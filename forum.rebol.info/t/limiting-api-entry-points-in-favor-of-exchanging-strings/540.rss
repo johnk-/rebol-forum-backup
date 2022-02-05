@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Limiting API Entry Points in Favor of Exchanging Strings</title>
+    <link>https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540</link>
+    <description>When I first saw the [libRed documentation](https://doc.red-lang.org/en/libred.html), it struck me as being...a grab-bag.
+
+Why was there a **[redAppend()](https://doc.red-lang.org/en/libred.html#_redappend)** with no /PART or /ONLY?  Why no **redInsert()**?  Were these things missing on purpose?  Or was it just in an incomplete state--with the ultimate goal to clone the entire Rebol2 manual as a catalog of C entry points?
+
+Moreover: if one is embedding a &quot;Redbol&quot; module or system into another language, the theory is that the win comes from dialects.  You presumably aren&#39;t just loading a raw interpreter so you can program in Rebol as awkwardly as possible--you&#39;ve got some prep work already and loaded a module of code you want to use.  So who&#39;s to say I plan to be doing any APPENDing or INSERTing at all?  Or perhaps I&#39;ve defined those words to mean something entirely different from the stock series operations...
+
+**Hence** though it&#39;s certainly necessary for a proper API to be able to reference Rebol values (BLOCK!s, WORD!s, etc.) via some kind of language handle, it crossed my mind that *ordinary requests to take action on these items should primarily be made through text strings*.  Rather than a `rebAppend(block, value)` and `rebAppendPart(block, value, limit)`...the entry points would be collapsed down to the likes of `rebDo(&quot;append/part&quot;, block, value, limit)`.
+
+*(Note: Whether that seems like a good idea to you on first reading or not, such a thing wouldn&#39;t typically be on the table at all for a pure C-based API.  Clever bit-twiddling makes it possible--and assuming your C compiler passes through character literal bytes as-is and you saved your file in UTF8, it even works with unicode strings.)*
+
+This possibly-&quot;radical&quot; idea raises questions about semantics and performance.  Here&#39;s a few talking points.
+
+### What if basic operations don&#39;t look up to what you meant?
+
+Taking libRed as an example, if you say **append: does [print &quot;potato&quot;]**, then what does `redAppend()` do after that?  In their case, it doesn&#39;t heed any redefinitions, because the API entry points are fixed at time of compilation.  There&#39;s exactly as much stack pushing and popping as necessary for the parameters of the [append &quot;action!&quot;](https://github.com/red/red/blob/c4f8bbf221728ba84d64a95cd9ea4f310b2ffea5/libRed/libRed.red#L894).
+
+This may seem like a good thing.  If you were trying to write some code to do series surgery, having the C API keep its semantics more stable means your code will do-what-you-meant, even in the face of change.
+
+But...if you&#39;re programming in just plain Rebol, you don&#39;t get this guarantee.  If you want that you have to bind directly to lib, or if you&#39;ve overridden things you have to use `lib/append`.
+
+What makes coding in C so sacred that it needs special rules or rights?  And as mentioned earlier, what if this is part of the whole *point* of embedding a Rebol...*you want to run in the potentially mutated environment*.
+
+I&#39;m reminded somewhat of the story of why airplanes are made out of aluminum instead of a stronger metal, when aluminum will crumple in a crash.  When you consider all the other factors of how bad a plane crash is, slightly stronger metal won&#39;t help relative to the big picture of the benefit of the lighter weight.
+
+My opinion is that it&#39;s a good thing--not a bad thing--to be beholden to the same mutable universe by hinging on text.  This puts pressure on improving the mechanisms by which Rebol code can be isolated into modules/etc.  It just means the API will need to do things like speak about &quot;which module it wants to run in&quot;.
+
+### What about the overhead of scanning/binding strings?
+
+This is a bit of a nuisance...and doubly so for languages whose string literal representation is not UTF-8.  (Which right now is looking like basically every language except C/C++/Rust.)
+
+Shortcuts are certainly possible; it may not be necessary to kick in the whole scanner to know that &quot;{foo}&quot; should be a string.  And sticking with the idea that source series are read-only, that could mean that each time you scan things they intern to the same pointer...you could loop over **rebDo(&quot;print&quot;, &quot;{foo}&quot;, END)** 10,000 times and yet only create 2 Rebol series backing the WORD! and the STRING!.
+
+But no matter how many shortcuts like that you throw in, there&#39;s no getting around that loading and binding repeatedly will cost more than if you did it just once.
+
+Yet I think one has to remember the context of our times--and the problem space for which Rebol is suited.  Compared to a network request to get a task done, how bad is running a few pieces of boilerplate through a scanner in raw C on the local machine?
+
+And following the 80/20 rule, if you really find some hybrid string-and-splicing instruction is taking a lot of time, you can cache that.  Beyond manually constructing reusable blocks or functions &quot;the hard way&quot;, the API might be able to help with something like a [prepared statement](https://en.wikipedia.org/wiki/Prepared_statement) in databases.
+
+So there are plans of attack.  And if you&#39;re trying to extend Rebol with new native behavior, the &quot;internal API&quot; can be used instead when performance is at issue.
+
+### If the &quot;official&quot; API scales back the number of entry points, what justifies a new one?
+
+One aspect I&#39;ve spoken about is that making a new entry point under this scheme should offer an explicit convenience to the language user.  So if you&#39;re looking at something like:
+
+    /* result = */ rebDo(&quot;spelling of&quot;, value, END);
+    /* result = */ rebSpellingOf(value, END);
+
+There needs to be something more to it--for instance, the return result of the latter should be an ordinary string class in the language, not a Rebol value that needs further processing and lifetime management before a usable string can be extracted from it.
+
+This is a fuzzy point, and it&#39;s a bit easier right now to suggest what shouldn&#39;t be an entry point (e.g. **rebAppendPartOnly()**) than what should.  So we&#39;ll have to see.</description>
+    
+    <lastBuildDate>Thu, 01 Mar 2018 17:30:39 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Limiting API Entry Points in Favor of Exchanging Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="540">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>If  performance is important, could there be something like prepared statements?</p>
+</blockquote>
+</aside>
+<p>Yup...I mention prepared statements above as a way to tune the performance, if and when it matters.</p>
+<p>I'm not sure the exact notation.  But it wouldn't need to use string-based escaping since we can do <strong>rebPrepare("print [f", rebSlot(2), rebSlot(1), "]", END);</strong> or similar. The mechanics would be a little bit weird because it would have to point into a loaded block structure and patch cells virtually into these "meta" slots.</p>
+<p>rebPrepare() and rebExecute() would be the usual pairing of terms.</p>
+<p>So far I really feel the direction with this API is a lot better.  And as I'm thinking about who the clients of this <em>kind</em> of API really are, it just makes more sense.</p>
+<p>We can even make it so C99 (and above) and C++11 (and above) make the END optional, so you only have to use it if you're targeting C89.  The idea of <em>all</em> APIs being variadic is looking really promising, eliminating extra steps.</p>
+          <p><a href="https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540/3</link>
+        <pubDate>Thu, 01 Mar 2018 17:30:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-540-3</guid>
+        <source url="https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540.rss">Limiting API Entry Points in Favor of Exchanging Strings</source>
+      </item>
+      <item>
+        <title>Limiting API Entry Points in Favor of Exchanging Strings</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I am not a C programmer but (or maybe that's why) I am all for a string based api.</p>
+<p>From other discussions it seems that a more direct api seems to be seen to be more performant. If  performance is important, could there be something like prepared statements?</p>
+<blockquote>
+<p>rebDo( "f: function[a][ a * 2]<br>
+handle = rebPrepare( "print [f <span class="hashtag">#1</span> <span class="hashtag">#2</span>]")<br>
+rebCall( handle, 5, "apples", END)</p>
+</blockquote>
+<p>And this prints</p>
+<blockquote>
+<p>10 apples</p>
+</blockquote>
+<p>I have now idea if this is possible, and if it would work, just putting the idea out there.</p>
+          <p><a href="https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540/2</link>
+        <pubDate>Thu, 01 Mar 2018 16:38:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-540-2</guid>
+        <source url="https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540.rss">Limiting API Entry Points in Favor of Exchanging Strings</source>
+      </item>
+      <item>
+        <title>Limiting API Entry Points in Favor of Exchanging Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When I first saw the <a href="https://doc.red-lang.org/en/libred.html" rel="nofollow noopener">libRed documentation</a>, it struck me as being...a grab-bag.</p>
+<p>Why was there a <strong><a href="https://doc.red-lang.org/en/libred.html#_redappend" rel="nofollow noopener">redAppend()</a></strong> with no /PART or /ONLY?  Why no <strong>redInsert()</strong>?  Were these things missing on purpose?  Or was it just in an incomplete state--with the ultimate goal to clone the entire Rebol2 manual as a catalog of C entry points?</p>
+<p>Moreover: if one is embedding a "Redbol" module or system into another language, the theory is that the win comes from dialects.  You presumably aren't just loading a raw interpreter so you can program in Rebol as awkwardly as possible--you've got some prep work already and loaded a module of code you want to use.  So who's to say I plan to be doing any APPENDing or INSERTing at all?  Or perhaps I've defined those words to mean something entirely different from the stock series operations...</p>
+<p><strong>Hence</strong> though it's certainly necessary for a proper API to be able to reference Rebol values (BLOCK!s, WORD!s, etc.) via some kind of language handle, it crossed my mind that <em>ordinary requests to take action on these items should primarily be made through text strings</em>.  Rather than a <code>rebAppend(block, value)</code> and <code>rebAppendPart(block, value, limit)</code>...the entry points would be collapsed down to the likes of <code>rebDo("append/part", block, value, limit)</code>.</p>
+<p><em>(Note: Whether that seems like a good idea to you on first reading or not, such a thing wouldn't typically be on the table at all for a pure C-based API.  Clever bit-twiddling makes it possible--and assuming your C compiler passes through character literal bytes as-is and you saved your file in UTF8, it even works with unicode strings.)</em></p>
+<p>This possibly-"radical" idea raises questions about semantics and performance.  Here's a few talking points.</p>
+<h3>What if basic operations don't look up to what you meant?</h3>
+<p>Taking libRed as an example, if you say <strong>append: does [print "potato"]</strong>, then what does <code>redAppend()</code> do after that?  In their case, it doesn't heed any redefinitions, because the API entry points are fixed at time of compilation.  There's exactly as much stack pushing and popping as necessary for the parameters of the <a href="https://github.com/red/red/blob/c4f8bbf221728ba84d64a95cd9ea4f310b2ffea5/libRed/libRed.red#L894" rel="nofollow noopener">append "action!"</a>.</p>
+<p>This may seem like a good thing.  If you were trying to write some code to do series surgery, having the C API keep its semantics more stable means your code will do-what-you-meant, even in the face of change.</p>
+<p>But...if you're programming in just plain Rebol, you don't get this guarantee.  If you want that you have to bind directly to lib, or if you've overridden things you have to use <code>lib/append</code>.</p>
+<p>What makes coding in C so sacred that it needs special rules or rights?  And as mentioned earlier, what if this is part of the whole <em>point</em> of embedding a Rebol...<em>you want to run in the potentially mutated environment</em>.</p>
+<p>I'm reminded somewhat of the story of why airplanes are made out of aluminum instead of a stronger metal, when aluminum will crumple in a crash.  When you consider all the other factors of how bad a plane crash is, slightly stronger metal won't help relative to the big picture of the benefit of the lighter weight.</p>
+<p>My opinion is that it's a good thing--not a bad thing--to be beholden to the same mutable universe by hinging on text.  This puts pressure on improving the mechanisms by which Rebol code can be isolated into modules/etc.  It just means the API will need to do things like speak about "which module it wants to run in".</p>
+<h3>What about the overhead of scanning/binding strings?</h3>
+<p>This is a bit of a nuisance...and doubly so for languages whose string literal representation is not UTF-8.  (Which right now is looking like basically every language except C/C++/Rust.)</p>
+<p>Shortcuts are certainly possible; it may not be necessary to kick in the whole scanner to know that "{foo}" should be a string.  And sticking with the idea that source series are read-only, that could mean that each time you scan things they intern to the same pointer...you could loop over <strong>rebDo("print", "{foo}", END)</strong> 10,000 times and yet only create 2 Rebol series backing the WORD! and the STRING!.</p>
+<p>But no matter how many shortcuts like that you throw in, there's no getting around that loading and binding repeatedly will cost more than if you did it just once.</p>
+<p>Yet I think one has to remember the context of our times--and the problem space for which Rebol is suited.  Compared to a network request to get a task done, how bad is running a few pieces of boilerplate through a scanner in raw C on the local machine?</p>
+<p>And following the 80/20 rule, if you really find some hybrid string-and-splicing instruction is taking a lot of time, you can cache that.  Beyond manually constructing reusable blocks or functions "the hard way", the API might be able to help with something like a <a href="https://en.wikipedia.org/wiki/Prepared_statement" rel="nofollow noopener">prepared statement</a> in databases.</p>
+<p>So there are plans of attack.  And if you're trying to extend Rebol with new native behavior, the "internal API" can be used instead when performance is at issue.</p>
+<h3>If the "official" API scales back the number of entry points, what justifies a new one?</h3>
+<p>One aspect I've spoken about is that making a new entry point under this scheme should offer an explicit convenience to the language user.  So if you're looking at something like:</p>
+<pre><code>/* result = */ rebDo("spelling of", value, END);
+/* result = */ rebSpellingOf(value, END);
+</code></pre>
+<p>There needs to be something more to it--for instance, the return result of the latter should be an ordinary string class in the language, not a Rebol value that needs further processing and lifetime management before a usable string can be extracted from it.</p>
+<p>This is a fuzzy point, and it's a bit easier right now to suggest what shouldn't be an entry point (e.g. <strong>rebAppendPartOnly()</strong>) than what should.  So we'll have to see.</p>
+          <p><a href="https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540/1</link>
+        <pubDate>Wed, 21 Feb 2018 19:40:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-540-1</guid>
+        <source url="https://forum.rebol.info/t/limiting-api-entry-points-in-favor-of-exchanging-strings/540.rss">Limiting API Entry Points in Favor of Exchanging Strings</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,440 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+    <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120</link>
+    <description>In [bringing back a modernized positional APPLY](https://forum.rebol.info/t/positional-apply-as-default-applique-for-frame-style-apply/1103/2) as the default, there&#39;s some really cool possibilities at hand.  We can do something people have wanted for a while, e.g.:
+
+    apply :append [series value /dup n + 1 /part skip series 4]
+
+Generalized quoting gives us an interesting ability because we can actually quote refinements in such a model:
+
+    apply :append [series &#39;/append-me /dup n + 1 /part skip series 4]
+
+Since APPLY (without /ONLY) evaluates its arguments, the APPLY operation can tell the difference between a refinement meant literally and one not.  (You might have done this with a GROUP! before, but that&#39;s noisier and also more costly in the evaluator, while this is practically free.)
+
+That&#39;s pretty &quot;exciting&quot;.  But it got me to thinking about [skippable parameters like predicates](https://forum.rebol.info/t/brave-switch-new-world-skippable-predicates/1045), or the [label to COMPOSE with](https://forum.rebol.info/t/the-even-more-powerful-compose/1101).  Those things are looking like they&#39;re going to be a very big deal--paradigm shifts.  So how could you specify those?
+
+Even though they&#39;re not refinements, you could specify them by their parameter name *expressed* as a refinement:
+
+    block: [(1 + 2) (&lt;*&gt; 1 + 2)]
+    apply :compose [block /label &lt;*&gt;]
+ 
+So inside of COMPOSE, label won&#39;t be a separate refinement variable...it will be the actual TAG! &lt;*&gt;.
+
+This got me to wondering...
+
+## Why Do Refinements Need More Than One Value Anyway?
+
+I&#39;m always frustrated trying to name refinement arguments.  If the function takes a /PART, why can&#39;t the variable be called PART?  What&#39;s this other name for?  Isn&#39;t that what NULL is *for* in the first place?  To indicate the absence of a value?
+
+This might make it a little harder to discern if PART could be a LOGIC! or INTEGER!.  You don&#39;t have as easy a test for discerning them.  But why should refinements be any easier than the entire rest of the system on this matter?  And how often does this actually happen?
+
+Functions with refinements have historically been pretty confusing, and having a refinement that takes more than one argument is extremely rare.  If you really need multiple arguments to a refinement for some reason, there&#39;s blocks and paths and such.
+
+Having the function arguments be refinements themselves has been an interesting experiment.  And it&#39;s very useful for refinements that don&#39;t have any arguments, because then the arguments themselves can&#39;t serve the &quot;present or not&quot; status.
+
+But it&#39;s not like it would be that hard to write something like this:
+
+    &gt;&gt; used: func [&#39;refinement [path!]] [
+        if not null? get refinement [
+            refinement
+        ]  
+    ]
+
+    &gt;&gt; foo: func [/a /b] [print [used /a used /b]]
+
+    &gt;&gt; foo/a
+    /a
+
+    &gt;&gt; foo/a/b
+    /a /b
+
+(I think @IngoHohmann made something of the sort a while ago.)  In any case, my point is that I think we can live without a separate &quot;status of the refinement&quot; and value.
+
+## How it would look in practice
+
+Imagine this function interpreted under the new understandings:
+
+    foo: function [
+        arg1 [block!]
+        /ref1
+        arg2 [string!]
+        /ref2 [integer!]
+    ][...]
+
+What this would actually be saying is that you have a /ref1 refinement whose only value is its use or disuse. This would be like any refinement without an argument today.  It would be blank if not used, and for good measure we could make it hold `/ref1` as its value if used (seems better than making something else up, and actually has applications for 0-arg refinements.
+
+But then, *arg2 is just another normal argument that comes after it*.  And ref2 is a refinement with an integer! argument--*but* that integer argument would arrive int the ref2 variable itself, or it would be a blank.
+
+So what this function actually is doing would be like the following in today&#39;s world:
+
+    foo: function [
+        arg1 [block!]
+        arg2 [string!]
+        /ref1
+        /ref2
+        ref2arg [integer!]
+    ][
+        ref2: ref2arg
+        unset &#39;ref2arg
+        ...
+    ]
+
+Already you can see that it wouldn&#39;t be *that* different from today.  And Ren-C already has tricks up its sleeve for doing legacy emulations...the old behavior of getting multiple arguments would be emulated one way or another, without doing too much extra work.  *(The simplest emulation would allow the same notation for single-argument refinements, and error with more than one argument--and that is likely sufficient.)*
+
+## It would save space and speed the system up
+
+Right now when you have a refinement with an argument, that&#39;s two frame cells to fulfill.  Collapsing it to one is obviously more efficient. 
+
+But saving on storage is only part of it.  There&#39;s a lot of evaluator complexity trying to keep the state and worrying about there being more than one argument...looping, checking.  A ton of complexity just vanishes with this.
+
+The &quot;refinement revocation&quot; methods of today are more complex than they need to be as well.  You can get in dicey situations where you&#39;ve revoked one argument and not another.  Specialization has to cover cases where you set a the refinement to false but the value to true.  The fact that you can always make a parameter a block if you really want it to carry multiple arguments seems to solve a lot of problems.
+
+## You could put normal arguments *after* refinement arguments
+
+I show in the example above putting an ordinary argument after a refinement argument.  That may not look all that useful to you.  Maybe it would have some help in putting related parameters together without worrying about whether they were optional or not...kind of letting you express things in the flow of your thought.
+
+*But there&#39;s a really compelling reason to do this mechanically for deriving functions that add new arguments*:
+
+Because of the way frames work positionally, you can&#39;t derive one function from another in a way that reorders its arguments.  This means that if you try to derive from a function that has two normal arguments and one refinement, you can do it today because it&#39;s not implied that everything after that point is a refinement.  But once you&#39;ve entered the &quot;refinement zone&quot;, it&#39;s a point of no return.
+
+This would correct that weirdness and permit extending functions with more parameters, either regular or refinement, and not run the risk of a regular refinement getting picked up as an argument to something it didn&#39;t intend.
+
+## You could write your arguments in any order in APPLY
+
+It helps make sense of the *&quot;The refinement names the argument you are about to give&quot;* situation.  But why not let you put refinements anywhere in an APPLY?
+
+    &gt;&gt; block: [1 2 3]
+    &gt;&gt; apply :append [/dup 2 /value &lt;x&gt; block]
+    == [1 2 3 &lt;x&gt; &lt;x&gt;]
+
+The current refinement processing mechanics would be much easier to rationalize and simplify under this model  and likely make such reimaginations possible--as well as other forms of lightweight skinning that let you reorder function arguments on a whim.
+
+## I haven&#39;t tried writing it yet, but...
+
+When I think of all the various parts of the system that get bent out of shape over edge cases, I have to say I think this sounds like it may well be a winner.
+
+For a while we could disable the ability to put normal parameters after a refinement, and just raise an error if you do that.  So you&#39;d know to convert **/foo bar [integer!]** to just **/foo [integer!]**  In the future though, cases like bar would start working as being a normal parameter.
+
+The only casualties I can think of are using blanks as refinement arguments, and being able to do partial refinement specialization *inside* of an APPLIQUE.  So you couldn&#39;t specialize like this:
+
+      applique :append [part: true ...]
+
+That would assume you wanted PART to be the value true.  For a partial specialization (e.g. one that says you get the behavior as if you&#39;d written APPEND/PART at the callsite, getting a refinement as a normal arg) you&#39;d have to say:
+
+     applique :append/part [...]
+
+I can think of some other mechanical complications, but nothing overwhelming off the top of my head.</description>
+    
+    <lastBuildDate>Wed, 08 Jul 2020 00:08:29 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="6" data-topic="1120">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Refinements, on the other hand, do effectively "shift gears" of the frame fulfillment. I'm talking about not having this gear-shift. The elimination of the shift is a very good and simplifying thing, saving memory cells, accelerating the system and removing a bunch of code. And nothing of significant value is lost.</p>
+</blockquote>
+</aside>
+<p>I came across an old comment on <code>Redo</code> of an action.  This concept of "redoing" an action originated from the PORT! code, where there'd be a generic definition of an interface function on the port...which would then have to be redispatched to a usermode function.  So the arguments were gathered for the archetype, and then had to be moved into the right slots to line them up in the implementation...which could be at entirely different positions in the frame.</p>
+<p>(The same code was later used in HIJACK when functions were hijacked with functions that were not derived from the same base, e.g. via ADAPT/SPECIALIZE/ENCLOSE.  Thus they can have incompatible frames, so some guesswork needs to be done in a similar way.)</p>
+<p>The comment I wrote says this, and take note of what I say about the difficulty of doing the mapping "in the face of targets that are 'adversarial' to the archetype:"</p>
+<pre><code>// This code takes a running call frame that has been built for one action
+// and then tries to map its parameters to invoke another action.  The new
+// action may have different orders and names of parameters.
+//
+// R3-Alpha had a rather brittle implementation, that had no error checking
+// and repetition of logic in Eval_Core.  Ren-C more simply builds a PATH! of
+// the target function and refinements, passing args with EVAL_FLAG_EVAL_ONLY.
+//
+// !!! This could be done more efficiently now by pushing the refinements to
+// the stack and using an APPLY-like technique.
+//
+// !!! This still isn't perfect and needs reworking, as it won't stand up in
+// the face of targets that are "adversarial" to the archetype:
+//
+//     foo: func [a /b c] [...]  =&gt;  bar: func [/b d e] [...]
+//                    foo/b 1 2  =&gt;  bar/b 1 2
+</code></pre>
+<p>This shows another angle of how having refinements with arguments inhibits a simple mapping of one named argument to another.</p>
+<p>Of course this raises the question of whether you should have to name your arguments the same thing.  If the original function takes <strong>[event]</strong> should you have to name it the same, or could you say <strong>[e]</strong> if it was a plain argument and not a refinement?</p>
+<p>Either way, it gets a lot easier to set a policy when refinements <em>are</em> the arguments.</p>
+          <p><a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/8</link>
+        <pubDate>Wed, 08 Jul 2020 00:08:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1120-8</guid>
+        <source url="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss">Pure and Refined: Simplifying Refinements to One or Zero Args</source>
+      </item>
+      <item>
+        <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1120">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>My gut reaction, I don't like it. It is an important part of Rebol, though I hate to have to come up with a name for a variable for a refinement.</p>
+</blockquote>
+</aside>
+<p>Though Ingo didn't mention it here, <a href="https://github.com/metaeducation/ren-c/pull/976#pullrequestreview-223488320" rel="nofollow noopener">on the commit itself</a> he said:</p>
+<blockquote>
+<p>I have to take your word about this simplifying and speeding up the evaluator.<br>
+I can't currently comment on the code quality, but I trust you there.<br>
+I obviously haven't tried this, yet, but I seem to have come to like the idea, so go for it.</p>
+</blockquote>
+<p>You still can name the refinement variables if you like.  The times when it makes the most sense to do so is when your refinement has an active name, which due to the shortage of short non-noun names available in Rebol, you <em>usually</em> want to recover those from LIB.  The previous model didn't do this...so you used up two names.</p>
+<p>For instance, in these <a href="https://github.com/rgchris/Scripts/pull/14/files#diff-7a65d69ceb7eb87078f3c9e842193f8aR47" rel="nofollow noopener">patches to @rgchris's curl.reb</a>, the /AS refinement is changed to /AGENT.  I don't know if the right decision would be to call the refinement /AGENT (probably is), but I wanted to show the issue of when you want to get AS the operator back how you have to do it today...which you would have had to do using such a refinement name.  I think there should be something in the spec dialect which does this shuffle for you...which probably means capturing the meaning of AS however it was when the function was defined (e.g. COMPOSE-ing it into the body) vs. blindly getting it from lib.</p>
+<p>That's all open to suggestions, but this change is in, and <a href="https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137">the Redbol layer emulates the old interface</a>.  Let me know of any questions/comments/concerns.</p>
+<p><em>(Note: While I may make it "look easy" to do these kinds of changes to the system, they are -a lot- of work.  But the impressive thing is the resilience of the asserts and debug mechanics that allow the changes.  It's not the kind of thing R3-Alpha/Red would be prepared to do.  Which indicates just how much more potential the Ren-C codebase has in it.)</em></p>
+          <p><a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/7</link>
+        <pubDate>Sat, 06 Apr 2019 18:21:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1120-7</guid>
+        <source url="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss">Pure and Refined: Simplifying Refinements to One or Zero Args</source>
+      </item>
+      <item>
+        <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="5" data-topic="1120">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/mark-hi/40/212_2.png" class="avatar"> Mark-hi:</div>
+<blockquote>
+<p>Currently, if you wanted to add a new argument, you'd put it in the spec block before the first refinement -- which must be exactly as hard as inserting it before the &lt;local&gt;, which you'd have to do for your idea anyway.</p>
+</blockquote>
+</aside>
+<p>In order to reuse an implementation, the frame you build must have the parameters in the integral order that underlying implementation expected by the time it gets to the point of running its code.</p>
+<p>As it happens, there is no <code>&lt;local&gt;</code> preserved in the spec.  A higher-level transformation just turns them into SET-WORD!</p>
+<pre><code> foo: function [x &lt;local&gt; y z] [...]  ; spec transformed to [x y: z:]
+</code></pre>
+<p>So <code>&lt;local&gt;</code> is already collapsed to the idea of a property on the parameter itself, not "everything after some point".  There's no "gear to shift"--the visitation of the local is the only moment in which it's in local mode, then it's on to the next one.  So a derived function can theoretically add normal parameters after that without being confused.  <em>(I say theoretically because right now there are a bunch of asserts that derived frames have the same length as the frames they inherit from, but we would have to relax this to let ADAPT add refinements and parameters after-the-fact...but this is doable.)</em></p>
+<p>Refinements, on the other hand, do effectively "shift gears" of the frame fulfillment.  I'm talking about not having this gear-shift.  The elimination of the shift is a very good and simplifying thing, saving memory cells, accelerating the system and removing a bunch of code.  And nothing of significant value is lost.</p>
+<p>We'll get type checking of patterns inside of BLOCK!s etc. one way or another.  Right now I'm attacking the bitset-of-64-bits limit for types.</p>
+          <p><a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/6</link>
+        <pubDate>Mon, 25 Mar 2019 18:23:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1120-6</guid>
+        <source url="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss">Pure and Refined: Simplifying Refinements to One or Zero Args</source>
+      </item>
+      <item>
+        <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="1120" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>So if you had a function that took two normal arguments and a refinement, you can make an adaptation that takes another normal argument and it won't be picked up as an argument to the refinement at the end of the existing spec.</p>
+</blockquote>
+</aside>
+<p>I am confused. Refinement parameters always come after "normal" parameters. If a function specifies two refinements (with or without refinement-arguments) and two arguments, the only reordering power you get at the call site is that the refinements can be expressed in either order. The two parameters must come, in the order their corresponding arguments are present in the spec block, before any refinement parameters, whatever order they must be in. Currently, if you wanted to add a new argument, you'd put it in the spec block before the first refinement -- which must be exactly as hard as inserting it before the &lt;local&gt;, which you'd have to do for your idea anyway.</p>
+          <p><a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/5</link>
+        <pubDate>Mon, 25 Mar 2019 18:16:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1120-5</guid>
+        <source url="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss">Pure and Refined: Simplifying Refinements to One or Zero Args</source>
+      </item>
+      <item>
+        <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1120">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I haven’t tried writing it yet, but…</p>
+</blockquote>
+</aside>
+<p>So there's one case I just saw looking at an unrelated issue: what if you have an idea that's coupled with something that wants to be able to signify "any-value!, or nothing at all".</p>
+<p>Consider ARRAY/INITIAL.  It wants to pass in an initial value.  As it so happens, having that initial value not be BLANK! isn't important, because all it does if you don't use the refinement is turn it into a blank.  But imagine if it wanted to do something different in the <strong>/initial blank</strong> and no-<strong>/initial</strong> case</p>
+<pre><code>array: function [
+    {Makes and initializes a block of a given size}
+    size [integer! block!] "Size or block of sizes for each dimension"
+    /initial "Specify an initial value for all elements"
+    value "Initial value (will be called each time if a function)"
+        [any-value!]
+][...]
+</code></pre>
+<p>But there's a tidy solution:</p>
+<p><strong>Allow <code>&lt;opt&gt;</code> refinements.</strong></p>
+<p>By marking a refinement <code>&lt;opt&gt;</code> you are saying that you distinguish BLANK! and NULL, and this distinction is meaningful.  So that's a request not to automatically treat lack-of-use of the refinement as "blanking" (which is usually done for convenience).</p>
+<p>So instead you'd write:</p>
+<pre><code>array: function [
+    {Makes and initializes a block of a given size}
+    size [integer! block!] "Size or block of sizes for each dimension"
+    /initial "Initial value for all elements, called each time if a function"
+        [&lt;opt&gt; any-value!]
+][...]
+</code></pre>
+<p>Then if the refinement isn't used (or is "used" but passed a null argument), you get NULL...not blank.</p>
+<p>This lines right up with the current philosophy, that if you are passed a null argument to a refinement it shapes it up as if you didn't get the refinement passed at all.  It's a better way of doing it, with fewer edge cases or possibilities for error!</p>
+          <p><a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/4</link>
+        <pubDate>Thu, 21 Mar 2019 19:21:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1120-4</guid>
+        <source url="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss">Pure and Refined: Simplifying Refinements to One or Zero Args</source>
+      </item>
+      <item>
+        <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="2" data-topic="1120">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>what’s the impact of creating unnecessary blocks?</p>
+</blockquote>
+</aside>
+<p>Why worry about the impacts of something that never happens?  Doesn't seem too relevant when you've <em>"checked the core and only found 2 functions using it"</em> and <em>"hate to have to come up with a name for a variable for a refinement"</em>...</p>
+<p>Take my word for it from writing the evaluator and things like SPECIALIZE.  If you want to talk about impacts on the system from a performance and memory standpoint, this is an <em>huge</em> benefit.  The cost of the blocks you'll never make pale in comparison.  Shortens function specs, saves space, simplifies broadly.</p>
+<p>The main potential drawbacks that I see are:</p>
+<ul>
+<li>
+<p>Can't pass a BLANK! as a refinement argument.  But as the philosophy of BLANK! and NULL equivalence has been going further, that's probably for the best.  NULL was revoking refinements and it's getting pretty prescriptive that a NULL and a blank are the same if you receive them.  e.g. when <strong>parse ... [... :(if false [...]) ...]</strong> splices in a "null" it acts the same as if you had a blank and ignores the rule, same for <strong>print</strong>.  Semantically blanks and nulls should have the same meaning, e.g. <strong>nothing?</strong>, both should count as no value held by a variable for DEFAULT's purposes, the list goes on...</p>
+</li>
+<li>
+<p>We lose of a feature that was Ren-C only, which was to error when you tried to use a refinement argument that was not provided.  This dials back to the historical behavior where unused refinement "arguments" are blank and not unset.  But I can't say I feel being saved from such errors has shown to be a world-changing benefit.  The biggest advantage it had was conceptual, by letting you not be fooled into thinking you'd been passed an explicit blank as a refinement argument when the refinement had not been used.  But per the previous point, I think that ability of having blank "used" refinement arguments was likely misguided.</p>
+</li>
+</ul>
+<p>I'll see if while implementing it I find any gotchas, but I am anticipating this wiping out huge amounts of complexity, and losing nothing of real value...while opening the door to important features like the ability to extend functions with normal arguments.  So if you had a function that took two normal arguments and a refinement, you can make an adaptation that takes another normal argument and it won't be picked up as an argument to the refinement at the end of the existing spec.</p>
+          <p><a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/3</link>
+        <pubDate>Wed, 20 Mar 2019 16:25:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1120-3</guid>
+        <source url="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss">Pure and Refined: Simplifying Refinements to One or Zero Args</source>
+      </item>
+      <item>
+        <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>My gut reaction, I don't like it. It is an important part of Rebol, though I hate to have to come up with a name for a variable for a refinement.</p>
+<p>Now I've checked the core and only found 2 functions using it. For whatever that's worth.</p>
+<p>Things to consider when using blocks:</p>
+<ul>
+<li>documentation (how many values, which types)</li>
+<li>type checking</li>
+<li>what's the impact of creating unnecessary blocks?</li>
+</ul>
+          <p><a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/2</link>
+        <pubDate>Wed, 20 Mar 2019 15:45:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1120-2</guid>
+        <source url="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss">Pure and Refined: Simplifying Refinements to One or Zero Args</source>
+      </item>
+      <item>
+        <title>Pure and Refined: Simplifying Refinements to One or Zero Args</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In <a href="https://forum.rebol.info/t/positional-apply-as-default-applique-for-frame-style-apply/1103/2">bringing back a modernized positional APPLY</a> as the default, there's some really cool possibilities at hand.  We can do something people have wanted for a while, e.g.:</p>
+<pre><code>apply :append [series value /dup n + 1 /part skip series 4]
+</code></pre>
+<p>Generalized quoting gives us an interesting ability because we can actually quote refinements in such a model:</p>
+<pre><code>apply :append [series '/append-me /dup n + 1 /part skip series 4]
+</code></pre>
+<p>Since APPLY (without /ONLY) evaluates its arguments, the APPLY operation can tell the difference between a refinement meant literally and one not.  (You might have done this with a GROUP! before, but that's noisier and also more costly in the evaluator, while this is practically free.)</p>
+<p>That's pretty "exciting".  But it got me to thinking about <a href="https://forum.rebol.info/t/brave-switch-new-world-skippable-predicates/1045">skippable parameters like predicates</a>, or the <a href="https://forum.rebol.info/t/the-even-more-powerful-compose/1101">label to COMPOSE with</a>.  Those things are looking like they're going to be a very big deal--paradigm shifts.  So how could you specify those?</p>
+<p>Even though they're not refinements, you could specify them by their parameter name <em>expressed</em> as a refinement:</p>
+<pre><code>block: [(1 + 2) (&lt;*&gt; 1 + 2)]
+apply :compose [block /label &lt;*&gt;]
+</code></pre>
+<p>So inside of COMPOSE, label won't be a separate refinement variable...it will be the actual TAG! &lt;*&gt;.</p>
+<p>This got me to wondering...</p>
+<h2>Why Do Refinements Need More Than One Value Anyway?</h2>
+<p>I'm always frustrated trying to name refinement arguments.  If the function takes a /PART, why can't the variable be called PART?  What's this other name for?  Isn't that what NULL is <em>for</em> in the first place?  To indicate the absence of a value?</p>
+<p>This might make it a little harder to discern if PART could be a LOGIC! or INTEGER!.  You don't have as easy a test for discerning them.  But why should refinements be any easier than the entire rest of the system on this matter?  And how often does this actually happen?</p>
+<p>Functions with refinements have historically been pretty confusing, and having a refinement that takes more than one argument is extremely rare.  If you really need multiple arguments to a refinement for some reason, there's blocks and paths and such.</p>
+<p>Having the function arguments be refinements themselves has been an interesting experiment.  And it's very useful for refinements that don't have any arguments, because then the arguments themselves can't serve the "present or not" status.</p>
+<p>But it's not like it would be that hard to write something like this:</p>
+<pre><code>&gt;&gt; used: func ['refinement [path!]] [
+    if not null? get refinement [
+        refinement
+    ]  
+]
+
+&gt;&gt; foo: func [/a /b] [print [used /a used /b]]
+
+&gt;&gt; foo/a
+/a
+
+&gt;&gt; foo/a/b
+/a /b
+</code></pre>
+<p>(I think <a class="mention" href="/u/ingohohmann">@IngoHohmann</a> made something of the sort a while ago.)  In any case, my point is that I think we can live without a separate "status of the refinement" and value.</p>
+<h2>How it would look in practice</h2>
+<p>Imagine this function interpreted under the new understandings:</p>
+<pre><code>foo: function [
+    arg1 [block!]
+    /ref1
+    arg2 [string!]
+    /ref2 [integer!]
+][...]
+</code></pre>
+<p>What this would actually be saying is that you have a /ref1 refinement whose only value is its use or disuse. This would be like any refinement without an argument today.  It would be blank if not used, and for good measure we could make it hold <code>/ref1</code> as its value if used (seems better than making something else up, and actually has applications for 0-arg refinements.</p>
+<p>But then, <em>arg2 is just another normal argument that comes after it</em>.  And ref2 is a refinement with an integer! argument--<em>but</em> that integer argument would arrive int the ref2 variable itself, or it would be a blank.</p>
+<p>So what this function actually is doing would be like the following in today's world:</p>
+<pre><code>foo: function [
+    arg1 [block!]
+    arg2 [string!]
+    /ref1
+    /ref2
+    ref2arg [integer!]
+][
+    ref2: ref2arg
+    unset 'ref2arg
+    ...
+]
+</code></pre>
+<p>Already you can see that it wouldn't be <em>that</em> different from today.  And Ren-C already has tricks up its sleeve for doing legacy emulations...the old behavior of getting multiple arguments would be emulated one way or another, without doing too much extra work.  <em>(The simplest emulation would allow the same notation for single-argument refinements, and error with more than one argument--and that is likely sufficient.)</em></p>
+<h2>It would save space and speed the system up</h2>
+<p>Right now when you have a refinement with an argument, that's two frame cells to fulfill.  Collapsing it to one is obviously more efficient.</p>
+<p>But saving on storage is only part of it.  There's a lot of evaluator complexity trying to keep the state and worrying about there being more than one argument...looping, checking.  A ton of complexity just vanishes with this.</p>
+<p>The "refinement revocation" methods of today are more complex than they need to be as well.  You can get in dicey situations where you've revoked one argument and not another.  Specialization has to cover cases where you set a the refinement to false but the value to true.  The fact that you can always make a parameter a block if you really want it to carry multiple arguments seems to solve a lot of problems.</p>
+<h2>You could put normal arguments <em>after</em> refinement arguments</h2>
+<p>I show in the example above putting an ordinary argument after a refinement argument.  That may not look all that useful to you.  Maybe it would have some help in putting related parameters together without worrying about whether they were optional or not...kind of letting you express things in the flow of your thought.</p>
+<p><em>But there's a really compelling reason to do this mechanically for deriving functions that add new arguments</em>:</p>
+<p>Because of the way frames work positionally, you can't derive one function from another in a way that reorders its arguments.  This means that if you try to derive from a function that has two normal arguments and one refinement, you can do it today because it's not implied that everything after that point is a refinement.  But once you've entered the "refinement zone", it's a point of no return.</p>
+<p>This would correct that weirdness and permit extending functions with more parameters, either regular or refinement, and not run the risk of a regular refinement getting picked up as an argument to something it didn't intend.</p>
+<h2>You could write your arguments in any order in APPLY</h2>
+<p>It helps make sense of the <em>"The refinement names the argument you are about to give"</em> situation.  But why not let you put refinements anywhere in an APPLY?</p>
+<pre><code>&gt;&gt; block: [1 2 3]
+&gt;&gt; apply :append [/dup 2 /value &lt;x&gt; block]
+== [1 2 3 &lt;x&gt; &lt;x&gt;]
+</code></pre>
+<p>The current refinement processing mechanics would be much easier to rationalize and simplify under this model  and likely make such reimaginations possible--as well as other forms of lightweight skinning that let you reorder function arguments on a whim.</p>
+<h2>I haven't tried writing it yet, but...</h2>
+<p>When I think of all the various parts of the system that get bent out of shape over edge cases, I have to say I think this sounds like it may well be a winner.</p>
+<p>For a while we could disable the ability to put normal parameters after a refinement, and just raise an error if you do that.  So you'd know to convert <strong>/foo bar [integer!]</strong> to just <strong>/foo [integer!]</strong>  In the future though, cases like bar would start working as being a normal parameter.</p>
+<p>The only casualties I can think of are using blanks as refinement arguments, and being able to do partial refinement specialization <em>inside</em> of an APPLIQUE.  So you couldn't specialize like this:</p>
+<pre><code>  applique :append [part: true ...]
+</code></pre>
+<p>That would assume you wanted PART to be the value true.  For a partial specialization (e.g. one that says you get the behavior as if you'd written APPEND/PART at the callsite, getting a refinement as a normal arg) you'd have to say:</p>
+<pre><code> applique :append/part [...]
+</code></pre>
+<p>I can think of some other mechanical complications, but nothing overwhelming off the top of my head.</p>
+          <p><a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120/1</link>
+        <pubDate>Mon, 18 Mar 2019 09:49:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1120-1</guid>
+        <source url="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120.rss">Pure and Refined: Simplifying Refinements to One or Zero Args</source>
+      </item>
+  </channel>
+</rss>

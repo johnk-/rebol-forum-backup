@@ -1,0 +1,589 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>&quot;Raw&quot; Strings</title>
+    <link>https://forum.rebol.info/t/raw-strings/1750</link>
+    <description>I&#39;m now 99% sure that { } best serves its purpose as a string form.
+
+But there were several talking points that came out of that discussion.  One was a desire for &quot;raw&quot; strings.
+
+This is the idea that outside of the termination sequence, there&#39;s *no* escaping.  This means you can put pretty much anything in the string.  Backslashes, carets...it&#39;s all fair game.
+
+## Two Very Different String Forms: When Are They Raw?
+
+To *me*, it made the most sense that the raw form be the braced form...because it is so frequently applied to sections of arbitrary documentation text (such as the Description: in module headers).
+
+    Description: {
+        If you call this from C, then write:
+
+            if (a ^ b != 0) {  // bitwise XOR
+                printf(&quot;This is an example\n&quot;);
+            }
+
+         So there you see carets and backslashes working.
+    }
+
+With binding support for string interpolation, we can imagine this getting even more useful for representing snippets of other languages with escaped portions inside of them.
+
+However, @giuliolunati favored the idea of making quoted strings *mostly-raw*, because there was an easy-seeming way to escape quotes using only the quote character.
+
+    &gt;&gt; &quot;This would be &quot;&quot;quotes&quot;&quot; inside a string&quot;
+    == {This would be &quot;quotes&quot; inside a string}
+
+How braces are escaped historically ( e.g. `^}` ) is messier.  That drags caret into it, so now you&#39;re worrying about needing to escape carets and braces.  A more uniform approach appealed to Giulio, so he favored the quotes form...and would prefer it to be able to represent characters &quot;as-is&quot; by default, with this exception for embedded quotes.
+
+But from my point of view, I was seeking to avoid is any need to do search/replace on the embedded information.  So *mostly-raw* wasn&#39;t good enough; e.g. I&#39;d like to copy and paste the C code out of the example above, not have its quotes doubled:
+
+    Description: &quot;
+        if (a ^ b != 0) {  // bitwise XOR
+            printf(&quot;&quot;This is an example\n&quot;&quot;);   &lt;-- doubled quotes not good
+        }
+    &quot;
+
+We also discussed that I&#39;m averse to having ordinary quotes as multi-line strings... though maybe we should allow them.  :-/  But even if we did, it feels unintentionally incomplete to see something like:
+
+    Description: &quot;
+
+So for these reasons I wanted to focus the raw string effort on braced strings.  Yet there are a lot of things that it gets hard to represent in a raw string form when you try to use unmatched braces in the content.
+
+After thinking about it a bit, we came up with the option of being able to set the delimiter according to a number of braces and a vertical bar.
+
+    {...}  ; expects any { } inside to be matched pairs 
+    {|...|}  ; allows internal unpaired and mismatched { }, {| |} matched pairs
+    {{|...|}}  ; allows internal unpaired and mismatched {| |}, {{| |}} matched
+
+etc. etc.
+
+This can handle some pretty sticky strings like **`{|ab&quot;c&quot;} {&quot;d&quot;ef|}`** if need be, where the data extracted is:
+
+    ab&quot;c&quot;} {&quot;d&quot;ef
+
+The approach would allow any number of {{ }}, which sounds like it could get ugly.  But it&#39;s kind of like generic quoting, where I don&#39;t anticipate people using ridiculously high levels like {{{{|...|}}}}.  But having it be a general method has value--especially in generated code scenarios.
+
+Strings starting or ending with vertical bar forms like **{|}** get sacrificed, so you&#39;ll have to use &quot;|&quot; instead.  But you would use &quot;}&quot; so this just moves | into the same category as } and {.
+
+I also suggested an additional rule...that you don&#39;t terminate braced strings except as:
+
+* {...} -space-
+* {...} -newline-
+* {...}]
+* {...})
+
+If we limit it to these possibilities, you can write things like:
+
+     code: {char c = &#39;}&#39;;}
+
+It seems that a lot of unpaired brace cases are single character literals like this, which don&#39;t fall under the rule.  You might want to put the bars in for good measure anyway:
+
+     code: {|char c = &#39;}&#39;;|}
+
+In any case, the other thing we were leaning toward here was that when quoted strings are escaped, they do so compatibility with the classical C backslashes, based on the idea that caret escaping hadn&#39;t done the language any particular favors.
+
+Just wanted to write this up while I still was thinking about it... :zzz:</description>
+    
+    <lastBuildDate>Sat, 27 Nov 2021 19:53:32 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/raw-strings/1750.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="LkpPo" data-post="16" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/lkppo/40/239_2.png" class="avatar"> LkpPo:</div>
+<blockquote>
+<p>you will need a way to protect the variable placeholder when the variable name is tricky</p>
+</blockquote>
+</aside>
+<p>The concept here is that the binding is the built in feature, but interpolation is done by functions.  So those functions could have different rules or parameterizations.</p>
+<p>e.g. today's REWORD allows you to specify delimiters:</p>
+<pre><code>&gt;&gt; reword/escape "abc*var*def" [var "hello"] ["*" "*"]
+== "abchellodef"
+
+&gt;&gt; reword/escape "abc*|var|*def" [var "hello"] ["*|" "|*"]
+== "abchellodef"
+</code></pre>
+<p>My concept here is that binding would take the place of needing to provide the mapping from words to values, but that options like /ESCAPE could still exist.  That would inhibit substitutions such as [1 "hello"] so maybe a more generic REWORD would still be useful.</p>
+<p>It's nice to have heuristics that non-word characters act as implicit delimiters.  In particular, if we rule out the idea of <strong>/</strong> for field selection, we could expand URLs and files more simply.  Though if you were trying to mix with dots of filenames you'd need something like parentheses:</p>
+<pre><code>interpolate http://$domain/$subfolder/$(obj.name).txt</code></pre>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/17</link>
+        <pubDate>Sat, 27 Nov 2021 19:53:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-17</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[LkpPo]]></dc:creator>
+        <description><![CDATA[
+            <p>With interpolation you will need a way to protect the variable placeholder when the variable name is tricky. No?</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/16</link>
+        <pubDate>Sat, 27 Nov 2021 13:14:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-16</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>Green light for {|||||....</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/15</link>
+        <pubDate>Mon, 25 Oct 2021 08:36:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-15</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="13" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If you think of this as a generic pattern, e.g. one that TAG!s might follow, the multiple-bar form avoids making you write <strong>&lt;&lt;</strong> or <strong>&gt;&gt;</strong> sequences to accomplish escaping.</p>
+</blockquote>
+</aside>
+<p>This raises a couple of additional questions about tags.</p>
+<p>First of all, <em>should TAG! be a raw string form</em>?  If you insert a backslash is that intended as a backslash, or should carets be carets... etc?</p>
+<p>Historically tags were tailored to the HTML expectations a bit, such as that you could put a literal <strong><code>&gt;</code></strong> inside an attribute string and it wouldn't close the tag.  <a href="https://stackoverflow.com/questions/94528/is-u003e-greater-than-sign-allowed-inside-an-html-element-attribute-value">Yes that is legal in HTML, you don't need to do <code>&amp;gt;</code></a></p>
+<pre><code>rebol2&gt;&gt; &lt;div label="1 &gt; 2"&gt;
+== &lt;div label="1 &gt; 2"&gt;
+</code></pre>
+<p>Note it's not actually parsing the tag or making any rules about its structure, it's just counting quotes.</p>
+<pre><code>rebol2&gt;&gt; &lt;""&gt;
+== &lt;""&gt;
+
+rebol2&gt;&gt; &lt;"""&gt;
+** Syntax Error: Missing " at &lt;"""
+</code></pre>
+<p>If TAG! were more agnostic about its contents, we'd be talking about something more like:</p>
+<pre><code>&lt;div label="I'm a &lt;div&gt;"&gt;  ; works because of nesting rules
+
+&lt;|div label="1 &gt; 2"|&gt;  ; needs the | to avoid &gt; terminating the tag
+</code></pre>
+<p>If not obvious in these discussions where we talk about |, it's not in the form'd version... only the molded version to make it LOAD-able:</p>
+<pre><code>&gt;&gt; form &lt;|div label="1 &gt; 2"|&gt;
+&lt;div label="1 &gt; 2"&gt;
+</code></pre>
+<p>Whether you see this as a worthwhile compromise depends on if you see it as a feature or not to be able to do things like:</p>
+<pre><code>quote-tag: &lt;"&gt;  ; doesn't work today, but could be useful?
+
+plain-tag: &lt;foo&gt;  ; works today
+one-quote: &lt;'foo&gt;  ; doesn't work today (in Red)
+two-quote: &lt;''foo&gt;  ; works today
+three-quote: &lt;'''foo&gt;  ; doesn't work today (in Red)
+</code></pre>
+<p>Since both " and ' can enclose attribute strings, Red is more consistent here... <strong>but</strong>...</p>
+<p>...I'd lean to wanting to scrap the sensitivity to " and '.  My feeling is that having a more general TAG! is probably worth the agnosticism about the content.  <strong>I think this will be even more true if interpolation and string binding work.</strong>  Because you'll be seeing a lot more of:</p>
+<pre><code>text: "One is greater than Two...?  :-/"
+html: reword {&lt;div label="1 &gt; 2"&gt;$text&lt;/div&gt;}
+</code></pre>
+<p>So lone tags will be serving more of a role as a dialecting part, and making them better general strings is probably the strongest play.</p>
+<p>^-- attention <a class="mention" href="/u/rgchris">@rgchris</a></p>
+<p>Note that this also brings <strong><code>&lt;...&gt;</code></strong> into the mix as an option for capturing patterns that use quotes and braces in weird ways.</p>
+<pre><code>&gt;&gt; weird: &lt;"}&gt;
+&gt;&gt; print as text! weird
+"}
+</code></pre>
+<p>This keeps you from having to write <strong><code>{|"}|}</code></strong> or <strong>"""}"</strong> or <strong><code>"\"}"</code></strong> in your source.  Which is pretty neat.</p>
+<p>(I'm actually on the fence of whether <strong><code>print [&lt;a&gt;]</code></strong> should print <strong><code>&lt;a&gt;</code></strong> or just <strong><code>a</code></strong> - the question is about why you think things are in TAG!s...if the delimiters are part of something visually significant or really just to get a distinct part of speech for the payload of "a".  Again, this is something that interpolation may twist the balance to where those who wish to generate HTML won't be as concerned about rendering behavior of TAG! as it would be used in more targeted ways, and not for boilerplate.)</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/14</link>
+        <pubDate>Mon, 25 Oct 2021 06:25:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-14</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="giuliolunati" data-post="9" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p>Ok, that's a strong argument. So {|...|} is good for me.</p>
+</blockquote>
+</aside>
+<p>To add more escaping levels, do you prefer:</p>
+<pre><code>{...}
+
+{|...|}
+
+{{|...|}}
+
+{{{|...|}}}
+</code></pre>
+<p>Or:</p>
+<pre><code>{...}
+
+{|...|}
+
+{||...||}
+
+{|||...|||}
+</code></pre>
+<p>Both have the same basic weakness that you can't start or end the content with a |.</p>
+<p>If you think of this as a generic pattern, e.g. one that TAG!s might follow, the multiple-bar form avoids making you write <strong>&lt;&lt;</strong> or <strong>&gt;&gt;</strong> sequences to accomplish escaping.  Even if these wouldn't technically conflict, it seems the visual appearance could create noise that looks like features which are more useful.</p>
+<p><em>(I still like my <a href="https://forum.rebol.info/t/console-transcript-replay-i-want-it/1711">console replay proposal</a>, which would be a novel feature other languages don't have.)</em></p>
+<p>It isn't likely to come up <em>that</em> often to need more than <strong>{|..|}</strong>.  Remember that you should only need that when you are trying to wrap code that has unpaired instances of <strong>{|</strong> and <strong>|}</strong> in it.</p>
+<p>(Of course, the nature of escaping is such that once you come up with these "rare" sequences you affect the situation by now making instances so they become non-rare... so they will start existing.)</p>
+<pre><code> Rebol [
+     Title "The Law Of Escape Sequences"
+     Description: {||
+         Whenever you introduce a new escaping delimiter, like
+         `|}`, then you inevitably end up having to talk about it.
+
+         Though I've pointed out we could avoid needing the {|| ||}
+         and just using { } if we made the rule that an open brace
+         that is at the end of a line will only be terminated by a
+         close brace that's at the beginning of a line.  That seems
+         like it would be an improvement over this...but you'd still
+         have the issue on single-line literals.
+     ||}
+ ]
+</code></pre>
+<hr>
+<p><strong>I think going by the bar count is likely better than going by the outer brace or angle bracket count.</strong></p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/13</link>
+        <pubDate>Mon, 25 Oct 2021 01:28:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-13</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I also suggested an additional rule...that you don't terminate braced strings except as:</p>
+<ul>
+<li>{...} -space-</li>
+<li>{...} -newline-</li>
+<li>{...}]</li>
+<li>{...})</li>
+</ul>
+<p>If we limit it to these possibilities, you can write things like:</p>
+<pre><code>code: {char c = '}';}
+</code></pre>
+</blockquote>
+</aside>
+<p>So this sounds nice in theory, but it creates a lot of headaches in terms of how it would interact with wanting to allow matched pairs of braces inside the content.</p>
+<pre><code>code: {
+   if (true) { printf("the character is %c\n", '}'); }
+}
+</code></pre>
+<p>At the point of the '}' we've already seen one open brace.  If this "doesn't count as a closing brace" does that mean it leaves the count at 1, or does the don't count rule only apply if we're at zero?</p>
+<p>C doesn't require the spaces, so: then what about this?</p>
+<pre><code>code: {
+   if(true){printf("the character is %c\n", '}');}
+}
+</code></pre>
+<p>There's a conflict here because <em>we're not assuming we know anything about how the text inside is being handled.</em>  I think when we go to trying to reason about what isn't a legal terminator (outside of allowing matching pairs of the delimiter sequence) it messes with that concept.</p>
+<p>I'd actually thought of the idea before the beefed up delimiters, so maybe it's best to leave it at that rule:</p>
+<pre><code>code: {|
+   if(true){printf("the character is %c\n", '}');}
+|}
+</code></pre>
+<p>...though we could say that if you open a delimiter sequence at the end of a line, then the closing delimiter has to be at the beginning of a line?  This would disallow:</p>
+<pre><code>stuff: {
+    Then things like this would be illegal. }</code></pre>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/12</link>
+        <pubDate>Sun, 24 Oct 2021 20:08:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-12</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="LkpPo" data-post="10" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/lkppo/40/239_2.png" class="avatar"> LkpPo:</div>
+<blockquote>
+<p>Aren't consecutive brackets sufficient instead of using two symbols?</p>
+</blockquote>
+</aside>
+<p>The vertical bars mean taking away only one character instead of two that you can use on the edges...and the belief is that it's more common to want to start or end regions of arbitrary text with { and } than with a bar.</p>
+<p>So you can represent things like:</p>
+<pre><code>{|{a"b"c}|}
+
+{|x"x}|}</code></pre>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/11</link>
+        <pubDate>Sun, 24 Oct 2021 19:51:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-11</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[LkpPo]]></dc:creator>
+        <description><![CDATA[
+            <p>Why do you need the tuple?</p>
+<p>Aren't consecutive brackets sufficient instead of using two symbols?</p>
+<p>{...}<br>
+{{...}}<br>
+{{{...}}}<br>
+...</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/10</link>
+        <pubDate>Sun, 24 Oct 2021 12:16:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-10</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="8" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I think my default is to agree that the exterior being an expression of the type of the thing is probably best, which is why I suggested that line of thinking first.</p>
+</blockquote>
+</aside>
+<p>Ok, that's a strong argument. So {|...|} is good for me.</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/9</link>
+        <pubDate>Sun, 24 Oct 2021 11:14:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-9</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="giuliolunati" data-post="6" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p>|{... is too similar to | {... in PARSE</p>
+</blockquote>
+</aside>
+<p><strong>I think my default is to agree that the exterior being an expression of the type of the thing is probably best, which is why I suggested that line of thinking first.</strong></p>
+<p>But to play devil's advocate a bit for the notation: It would be a rare juxtaposition, and just as with any other "weird" juxtaposition it's something you can control with your choices.</p>
+<p>Remember there are all sorts of other situations where you can shuffle it when you're bothered...</p>
+<pre><code>if tag &lt;&gt; &lt;div&gt; [...]  ; does &lt;&gt; next to div look weird?
+
+if not tag = &lt;div&gt; [...]  ; you make adjustments if it bugs you
+</code></pre>
+<blockquote>
+<p>Maybe <code>*{...}*</code> ?</p>
+</blockquote>
+<p>Just because the PARSE dialect puts strings up against <code>|</code> and code puts strings up against <code>=</code> doesn't mean there's not another dialect that would put strings up against <code>*</code>.</p>
+<p>So if you really want to maximize the differential between strings and arbitrary-thing-next-to-string...then having the braces on the outside is the way to go.  This would favor the <strong><code>{{|...|}}</code></strong> style of solutions.  There's certainly value in that, and maybe to say <strong><code>&lt;|...|&gt;</code></strong> style solutions for tags too.</p>
+<p>It's an issue of what you think is more important: stronger difference from characters of adjacent values or being able to have things like <strong><code>&lt;|&gt;</code></strong> and <strong><code>{|}</code></strong> with their historical meanings.</p>
+<p>(Note: <code>&lt;|&gt;</code> is today an "arrow-word" and not a tag, this concept would have to be updated to remove | from the arrow word characters, since <code>&lt;||&gt;</code> would be empty tag and not an arrow.)</p>
+<p>Anyway...remember situations that involve escaping are always going to have something suboptimal about them.  So efinitely do see if you can operate in the realm of real examples.  Because if you argue in the abstract about some behavior of {...} when you could just substitute a "..." then it's not a good example.  The best examples are those that show no good choices exist.</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/8</link>
+        <pubDate>Sun, 24 Oct 2021 10:43:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-8</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>|{... is too similar to | {... in PARSE</p>
+<p>'{...}' conflicts with '{...}    :-/</p>
+<p>={...}= could look good in multiline:</p>
+<p>={<br>
+....<br>
+}=</p>
+<p>But ={... is too similar to = {...</p>
+<p>Maybe *{...}* ?<br>
+Also, it's slightly more visible than |{ ... }|</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/6</link>
+        <pubDate>Sun, 24 Oct 2021 10:18:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-6</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="giuliolunati" data-post="3" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p>(or replace &lt;&gt; with another couple)</p>
+</blockquote>
+</aside>
+<p>Hm...well, it can't be <strong>({...})</strong> or <strong>[{...}]</strong> as those have meaning.</p>
+<p>But so long as we make the rule that you can't put things right up against strings otherwise:</p>
+<pre><code>{...}
+|{...}|
+||{...}||
+</code></pre>
+<p>This would allow <strong><code>{|}</code></strong> to mean <strong><code>"|"</code></strong> and <strong><code>|{}}|</code></strong> to mean <strong><code>"}"</code></strong>, for instance.</p>
+<p>Maybe a similar technique could help with weird tags?</p>
+<pre><code>&gt;&gt; make tag! "&gt;"
+== |&lt;&gt;&gt;|
+</code></pre>
+<hr>
+<p>Further thought: I've talked in the past about why banana clips <strong><code>(| a b c |)</code></strong> don't work in Rebol as a delimiter class, but <em>"inverse banana clips"</em> could work:</p>
+<pre><code>|(a b c)|
+</code></pre>
+<p>If you squint you might think of that as a symmetrical delimiter class, that has some nicer properties than <strong>#(...)</strong> in terms of marking both ends...and it has a reasonably "clean" look.</p>
+<p>The block form is a bit harder to distinguish from [[a b c]], but...maybe still would have some purpose.</p>
+<pre><code>|[a b c]|
+</code></pre>
+<p>Interesting...</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/5</link>
+        <pubDate>Sun, 24 Oct 2021 08:31:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-5</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Interesting idea; though it does take away from having representations like <strong><code>&lt;{foo}&gt;</code></strong> be a TAG!.</p>
+<p>So the question is if being able to say <strong>{|}</strong> is worth losing that family of tag possibilities, as well as just the general visual issue of "looking like a tag".</p>
+<p>It's probably better to sacrifice | ... but good to write up all the options for consideration.</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/4</link>
+        <pubDate>Sun, 24 Oct 2021 08:10:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-4</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>Another set of delimiters could be:</p>
+<p>{ ... }<br>
+&lt;{ ... }&gt;<br>
+&lt;&lt;{ ... }&gt;&gt;<br>
+...<br>
+(or replace &lt;&gt; with another couple)</p>
+<p>This choice has a little advantage: the only troubling chars in content are { }, while &lt; &gt; are fine.</p>
+<p>"&lt;" = {&lt;}<br>
+"&gt;" = {&gt;}</p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/3</link>
+        <pubDate>Sun, 24 Oct 2021 07:30:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-3</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1750">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I'm now 99% sure that { } best serves its purpose as a string form.</p>
+</blockquote>
+</aside>
+<p>You are very welcome to join the 100% party on this issue <img src="https://forum.rebol.info/images/emoji/twitter/wink.png?v=9" title=":wink:" class="emoji" alt=":wink:"></p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/2</link>
+        <pubDate>Sat, 23 Oct 2021 18:40:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-2</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+      <item>
+        <title>&quot;Raw&quot; Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm now 99% sure that { } best serves its purpose as a string form.</p>
+<p>But there were several talking points that came out of that discussion.  One was a desire for "raw" strings.</p>
+<p>This is the idea that outside of the termination sequence, there's <em>no</em> escaping.  This means you can put pretty much anything in the string.  Backslashes, carets...it's all fair game.</p>
+<h2>Two Very Different String Forms: When Are They Raw?</h2>
+<p>To <em>me</em>, it made the most sense that the raw form be the braced form...because it is so frequently applied to sections of arbitrary documentation text (such as the Description: in module headers).</p>
+<pre><code>Description: {
+    If you call this from C, then write:
+
+        if (a ^ b != 0) {  // bitwise XOR
+            printf("This is an example\n");
+        }
+
+     So there you see carets and backslashes working.
+}
+</code></pre>
+<p>With binding support for string interpolation, we can imagine this getting even more useful for representing snippets of other languages with escaped portions inside of them.</p>
+<p>However, <a class="mention" href="/u/giuliolunati">@giuliolunati</a> favored the idea of making quoted strings <em>mostly-raw</em>, because there was an easy-seeming way to escape quotes using only the quote character.</p>
+<pre><code>&gt;&gt; "This would be ""quotes"" inside a string"
+== {This would be "quotes" inside a string}
+</code></pre>
+<p>How braces are escaped historically ( e.g. <code>^}</code> ) is messier.  That drags caret into it, so now you're worrying about needing to escape carets and braces.  A more uniform approach appealed to Giulio, so he favored the quotes form...and would prefer it to be able to represent characters "as-is" by default, with this exception for embedded quotes.</p>
+<p>But from my point of view, I was seeking to avoid is any need to do search/replace on the embedded information.  So <em>mostly-raw</em> wasn't good enough; e.g. I'd like to copy and paste the C code out of the example above, not have its quotes doubled:</p>
+<pre><code>Description: "
+    if (a ^ b != 0) {  // bitwise XOR
+        printf(""This is an example\n"");   &lt;-- doubled quotes not good
+    }
+"
+</code></pre>
+<p>We also discussed that I'm averse to having ordinary quotes as multi-line strings... though maybe we should allow them.  :-/  But even if we did, it feels unintentionally incomplete to see something like:</p>
+<pre><code>Description: "
+</code></pre>
+<p>So for these reasons I wanted to focus the raw string effort on braced strings.  Yet there are a lot of things that it gets hard to represent in a raw string form when you try to use unmatched braces in the content.</p>
+<p>After thinking about it a bit, we came up with the option of being able to set the delimiter according to a number of braces and a vertical bar.</p>
+<pre><code>{...}  ; expects any { } inside to be matched pairs 
+{|...|}  ; allows internal unpaired and mismatched { }, {| |} matched pairs
+{{|...|}}  ; allows internal unpaired and mismatched {| |}, {{| |}} matched
+</code></pre>
+<p>etc. etc.</p>
+<p>This can handle some pretty sticky strings like <strong><code>{|ab"c"} {"d"ef|}</code></strong> if need be, where the data extracted is:</p>
+<pre><code>ab"c"} {"d"ef
+</code></pre>
+<p>The approach would allow any number of {{ }}, which sounds like it could get ugly.  But it's kind of like generic quoting, where I don't anticipate people using ridiculously high levels like {{{{|...|}}}}.  But having it be a general method has value--especially in generated code scenarios.</p>
+<p>Strings starting or ending with vertical bar forms like <strong>{|}</strong> get sacrificed, so you'll have to use "|" instead.  But you would use "}" so this just moves | into the same category as } and {.</p>
+<p>I also suggested an additional rule...that you don't terminate braced strings except as:</p>
+<ul>
+<li>{...} -space-</li>
+<li>{...} -newline-</li>
+<li>{...}]</li>
+<li>{...})</li>
+</ul>
+<p>If we limit it to these possibilities, you can write things like:</p>
+<pre><code> code: {char c = '}';}
+</code></pre>
+<p>It seems that a lot of unpaired brace cases are single character literals like this, which don't fall under the rule.  You might want to put the bars in for good measure anyway:</p>
+<pre><code> code: {|char c = '}';|}
+</code></pre>
+<p>In any case, the other thing we were leaning toward here was that when quoted strings are escaped, they do so compatibility with the classical C backslashes, based on the idea that caret escaping hadn't done the language any particular favors.</p>
+<p>Just wanted to write this up while I still was thinking about it... <img src="https://forum.rebol.info/images/emoji/twitter/zzz.png?v=9" title=":zzz:" class="emoji" alt=":zzz:"></p>
+          <p><a href="https://forum.rebol.info/t/raw-strings/1750/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/raw-strings/1750/1</link>
+        <pubDate>Sat, 23 Oct 2021 13:33:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1750-1</guid>
+        <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+      </item>
+  </channel>
+</rss>

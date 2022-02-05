@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>MAP-EACH + generic Identity Swapping vs. REMOVE-EACH</title>
+    <link>https://forum.rebol.info/t/map-each-generic-identity-swapping-vs-remove-each/1316</link>
+    <description>REMOVE-EACH is a somewhat problematic operation, in that it is doing a low-level manipulation of an array&#39;s contents...and you don&#39;t want to expose any intermediate states that aren&#39;t valid.
+
+The efficiency of it is questionable...e.g. if you have an array that is 1,000 items long and you remove half of them, your array will now have 500 unused slots.  Also, each time you remove an item you have to slide the rest of the array down...otherwise you leave an array which may have outstanding references in a potentially invalid state.
+
+Ren-C went to some extremes to try and make REMOVE-EACH &quot;rigorous&quot;.  But it seems that it might be better to just write something like
+
+    remove-each: func [
+        {Removes values for each block that returns true.}
+
+        return: &quot;Number of removed series items, or null if BREAK&quot;
+            [&lt;opt&gt; integer!]
+        &#39;vars &quot;Word or block of words to set each time (local)&quot;
+            [blank! word! block!]
+        data &quot;The series to traverse (modified)&quot; ; should BLANK! opt-out?
+            [&lt;blank&gt; any-series!]
+        body &quot;Block to evaluate (return TRUE to remove)&quot;
+            [&lt;const&gt; block!]  ; !! Should support ACTION!
+    ][
+        if empty? :body [body: [void]]  ; GROUP!s vaporize when empty, address it
+
+        let mp: either block? vars [:map-each/splice] [:map-each]
+
+        let new-data: mp (vars) data compose/deep [
+            if not (as group! body) [get/any &#39;(vars)]
+        ]
+        if null? new-data [return null]  ; BREAK
+
+        let diff: (length of data) - (length of new-data)
+        swap-contents data new-data
+        return diff
+    ]
+
+This hinges on the SWAP-CONTENTS low-level operation (better name sought), which would simply take the guts of the new series and swap it out with the old series.  Code for this already exists.
+
+What this means is that any code which accessed the original array during the removal process would see it as the pre-modified form.  Which is basically what the Ren-C bulletproofing did, just much more awkwardly.  :-/
+
+REMOVE-EACH isn&#39;t all that terribly common, and the acrobatics required to make it safe aren&#39;t really a good use of time...especially to port here in stackless.  It&#39;s better to invest more into making MAP-EACH stackless and rigorous, and spending time on more important problems.</description>
+    
+    <lastBuildDate>Tue, 04 Aug 2020 21:07:33 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/map-each-generic-identity-swapping-vs-remove-each/1316.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>MAP-EACH + generic Identity Swapping vs. REMOVE-EACH</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Trying this out, there are a couple of problems.</p>
+<p>One is the general problem I've mentioned before, of when you try to incorporate additional code with a loop's body...of the binding of the variables vs. the names of the constructs you're adding in, summarized here:</p>
+<p><strong><a href="https://forum.rebol.info/t/compatibility-map-each-and-problems-therewith/1192">Compatibility MAP-EACH and problems therewith</a></strong></p>
+<p>The other problem is that MAP-EACH as written currently always returns a BLOCK!.  (This now reminds me of why REMOVE-EACH's implementation was such a pain and not written in terms of MAP-EACH in the first place.)</p>
+<p>So... this needs some deeper thinking.  :-/</p>
+          <p><a href="https://forum.rebol.info/t/map-each-generic-identity-swapping-vs-remove-each/1316/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/map-each-generic-identity-swapping-vs-remove-each/1316/2</link>
+        <pubDate>Tue, 04 Aug 2020 21:07:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1316-2</guid>
+        <source url="https://forum.rebol.info/t/map-each-generic-identity-swapping-vs-remove-each/1316.rss">MAP-EACH + generic Identity Swapping vs. REMOVE-EACH</source>
+      </item>
+      <item>
+        <title>MAP-EACH + generic Identity Swapping vs. REMOVE-EACH</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>REMOVE-EACH is a somewhat problematic operation, in that it is doing a low-level manipulation of an array's contents...and you don't want to expose any intermediate states that aren't valid.</p>
+<p>The efficiency of it is questionable...e.g. if you have an array that is 1,000 items long and you remove half of them, your array will now have 500 unused slots.  Also, each time you remove an item you have to slide the rest of the array down...otherwise you leave an array which may have outstanding references in a potentially invalid state.</p>
+<p>Ren-C went to some extremes to try and make REMOVE-EACH "rigorous".  But it seems that it might be better to just write something like</p>
+<pre><code>remove-each: func [
+    {Removes values for each block that returns true.}
+
+    return: "Number of removed series items, or null if BREAK"
+        [&lt;opt&gt; integer!]
+    'vars "Word or block of words to set each time (local)"
+        [blank! word! block!]
+    data "The series to traverse (modified)" ; should BLANK! opt-out?
+        [&lt;blank&gt; any-series!]
+    body "Block to evaluate (return TRUE to remove)"
+        [&lt;const&gt; block!]  ; !! Should support ACTION!
+][
+    if empty? :body [body: [void]]  ; GROUP!s vaporize when empty, address it
+
+    let mp: either block? vars [:map-each/splice] [:map-each]
+
+    let new-data: mp (vars) data compose/deep [
+        if not (as group! body) [get/any '(vars)]
+    ]
+    if null? new-data [return null]  ; BREAK
+
+    let diff: (length of data) - (length of new-data)
+    swap-contents data new-data
+    return diff
+]
+</code></pre>
+<p>This hinges on the SWAP-CONTENTS low-level operation (better name sought), which would simply take the guts of the new series and swap it out with the old series.  Code for this already exists.</p>
+<p>What this means is that any code which accessed the original array during the removal process would see it as the pre-modified form.  Which is basically what the Ren-C bulletproofing did, just much more awkwardly.  :-/</p>
+<p>REMOVE-EACH isn't all that terribly common, and the acrobatics required to make it safe aren't really a good use of time...especially to port here in stackless.  It's better to invest more into making MAP-EACH stackless and rigorous, and spending time on more important problems.</p>
+          <p><a href="https://forum.rebol.info/t/map-each-generic-identity-swapping-vs-remove-each/1316/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/map-each-generic-identity-swapping-vs-remove-each/1316/1</link>
+        <pubDate>Tue, 04 Aug 2020 20:07:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1316-1</guid>
+        <source url="https://forum.rebol.info/t/map-each-generic-identity-swapping-vs-remove-each/1316.rss">MAP-EACH + generic Identity Swapping vs. REMOVE-EACH</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Beta/One Quoting in the API decision: rebValue() and rebValueQ()</title>
+    <link>https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095</link>
+    <description>In the question of whether or not APIs should quote spliced values, the answer is...
+
+## **Only if you ask it to** *...but...* ***make it really easy to ask***.
+
+Previously this was considered to be undesirable:
+
+    const char *spelling = rebSpell(rebQ(word));
+
+To mitigate that, instead go ahead and offer a &quot;Q&quot; version of every variadic evaluating API:
+
+    const char *spelling = rebSpellQ(word)
+
+You can choose either way, and you can also switch back and forth with rebQ() to add a quoting level to your splices and rebU() to remove one.
+## Looks good enough AND makes people feel in control
+
+People may grumble when `rebValue(&quot;append [copy reduce]&quot;, word);` acts like:
+
+    do compose [append [copy reduce] (word)]
+
+They may have forgotten they were in C (or JavaScript, or whatever), and at runtime in that language the variable names are gone.  There is no &quot;word&quot;...just as &quot;word&quot; is gone after the COMPOSE is finished.
+
+Though they may grumble...at least they&#39;d understand.  On the other hand, they might get pretty mad if they get **[&#39;10 &#39;20]** out of the following if x and y are plain INTEGER!
+
+    REBVAL *coordinate = rebValue(&quot;reduce [&quot;, x, y, &quot;]&quot;);
+
+This is why I think the Q is important to have *somewhere* . If they&#39;d used `rebValueQ()`, they feel more like *&quot;oh, I asked for that...didn&#39;t I!&quot;*
+
+So the way I look at it is that if someone studies the issues and decides they want to use the Q APIs by default and never touch the non-Q ones, then that&#39;s their business.  If someone goes the other way, they can do that.  But I think looking at what kind of code you&#39;re writing and choosing appropriately makes the most sense...which was the direction I&#39;d been headed in.
+
+## COMPOSE may be able to benefit from this, too
+
+COMPOSE can use .QUOTE (today, /QUOTE) as a &quot;predicate&quot; to tell it to quote the things it put in slots:
+
+     &gt;&gt; word: first [print]
+     &gt;&gt; compose .quote [append [copy reduce] (word)]
+     == [append [copy reduce] &#39;print]
+
+Though it&#39;s pretty lightweight as is to say `&#39;(...)` on your slots instead of just `(...)`, you still might want a specialization for this if you had a lot of them.  Maybe called **composeQ** to line up with the API (I&#39;ve wondered about doing mixed-case names like that, as I&#39;m not crazy about `compose-q` or `composeq` or `qcompose`.)
+
+In any case, working with compose lately got me seeing it through the lens of *&quot;how much better do you expect a C API to a language to be than the language itself.&quot;*  I think it&#39;s gotten to right about where it can be, and at this point there&#39;s more value in having the API stable than in tweaking it more.  So this is what I&#39;m ready to commit to for Beta/One.</description>
+    
+    <lastBuildDate>Sun, 16 May 2021 20:23:46 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Beta/One Quoting in the API decision: rebValue() and rebValueQ()</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1095">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>In the question of whether or not APIs should quote spliced values, the answer is...</p>
+<p><strong>Only if you ask it to</strong> <em>...but...</em> <em><strong>make it really easy to ask</strong></em>.</p>
+</blockquote>
+</aside>
+<p>The big picture thought here was right, but the way I proposed to do it (rebValue() vs rebValueQ()) was wrong.</p>
+<p>My new idea is that we take advantage of the new behavior of <strong>@</strong> in order to get back a value as-is, and have this be part of the scanned string portion:</p>
+<p>So instead of writing:</p>
+<pre><code>if (rebDid("action?", rebQ(var))) {...}  ; would run ACTION! without rebQ()
+</code></pre>
+<p>We can say:</p>
+<pre><code>if (rebDid("action? @", var)) {...}
+</code></pre>
+<p>When we learn in general that <strong>@ x</strong> produces <strong>x</strong>, we take for granted that this is a general language facility.</p>
+<p>You could use THE as well:</p>
+<pre><code>if (rebDid("action? the", var)) {...}
+</code></pre>
+<p>But I like how the @ stands out as far as these APIs are concerned.  It has the right properties.</p>
+<p>Nothing is getting "quoted" here.  It's just unevaluated.  So it won't be the right choice in all cases (like if you want to actually put a tick mark on something to get a QUOTED! value, e.g. to make a soft-quoted branch or similar).  And if your intention is to structurally make a single item in a block, you won't want the independent <code>@</code> as a second value.</p>
+<p>Yet for what "rebValueQ" and "rebDidQ" and "rebElideQ" (etc.) were being used to solve, this is the better answer.</p>
+<p>This makes a significant difference in the size and perception of complexity of the C library header file...because there were already inline / non-inline / c++ / c89 variants... and when each has a Q or non-Q that doubles the size.</p>
+<p>(I've already mentioned the very important point that you want to avoid taxes on people like "did I pick the right API to use, the Q version or not...removing that concern and variance lifts a big weight off one's shoulders.)</p>
+          <p><a href="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095/3</link>
+        <pubDate>Sun, 16 May 2021 17:58:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1095-3</guid>
+        <source url="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095.rss">Beta/One Quoting in the API decision: rebValue() and rebValueQ()</source>
+      </item>
+      <item>
+        <title>Beta/One Quoting in the API decision: rebValue() and rebValueQ()</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Something I mentioned in chat is that a feature that put this decision over the top for me was <a href="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020">soft-quoted-branching</a>.</p>
+<p>Quick refresher: that's the feature which means you get this behavior:</p>
+<pre><code>&gt;&gt; if true [1 + 2]
+== 3
+
+&gt;&gt; if true '[1 + 2]
+== [1 + 2]
+</code></pre>
+<p>This means that within the framework of the language, you understand that branches of conditionals are one of those things you understand to be quoted by default.  If they weren't, they wouldn't be able to see the quote... it would be stripped off when they received their evaluative parameter.</p>
+<p>I like this feature for many reasons.  It makes EITHER and IF...ELSE fully interchangeable, and not only can your code be shorter, but it can be more performant in CPU and GC/memory usage.  I mentioned in chat that where you used to have to write:</p>
+<pre><code> compose/deep/only [if condition [(block)]]
+</code></pre>
+<p>You can get this with the <a href="https://github.com/metaeducation/ren-c/pull/944" rel="nofollow noopener">updated COMPOSE splicing rule</a> simply by saying:</p>
+<pre><code> compose [if condition '(block)]
+</code></pre>
+<p>So far, I think the benefits more than outweigh any drawbacks.  But consider what you expect now when you say:</p>
+<pre><code>rebElide("if condition", some_block);
+</code></pre>
+<p>I don't know about you, but I expect that to run the block as code.  My eyes don't pick up any quoting going on here.  So if the API were doing it automatically based on some expectation that every slot will be evaluative, that's going to be wrong.  It would seem like a bug.</p>
+<p>But what if I wrote either of:</p>
+<pre><code>rebElideQ("if condition", some_block);
+rebElide("if condition", rebQ(some_block));
+</code></pre>
+<p>If I wound up with the block as-is in this case, <em>it would feel like a feature</em>.  I'm in control of where the quotes are showing up, so when the language construct acts like there's a quote there I'm not surprised.</p>
+<p>So if anyone is unhappy that <strong>rebValue("first", some_group)</strong> runs the GROUP! as if it had been written there literally...they can blame soft quoted branches for it.  They may decide to become a Q-ist, and always use rebValueQ, rebSpellQ, etc. "just to be safe".  Until they find out it isn't really safe in any general sense, and then perhaps they'll do what I'm suggesting...to use the right mix of operators for the job, based on what kind of code you're executing.</p>
+          <p><a href="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095/2</link>
+        <pubDate>Mon, 04 Mar 2019 13:24:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1095-2</guid>
+        <source url="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095.rss">Beta/One Quoting in the API decision: rebValue() and rebValueQ()</source>
+      </item>
+      <item>
+        <title>Beta/One Quoting in the API decision: rebValue() and rebValueQ()</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In the question of whether or not APIs should quote spliced values, the answer is...</p>
+<h2>
+<strong>Only if you ask it to</strong> <em>...but...</em> <em><strong>make it really easy to ask</strong></em>.</h2>
+<p>Previously this was considered to be undesirable:</p>
+<pre><code>const char *spelling = rebSpell(rebQ(word));
+</code></pre>
+<p>To mitigate that, instead go ahead and offer a "Q" version of every variadic evaluating API:</p>
+<pre><code>const char *spelling = rebSpellQ(word)
+</code></pre>
+<p>You can choose either way, and you can also switch back and forth with rebQ() to add a quoting level to your splices and rebU() to remove one.</p>
+<h2>Looks good enough AND makes people feel in control</h2>
+<p>People may grumble when <code>rebValue("append [copy reduce]", word);</code> acts like:</p>
+<pre><code>do compose [append [copy reduce] (word)]
+</code></pre>
+<p>They may have forgotten they were in C (or JavaScript, or whatever), and at runtime in that language the variable names are gone.  There is no "word"...just as "word" is gone after the COMPOSE is finished.</p>
+<p>Though they may grumble...at least they'd understand.  On the other hand, they might get pretty mad if they get <strong>['10 '20]</strong> out of the following if x and y are plain INTEGER!</p>
+<pre><code>REBVAL *coordinate = rebValue("reduce [", x, y, "]");
+</code></pre>
+<p>This is why I think the Q is important to have <em>somewhere</em> . If they'd used <code>rebValueQ()</code>, they feel more like <em>"oh, I asked for that...didn't I!"</em></p>
+<p>So the way I look at it is that if someone studies the issues and decides they want to use the Q APIs by default and never touch the non-Q ones, then that's their business.  If someone goes the other way, they can do that.  But I think looking at what kind of code you're writing and choosing appropriately makes the most sense...which was the direction I'd been headed in.</p>
+<h2>COMPOSE may be able to benefit from this, too</h2>
+<p>COMPOSE can use .QUOTE (today, /QUOTE) as a "predicate" to tell it to quote the things it put in slots:</p>
+<pre><code> &gt;&gt; word: first [print]
+ &gt;&gt; compose .quote [append [copy reduce] (word)]
+ == [append [copy reduce] 'print]
+</code></pre>
+<p>Though it's pretty lightweight as is to say <code>'(...)</code> on your slots instead of just <code>(...)</code>, you still might want a specialization for this if you had a lot of them.  Maybe called <strong>composeQ</strong> to line up with the API (I've wondered about doing mixed-case names like that, as I'm not crazy about <code>compose-q</code> or <code>composeq</code> or <code>qcompose</code>.)</p>
+<p>In any case, working with compose lately got me seeing it through the lens of <em>"how much better do you expect a C API to a language to be than the language itself."</em>  I think it's gotten to right about where it can be, and at this point there's more value in having the API stable than in tweaking it more.  So this is what I'm ready to commit to for Beta/One.</p>
+          <p><a href="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095/1</link>
+        <pubDate>Mon, 04 Mar 2019 04:56:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1095-1</guid>
+        <source url="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095.rss">Beta/One Quoting in the API decision: rebValue() and rebValueQ()</source>
+      </item>
+  </channel>
+</rss>

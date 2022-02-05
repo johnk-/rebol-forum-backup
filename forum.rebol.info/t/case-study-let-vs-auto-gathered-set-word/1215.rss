@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Case Study: LET vs. auto-gathered SET-WORD!</title>
+    <link>https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215</link>
+    <description>We now have a [clunky implementation of LET](https://github.com/metaeducation/ren-c/pull/1014) *(when I say clunky, I mean it&#39;s basically like how SET-WORD!s were gathered before...so no clever virtual binding just yet)*.  I explain in that pull request what the difference virtual binding would make would be; you would have to be -running- a **let** in order to see its impacts.  Simple inert references in blocks would not be enough to cause memory to be allocated for a variable.  It would have to be run, at which point there would be an allocation and then a &quot;wave&quot; of binding traveling along with the evaluation stream.
+
+But the clunky method used for the moment is at least good enough to get us started moving away from SET-WORD! gathering, and assess the approach.  What I want us to do is to slowly start turning FUNCTIONs into FUNC, and see what problems we find (other than the known issue with PARSE rules like **copy x: to end** not having a place to put a LET).  Then someday we deprecate FUNCTION.  And then someday after that, they [become synonyms](https://forum.rebol.info/t/abbreviations-as-synonyms/1211).
+
+Here is a sample function, just to look at the BEFORE and AFTER (of a kind of klutzy piece of code used by the help system on derived functions, which is not particularly great to uphold as great code but it&#39;s a real thing to look at):
+
+## Before
+
+    dig-action-meta-fields: function [value [action!]] [
+        meta: meta-of :value else [
+            return make system/standard/action-meta [
+                description: _
+                return-type: _
+                return-note: _
+                parameter-types: make frame! :value
+                parameter-notes: make frame! :value
+            ]
+        ]
+
+        underlying: try ensure [&lt;opt&gt; action!] any [
+            select meta &#39;specializee
+            select meta &#39;adaptee
+            first try match block! select meta &#39;chainees
+        ]
+
+        fields: try all [:underlying | dig-action-meta-fields :underlying]
+
+        inherit-frame: function [parent [&lt;blank&gt; frame!]] [
+            let child: make frame! :value
+            for-each param words of child [  ; `for-each param child` locks child
+                child/(param): maybe select parent param
+            ]
+            return child
+        ]
+
+        return make system/standard/action-meta [
+            description: try ensure [&lt;opt&gt; text!] any [
+                select meta &#39;description
+                copy try select fields &#39;description
+            ]
+            return-type: try ensure [&lt;opt&gt; block!] any [
+                select meta &#39;return-type
+                copy try select fields &#39;return-type
+            ]
+            return-note: try ensure [&lt;opt&gt; text!] any [
+                select meta &#39;return-note
+                copy try select fields &#39;return-note
+            ]
+            parameter-types: try ensure [&lt;opt&gt; frame!] any [
+                select meta &#39;parameter-types
+                inherit-frame try select fields &#39;parameter-types
+            ]
+            parameter-notes: try ensure [&lt;opt&gt; frame!] any [
+                select meta &#39;parameter-notes
+                inherit-frame try select fields &#39;parameter-notes
+            ]
+        ]
+    ]
+
+## After
+
+*(Note: While the name is FUNC for the moment--to indicate suppression of auto-gathering--long term it could be FUNCTION as a synonym, under the current plan.)*
+
+    dig-action-meta-fields: func [value [action!]] [
+        let meta: meta-of :value else [
+            return make system/standard/action-meta [
+                description: _
+                return-type: _
+                return-note: _
+                parameter-types: make frame! :value
+                parameter-notes: make frame! :value
+            ]
+        ]
+
+        let underlying: try ensure [&lt;opt&gt; action!] any [
+            select meta &#39;specializee
+            select meta &#39;adaptee
+            first try match block! select meta &#39;chainees
+        ]
+
+        let fields: try all [:underlying | dig-action-meta-fields :underlying]
+
+        let inherit-frame: func [parent [&lt;blank&gt; frame!]] [
+            let child: make frame! :value
+            for-each param words of child [  ; `for-each param child` locks child
+                child/(param): maybe select parent param
+            ]
+            return child
+        ]
+
+        return make system/standard/action-meta [
+            description: try ensure [&lt;opt&gt; text!] any [
+                select meta &#39;description
+                copy try select fields &#39;description
+            ]
+            return-type: try ensure [&lt;opt&gt; block!] any [
+                select meta &#39;return-type
+                copy try select fields &#39;return-type
+            ]
+            return-note: try ensure [&lt;opt&gt; text!] any [
+                select meta &#39;return-note
+                copy try select fields &#39;return-note
+            ]
+            parameter-types: try ensure [&lt;opt&gt; frame!] any [
+                select meta &#39;parameter-types
+                inherit-frame try select fields &#39;parameter-types
+            ]
+            parameter-notes: try ensure [&lt;opt&gt; frame!] any [
+                select meta &#39;parameter-notes
+                inherit-frame try select fields &#39;parameter-notes
+            ]
+        ]
+    ]
+
+## Observations
+
+The auto-gathered version may seem cleaner to you, because you&#39;re not needing to mark the locals explicitly, but that comes at a cost.
+
+What cost?  Well, how big is the frame for the first case...?
+
+    &gt;&gt; words of make frame! :dig-action-meta-fields  ; BEFORE
+    == [return value meta description return-type return-note parameter-types
+        parameter-notes underlying fields inherit-frame child]
+
+...and the second case?
+
+    &gt;&gt; words of make frame! :dig-action-meta-fields  ; AFTER
+    == [return value meta underlying fields inherit-frame child]
+
+Here we have 4 unnecessary variables, and it&#39;s [not just about wasted memory and processing cycles](https://forum.rebol.info/t/rethinking-auto-gathered-set-word-locals/1150).  This is why people who were skeptical of FUNCTION preferred FUNC and explicit locals.  But it seems to me that LET offers the best of both worlds.
+
+**Like I say, this is not to say that an auto-gathering mechanism for SET-WORD! shouldn&#39;t exist.**  It&#39;s the kind of thing someone should be able to dream up here in the Minecraft-Of-Programming.  But it&#39;s not what we want in the mezzanine and core implementation code.  So we should let those who want it get it out of some third-party module or extension of some kind.
+
+## Thoughts on Unbinding
+
+For reasons of safety, I&#39;m wondering if any SET-WORD! in the body of the function be unbound if it isn&#39;t an argument, in the &quot;wave&quot; of a LET, or explicitly `&lt;with&gt;`&#39;d in the spec.
+
+    y: &lt;global&gt;
+    foo: func [x] [
+        y: x + 1
+    ]
+    foo 10  ; error
+
+    bar: func [x &lt;with&gt; y] [
+        y: x + 1
+    ]
+    bar 10  ; sets y to 11
+
+In the design I&#39;m thinking of, it would only unbind the SET-WORD!s.  e.g.
+
+    y: &lt;global&gt;
+    baz: func [condition] [
+        print mold y
+        code: [y: 11]
+        if condition [do code]
+    ]
+    baz false  ; would print &lt;global&gt;
+    baz true  ; would print &lt;global&gt; then error, y is unbound
+
+Do people have any gut feelings on this?  I feel like it would help catch bugs.</description>
+    
+    <lastBuildDate>Tue, 12 Nov 2019 08:08:42 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Case Study: LET vs. auto-gathered SET-WORD!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1215">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>Unbinding set-words could really help to avoid bugs, it would lead to every accessed word having to be explicitly having to be defined as either global or local.</p>
+</blockquote>
+</aside>
+<p>I think this is the better angle, and am looking into it.  That said, what the locals-gathering abstraction does has applications as well.  So it's sort of a matter of making sure people have choices.</p>
+<p>(Rebol <em>is</em> the ministry of crazy ideas; I think the level to which this is "throw out every bit of conventional thinking" is oft underestimated.)</p>
+          <p><a href="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215/3</link>
+        <pubDate>Tue, 12 Nov 2019 08:08:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1215-3</guid>
+        <source url="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215.rss">Case Study: LET vs. auto-gathered SET-WORD!</source>
+      </item>
+      <item>
+        <title>Case Study: LET vs. auto-gathered SET-WORD!</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>Unbinding set-words could really help to avoid bugs, it would lead to every accessed word having to be explicitly having to be defined as either global or local.</p>
+<p>And from the ministry of crazy ideas: what if set-words were unbound and would be gathered as locals the moment they are accessed? Like, instead of erroring just make it local and keep going.</p>
+          <p><a href="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215/2</link>
+        <pubDate>Tue, 12 Nov 2019 05:53:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1215-2</guid>
+        <source url="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215.rss">Case Study: LET vs. auto-gathered SET-WORD!</source>
+      </item>
+      <item>
+        <title>Case Study: LET vs. auto-gathered SET-WORD!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>We now have a <a href="https://github.com/metaeducation/ren-c/pull/1014" rel="nofollow noopener">clunky implementation of LET</a> <em>(when I say clunky, I mean it's basically like how SET-WORD!s were gathered before...so no clever virtual binding just yet)</em>.  I explain in that pull request what the difference virtual binding would make would be; you would have to be -running- a <strong>let</strong> in order to see its impacts.  Simple inert references in blocks would not be enough to cause memory to be allocated for a variable.  It would have to be run, at which point there would be an allocation and then a "wave" of binding traveling along with the evaluation stream.</p>
+<p>But the clunky method used for the moment is at least good enough to get us started moving away from SET-WORD! gathering, and assess the approach.  What I want us to do is to slowly start turning FUNCTIONs into FUNC, and see what problems we find (other than the known issue with PARSE rules like <strong>copy x: to end</strong> not having a place to put a LET).  Then someday we deprecate FUNCTION.  And then someday after that, they <a href="https://forum.rebol.info/t/abbreviations-as-synonyms/1211">become synonyms</a>.</p>
+<p>Here is a sample function, just to look at the BEFORE and AFTER (of a kind of klutzy piece of code used by the help system on derived functions, which is not particularly great to uphold as great code but it's a real thing to look at):</p>
+<h2>Before</h2>
+<pre><code>dig-action-meta-fields: function [value [action!]] [
+    meta: meta-of :value else [
+        return make system/standard/action-meta [
+            description: _
+            return-type: _
+            return-note: _
+            parameter-types: make frame! :value
+            parameter-notes: make frame! :value
+        ]
+    ]
+
+    underlying: try ensure [&lt;opt&gt; action!] any [
+        select meta 'specializee
+        select meta 'adaptee
+        first try match block! select meta 'chainees
+    ]
+
+    fields: try all [:underlying | dig-action-meta-fields :underlying]
+
+    inherit-frame: function [parent [&lt;blank&gt; frame!]] [
+        let child: make frame! :value
+        for-each param words of child [  ; `for-each param child` locks child
+            child/(param): maybe select parent param
+        ]
+        return child
+    ]
+
+    return make system/standard/action-meta [
+        description: try ensure [&lt;opt&gt; text!] any [
+            select meta 'description
+            copy try select fields 'description
+        ]
+        return-type: try ensure [&lt;opt&gt; block!] any [
+            select meta 'return-type
+            copy try select fields 'return-type
+        ]
+        return-note: try ensure [&lt;opt&gt; text!] any [
+            select meta 'return-note
+            copy try select fields 'return-note
+        ]
+        parameter-types: try ensure [&lt;opt&gt; frame!] any [
+            select meta 'parameter-types
+            inherit-frame try select fields 'parameter-types
+        ]
+        parameter-notes: try ensure [&lt;opt&gt; frame!] any [
+            select meta 'parameter-notes
+            inherit-frame try select fields 'parameter-notes
+        ]
+    ]
+]
+</code></pre>
+<h2>After</h2>
+<p><em>(Note: While the name is FUNC for the moment--to indicate suppression of auto-gathering--long term it could be FUNCTION as a synonym, under the current plan.)</em></p>
+<pre><code>dig-action-meta-fields: func [value [action!]] [
+    let meta: meta-of :value else [
+        return make system/standard/action-meta [
+            description: _
+            return-type: _
+            return-note: _
+            parameter-types: make frame! :value
+            parameter-notes: make frame! :value
+        ]
+    ]
+
+    let underlying: try ensure [&lt;opt&gt; action!] any [
+        select meta 'specializee
+        select meta 'adaptee
+        first try match block! select meta 'chainees
+    ]
+
+    let fields: try all [:underlying | dig-action-meta-fields :underlying]
+
+    let inherit-frame: func [parent [&lt;blank&gt; frame!]] [
+        let child: make frame! :value
+        for-each param words of child [  ; `for-each param child` locks child
+            child/(param): maybe select parent param
+        ]
+        return child
+    ]
+
+    return make system/standard/action-meta [
+        description: try ensure [&lt;opt&gt; text!] any [
+            select meta 'description
+            copy try select fields 'description
+        ]
+        return-type: try ensure [&lt;opt&gt; block!] any [
+            select meta 'return-type
+            copy try select fields 'return-type
+        ]
+        return-note: try ensure [&lt;opt&gt; text!] any [
+            select meta 'return-note
+            copy try select fields 'return-note
+        ]
+        parameter-types: try ensure [&lt;opt&gt; frame!] any [
+            select meta 'parameter-types
+            inherit-frame try select fields 'parameter-types
+        ]
+        parameter-notes: try ensure [&lt;opt&gt; frame!] any [
+            select meta 'parameter-notes
+            inherit-frame try select fields 'parameter-notes
+        ]
+    ]
+]
+</code></pre>
+<h2>Observations</h2>
+<p>The auto-gathered version may seem cleaner to you, because you're not needing to mark the locals explicitly, but that comes at a cost.</p>
+<p>What cost?  Well, how big is the frame for the first case...?</p>
+<pre><code>&gt;&gt; words of make frame! :dig-action-meta-fields  ; BEFORE
+== [return value meta description return-type return-note parameter-types
+    parameter-notes underlying fields inherit-frame child]
+</code></pre>
+<p>...and the second case?</p>
+<pre><code>&gt;&gt; words of make frame! :dig-action-meta-fields  ; AFTER
+== [return value meta underlying fields inherit-frame child]
+</code></pre>
+<p>Here we have 4 unnecessary variables, and it's <a href="https://forum.rebol.info/t/rethinking-auto-gathered-set-word-locals/1150">not just about wasted memory and processing cycles</a>.  This is why people who were skeptical of FUNCTION preferred FUNC and explicit locals.  But it seems to me that LET offers the best of both worlds.</p>
+<p><strong>Like I say, this is not to say that an auto-gathering mechanism for SET-WORD! shouldn't exist.</strong>  It's the kind of thing someone should be able to dream up here in the Minecraft-Of-Programming.  But it's not what we want in the mezzanine and core implementation code.  So we should let those who want it get it out of some third-party module or extension of some kind.</p>
+<h2>Thoughts on Unbinding</h2>
+<p>For reasons of safety, I'm wondering if any SET-WORD! in the body of the function be unbound if it isn't an argument, in the "wave" of a LET, or explicitly <code>&lt;with&gt;</code>'d in the spec.</p>
+<pre><code>y: &lt;global&gt;
+foo: func [x] [
+    y: x + 1
+]
+foo 10  ; error
+
+bar: func [x &lt;with&gt; y] [
+    y: x + 1
+]
+bar 10  ; sets y to 11
+</code></pre>
+<p>In the design I'm thinking of, it would only unbind the SET-WORD!s.  e.g.</p>
+<pre><code>y: &lt;global&gt;
+baz: func [condition] [
+    print mold y
+    code: [y: 11]
+    if condition [do code]
+]
+baz false  ; would print &lt;global&gt;
+baz true  ; would print &lt;global&gt; then error, y is unbound
+</code></pre>
+<p>Do people have any gut feelings on this?  I feel like it would help catch bugs.</p>
+          <p><a href="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215/1</link>
+        <pubDate>Thu, 26 Sep 2019 11:26:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1215-1</guid>
+        <source url="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215.rss">Case Study: LET vs. auto-gathered SET-WORD!</source>
+      </item>
+  </channel>
+</rss>

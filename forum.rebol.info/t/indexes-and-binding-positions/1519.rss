@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Indexes And Binding Positions</title>
+    <link>https://forum.rebol.info/t/indexes-and-binding-positions/1519</link>
+    <description>The fact that blocks have a &quot;somewhat hidden&quot; index in them creates no shortage of problems system-wide.  The semantics of this index are quite nebulous.  COPY doesn&#39;t see backwards, for instance:
+
+    r3-alpha&gt;&gt; data: [a b c]
+
+    r3-alpha&gt;&gt; pos: next data
+    == [b c]
+
+    r3-alpha&gt;&gt; copied-pos: copy pos
+    == [b c]
+
+    r3-alpha&gt;&gt; back pos
+    == [a b c]
+
+    r3-alpha&gt;&gt; back copied-pos
+    == [b c]
+
+Your new `copied-pos` only has parity with the original `pos` so long as no one ever uses BACK on it.  This semantic question is inherent to all kinds of functions that accept blocks that aren&#39;t at their head.  How about the low-level MAKE FUNCTION! ?
+
+    r3-alpha&gt;&gt; spec: []
+    r3-alpha&gt;&gt; body: [print &quot;one&quot; print &quot;two&quot;]
+
+    r3-alpha&gt;&gt; test: make function! compose/only [(spec) (next next body)]
+
+    r3-alpha&gt;&gt; test
+    one  ; hey, we skipped past `print &quot;one&quot;` (?!)
+    two
+
+You&#39;ll find quirks related to this everywhere.  Ren-C has some implementation changes that make it less likely to just forget that a block encodes a position, but the questions still remain.
+
+## How does BIND interact with Indexing?
+
+In R3-Alpha and Rebol2, the index is ignored.  Regardless of the input position, the whole block gets the new binding:
+
+    rebol2&gt;&gt; x: 304
+    rebol2&gt;&gt; block: [x x]
+    rebol2&gt;&gt; reduce block
+    == [304 304]
+
+    rebol2&gt;&gt; obj: make object! [x: 1020]
+    rebol2&gt;&gt; bind next block obj
+    rebol2&gt;&gt; reduce block
+    == [1020 1020]
+
+Red and Ren-C currently give back [304 1020] for the BIND case, so only the positions after are bound.
+
+That&#39;s fine and good for BIND. But Ren-C&#39;s virtual binding gives you a new view on a block.  What happens if you step backwards in that view?
+
+    &gt;&gt; x: 304
+    &gt;&gt; block: [x x]
+    &gt;&gt; obj: make object! [x: 1020]
+    &gt;&gt; virtualized: in obj next block
+    &gt;&gt; reduce head virtualized
+    == [1020 1020]
+
+There&#39;s nothing in the virtual binding information that says it only applies after a certain index in the block.  So if you take that step backward, you get the bindings.
+
+It&#39;s *technically possible* to put an index position into a virtual binding...but you&#39;d also have to change the binding to remove the index after stepping down into a nested block, because the index as limit only applies at the top level.  So if instead of **[x x]** the above block had been **[[x x] [x x]]**, the you&#39;d want it to act as **[[304 304] [1020 1020]]** with the splitting at the top level, not keep splitting all the way down as **[[304 304] [304 1020]]**, thinking the &quot;start at the second item&quot; applied to the nesting too.
+
+But even if we did that, there&#39;d be a problem with mutations.  Although virtually bound views of blocks are CONST, that&#39;s only a suggestion...you&#39;re supposed to be able to switch it to MUTABLE if you&#39;re sure you know what you&#39;re doing.  And the original block being input isn&#39;t even made CONST. 
+
+## Does LET Make This Worse, or Just The Same?
+
+At first I thought LET was worse, because it&#39;s an active instruction in a block to change the binding.  Meaning if you reposition in it and run it again, you get the binding twice.
+
+But I think the main issue with that is kind of tangential.  You probably shouldn&#39;t be capturing a BLOCK! with accrued LET state in the first place; I talk about that in [Should the Evaluator Have State Besides A Block?](https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496).  It seems that&#39;s a job for FRAME!.  So really, the places that capture virtual binding state are whole blocks, where it&#39;s their stored index position that creates the problem just like any other IN OBJ at a non-head position would.
+
+## Best Solution...Shallow COPY If You Care?
+
+As semantically crappy as the index positioning in Rebol is...historical usage points out that quite a lot of code doesn&#39;t really wind up caring about this problem.  Most block operations are on heads of arrays...and most evaluative and binding operations never step backwards.
+
+Offhand I feel like it would be a losing battle to try to encode a position into virtual binding.  It&#39;s probably more efficient to just have those places that have a reason for fine-grained control to make a shallow copy to prevent stepping backwards altogether.
+
+There really are just going to be limits in a system that embraces mutability as much as Rebol historically has...the ergonomics and semantics are going to be perpetually at odds.  :-/</description>
+    
+    <lastBuildDate>Tue, 23 Feb 2021 18:51:55 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/indexes-and-binding-positions/1519.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Indexes And Binding Positions</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>I think people program around this feature, taking profit when only part of the info is needed in the copy, or using copy head in the other case.</p>
+<p>As usual I my needs are limited so the function example had not crossed my path.</p>
+          <p><a href="https://forum.rebol.info/t/indexes-and-binding-positions/1519/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/indexes-and-binding-positions/1519/2</link>
+        <pubDate>Tue, 23 Feb 2021 18:51:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1519-2</guid>
+        <source url="https://forum.rebol.info/t/indexes-and-binding-positions/1519.rss">Indexes And Binding Positions</source>
+      </item>
+      <item>
+        <title>Indexes And Binding Positions</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The fact that blocks have a "somewhat hidden" index in them creates no shortage of problems system-wide.  The semantics of this index are quite nebulous.  COPY doesn't see backwards, for instance:</p>
+<pre><code>r3-alpha&gt;&gt; data: [a b c]
+
+r3-alpha&gt;&gt; pos: next data
+== [b c]
+
+r3-alpha&gt;&gt; copied-pos: copy pos
+== [b c]
+
+r3-alpha&gt;&gt; back pos
+== [a b c]
+
+r3-alpha&gt;&gt; back copied-pos
+== [b c]
+</code></pre>
+<p>Your new <code>copied-pos</code> only has parity with the original <code>pos</code> so long as no one ever uses BACK on it.  This semantic question is inherent to all kinds of functions that accept blocks that aren't at their head.  How about the low-level MAKE FUNCTION! ?</p>
+<pre><code>r3-alpha&gt;&gt; spec: []
+r3-alpha&gt;&gt; body: [print "one" print "two"]
+
+r3-alpha&gt;&gt; test: make function! compose/only [(spec) (next next body)]
+
+r3-alpha&gt;&gt; test
+one  ; hey, we skipped past `print "one"` (?!)
+two
+</code></pre>
+<p>You'll find quirks related to this everywhere.  Ren-C has some implementation changes that make it less likely to just forget that a block encodes a position, but the questions still remain.</p>
+<h2>How does BIND interact with Indexing?</h2>
+<p>In R3-Alpha and Rebol2, the index is ignored.  Regardless of the input position, the whole block gets the new binding:</p>
+<pre><code>rebol2&gt;&gt; x: 304
+rebol2&gt;&gt; block: [x x]
+rebol2&gt;&gt; reduce block
+== [304 304]
+
+rebol2&gt;&gt; obj: make object! [x: 1020]
+rebol2&gt;&gt; bind next block obj
+rebol2&gt;&gt; reduce block
+== [1020 1020]
+</code></pre>
+<p>Red and Ren-C currently give back [304 1020] for the BIND case, so only the positions after are bound.</p>
+<p>That's fine and good for BIND. But Ren-C's virtual binding gives you a new view on a block.  What happens if you step backwards in that view?</p>
+<pre><code>&gt;&gt; x: 304
+&gt;&gt; block: [x x]
+&gt;&gt; obj: make object! [x: 1020]
+&gt;&gt; virtualized: in obj next block
+&gt;&gt; reduce head virtualized
+== [1020 1020]
+</code></pre>
+<p>There's nothing in the virtual binding information that says it only applies after a certain index in the block.  So if you take that step backward, you get the bindings.</p>
+<p>It's <em>technically possible</em> to put an index position into a virtual binding...but you'd also have to change the binding to remove the index after stepping down into a nested block, because the index as limit only applies at the top level.  So if instead of <strong>[x x]</strong> the above block had been <strong>[[x x] [x x]]</strong>, the you'd want it to act as <strong>[[304 304] [1020 1020]]</strong> with the splitting at the top level, not keep splitting all the way down as <strong>[[304 304] [304 1020]]</strong>, thinking the "start at the second item" applied to the nesting too.</p>
+<p>But even if we did that, there'd be a problem with mutations.  Although virtually bound views of blocks are CONST, that's only a suggestion...you're supposed to be able to switch it to MUTABLE if you're sure you know what you're doing.  And the original block being input isn't even made CONST.</p>
+<h2>Does LET Make This Worse, or Just The Same?</h2>
+<p>At first I thought LET was worse, because it's an active instruction in a block to change the binding.  Meaning if you reposition in it and run it again, you get the binding twice.</p>
+<p>But I think the main issue with that is kind of tangential.  You probably shouldn't be capturing a BLOCK! with accrued LET state in the first place; I talk about that in <a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496">Should the Evaluator Have State Besides A Block?</a>.  It seems that's a job for FRAME!.  So really, the places that capture virtual binding state are whole blocks, where it's their stored index position that creates the problem just like any other IN OBJ at a non-head position would.</p>
+<h2>Best Solution...Shallow COPY If You Care?</h2>
+<p>As semantically crappy as the index positioning in Rebol is...historical usage points out that quite a lot of code doesn't really wind up caring about this problem.  Most block operations are on heads of arrays...and most evaluative and binding operations never step backwards.</p>
+<p>Offhand I feel like it would be a losing battle to try to encode a position into virtual binding.  It's probably more efficient to just have those places that have a reason for fine-grained control to make a shallow copy to prevent stepping backwards altogether.</p>
+<p>There really are just going to be limits in a system that embraces mutability as much as Rebol historically has...the ergonomics and semantics are going to be perpetually at odds.  :-/</p>
+          <p><a href="https://forum.rebol.info/t/indexes-and-binding-positions/1519/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/indexes-and-binding-positions/1519/1</link>
+        <pubDate>Tue, 23 Feb 2021 15:36:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1519-1</guid>
+        <source url="https://forum.rebol.info/t/indexes-and-binding-positions/1519.rss">Indexes And Binding Positions</source>
+      </item>
+  </channel>
+</rss>

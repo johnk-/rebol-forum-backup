@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>What should enfix IF-NOT and blank-testing ELSE be named?</title>
+    <link>https://forum.rebol.info/t/what-should-enfix-if-not-and-blank-testing-else-be-named/503</link>
+    <description>Given that this works:
+
+    print [&quot;you are&quot; (is-rebol-user then [&quot;very&quot;]) &quot;cool&quot;]
+
+One may wonder why this doesn&#39;t work:
+
+    print [&quot;one is&quot; (1 &gt; 2 else [&quot;not&quot;]) &quot;greater than two&quot;]
+
+Although the more frequent question is why this doesn&#39;t work:
+
+    x: all [...] else [1 + 2]
+
+While neither work, they are two different desires.  The &quot;print&quot; case wants ELSE to return void if a logical test from the left is false, and run the branch otherwise.  The &quot;all&quot; case wants ELSE to return the result of the ALL if it&#39;s truthy, but the result of running the branch if it&#39;s blank.
+
+Both are useful ideas... but neither of those ideas are today&#39;s ELSE.  This is because ELSE is meant to be used in conjunction with some kind of conditional branch.  It tests its left hand side for *voidness*, not for *falsey-ness*.
+
+**This is important.**  If it didn&#39;t work that way, you couldn&#39;t write:
+
+    frob-mode: if detect-flag flags #disable-frob [
+        false
+    ] else [
+        true
+    ]
+
+ELSE&#39;s mechanic is to look at the evaluation on its left...and decide if will evaluate to that as its result, or the result of evaluating its own branch.  Here we clearly want it to consider FALSE an established and decided-on value by the prior branch, it shouldn&#39;t run its own code.  And I&#39;d argue that had the first branch been BLANK!...a fully legitimate value for putting in a block...it should also accept that...probably.  *(Premise questioned below.)*
+
+Hence void is the only signal from the left it uses to trigger running its branch.  And my feeling has been that it&#39;s more important than the other cases... given you could have written:
+
+    print [&quot;one is&quot; (1 =&lt; 2 then [&quot;not&quot;]) &quot;greater than two&quot;]
+
+...or...
+
+    x: any [all [...] 1 + 2]
+
+I&#39;ll also say that having ELSE not be designed for those purposes *is not that unusual*. I don&#39;t think there are many languages which have the independent use of ELSE branches without some conditional clause of what to do in the true case.  Not all languages have THENs...C doesn&#39;t, nor does its preprocessor.  But you can&#39;t just throw an ELSE in without a true-branch somewhere.
+
+But let&#39;s look at the two cases in more detail.
+
+### enfix IF-NOT
+
+The first one is just an enfix variation of IF-NOT:
+
+    &gt;&gt; enfixed-if-not: enfix :if-not
+
+    &gt;&gt; print [&quot;one is&quot; (1 &gt; 2 enfixed-if-not [&quot;not&quot;]) &quot;greater than two&quot;]
+    one is not greater than two
+
+Easy to code...but hard to name.  It&#39;s the anti-THEN.  You&#39;ve just stated a falsehood of some kind, and now want to hang a branch on it.  Were it Wayne&#39;s World we could call it THEN...NOT!
+
+Analogy question: *IF is to THEN, as IF-NOT is to ...* ?  Bear in mind the arguments above of why it can&#39;t be ELSE.
+
+Strange suggestion: [NAY](http://www.dictionary.com/browse/nay?s=t)?  It&#39;s not completely terrible, so maybe a good first try.  [@IngoHohmann voted it up](https://chat.stackoverflow.com/transcript/message/41031899#41031899) 
+
+    &gt;&gt; print [&quot;one is&quot; (1 &gt; 2 nay [&quot;not&quot;]) &quot;greater than two&quot;]
+
+## enfix EITHER-TEST-SOMETHING?
+
+Depending on whether you want it to override FALSE and error on void or not, this is either checking for &quot;truthy?&quot; (now DID) or SOMETHING? (e.g. not blank or void).  Let&#39;s go with the latter, and I&#39;ll explain why in a second.
+
+    &gt;&gt; either-test-something-enfixed: enfix specialize &#39;either-test [
+        test: :something?
+    ]
+
+    &gt;&gt; x: all [false true] either-test-something-enfixed [1 + 2]
+    == 3
+
+    &gt;&gt; x: all [true 7] either-test-something-enfixed [1 + 2]
+    == 7
+
+Don&#39;t tell me you&#39;re not impressed.  :-)
+
+One &quot;radical&quot; possibility that was once considered was that taken branches not be allowed to return void *or* BLANK!, and that ELSE consider blank another provocation to run (along with the traditional void).  That would solve some problems, yet disrupt the intent of:
+
+    x: if 1 &lt; 2 [
+        _
+    ] else [
+        &lt;nonblank&gt;
+    ]
+
+You&#39;d get something else back from that besides blank.  While #[false] would be a possibility that might &quot;gloss over&quot; the fact that you couldn&#39;t get a blank *(by giving you something that was still conditionally false)*, I think that cover-up probably does more harm than good...and BAR! would be a more &quot;jarring&quot; choice to inform you that you needed to do something else to get what you intend.
+
+So this would mean deliberately returning blanks would require using the /ONLY version IF/ONLY (`IF*`), used today only if you really want a void...and you couldn&#39;t combine that with ELSE, though possibly ELSE* might be written to trigger only on voids as well as delivering its result verbatim.  :-/  Given that DEFAULT considers blank as much a non-value as a void by default, this might well be the smartest option.
+
+Anyone against it?  I feel like on balance, this might be the thing to do...because people are going to want to do **all [...] else [...]**, and confused if it doesn&#39;t work.
+
+&gt; **UPDATE:** I tried this and decided the better strategy and the better name for this is to use the short-circuit **OR** that we already have...which is thus kind-of-sorta-like an &quot;EITHER-TEST-TRUTHY&quot;...testing the left side for logical truth.  It only needed slight modification so that if its input values stay in the LOGIC! domain it will return a LOGIC!, but otherwise it will act like ANY [] and return a BLANK! on failure or the last value evaluated.  While this is not perfect, trying to make ELSE &quot;serve two masters&quot; created too much complexity...so it had to be cut out.
+&gt;
+&gt; The solution to be trying now is here:
+&gt;
+&gt; https://github.com/metaeducation/ren-c/commit/c0eecb654a69203a633e2b830aecb975cbe222f8</description>
+    
+    <lastBuildDate>Tue, 12 Jun 2018 23:40:45 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/what-should-enfix-if-not-and-blank-testing-else-be-named/503.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>What should enfix IF-NOT and blank-testing ELSE be named?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Given that this works:</p>
+<pre><code>print ["you are" (is-rebol-user then ["very"]) "cool"]
+</code></pre>
+<p>One may wonder why this doesn't work:</p>
+<pre><code>print ["one is" (1 &gt; 2 else ["not"]) "greater than two"]
+</code></pre>
+<p>Although the more frequent question is why this doesn't work:</p>
+<pre><code>x: all [...] else [1 + 2]
+</code></pre>
+<p>While neither work, they are two different desires.  The "print" case wants ELSE to return void if a logical test from the left is false, and run the branch otherwise.  The "all" case wants ELSE to return the result of the ALL if it's truthy, but the result of running the branch if it's blank.</p>
+<p>Both are useful ideas... but neither of those ideas are today's ELSE.  This is because ELSE is meant to be used in conjunction with some kind of conditional branch.  It tests its left hand side for <em>voidness</em>, not for <em>falsey-ness</em>.</p>
+<p><strong>This is important.</strong>  If it didn't work that way, you couldn't write:</p>
+<pre><code>frob-mode: if detect-flag flags #disable-frob [
+    false
+] else [
+    true
+]
+</code></pre>
+<p>ELSE's mechanic is to look at the evaluation on its left...and decide if will evaluate to that as its result, or the result of evaluating its own branch.  Here we clearly want it to consider FALSE an established and decided-on value by the prior branch, it shouldn't run its own code.  And I'd argue that had the first branch been BLANK!...a fully legitimate value for putting in a block...it should also accept that...probably.  <em>(Premise questioned below.)</em></p>
+<p>Hence void is the only signal from the left it uses to trigger running its branch.  And my feeling has been that it's more important than the other cases... given you could have written:</p>
+<pre><code>print ["one is" (1 =&lt; 2 then ["not"]) "greater than two"]
+</code></pre>
+<p>...or...</p>
+<pre><code>x: any [all [...] 1 + 2]
+</code></pre>
+<p>I'll also say that having ELSE not be designed for those purposes <em>is not that unusual</em>. I don't think there are many languages which have the independent use of ELSE branches without some conditional clause of what to do in the true case.  Not all languages have THENs...C doesn't, nor does its preprocessor.  But you can't just throw an ELSE in without a true-branch somewhere.</p>
+<p>But let's look at the two cases in more detail.</p>
+<h3>enfix IF-NOT</h3>
+<p>The first one is just an enfix variation of IF-NOT:</p>
+<pre><code>&gt;&gt; enfixed-if-not: enfix :if-not
+
+&gt;&gt; print ["one is" (1 &gt; 2 enfixed-if-not ["not"]) "greater than two"]
+one is not greater than two
+</code></pre>
+<p>Easy to code...but hard to name.  It's the anti-THEN.  You've just stated a falsehood of some kind, and now want to hang a branch on it.  Were it Wayne's World we could call it THEN...NOT!</p>
+<p>Analogy question: <em>IF is to THEN, as IF-NOT is to ...</em> ?  Bear in mind the arguments above of why it can't be ELSE.</p>
+<p>Strange suggestion: <a href="http://www.dictionary.com/browse/nay?s=t" rel="nofollow noopener">NAY</a>?  It's not completely terrible, so maybe a good first try.  <a href="https://chat.stackoverflow.com/transcript/message/41031899#41031899" rel="nofollow noopener">@IngoHohmann voted it up</a></p>
+<pre><code>&gt;&gt; print ["one is" (1 &gt; 2 nay ["not"]) "greater than two"]
+</code></pre>
+<h2>enfix EITHER-TEST-SOMETHING?</h2>
+<p>Depending on whether you want it to override FALSE and error on void or not, this is either checking for "truthy?" (now DID) or SOMETHING? (e.g. not blank or void).  Let's go with the latter, and I'll explain why in a second.</p>
+<pre><code>&gt;&gt; either-test-something-enfixed: enfix specialize 'either-test [
+    test: :something?
+]
+
+&gt;&gt; x: all [false true] either-test-something-enfixed [1 + 2]
+== 3
+
+&gt;&gt; x: all [true 7] either-test-something-enfixed [1 + 2]
+== 7
+</code></pre>
+<p>Don't tell me you're not impressed.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>One "radical" possibility that was once considered was that taken branches not be allowed to return void <em>or</em> BLANK!, and that ELSE consider blank another provocation to run (along with the traditional void).  That would solve some problems, yet disrupt the intent of:</p>
+<pre><code>x: if 1 &lt; 2 [
+    _
+] else [
+    &lt;nonblank&gt;
+]
+</code></pre>
+<p>You'd get something else back from that besides blank.  While #[false] would be a possibility that might "gloss over" the fact that you couldn't get a blank <em>(by giving you something that was still conditionally false)</em>, I think that cover-up probably does more harm than good...and BAR! would be a more "jarring" choice to inform you that you needed to do something else to get what you intend.</p>
+<p>So this would mean deliberately returning blanks would require using the /ONLY version IF/ONLY (<code>IF*</code>), used today only if you really want a void...and you couldn't combine that with ELSE, though possibly ELSE* might be written to trigger only on voids as well as delivering its result verbatim.  :-/  Given that DEFAULT considers blank as much a non-value as a void by default, this might well be the smartest option.</p>
+<p>Anyone against it?  I feel like on balance, this might be the thing to do...because people are going to want to do <strong>all [...] else [...]</strong>, and confused if it doesn't work.</p>
+<blockquote>
+<p><strong>UPDATE:</strong> I tried this and decided the better strategy and the better name for this is to use the short-circuit <strong>OR</strong> that we already have...which is thus kind-of-sorta-like an "EITHER-TEST-TRUTHY"...testing the left side for logical truth.  It only needed slight modification so that if its input values stay in the LOGIC! domain it will return a LOGIC!, but otherwise it will act like ANY [] and return a BLANK! on failure or the last value evaluated.  While this is not perfect, trying to make ELSE "serve two masters" created too much complexity...so it had to be cut out.</p>
+<p>The solution to be trying now is here:</p>
+<p><a href="https://github.com/metaeducation/ren-c/commit/c0eecb654a69203a633e2b830aecb975cbe222f8" rel="nofollow noopener">https://github.com/metaeducation/ren-c/commit/c0eecb654a69203a633e2b830aecb975cbe222f8</a></p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/what-should-enfix-if-not-and-blank-testing-else-be-named/503/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-should-enfix-if-not-and-blank-testing-else-be-named/503/1</link>
+        <pubDate>Tue, 30 Jan 2018 06:38:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-503-1</guid>
+        <source url="https://forum.rebol.info/t/what-should-enfix-if-not-and-blank-testing-else-be-named/503.rss">What should enfix IF-NOT and blank-testing ELSE be named?</source>
+      </item>
+  </channel>
+</rss>

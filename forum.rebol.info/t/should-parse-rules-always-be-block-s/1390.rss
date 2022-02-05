@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should PARSE Rules Always Be BLOCK!s ?</title>
+    <link>https://forum.rebol.info/t/should-parse-rules-always-be-block-s/1390</link>
+    <description>At the top level, PARSE allows only a BLOCK! rule.
+
+    &gt;&gt; parse [&quot;abc&quot;] &quot;abc&quot; 
+    ** Script Error: parse does not allow #[datatype! text!] for its rules argument
+
+But when a rule is being invoked by reference, you get the option of that reference not having to be a BLOCK!:
+
+    &gt;&gt; rule: &quot;abc&quot;
+
+    &gt;&gt; parse [&quot;abc&quot;] [rule]
+    == [&quot;abc&quot;]
+
+Being able to break down your parse rules into named subexpressions is one of the huge advantages PARSE has over things like RegEx.  But there are questions raised about whether certain fetched contents from names should be *matched as value*, *matched as rule*, or considered errors.
+
+As an example: What do you think this should do?
+
+    word: &#39;reject
+    parse [reject reject] [2 word]
+
+There seem to be 3 possibilities for what [2 word] does in this context:
+
+1. act like **[2 reject]**
+2. act like **[2 &#39;reject]**
+3. raise an error
+
+***I think #2 should be out of the question.***  It&#39;s just too inconsistent with the rule-interpretation if it had been a BLOCK!.
+
+What I have proposed to get #2 would be:
+
+    word: &#39;reject
+    parse [reject reject] [2 @word]
+
+This lets you fetch a value and match it literally.  So BLOCK! would not be matched as a rule either.
+
+*#1 has the appeal of generality and the substitution principle.*  It implies any term that could occur in the rules as source could be put behind a WORD!.
+
+     &gt;&gt; sub: &#39;(print &quot;Hi!&quot;)
+     &gt;&gt; parse &quot;aa&quot; [some [&quot;a&quot; sub]]
+     Hi!
+     Hi!
+     == &quot;aa&quot;
+
+That seems kind of interesting.  Though if we&#39;re truly allowing anything, it means QUOTED!s would match things at one level of quote below themselves.
+
+     &gt;&gt; sub: &#39;&#39;reject
+     &gt;&gt; parse [reject reject] [2 sub]
+     == [reject reject]
+
+Though having to decorate the value you&#39;re matching to say &quot;I&#39;m meant as a match&quot; is awkward.  This is why I like the **@word** concept... it lets you put the &quot;match literally&quot; annotation on the reference, while leaving the thing you are matching at the right quote level.
+
+I really think the above is clearer as:
+
+     &gt;&gt; sub: [&#39;reject]
+     &gt;&gt; parse [reject reject] [2 sub]
+     == [reject reject]
+
+It&#39;s enough clearer that I feel a twinge of prescriptivism in saying that you either use the @xxx syntax at your reference sites or you form your subrules as proper blocks.  Which is why I&#39;m bringing up option #3.
+
+**But the flexibility of the substitution principle is kind of hard to deny.**  You might want to define:
+
+     match-op: either condition [&#39;any] [&#39;some]
+     parse &quot;aaaa&quot; [some &quot;a&quot;, match-op &quot;b&quot;]
+
+If all rules are forced into blocks, you wouldn&#39;t get that parameterization.  Because this wouldn&#39;t work:
+
+     match-op: either condition [[any]] [[some]]
+     parse &quot;aaaa&quot; [some &quot;a&quot;, match-op &quot;b&quot;]  ; some &quot;a&quot;, [any] &quot;b&quot;
+
+With a block-rule-only when fetching WORD! we *could* say that you can get such weird behavior only if you use **:match-op** as GET-WORD!.
+
+## I Guess #1 Should Win
+
+What I&#39;ve mostly done here is explain why #2 is not going to happen, and why you should be happy for the new @(...) matching.
+
+*(Note: @foo will not allow voids, but if you do **@(get/any &#39;foo)** and it&#39;s void it will match that void symbol...because inside the GROUP! you had to do whatever the rigamarole to get at a void was.  This protects against typos so that @some-undef doesn&#39;t try and match `~undefined~` and silently fail.)*
+
+## Note About Interoperability With The @[datatype] Proposal
+
+Despite this new meaning for `@a`, `@a.b`, `@a/b`, and `@(a b)`... there&#39;d not be any reason for **@[a b]** to mean the same thing as **&#39;[a b]** as a parse rule.
+
+This outlier status was the original premise guiding why @[integer] and friends were &quot;relatively useless&quot; enough to take for datatypes.
+
+But the outlier status is also kind of confusing.  Plus now that `@[...]` is a common branch type, and wanting **`append [a b c] @[d e]`** to give **`[a b c [d e]]`** it complicates the picture.
+
+With VOID! representation having undergone a eureka moment, it would be nice if datatypes have such a moment soonish.</description>
+    
+    <lastBuildDate>Sat, 07 Nov 2020 06:22:30 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/should-parse-rules-always-be-block-s/1390.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should PARSE Rules Always Be BLOCK!s ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>At the top level, PARSE allows only a BLOCK! rule.</p>
+<pre><code>&gt;&gt; parse ["abc"] "abc" 
+** Script Error: parse does not allow #[datatype! text!] for its rules argument
+</code></pre>
+<p>But when a rule is being invoked by reference, you get the option of that reference not having to be a BLOCK!:</p>
+<pre><code>&gt;&gt; rule: "abc"
+
+&gt;&gt; parse ["abc"] [rule]
+== ["abc"]
+</code></pre>
+<p>Being able to break down your parse rules into named subexpressions is one of the huge advantages PARSE has over things like RegEx.  But there are questions raised about whether certain fetched contents from names should be <em>matched as value</em>, <em>matched as rule</em>, or considered errors.</p>
+<p>As an example: What do you think this should do?</p>
+<pre><code>word: 'reject
+parse [reject reject] [2 word]
+</code></pre>
+<p>There seem to be 3 possibilities for what [2 word] does in this context:</p>
+<ol>
+<li>act like <strong>[2 reject]</strong>
+</li>
+<li>act like <strong>[2 'reject]</strong>
+</li>
+<li>raise an error</li>
+</ol>
+<p><em><strong>I think <span class="hashtag">#2</span> should be out of the question.</strong></em>  It's just too inconsistent with the rule-interpretation if it had been a BLOCK!.</p>
+<p>What I have proposed to get <span class="hashtag">#2</span> would be:</p>
+<pre><code>word: 'reject
+parse [reject reject] [2 @word]
+</code></pre>
+<p>This lets you fetch a value and match it literally.  So BLOCK! would not be matched as a rule either.</p>
+<p><em><span class="hashtag">#1</span> has the appeal of generality and the substitution principle.</em>  It implies any term that could occur in the rules as source could be put behind a WORD!.</p>
+<pre><code> &gt;&gt; sub: '(print "Hi!")
+ &gt;&gt; parse "aa" [some ["a" sub]]
+ Hi!
+ Hi!
+ == "aa"
+</code></pre>
+<p>That seems kind of interesting.  Though if we're truly allowing anything, it means QUOTED!s would match things at one level of quote below themselves.</p>
+<pre><code> &gt;&gt; sub: ''reject
+ &gt;&gt; parse [reject reject] [2 sub]
+ == [reject reject]
+</code></pre>
+<p>Though having to decorate the value you're matching to say "I'm meant as a match" is awkward.  This is why I like the <strong><span class="mention">@word</span></strong> concept... it lets you put the "match literally" annotation on the reference, while leaving the thing you are matching at the right quote level.</p>
+<p>I really think the above is clearer as:</p>
+<pre><code> &gt;&gt; sub: ['reject]
+ &gt;&gt; parse [reject reject] [2 sub]
+ == [reject reject]
+</code></pre>
+<p>It's enough clearer that I feel a twinge of prescriptivism in saying that you either use the <span class="mention">@xxx</span> syntax at your reference sites or you form your subrules as proper blocks.  Which is why I'm bringing up option <span class="hashtag">#3</span>.</p>
+<p><strong>But the flexibility of the substitution principle is kind of hard to deny.</strong>  You might want to define:</p>
+<pre><code> match-op: either condition ['any] ['some]
+ parse "aaaa" [some "a", match-op "b"]
+</code></pre>
+<p>If all rules are forced into blocks, you wouldn't get that parameterization.  Because this wouldn't work:</p>
+<pre><code> match-op: either condition [[any]] [[some]]
+ parse "aaaa" [some "a", match-op "b"]  ; some "a", [any] "b"
+</code></pre>
+<p>With a block-rule-only when fetching WORD! we <em>could</em> say that you can get such weird behavior only if you use <strong>:match-op</strong> as GET-WORD!.</p>
+<h2>I Guess <span class="hashtag">#1</span> Should Win</h2>
+<p>What I've mostly done here is explain why <span class="hashtag">#2</span> is not going to happen, and why you should be happy for the new @(...) matching.</p>
+<p><em>(Note: <span class="mention">@foo</span> will not allow voids, but if you do <strong>@(get/any 'foo)</strong> and it's void it will match that void symbol...because inside the GROUP! you had to do whatever the rigamarole to get at a void was.  This protects against typos so that <span class="mention">@some-undef</span> doesn't try and match <code>~undefined~</code> and silently fail.)</em></p>
+<h2>Note About Interoperability With The @[datatype] Proposal</h2>
+<p>Despite this new meaning for <code>@a</code>, <code>@a.b</code>, <code>@a/b</code>, and <code>@(a b)</code>... there'd not be any reason for <strong>@[a b]</strong> to mean the same thing as <strong>'[a b]</strong> as a parse rule.</p>
+<p>This outlier status was the original premise guiding why @[integer] and friends were "relatively useless" enough to take for datatypes.</p>
+<p>But the outlier status is also kind of confusing.  Plus now that <code>@[...]</code> is a common branch type, and wanting <strong><code>append [a b c] @[d e]</code></strong> to give <strong><code>[a b c [d e]]</code></strong> it complicates the picture.</p>
+<p>With VOID! representation having undergone a eureka moment, it would be nice if datatypes have such a moment soonish.</p>
+          <p><a href="https://forum.rebol.info/t/should-parse-rules-always-be-block-s/1390/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-parse-rules-always-be-block-s/1390/1</link>
+        <pubDate>Sat, 07 Nov 2020 05:26:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1390-1</guid>
+        <source url="https://forum.rebol.info/t/should-parse-rules-always-be-block-s/1390.rss">Should PARSE Rules Always Be BLOCK!s ?</source>
+      </item>
+  </channel>
+</rss>

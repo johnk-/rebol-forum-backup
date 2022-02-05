@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Philosophy of ANY and ALL w.r.t. voids</title>
+    <link>https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154</link>
+    <description>The change in behavior of ANY and ALL has caused people to state confusions or concerns.  I think it&#39;s actually significantly *less* confusing, and much better thought out.
+
+We can treat an absent result a number of ways:
+
+* conditionally false
+* conditionally true
+* an error
+* abstaining from a vote
+
+Rebol2 and R3-Alpha were not consistent on these points, and Red throws in some wild cards of its own:
+
+    &gt;&gt; all []
+    == #[none] ;-- in Red
+    == #[true] ;-- in Rebol2/R3-Alpha
+
+    &gt;&gt; all [()]
+    ;-- no result
+
+    &gt;&gt; all [() 1]
+    == 1
+
+    &gt;&gt; all [1 ()]
+    ;-- no result
+
+It may appear from the above that it is acting as conditionally true.  But looking at ANY in Rebol2 and R3-Alpha, we can see the pattern is a bit more like abstaining from a vote...with Red taking its own path:
+
+    &gt;&gt; any []
+    == #[none]
+
+    &gt;&gt; any [()]
+    ;-- no result, Rebol2 and R3-Alpha
+    *** Script Error: block did not return a value ;-- Red
+
+     &gt;&gt; any [1 ()]
+     == 1
+
+      &gt;&gt; any [() 1]
+      ;-- no result, Rebol2 and R3-Alpha
+      *** Script Error: block did not return a value ;-- Red
+
+When historical discussions came up on CureCode, some people liked the ability to skip over the absence of a value specifically because they liked putting in print statements without needing to coerce it to the appropriate &quot;non-disruptive&quot; thing for the construct.
+
+    x: any [
+        some-thing
+        (print &quot;debug message&quot; false) ;-- false prevents interruption
+        some-other-thing
+     ]
+
+     y: all [
+         some-thing
+         (print &quot;debug message&quot; true) ;-- true prevents interruption
+         some-other-thing
+     ]
+
+These people preferred the simplicity and symmetry of:
+
+    x: any [
+        some-thing
+        print &quot;debug message&quot;
+        some-other-thing
+     ]
+
+     y: all [
+         some-thing
+         print &quot;debug message&quot;
+         some-other-thing
+     ]
+
+But PRINT always returns void.  So it&#39;s a fairly simple example of where being able to opt-out can be helpful.  One can also consciously create opt-out constructs, that might return a truthy thing... a falsey thing... or an opt-out.
+
+Ren-C also believes the only time an ANY or ALL should return a void is if every vote opted out.  So `all []` and `all [() () ()]` and `all [() any [() ()] ()]` will all be void, but if you have a vote of any kind in either construct then that will force it to a value.
+
+Hence we end up with:
+
+    &gt;&gt; all []
+    ;-- no result
+
+    &gt;&gt; all [()]
+    ;-- no result
+
+    &gt;&gt; all [() 1]
+    == 1
+
+    &gt;&gt; all [1 ()]
+    == 1
+
+    &gt;&gt; any []
+    ;-- no result
+
+    &gt;&gt; any [()]
+    ;-- no result
+
+     &gt;&gt; any [1 ()]
+     == 1
+
+      &gt;&gt; any [() 1]
+      == 1
+
+Here we see that constructs like `all []` aren&#39;t synthesizing true out of thin air, and `any []` isn&#39;t synthesizing falsehood out of thin air either.  As I&#39;ve pointed out, the distinction of letting them pass-through the &quot;sorry, no one voted&quot; state permits proper chaining of non-voters to indicate a group non-vote.
+
+This may not be what you want in a conditional expression, e.g. `if all compose [(...) (...)] [...]` where it turns into `if all [] [...]` and you wanted the absence of votes to say &quot;no one failed&quot;.  But this is handled by the `ANY?` and `ALL?` variations, which always return a LOGIC!... and follow the base case convention of Rebol2.  (ANY? [] and ANY? [() ()] is false, ALL? [] and ALL? [() ()] is true)
+
+I&#39;d be very interested to see cases where people think this isn&#39;t more elegant, easy to remember, and serviceable.</description>
+    
+    <lastBuildDate>Sat, 09 Jun 2018 03:23:14 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Philosophy of ANY and ALL w.r.t. voids</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Reviewing old posts, I will update that the behavior I describe above for ANY and ALL is now in <code>ANY/OPT</code> and <code>ALL/OPT</code>, also known as <code>ANY*</code> and <code>ALL*</code>.  They will treat nulls as no vote.</p>
+<p>But plain ANY and ALL will fail on nulls, treating them as neither true nor false.</p>
+<p>One of the main reasons behind changing it was the existence of ELIDE.  If you want to run code in the middle of an ANY or ALL sequence and remove it from the vote, you have a way to do it.  DUMP also does not have a result (by default, anyway) and that's usually what you want to use.</p>
+<p>The idea that NULLs be an error comes from situations like:</p>
+<pre><code> all [
+     ...
+     x: select block item
+     ... do stuff assuming the select succeeded ...
+ ]
+</code></pre>
+<p>A NULL in that case means item wasn't selected.  There was nothing for it.  It doesn't seem appropriate to blindly continue to the next step.  It's better to say that you want the steps to fail:</p>
+<pre><code>all [
+    ...
+    did x: select block item ;-- fail and x is null after the all
+    ...
+]
+
+all [
+    ...
+    x: try select block item ;-- fail and x is blank after the all
+    ...
+]
+
+all [
+   ...
+   value? x: select block item ;-- false and blank selections ok
+   ...
+]
+</code></pre>
+<p>And if you don't really care and just want the all to continue, you could elide it:</p>
+<pre><code> all [
+     ...
+     elide x: select block item
+     ...
+]
+</code></pre>
+<p>With tools like ELIDE, TRY, and DID at one's disposal...it just doesn't make sense to default to letting null slide in ALL.  In the balance of places where a <a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663">no-op interpretation is a good default for null</a>, <em>conditions aren't one of them</em>.  It's good that conditionals error on nulls.</p>
+<p>(But the opt-out functionality is available with the /OPT switch!)</p>
+          <p><a href="https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154/2</link>
+        <pubDate>Sat, 09 Jun 2018 03:23:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-154-2</guid>
+        <source url="https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154.rss">Philosophy of ANY and ALL w.r.t. voids</source>
+      </item>
+      <item>
+        <title>Philosophy of ANY and ALL w.r.t. voids</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The change in behavior of ANY and ALL has caused people to state confusions or concerns.  I think it's actually significantly <em>less</em> confusing, and much better thought out.</p>
+<p>We can treat an absent result a number of ways:</p>
+<ul>
+<li>conditionally false</li>
+<li>conditionally true</li>
+<li>an error</li>
+<li>abstaining from a vote</li>
+</ul>
+<p>Rebol2 and R3-Alpha were not consistent on these points, and Red throws in some wild cards of its own:</p>
+<pre><code>&gt;&gt; all []
+== #[none] ;-- in Red
+== #[true] ;-- in Rebol2/R3-Alpha
+
+&gt;&gt; all [()]
+;-- no result
+
+&gt;&gt; all [() 1]
+== 1
+
+&gt;&gt; all [1 ()]
+;-- no result
+</code></pre>
+<p>It may appear from the above that it is acting as conditionally true.  But looking at ANY in Rebol2 and R3-Alpha, we can see the pattern is a bit more like abstaining from a vote...with Red taking its own path:</p>
+<pre><code>&gt;&gt; any []
+== #[none]
+
+&gt;&gt; any [()]
+;-- no result, Rebol2 and R3-Alpha
+*** Script Error: block did not return a value ;-- Red
+
+ &gt;&gt; any [1 ()]
+ == 1
+
+  &gt;&gt; any [() 1]
+  ;-- no result, Rebol2 and R3-Alpha
+  *** Script Error: block did not return a value ;-- Red
+</code></pre>
+<p>When historical discussions came up on CureCode, some people liked the ability to skip over the absence of a value specifically because they liked putting in print statements without needing to coerce it to the appropriate "non-disruptive" thing for the construct.</p>
+<pre><code>x: any [
+    some-thing
+    (print "debug message" false) ;-- false prevents interruption
+    some-other-thing
+ ]
+
+ y: all [
+     some-thing
+     (print "debug message" true) ;-- true prevents interruption
+     some-other-thing
+ ]
+</code></pre>
+<p>These people preferred the simplicity and symmetry of:</p>
+<pre><code>x: any [
+    some-thing
+    print "debug message"
+    some-other-thing
+ ]
+
+ y: all [
+     some-thing
+     print "debug message"
+     some-other-thing
+ ]
+</code></pre>
+<p>But PRINT always returns void.  So it's a fairly simple example of where being able to opt-out can be helpful.  One can also consciously create opt-out constructs, that might return a truthy thing... a falsey thing... or an opt-out.</p>
+<p>Ren-C also believes the only time an ANY or ALL should return a void is if every vote opted out.  So <code>all []</code> and <code>all [() () ()]</code> and <code>all [() any [() ()] ()]</code> will all be void, but if you have a vote of any kind in either construct then that will force it to a value.</p>
+<p>Hence we end up with:</p>
+<pre><code>&gt;&gt; all []
+;-- no result
+
+&gt;&gt; all [()]
+;-- no result
+
+&gt;&gt; all [() 1]
+== 1
+
+&gt;&gt; all [1 ()]
+== 1
+
+&gt;&gt; any []
+;-- no result
+
+&gt;&gt; any [()]
+;-- no result
+
+ &gt;&gt; any [1 ()]
+ == 1
+
+  &gt;&gt; any [() 1]
+  == 1
+</code></pre>
+<p>Here we see that constructs like <code>all []</code> aren't synthesizing true out of thin air, and <code>any []</code> isn't synthesizing falsehood out of thin air either.  As I've pointed out, the distinction of letting them pass-through the "sorry, no one voted" state permits proper chaining of non-voters to indicate a group non-vote.</p>
+<p>This may not be what you want in a conditional expression, e.g. <code>if all compose [(...) (...)] [...]</code> where it turns into <code>if all [] [...]</code> and you wanted the absence of votes to say "no one failed".  But this is handled by the <code>ANY?</code> and <code>ALL?</code> variations, which always return a LOGIC!... and follow the base case convention of Rebol2.  (ANY? [] and ANY? [() ()] is false, ALL? [] and ALL? [() ()] is true)</p>
+<p>I'd be very interested to see cases where people think this isn't more elegant, easy to remember, and serviceable.</p>
+          <p><a href="https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154/1</link>
+        <pubDate>Thu, 22 Jun 2017 05:16:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-154-1</guid>
+        <source url="https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154.rss">Philosophy of ANY and ALL w.r.t. voids</source>
+      </item>
+  </channel>
+</rss>

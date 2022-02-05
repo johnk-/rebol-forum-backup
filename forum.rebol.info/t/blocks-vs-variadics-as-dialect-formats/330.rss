@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Blocks vs Variadics as Dialect Formats</title>
+    <link>https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330</link>
+    <description>Imagine you have a function that takes one BLOCK! and emits the data from the block to a file by default.  But optionally there&#39;s another filename into which the data will be put.   The conventional way to do optional arguments in Rebol is via refinements:
+
+    emit [x y z]
+    emit/into [x y z] %foo.txt
+
+The usual suggestion to someone who finds this kind of thing cumbersome might be to consider taking a dialected block:
+
+    emit [x y z]
+    emit [%foo.txt [x y z]]
+
+And if you&#39;re lucky enough to know that the slot where X lives can&#39;t be a FILE!, you might be tempted to eliminate the nested block.  But you may not be lucky...and if the block lives in a variable instead of a literal, introducing a new level of block suppresses evaluation and causes you all kinds of grief.  You start needing to COMPOSE or REDUCE, and this kind of problem comes up a lot.
+
+With variadics we now have another possibility:
+
+    emit [x y z]
+    emit %foo.txt [x y z]
+
+At the interface level, rather than implementing this using a single VARARGS! it could be supported more cleanly by marking parameters as `&lt;skip&gt;`able:
+
+     emit: function [file [&lt;skip&gt; file!] block [block!]] [...]
+
+This could tell the evaluator that if it can&#39;t match the type of the first argument, then just set it to void and keep going.  An upside to this is that it would mean people using APPLY wouldn&#39;t have to jump any particular hoops to build a VARARGS!, and could supply parameters as normal.
+
+**Is permitting this a good idea?** Well, the cat&#39;s out of the bag as variadics are permitted now, and I think variadics have many justifiable applications.  The real worry is if you start writing things like:
+
+     emit x
+     blah-blah
+
+...and the reader can&#39;t be confident if x is a FILE! or a BLOCK!.  Of course, if you don&#39;t know if x is a FUNCTION! or a BLOCK! you&#39;ve always had a similar amount of trouble.  You also get in a bit of trouble the day you decide that first argument to `emit` can be either a FILE! or a BLOCK!, still taking a BLOCK! as the second argument.  But changing function interfaces always influences callsites, this is just taking it further.  I&#39;d argue *it&#39;s just how Rebol is*.
+
+Now this doesn&#39;t mean it&#39;s a good idea to use for exposing core functionality.  But if one is scribbling out a quick-and-dirty script, this freedom may be all part of [the deep lake](https://forum.rebol.info/t/more-than-just-code-a-deep-lake/295).
+
+[quote=&quot;hostilefork, post:1, topic:295&quot;]
+Of course, how you write code is ultimately your choice alone. REBOL, as a context dependent language, is perhaps the most freeform computing language ever invented. But therein lies the importance of good coding style. You can write actual working programs using an alien dialect, or you can write them to be as clear as possible. It&#39;s your choice.
+[/quote]</description>
+    
+    <lastBuildDate>Sat, 04 Aug 2018 22:13:26 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Blocks vs Variadics as Dialect Formats</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="330" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>I like it, and as it is possible, people will do it.</p>
+<p>So having it made clear in the function signature is much cleaner.</p>
+</blockquote>
+</aside>
+<p>I'm not sure if <code>&lt;skip&gt;</code> is the best name for what this is.  But I wound up doing an implementation for it:</p>
+<p><a href="https://github.com/metaeducation/ren-c/commit/5857740aedb3bfbafad5dc3c110cb0fab8f34b7d" rel="nofollow noopener"><code>https://github.com/metaeducation/ren-c/commit/5857740aedb3bfbafad5dc3c110cb0fab8f34b7d</code></a></p>
+<p>I didn't do it for frivolous reasons, I did it because it was needed to keep code from breaking that used the new DEFAULT, e.g. <code>case [... default [...]]</code>.</p>
+<p>What happened is that ELIDE had been showing various weaknesses due to requiring that it run along with whatever was on its left hand side.  This kept giving unpredictable ordering problems.  At one point, it required changing CASE to essentially quote its branches.  While it may not have been that big of a loss, it did create a rift between what a list of IFs could do and what a CASE could do...so it was a little uncomfortable.</p>
+<p>Eventually it seemed this really was a problem with how the evaluator was handling functions like ELIDE, and a better solution was needed.  That gave rise to a reworking of Eval_Core() and related routines to <a href="https://forum.rebol.info/t/re-imagining-do-next-or-next-do-or-whatever/767">rethink DO/NEXT</a> that could leave ELIDEs pending for the <em>next</em> evaluator step, and yet not lose the last evaluative product.  That interface is now called <a href="https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770/2?u=hostilefork">EVALUATE</a></p>
+<p>This was a relief to all the many situations in which ELIDE had been presenting ordering problems.  It also unchained CASE so that the old non-literal-branch functionality could come back, with ELIDE working as one would expect it to:</p>
+<p><a href="https://github.com/metaeducation/ren-c/commit/8af4214b985bf7323167b959727592d7b3f842c2" rel="nofollow noopener"><code>https://github.com/metaeducation/ren-c/commit/8af4214b985bf7323167b959727592d7b3f842c2</code></a></p>
+<p>But sadly this broke DEFAULT's enfix-vs-non-enfix polymorphism, which I'd become rather attached to.  With the evaluator run on <strong>case [... [...] default [...]</strong> the block on the left of default would now be visible to it.  (It hadn't been when it was lit-quoted, but Eval_Step() runs enfix).</p>
+<p>If the trick was to be preserved so that <code>x: default [...]</code> could pick up the X: as well as use DEFAULT in this case, there needed to be some way for DEFAULT to reject whatever was on its left that wasn't a SET-WORD! or SET-PATH!.  It couldn't wait to do this rejection until it was running (the way a variadic might) because that would be too late for the block to be bounced back to use as a branch.</p>
+<p>The only idea on the map which would solve this would be skippability--with rules adapted to let a left enfix with a type it wanted to skip be deferred until the next evaluator step.  While it might feel a bit convoluted, it doesn't feel mechanically "unsound"...any more so than any of the rest of Rebol is unsound.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/6</link>
+        <pubDate>Sat, 04 Aug 2018 22:13:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-330-6</guid>
+        <source url="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330.rss">Blocks vs Variadics as Dialect Formats</source>
+      </item>
+      <item>
+        <title>Blocks vs Variadics as Dialect Formats</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="330" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/gchiu/40/22_2.png" class="avatar"> gchiu:</div>
+<blockquote>
+<p>Well if you can do a clean implementation, then great. Even if we have to explicitly evaluate variables first to expose their type!</p>
+</blockquote>
+</aside>
+<p>While I haven't exactly figured out how to write it cleanly without messing up the evaluator loop, it is <em>technically plausible</em> to roll over a quoted argument into a non-quoted argument.  Moreover, I actually think this will be the least obscuring case.</p>
+<p>The reason it is the least obscuring is because <strong><code>foo blah blah blah blah</code></strong> vs. <strong><code>foo &lt;some-influencing-tag-instruction&gt; blah blah blah blah</code></strong> has the advantage of being clear at the callsite, as opposed to <strong><code>foo mystery-thing blah blah blah blah</code></strong>.  Sometimes mystery-thing might be a tag and sometimes it might not.</p>
+<p>If I were to be prescriptive, I'd say you should <em>only</em> roll over quoted args, most likely into evaluated ones.  If you evaluate you are in a bad situation in the sense that the same code--written with a certain arity assumption--could sometimes skip and sometimes not.  It's hard to imagine code making sense in that case.</p>
+<p>Perhaps then <code>&lt;skip&gt;</code> should only be available to hard quotes.  But rolling over such hard quotes into subsequent evaluation is not something technically obvious how to do cleanly, so I'll have to think on it.</p>
+          <p><a href="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/5</link>
+        <pubDate>Wed, 25 Oct 2017 00:35:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-330-5</guid>
+        <source url="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330.rss">Blocks vs Variadics as Dialect Formats</source>
+      </item>
+      <item>
+        <title>Blocks vs Variadics as Dialect Formats</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>Well if you can do a clean implementation, then great. Even if we have to explicitly evaluate variables first to expose their type!</p>
+          <p><a href="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/4</link>
+        <pubDate>Mon, 09 Oct 2017 19:31:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-330-4</guid>
+        <source url="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330.rss">Blocks vs Variadics as Dialect Formats</source>
+      </item>
+      <item>
+        <title>Blocks vs Variadics as Dialect Formats</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="330">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>So having it made clear in the function signature is much cleaner.</p>
+</blockquote>
+</aside>
+<p>Looking quickly at implementation details, there is a problem in the issue of parameter convention.  You have to have the parameter gathering convention match the thing you're rolling over to.  Consider:</p>
+<pre><code>foo: function [file [&lt;skip&gt; file!] 'word [word!]] [...]
+
+x: does [print "side effect" [a b c]]
+foo x
+</code></pre>
+<p>The attempt to fulfill the file parameter won't quote, it will evaluate... and it cannot undo that evaluation, despite rejecting the argument.  Basically the parameter classes must be the same.  Soft quotes can only roll over to soft quotes, tight evaluations only to tight evaluations, etc.</p>
+<p>Technically speaking, some quotes could roll over into evaluated slots.  It's not totally obvious to see how to write that just now.</p>
+<p>You also have to roll over to some required parameter before you run out of arguments.  Because otherwise, you can potentially break iterative DO/NEXTs on a block acting the same as DO on that block...since there's nowhere to hold the rolled-over piece.</p>
+          <p><a href="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/3</link>
+        <pubDate>Mon, 09 Oct 2017 19:09:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-330-3</guid>
+        <source url="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330.rss">Blocks vs Variadics as Dialect Formats</source>
+      </item>
+      <item>
+        <title>Blocks vs Variadics as Dialect Formats</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I like it, and as it is possible, people will do it.<br>
+So having it made clear in the function signature is much cleaner.</p>
+          <p><a href="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/2</link>
+        <pubDate>Mon, 09 Oct 2017 18:33:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-330-2</guid>
+        <source url="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330.rss">Blocks vs Variadics as Dialect Formats</source>
+      </item>
+      <item>
+        <title>Blocks vs Variadics as Dialect Formats</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Imagine you have a function that takes one BLOCK! and emits the data from the block to a file by default.  But optionally there's another filename into which the data will be put.   The conventional way to do optional arguments in Rebol is via refinements:</p>
+<pre><code>emit [x y z]
+emit/into [x y z] %foo.txt
+</code></pre>
+<p>The usual suggestion to someone who finds this kind of thing cumbersome might be to consider taking a dialected block:</p>
+<pre><code>emit [x y z]
+emit [%foo.txt [x y z]]
+</code></pre>
+<p>And if you're lucky enough to know that the slot where X lives can't be a FILE!, you might be tempted to eliminate the nested block.  But you may not be lucky...and if the block lives in a variable instead of a literal, introducing a new level of block suppresses evaluation and causes you all kinds of grief.  You start needing to COMPOSE or REDUCE, and this kind of problem comes up a lot.</p>
+<p>With variadics we now have another possibility:</p>
+<pre><code>emit [x y z]
+emit %foo.txt [x y z]
+</code></pre>
+<p>At the interface level, rather than implementing this using a single VARARGS! it could be supported more cleanly by marking parameters as <code>&lt;skip&gt;</code>able:</p>
+<pre><code> emit: function [file [&lt;skip&gt; file!] block [block!]] [...]
+</code></pre>
+<p>This could tell the evaluator that if it can't match the type of the first argument, then just set it to void and keep going.  An upside to this is that it would mean people using APPLY wouldn't have to jump any particular hoops to build a VARARGS!, and could supply parameters as normal.</p>
+<p><strong>Is permitting this a good idea?</strong> Well, the cat's out of the bag as variadics are permitted now, and I think variadics have many justifiable applications.  The real worry is if you start writing things like:</p>
+<pre><code> emit x
+ blah-blah
+</code></pre>
+<p>...and the reader can't be confident if x is a FILE! or a BLOCK!.  Of course, if you don't know if x is a FUNCTION! or a BLOCK! you've always had a similar amount of trouble.  You also get in a bit of trouble the day you decide that first argument to <code>emit</code> can be either a FILE! or a BLOCK!, still taking a BLOCK! as the second argument.  But changing function interfaces always influences callsites, this is just taking it further.  I'd argue <em>it's just how Rebol is</em>.</p>
+<p>Now this doesn't mean it's a good idea to use for exposing core functionality.  But if one is scribbling out a quick-and-dirty script, this freedom may be all part of <a href="https://forum.rebol.info/t/more-than-just-code-a-deep-lake/295">the deep lake</a>.</p>
+<aside class="quote no-group quote-modified" data-post="1" data-topic="295">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"><a href="//forum.rebol.info/t/more-than-just-code-a-deep-lake/295/1">More Than Just Code - A Deep Lake</a>
+</div>
+<blockquote>
+<p>Of course, how you write code is ultimately your choice alone. REBOL, as a context dependent language, is perhaps the most freeform computing language ever invented. But therein lies the importance of good coding style. You can write actual working programs using an alien dialect, or you can write them to be as clear as possible. It's your choice.</p>
+</blockquote>
+</aside>
+          <p><a href="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330/1</link>
+        <pubDate>Mon, 09 Oct 2017 17:48:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-330-1</guid>
+        <source url="https://forum.rebol.info/t/blocks-vs-variadics-as-dialect-formats/330.rss">Blocks vs Variadics as Dialect Formats</source>
+      </item>
+  </channel>
+</rss>

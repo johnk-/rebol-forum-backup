@@ -1,0 +1,395 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How To Resolve the SET Inconsistencies in PARSE?</title>
+    <link>https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534</link>
+    <description>## Background
+
+The general concept of a parser combinator is that it processes some amount of input and returns the remainder...but also typically returns a value of arbitrary type.
+
+So if you want to get an IP address structure from a string, you would build a combinator for that out of a combinator that gave an integer from a string...and a combinator that could detect a dot and skip over it (if it gave a result you&#39;d throw it out).
+
+In Haskell this is rather straightforward.  e.g. with Attoparsec:
+
+    -- define the structure of an IP address
+    data IP = IP Word8 Word8 Word8 Word8
+
+    parseIP :: Parser IP
+    parseIP = do  -- Haskell &quot;do&quot; is syntax sugar for &quot;call these steps in order&quot;
+      d1 &lt;- decimal
+      char &#39;.&#39;
+      d2 &lt;- decimal
+      char &#39;.&#39;
+      d3 &lt;- decimal
+      char &#39;.&#39;
+      d4 &lt;- decimal
+      char &#39;\n&#39;
+      return $ IP d1 d2 d3 d4
+
+As in UPARSE, you see that there&#39;s a certain amount of &quot;magic parameterization&quot; going on behind the scenes with these functions.  You don&#39;t have to explicitly pass the input data to the `decimal` or `char` combinators, they effectively &quot;inherit&quot; that from being &quot;inside the Parser monad&quot;.
+
+**Point being: how much input a combinator consumes and the evaluative product of the combinator are two completely different things.**  You tend to bubble up to get more and more complex types from simpler ones.  And the parse pattern can even proceed to higher levels; you can convert a stream of text into a stream of IP addresses *and then parse that stream* at a higher level.
+
+## But Historical Rebol/Red Has No &quot;Combinator Product&quot;
+
+The only known result from a parse rule is &quot;advanced input&quot;.  Hence the product has to be determined from that.
+
+If you use SET, you get *just the first element* of however far the rule got:
+
+     rebol2&gt;&gt; parse &quot;abcde&quot; [set x some skip]
+     == true
+
+     rebol2&gt;&gt; x
+     == #&quot;a&quot;
+
+Rebol2 errors if you try to use SET with a literal series match, but R3-Alpha/Red chose to allow it...again only single:
+
+    r3-alpha&gt;&gt; parse &quot;hello&quot; [set x &quot;hello&quot;]
+    == true
+
+    r3-alpha&gt;&gt; x
+    == #&quot;h&quot;
+
+If you use COPY, you get *all of the elements* for how far the rule got:
+     
+     rebol2&gt;&gt; parse &quot;abcde&quot; [copy x some skip]
+     == true
+
+     rebol2&gt;&gt; x
+     == &quot;abcde&quot;
+
+When adding COLLECT, Red seemed to go with the COPY semantics for KEEP:
+
+    &gt;&gt; parse &quot;aaaa&quot; [collect [keep some &quot;a&quot;]]
+    == [&quot;aaaa&quot;]
+
+But notice that the exact phrasing of the rule doesn&#39;t matter...the only thing that&#39;s paid attention to is the absolute amount of progress made on the input:
+
+    &gt;&gt; parse &quot;aaaa&quot; [collect [keep some 2 &quot;a&quot;]]
+    == [&quot;aaaa&quot;]  ; e.g. not [&quot;aa&quot; &quot;aa&quot;]
+
+## UPARSE Adds The Combinator Product Twist
+
+What I wanted with UPARSE was to split off this idea of what was produced by a &quot;rule&quot; from having to be the same type as the series elements.  If you don&#39;t allow that, you wind up having to write labor-intensive code just to extract integers out of a string.
+
+It seems reasonable that when you use a SET-WORD! in UPARSE, that means that you&#39;re asking for a result from whatever follows.  You don&#39;t have to ask for it...if you use a rule without it then it will consume the input.
+
+I&#39;d imagine that if you say **x: a-rule** that whatever gets put in X would be the same thing that is kept when you say **keep a-rule**...which is to say, the combinator product.
+
+But should all rules have combinator products, or should some refuse?  Rebol2 wouldn&#39;t allow you to do **set x thru ...** while R3-Alpha and Red do.  It doesn&#39;t look good to me:
+
+     red&gt;&gt; parse &quot;abcde&quot; [set x thru &quot;e&quot;]
+     == true
+
+     red&gt;&gt; x
+     == #&quot;a&quot;
+
+But before we go banning &quot;weird sets&quot; we should look at a genuinely useful pattern of being able to set single elements out of alternates:
+
+     rebol2&gt;&gt; parse [1] [set x [tag! | integer!]]
+     == true
+
+     rebol2&gt;&gt; x
+     == 1
+
+That looks coherent, but it quickly gets non-coherent:
+
+     rebol2&gt;&gt; parse [1 2] [set x [tag! tag! | integer! integer!]]
+     == true
+
+     rebol2&gt;&gt; x
+     == 1  ; d&#39;oh, what about 2?
+
+This might get you to think that the right thing to do here would be to collect those up as a BLOCK!, e.g. [1 2].  This brings us back to the question of whether every combinator has a result or not.  Does TO?  THRU?  Literals?  GROUP!s?
+
+    rebol2&gt;&gt; parse [&lt;test&gt;] [set x [(10 + 20) tag!]]
+    == true
+
+    rebol2&gt;&gt; x
+    == &lt;test&gt;
+
+If the goal was to collect up the combinator products, and GROUP!s had a product, then that would be **`[30 &lt;test&gt;]`** instead.  But this seems to be getting away from what&#39;s useful.
+
+## This Is The Current Biggest Issue To Sort Out in UPARSE
+
+I hope I&#39;ve motivated it to where it&#39;s clear why we don&#39;t want all the parse process to be trapped speaking only in terms of the elements of the series it&#39;s processing.  The goal is extraction.  You need to be able to abstract that extraction...or this simply is not competitive with the other offerings.
+
+Right now, I&#39;ve made it so GROUP!, TO, THRU, and literals are combinators with no product.  This means they cannot be used with SET, and would not show up in results collected during a BLOCK!.
+
+OPT will mirror whether the thing it is used with has a product.  So **x: opt integer!** is legal but **x: &quot;abc&quot;** is not, since **x: &quot;abc&quot;** is not.
+
+A similar premise could be applied to SOME and ANY.  They could default to gathering their products in a block.  Here would be an example with a string as input, but that gathered a block out:
+
+    &gt;&gt; uparse &quot;(((1 2 3)))&quot; [some &quot;(&quot;, x: some integer!, some &quot;)&quot;]
+    &gt;&gt; x
+    == [1 2 3]
+
+If you didn&#39;t want products gathered, but actually wanted to just get the input across the span, you would use COPY:
+
+    &gt;&gt; uparse &quot;(((1 2 3)))&quot; [some &quot;(&quot;, x: copy some integer!, some &quot;)&quot;]
+    &gt;&gt; x
+    == &quot;1 2 3&quot;
+
+This makes me question if COPY is the right name for the combinator that is &quot;only interested in how much input was consumed&quot;.  Perhaps that should be CONSUMED?  EATEN?  SPAN?  ACROSS?
+
+You could get both:
+
+    &gt;&gt; uparse &quot;(((1 2 3)))&quot; [some &quot;(&quot;, a: across x: some integer!, some &quot;)&quot;]
+    &gt;&gt; x
+    == [1 2 3]
+    &gt;&gt; a
+    == &quot;1 2 3&quot;
+
+Point being that if you have [1 2 3] and &quot;COPY&quot; that you would usually expect another BLOCK!, not a textual span &quot;1 2 3&quot; from the input.
+
+Something that would be tough would be how to merge single results with multiple results in a block rule.
+
+     &gt;&gt; uparse [&lt;a&gt; 1 2 3] [x: [tag! some integer!]]
+
+Would that be **`[&lt;a&gt; [1 2 3]]`** or **`[&lt;a&gt; 1 2 3]`**?  Mechanically it would pretty much have to be the former, because there&#39;s not really any information to tell you whether to do a merge or not.  Perhaps there could be a merging operator in the BLOCK! combinator itself...something like `++` to indicate it should stick things together?  Going with my proposal that the N rule always makes a BLOCK!...you might ask those blocks to be stuck together somehow:
+
+     &gt;&gt; uparse [&lt;a&gt; 1 2 3] [x: [1 tag! ++ some integer!]]
+     &gt;&gt; x
+     == [&lt;a&gt; 1 2 3]
+
+Also...this may speak to the need for an ELIDE operation in UPARSE, which stops the BLOCK! combinator from accruing something when you only wanted to match it.  :-/
+
+     &gt;&gt; uparse [&lt;a&gt; 1 2 3] [x: [elide tag!, some integer!]]
+     &gt;&gt; x
+     == [1 2 3]
+
+But I think that implicitly eliding GROUP!s seems to make sense.
+
+&gt; **Remember the reason this is being reasoned through despite the existence of COLLECT and KEEP...** there&#39;s a situation with **x: [integer! | text! | ...]** which has worked historically and needs some kind of reasoning.  Maybe this is the wrong line of thinking, and that should be done with a specialized rule for that kind of situation...like MATCH:
+&gt;
+&gt;      &gt;&gt; uparse [&lt;tag&gt;] [x: match [integer! tag!]] 
+&gt;
+&gt; I don&#39;t know yet, but at least we can try some experiments.  I just did:
+&gt;
+&gt;     &gt;&gt; uparse [1 2 3] [x: [integer!, elide integer!, integer!]]
+&gt;     == [1 2 3]
+&gt;
+&gt;     &gt;&gt; x
+&gt;     == [1 3]
+&gt;
+&gt; It&#39;s at least worth giving this kind of idea a shot to see if it&#39;s worth considering.
+
+## Well, There&#39;s At Least  A Few Thoughts In All Of That
+
+I&#39;ll call this writeup progress.  Figuring out why you might want ELIDE in PARSE after all is a bit of a revelation.
+
+This also bolsters my opinion that plain GROUP!s should not be value-bearing...which is a longstanding point that I&#39;ve tried to make.  I think that **keep do [...]** solves that pretty well, by letting DO be the value-bearing executable form.
+
+If people have samples of code they believe must work a certain way, or any killer new feature ideas, that&#39;s useful data.</description>
+    
+    <lastBuildDate>Wed, 11 Aug 2021 07:49:06 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How To Resolve the SET Inconsistencies in PARSE?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1534">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But before we go banning "weird sets" we should look at a genuinely useful pattern of being able to set single elements out of alternates:</p>
+<pre><code>rebol2&gt;&gt; parse [1] [set x [tag! | integer!]]
+== true
+
+rebol2&gt;&gt; x
+== 1
+</code></pre>
+<p>That looks coherent, but it quickly gets non-coherent:</p>
+<pre><code>rebol2&gt;&gt; parse [1 2] [set x [tag! tag! | integer! integer!]]
+== true
+
+rebol2&gt;&gt; x
+== 1  ; d'oh, what about 2?
+</code></pre>
+</blockquote>
+</aside>
+<p>The ultimate answer for this was that a BLOCK! rule <em>will evaluate to the result of the <strong>last match</strong>.</em></p>
+<pre><code>&gt;&gt; uparse? [1 2] [x: [tag! tag! | integer! integer!]]
+== #[true]
+
+&gt;&gt; x
+== 2
+</code></pre>
+<p>Ultimately this is the return value that bubbles out of UPARSE, you don't even need an assignment:</p>
+<pre><code>&gt;&gt; uparse [&lt;a&gt; &lt;b&gt;] [[tag! tag! | integer! integer!]]
+== &lt;b&gt;
+</code></pre>
+<p><strong>While it wasn't immediately obvious this should be the answer (for some reason), now that it has been seen it cannot be unseen...and is serving very well!</strong></p>
+          <p><a href="https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534/3</link>
+        <pubDate>Sun, 14 Mar 2021 04:28:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1534-3</guid>
+        <source url="https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534.rss">How To Resolve the SET Inconsistencies in PARSE?</source>
+      </item>
+      <item>
+        <title>How To Resolve the SET Inconsistencies in PARSE?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>8 posts were merged into an existing topic: <a href="/t/what-to-call-historical-skip-in-parse/1557/2">What to Call Historical "SKIP" in PARSE?</a></p>
+          <p><a href="https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534/2</link>
+        <pubDate>Sun, 14 Mar 2021 03:57:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1534-2</guid>
+        <source url="https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534.rss">How To Resolve the SET Inconsistencies in PARSE?</source>
+      </item>
+      <item>
+        <title>How To Resolve the SET Inconsistencies in PARSE?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Background</h2>
+<p>The general concept of a parser combinator is that it processes some amount of input and returns the remainder...but also typically returns a value of arbitrary type.</p>
+<p>So if you want to get an IP address structure from a string, you would build a combinator for that out of a combinator that gave an integer from a string...and a combinator that could detect a dot and skip over it (if it gave a result you'd throw it out).</p>
+<p>In Haskell this is rather straightforward.  e.g. with Attoparsec:</p>
+<pre><code>-- define the structure of an IP address
+data IP = IP Word8 Word8 Word8 Word8
+
+parseIP :: Parser IP
+parseIP = do  -- Haskell "do" is syntax sugar for "call these steps in order"
+  d1 &lt;- decimal
+  char '.'
+  d2 &lt;- decimal
+  char '.'
+  d3 &lt;- decimal
+  char '.'
+  d4 &lt;- decimal
+  char '\n'
+  return $ IP d1 d2 d3 d4
+</code></pre>
+<p>As in UPARSE, you see that there's a certain amount of "magic parameterization" going on behind the scenes with these functions.  You don't have to explicitly pass the input data to the <code>decimal</code> or <code>char</code> combinators, they effectively "inherit" that from being "inside the Parser monad".</p>
+<p><strong>Point being: how much input a combinator consumes and the evaluative product of the combinator are two completely different things.</strong>  You tend to bubble up to get more and more complex types from simpler ones.  And the parse pattern can even proceed to higher levels; you can convert a stream of text into a stream of IP addresses <em>and then parse that stream</em> at a higher level.</p>
+<h2>But Historical Rebol/Red Has No "Combinator Product"</h2>
+<p>The only known result from a parse rule is "advanced input".  Hence the product has to be determined from that.</p>
+<p>If you use SET, you get <em>just the first element</em> of however far the rule got:</p>
+<pre><code> rebol2&gt;&gt; parse "abcde" [set x some skip]
+ == true
+
+ rebol2&gt;&gt; x
+ == #"a"
+</code></pre>
+<p>Rebol2 errors if you try to use SET with a literal series match, but R3-Alpha/Red chose to allow it...again only single:</p>
+<pre><code>r3-alpha&gt;&gt; parse "hello" [set x "hello"]
+== true
+
+r3-alpha&gt;&gt; x
+== #"h"
+</code></pre>
+<p>If you use COPY, you get <em>all of the elements</em> for how far the rule got:</p>
+<pre><code> rebol2&gt;&gt; parse "abcde" [copy x some skip]
+ == true
+
+ rebol2&gt;&gt; x
+ == "abcde"
+</code></pre>
+<p>When adding COLLECT, Red seemed to go with the COPY semantics for KEEP:</p>
+<pre><code>&gt;&gt; parse "aaaa" [collect [keep some "a"]]
+== ["aaaa"]
+</code></pre>
+<p>But notice that the exact phrasing of the rule doesn't matter...the only thing that's paid attention to is the absolute amount of progress made on the input:</p>
+<pre><code>&gt;&gt; parse "aaaa" [collect [keep some 2 "a"]]
+== ["aaaa"]  ; e.g. not ["aa" "aa"]
+</code></pre>
+<h2>UPARSE Adds The Combinator Product Twist</h2>
+<p>What I wanted with UPARSE was to split off this idea of what was produced by a "rule" from having to be the same type as the series elements.  If you don't allow that, you wind up having to write labor-intensive code just to extract integers out of a string.</p>
+<p>It seems reasonable that when you use a SET-WORD! in UPARSE, that means that you're asking for a result from whatever follows.  You don't have to ask for it...if you use a rule without it then it will consume the input.</p>
+<p>I'd imagine that if you say <strong>x: a-rule</strong> that whatever gets put in X would be the same thing that is kept when you say <strong>keep a-rule</strong>...which is to say, the combinator product.</p>
+<p>But should all rules have combinator products, or should some refuse?  Rebol2 wouldn't allow you to do <strong>set x thru ...</strong> while R3-Alpha and Red do.  It doesn't look good to me:</p>
+<pre><code> red&gt;&gt; parse "abcde" [set x thru "e"]
+ == true
+
+ red&gt;&gt; x
+ == #"a"
+</code></pre>
+<p>But before we go banning "weird sets" we should look at a genuinely useful pattern of being able to set single elements out of alternates:</p>
+<pre><code> rebol2&gt;&gt; parse [1] [set x [tag! | integer!]]
+ == true
+
+ rebol2&gt;&gt; x
+ == 1
+</code></pre>
+<p>That looks coherent, but it quickly gets non-coherent:</p>
+<pre><code> rebol2&gt;&gt; parse [1 2] [set x [tag! tag! | integer! integer!]]
+ == true
+
+ rebol2&gt;&gt; x
+ == 1  ; d'oh, what about 2?
+</code></pre>
+<p>This might get you to think that the right thing to do here would be to collect those up as a BLOCK!, e.g. [1 2].  This brings us back to the question of whether every combinator has a result or not.  Does TO?  THRU?  Literals?  GROUP!s?</p>
+<pre><code>rebol2&gt;&gt; parse [&lt;test&gt;] [set x [(10 + 20) tag!]]
+== true
+
+rebol2&gt;&gt; x
+== &lt;test&gt;
+</code></pre>
+<p>If the goal was to collect up the combinator products, and GROUP!s had a product, then that would be <strong><code>[30 &lt;test&gt;]</code></strong> instead.  But this seems to be getting away from what's useful.</p>
+<h2>This Is The Current Biggest Issue To Sort Out in UPARSE</h2>
+<p>I hope I've motivated it to where it's clear why we don't want all the parse process to be trapped speaking only in terms of the elements of the series it's processing.  The goal is extraction.  You need to be able to abstract that extraction...or this simply is not competitive with the other offerings.</p>
+<p>Right now, I've made it so GROUP!, TO, THRU, and literals are combinators with no product.  This means they cannot be used with SET, and would not show up in results collected during a BLOCK!.</p>
+<p>OPT will mirror whether the thing it is used with has a product.  So <strong>x: opt integer!</strong> is legal but <strong>x: "abc"</strong> is not, since <strong>x: "abc"</strong> is not.</p>
+<p>A similar premise could be applied to SOME and ANY.  They could default to gathering their products in a block.  Here would be an example with a string as input, but that gathered a block out:</p>
+<pre><code>&gt;&gt; uparse "(((1 2 3)))" [some "(", x: some integer!, some ")"]
+&gt;&gt; x
+== [1 2 3]
+</code></pre>
+<p>If you didn't want products gathered, but actually wanted to just get the input across the span, you would use COPY:</p>
+<pre><code>&gt;&gt; uparse "(((1 2 3)))" [some "(", x: copy some integer!, some ")"]
+&gt;&gt; x
+== "1 2 3"
+</code></pre>
+<p>This makes me question if COPY is the right name for the combinator that is "only interested in how much input was consumed".  Perhaps that should be CONSUMED?  EATEN?  SPAN?  ACROSS?</p>
+<p>You could get both:</p>
+<pre><code>&gt;&gt; uparse "(((1 2 3)))" [some "(", a: across x: some integer!, some ")"]
+&gt;&gt; x
+== [1 2 3]
+&gt;&gt; a
+== "1 2 3"
+</code></pre>
+<p>Point being that if you have [1 2 3] and "COPY" that you would usually expect another BLOCK!, not a textual span "1 2 3" from the input.</p>
+<p>Something that would be tough would be how to merge single results with multiple results in a block rule.</p>
+<pre><code> &gt;&gt; uparse [&lt;a&gt; 1 2 3] [x: [tag! some integer!]]
+</code></pre>
+<p>Would that be <strong><code>[&lt;a&gt; [1 2 3]]</code></strong> or <strong><code>[&lt;a&gt; 1 2 3]</code></strong>?  Mechanically it would pretty much have to be the former, because there's not really any information to tell you whether to do a merge or not.  Perhaps there could be a merging operator in the BLOCK! combinator itself...something like <code>++</code> to indicate it should stick things together?  Going with my proposal that the N rule always makes a BLOCK!...you might ask those blocks to be stuck together somehow:</p>
+<pre><code> &gt;&gt; uparse [&lt;a&gt; 1 2 3] [x: [1 tag! ++ some integer!]]
+ &gt;&gt; x
+ == [&lt;a&gt; 1 2 3]
+</code></pre>
+<p>Also...this may speak to the need for an ELIDE operation in UPARSE, which stops the BLOCK! combinator from accruing something when you only wanted to match it.  :-/</p>
+<pre><code> &gt;&gt; uparse [&lt;a&gt; 1 2 3] [x: [elide tag!, some integer!]]
+ &gt;&gt; x
+ == [1 2 3]
+</code></pre>
+<p>But I think that implicitly eliding GROUP!s seems to make sense.</p>
+<blockquote>
+<p><strong>Remember the reason this is being reasoned through despite the existence of COLLECT and KEEP...</strong> there's a situation with <strong>x: [integer! | text! | ...]</strong> which has worked historically and needs some kind of reasoning.  Maybe this is the wrong line of thinking, and that should be done with a specialized rule for that kind of situation...like MATCH:</p>
+<pre><code> &gt;&gt; uparse [&lt;tag&gt;] [x: match [integer! tag!]] 
+</code></pre>
+<p>I don't know yet, but at least we can try some experiments.  I just did:</p>
+<pre><code>&gt;&gt; uparse [1 2 3] [x: [integer!, elide integer!, integer!]]
+== [1 2 3]
+
+&gt;&gt; x
+== [1 3]
+</code></pre>
+<p>It's at least worth giving this kind of idea a shot to see if it's worth considering.</p>
+</blockquote>
+<h2>Well, There's At Least  A Few Thoughts In All Of That</h2>
+<p>I'll call this writeup progress.  Figuring out why you might want ELIDE in PARSE after all is a bit of a revelation.</p>
+<p>This also bolsters my opinion that plain GROUP!s should not be value-bearing...which is a longstanding point that I've tried to make.  I think that <strong>keep do [...]</strong> solves that pretty well, by letting DO be the value-bearing executable form.</p>
+<p>If people have samples of code they believe must work a certain way, or any killer new feature ideas, that's useful data.</p>
+          <p><a href="https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534/1</link>
+        <pubDate>Wed, 03 Mar 2021 07:30:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1534-1</guid>
+        <source url="https://forum.rebol.info/t/how-to-resolve-the-set-inconsistencies-in-parse/1534.rss">How To Resolve the SET Inconsistencies in PARSE?</source>
+      </item>
+  </channel>
+</rss>

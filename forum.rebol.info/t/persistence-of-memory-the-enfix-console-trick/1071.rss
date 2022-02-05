@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Persistence of Memory: The Enfix Console Trick</title>
+    <link>https://forum.rebol.info/t/persistence-of-memory-the-enfix-console-trick/1071</link>
+    <description>Access to the last expression&#39;s result is pretty important.  So I was wondering what sort of syntax we could use to splice it in.  We could commandeer some existing Rebol token:
+
+    &gt;&gt; second [&lt;alpha&gt; &lt;beta&gt;]
+    == &lt;beta&gt;
+
+    &gt;&gt; print #1   ; e.g. #1 for last console result, #2 for the one before that...
+    &lt;beta&gt;
+
+But by definition, *anything* you pick could be meant literally.  We have quite a few more possibilities to make the escaping ever more esoteric, like **`&lt;console&gt;/#1`**.  But if the point is to keep you from re-entering or retyping a result, having to type in a long thing to get uniqueness defeats the purpose...you&#39;re usually trying to save time.
+
+Maybe the best idea would be to find a way to get the result *without mentioning it at all*.  And that gave me the idea of combining enfix and generalized quoting, to make the `system/console/dialect-hook` (which runs after all the code has been LOADed) do something extremely cool...
+
+## Kicking it old-school, calculator-style
+
+The idea is that we *inject the last result, quoted, at the start of the code we&#39;re running*!  If the next operation isn&#39;t enfix, it will just be scrapped.  If it is enfix, it will get picked up as if it had been on the left.
+
+    &gt;&gt; 1 + 2
+    == 3
+
+    &gt;&gt; * 10   ; it actually runs `(&#39;3 * 10)`
+    == 30
+
+And with a small tweak to the SHOVE (**`-&gt;`**) operation, you can now shove the left hand side into a SET-WORD! (or SET-PATH!, SET-GROUP!, SET-BLOCK!....)
+
+    &gt;&gt; 1 + 2
+    == 3
+
+    &gt;&gt; -&gt; foo:
+    == 3
+
+    &gt;&gt; foo
+    == 3
+
+Why is the quoting important?  Well, if the last thing you evaluated was an ACTION!, you don&#39;t want that action to run, if it was a SET-WORD! you don&#39;t want it to assign, etc. etc.  But you do want to be able to capture it!
+
+    &gt;&gt; func [x] [x + 1]
+
+    &gt;&gt; -&gt; addone:
+
+    &gt;&gt; addone 10
+    == 11
+
+Nothing is injected for a VOID! result.  So if you ever want to clear out the memory and not get this behavior, just cycle the prompt by hitting enter.
+
+    &gt;&gt; 1 + 2
+    == 3
+
+    &gt;&gt;  ; hit enter
+
+    &gt;&gt; * 5
+    ** Script Error: * is missing its value1 argument
+
+Are we having fun, yet?  :partying_face:
+
+Notable is [just how little code this took to implement](https://github.com/metaeducation/ren-c/commit/73da0961c6f0b37bbbc3fb0675c6c430bdb6d2ff), mostly comments and adding the SET-XXX! feature to SHOVE.  Imagine how easy it would be to start adding your own console customizations!
+
+&gt; Not too distant plans might allow things like:
+&gt;
+&gt;     &gt;&gt; data: [&lt;a&gt; &lt;b&gt;]
+&gt;
+&gt;     &gt;&gt; 1 + 2
+&gt;     == 3
+&gt;
+&gt;     &gt;&gt; -&gt; (=&gt; append data)
+&gt;     == [&lt;a&gt; &lt;b&gt; 3]
+&gt; 
+&gt; That would be a shorthand for:
+&gt;
+&gt;     -&gt; specialize &#39;append [series: data]
+&gt;
+&gt; I haven&#39;t really figured out what these &quot;by example&quot; specializations will look like.  At first, I thought it could be a behavior of GET-GROUP!:
+&gt;
+&gt;     -&gt; :(append data)
+&gt;
+&gt; But if it&#39;s not the *only* behavior of GET-GROUP!, I fear it might be too confusing.  Having the behavior of an unfinished call in a group producing a specialization could be unpredictable-seeming, when the user would have liked to get an error.  (That is if they could use GET-GROUP! for other things besides specialization, e.g. `:(x)` as `get x`)
+&gt;
+&gt; The average person would probably find that too convoluted and just use a variable.  :-)</description>
+    
+    <lastBuildDate>Tue, 24 Sep 2019 09:08:20 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/persistence-of-memory-the-enfix-console-trick/1071.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Persistence of Memory: The Enfix Console Trick</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>This is a cool trick, and was fun to try out...</p>
+<p>...but I think we should leave it as one of those "optional things" that people might try in their own console configurations.  There's too much potential for confusion when people are learning the language.</p>
+<p>For reference, here's the code to put into your console's DIALECT-HOOK:</p>
+<pre><code>    ; We put the last-result into the code stream, so you can say:
+    ;
+    ;     &gt;&gt; 1 + 2
+    ;     == 3
+    ;
+    ;     &gt;&gt; * 5
+    ;     == 15
+    ;
+    ; https://forum.rebol.info/t/1071
+    ;
+    if (not empty? b) and [not void? :last-result] [
+        insert/only b quote :last-result
+    ]</code></pre>
+          <p><a href="https://forum.rebol.info/t/persistence-of-memory-the-enfix-console-trick/1071/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/persistence-of-memory-the-enfix-console-trick/1071/2</link>
+        <pubDate>Sat, 27 Apr 2019 16:40:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1071-2</guid>
+        <source url="https://forum.rebol.info/t/persistence-of-memory-the-enfix-console-trick/1071.rss">Persistence of Memory: The Enfix Console Trick</source>
+      </item>
+      <item>
+        <title>Persistence of Memory: The Enfix Console Trick</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Access to the last expression's result is pretty important.  So I was wondering what sort of syntax we could use to splice it in.  We could commandeer some existing Rebol token:</p>
+<pre><code>&gt;&gt; second [&lt;alpha&gt; &lt;beta&gt;]
+== &lt;beta&gt;
+
+&gt;&gt; print #1   ; e.g. #1 for last console result, #2 for the one before that...
+&lt;beta&gt;
+</code></pre>
+<p>But by definition, <em>anything</em> you pick could be meant literally.  We have quite a few more possibilities to make the escaping ever more esoteric, like <strong><code>&lt;console&gt;/#1</code></strong>.  But if the point is to keep you from re-entering or retyping a result, having to type in a long thing to get uniqueness defeats the purpose...you're usually trying to save time.</p>
+<p>Maybe the best idea would be to find a way to get the result <em>without mentioning it at all</em>.  And that gave me the idea of combining enfix and generalized quoting, to make the <code>system/console/dialect-hook</code> (which runs after all the code has been LOADed) do something extremely cool...</p>
+<h2>Kicking it old-school, calculator-style</h2>
+<p>The idea is that we <em>inject the last result, quoted, at the start of the code we're running</em>!  If the next operation isn't enfix, it will just be scrapped.  If it is enfix, it will get picked up as if it had been on the left.</p>
+<pre><code>&gt;&gt; 1 + 2
+== 3
+
+&gt;&gt; * 10   ; it actually runs `('3 * 10)`
+== 30
+</code></pre>
+<p>And with a small tweak to the SHOVE (<strong><code>-&gt;</code></strong>) operation, you can now shove the left hand side into a SET-WORD! (or SET-PATH!, SET-GROUP!, SET-BLOCK!....)</p>
+<pre><code>&gt;&gt; 1 + 2
+== 3
+
+&gt;&gt; -&gt; foo:
+== 3
+
+&gt;&gt; foo
+== 3
+</code></pre>
+<p>Why is the quoting important?  Well, if the last thing you evaluated was an ACTION!, you don't want that action to run, if it was a SET-WORD! you don't want it to assign, etc. etc.  But you do want to be able to capture it!</p>
+<pre><code>&gt;&gt; func [x] [x + 1]
+
+&gt;&gt; -&gt; addone:
+
+&gt;&gt; addone 10
+== 11
+</code></pre>
+<p>Nothing is injected for a VOID! result.  So if you ever want to clear out the memory and not get this behavior, just cycle the prompt by hitting enter.</p>
+<pre><code>&gt;&gt; 1 + 2
+== 3
+
+&gt;&gt;  ; hit enter
+
+&gt;&gt; * 5
+** Script Error: * is missing its value1 argument
+</code></pre>
+<p>Are we having fun, yet?  <img src="//forum.rebol.info/images/emoji/twitter/partying_face.png?v=7" title=":partying_face:" class="emoji" alt=":partying_face:"></p>
+<p>Notable is <a href="https://github.com/metaeducation/ren-c/commit/73da0961c6f0b37bbbc3fb0675c6c430bdb6d2ff" rel="nofollow noopener">just how little code this took to implement</a>, mostly comments and adding the SET-XXX! feature to SHOVE.  Imagine how easy it would be to start adding your own console customizations!</p>
+<blockquote>
+<p>Not too distant plans might allow things like:</p>
+<pre><code>&gt;&gt; data: [&lt;a&gt; &lt;b&gt;]
+
+&gt;&gt; 1 + 2
+== 3
+
+&gt;&gt; -&gt; (=&gt; append data)
+== [&lt;a&gt; &lt;b&gt; 3]
+</code></pre>
+<p>That would be a shorthand for:</p>
+<pre><code>-&gt; specialize 'append [series: data]
+</code></pre>
+<p>I haven't really figured out what these "by example" specializations will look like.  At first, I thought it could be a behavior of GET-GROUP!:</p>
+<pre><code>-&gt; :(append data)
+</code></pre>
+<p>But if it's not the <em>only</em> behavior of GET-GROUP!, I fear it might be too confusing.  Having the behavior of an unfinished call in a group producing a specialization could be unpredictable-seeming, when the user would have liked to get an error.  (That is if they could use GET-GROUP! for other things besides specialization, e.g. <code>:(x)</code> as <code>get x</code>)</p>
+<p>The average person would probably find that too convoluted and just use a variable.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/persistence-of-memory-the-enfix-console-trick/1071/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/persistence-of-memory-the-enfix-console-trick/1071/1</link>
+        <pubDate>Fri, 15 Feb 2019 09:48:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1071-1</guid>
+        <source url="https://forum.rebol.info/t/persistence-of-memory-the-enfix-console-trick/1071.rss">Persistence of Memory: The Enfix Console Trick</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Changing Strategies on Avoiding Stdio Inclusion</title>
+    <link>https://forum.rebol.info/t/changing-strategies-on-avoiding-stdio-inclusion/1685</link>
+    <description>Among the battles that Rebol picked, one was to not become dependent on the IO and formatting constructs of libc.  So you could build an interpreter without the logic that is behind **printf(&quot;Hello %s, your Score is %d\n&quot;);** 
+
+Ren-C embraced this and tried to enforce it by causing compile-time errors when stdio.h was included in release builds.  Over time this has turned out to be a non-viable strategy for accomplishing the intent.
+
+Modern C compilers have more or less assumed that if you include one header you want to include them all.  So if you **`#include &lt;string.h&gt;`** you&#39;re likely to get all of **`&lt;stdio.h&gt;`** too.
+
+And as it happens, while we don&#39;t need printf(), we now do need some definitions out of stdio in some files.
+
+**We still should keep an eye on included functions, but that oversight needs to shift from the compiler level to the linkage level**.
+
+Here was some of the trickery used to try and keep stdio.h out of release builds:
+
+    //
+    // DISABLE STDIO.H IN RELEASE BUILD
+    //
+    // The core build of Rebol published in R3-Alpha sought to not be dependent
+    // on &lt;stdio.h&gt;.  Since Rebol has richer tools like WORD!s and BLOCK! for
+    // dialecting, including a brittle historic string-based C &quot;mini-language&quot; of
+    // printf into the executable was a wasteful dependency.  Also, many
+    // implementations are clunky:
+    //
+    // http://blog.hostilefork.com/where-printf-rubber-meets-road/
+    //
+    // To formalize this rule, these definitions will help catch uses of &lt;stdio.h&gt;
+    // in the release build, and give a hopefully informative error.
+    //
+    #if defined(NDEBUG) &amp;&amp; !defined(DEBUG_STDIO_OK)
+        //
+        // `stdin` is required to be macro https://en.cppreference.com/w/c/io
+        //
+        #if defined(__clang__)
+            //
+            // !!! At least as of XCode 12.0 and Clang 9.0.1, including basic
+            // system headers will force the inclusion of &lt;stdio.h&gt;.  If someone
+            // wants to dig into why that is, they may...but tolerate it for now.
+            // Checking if `printf` and such makes it into the link would require
+            // dumping the library symbols, in general anyway...
+            //
+        #elif defined(stdin) and !defined(REBOL_ALLOW_STDIO_IN_RELEASE_BUILD)
+            #error &quot;&lt;stdio.h&gt; included prior to %sys-core.h in release build&quot;
+        #endif
+
+        #define printf dont_include_stdio_h
+        #define fprintf dont_include_stdio_h
+    #else
+        // Desire to not bake in &lt;stdio.h&gt; notwithstanding, in debug builds it
+        // can be convenient (or even essential) to have access to stdio.  This
+        // is especially true when trying to debug the core I/O routines and
+        // unicode/UTF8 conversions that Rebol seeks to replace stdio with.
+        //
+        // Hence debug builds are allowed to use stdio.h conveniently.  The
+        // release build should catch if any of these aren&#39;t #if !defined(NDEBUG)
+        //
+        #include &lt;stdio.h&gt;
+
+        // NOTE: F/PRINTF DOES NOT ALWAYS FFLUSH() BUFFERS AFTER NEWLINES; it is
+        // an &quot;implementation defined&quot; behavior, and never applies to redirects:
+        //
+        // https://stackoverflow.com/a/5229135/211160
+        //
+        // So when writing information you intend to be flushed before a potential
+        // crash, be sure to fflush(), regardless of using `\n` or not.
+    #endif
+
+Here are some comments on how the C++ **`&lt;string&gt;`** header on MSVC pulled in formatting that pulled in string.h (aka. **`&lt;cstring&gt;`** in C++ terms).
+
+    /*
+     * If using C++, variadic calls can be type-checked to make sure only
+     * legal arguments are passed.  It also means one can pass literals
+     * and have them coerced (e.g. integer =&gt; INTEGER! or bool =&gt; LOGIC!).
+     *
+     * Note: In MSVC, `#include &lt;string&gt;` will pull in `&lt;xstring&gt;` that
+     * then sucks in `&lt;iosfwd&gt;` which brings in `&lt;cstdio&gt;`.  This means
+     * that including the release version of %sys-core.h will see an
+     * inclusion of stdio that it doesn&#39;t want.  Bypass the assertion
+     * for this case, and hope the C build maintains dependency purity.
+     */
+    #ifdef TO_WINDOWS
+        #define REBOL_ALLOW_STDIO_IN_RELEASE_BUILD  // ^^-- see above
+    #endif
+
+## Again, not giving up, just changing tactics...
+
+In fact, it&#39;s really better to be looking at the binary for bloat anyway.  You can write innocuous lines of source and find that brought in all kinds of things in the compiler.  So going by the source isn&#39;t the best idea.</description>
+    
+    <lastBuildDate>Thu, 26 Aug 2021 13:24:52 +0000</lastBuildDate>
+    <category>Optimization</category>
+    <atom:link href="https://forum.rebol.info/t/changing-strategies-on-avoiding-stdio-inclusion/1685.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Changing Strategies on Avoiding Stdio Inclusion</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Among the battles that Rebol picked, one was to not become dependent on the IO and formatting constructs of libc.  So you could build an interpreter without the logic that is behind <strong>printf("Hello %s, your Score is %d\n");</strong></p>
+<p>Ren-C embraced this and tried to enforce it by causing compile-time errors when stdio.h was included in release builds.  Over time this has turned out to be a non-viable strategy for accomplishing the intent.</p>
+<p>Modern C compilers have more or less assumed that if you include one header you want to include them all.  So if you <strong><code>#include &lt;string.h&gt;</code></strong> you're likely to get all of <strong><code>&lt;stdio.h&gt;</code></strong> too.</p>
+<p>And as it happens, while we don't need printf(), we now do need some definitions out of stdio in some files.</p>
+<p><strong>We still should keep an eye on included functions, but that oversight needs to shift from the compiler level to the linkage level</strong>.</p>
+<p>Here was some of the trickery used to try and keep stdio.h out of release builds:</p>
+<pre><code>//
+// DISABLE STDIO.H IN RELEASE BUILD
+//
+// The core build of Rebol published in R3-Alpha sought to not be dependent
+// on &lt;stdio.h&gt;.  Since Rebol has richer tools like WORD!s and BLOCK! for
+// dialecting, including a brittle historic string-based C "mini-language" of
+// printf into the executable was a wasteful dependency.  Also, many
+// implementations are clunky:
+//
+// http://blog.hostilefork.com/where-printf-rubber-meets-road/
+//
+// To formalize this rule, these definitions will help catch uses of &lt;stdio.h&gt;
+// in the release build, and give a hopefully informative error.
+//
+#if defined(NDEBUG) &amp;&amp; !defined(DEBUG_STDIO_OK)
+    //
+    // `stdin` is required to be macro https://en.cppreference.com/w/c/io
+    //
+    #if defined(__clang__)
+        //
+        // !!! At least as of XCode 12.0 and Clang 9.0.1, including basic
+        // system headers will force the inclusion of &lt;stdio.h&gt;.  If someone
+        // wants to dig into why that is, they may...but tolerate it for now.
+        // Checking if `printf` and such makes it into the link would require
+        // dumping the library symbols, in general anyway...
+        //
+    #elif defined(stdin) and !defined(REBOL_ALLOW_STDIO_IN_RELEASE_BUILD)
+        #error "&lt;stdio.h&gt; included prior to %sys-core.h in release build"
+    #endif
+
+    #define printf dont_include_stdio_h
+    #define fprintf dont_include_stdio_h
+#else
+    // Desire to not bake in &lt;stdio.h&gt; notwithstanding, in debug builds it
+    // can be convenient (or even essential) to have access to stdio.  This
+    // is especially true when trying to debug the core I/O routines and
+    // unicode/UTF8 conversions that Rebol seeks to replace stdio with.
+    //
+    // Hence debug builds are allowed to use stdio.h conveniently.  The
+    // release build should catch if any of these aren't #if !defined(NDEBUG)
+    //
+    #include &lt;stdio.h&gt;
+
+    // NOTE: F/PRINTF DOES NOT ALWAYS FFLUSH() BUFFERS AFTER NEWLINES; it is
+    // an "implementation defined" behavior, and never applies to redirects:
+    //
+    // https://stackoverflow.com/a/5229135/211160
+    //
+    // So when writing information you intend to be flushed before a potential
+    // crash, be sure to fflush(), regardless of using `\n` or not.
+#endif
+</code></pre>
+<p>Here are some comments on how the C++ <strong><code>&lt;string&gt;</code></strong> header on MSVC pulled in formatting that pulled in string.h (aka. <strong><code>&lt;cstring&gt;</code></strong> in C++ terms).</p>
+<pre><code>/*
+ * If using C++, variadic calls can be type-checked to make sure only
+ * legal arguments are passed.  It also means one can pass literals
+ * and have them coerced (e.g. integer =&gt; INTEGER! or bool =&gt; LOGIC!).
+ *
+ * Note: In MSVC, `#include &lt;string&gt;` will pull in `&lt;xstring&gt;` that
+ * then sucks in `&lt;iosfwd&gt;` which brings in `&lt;cstdio&gt;`.  This means
+ * that including the release version of %sys-core.h will see an
+ * inclusion of stdio that it doesn't want.  Bypass the assertion
+ * for this case, and hope the C build maintains dependency purity.
+ */
+#ifdef TO_WINDOWS
+    #define REBOL_ALLOW_STDIO_IN_RELEASE_BUILD  // ^^-- see above
+#endif
+</code></pre>
+<h2>Again, not giving up, just changing tactics...</h2>
+<p>In fact, it's really better to be looking at the binary for bloat anyway.  You can write innocuous lines of source and find that brought in all kinds of things in the compiler.  So going by the source isn't the best idea.</p>
+          <p><a href="https://forum.rebol.info/t/changing-strategies-on-avoiding-stdio-inclusion/1685/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/changing-strategies-on-avoiding-stdio-inclusion/1685/1</link>
+        <pubDate>Thu, 26 Aug 2021 13:24:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1685-1</guid>
+        <source url="https://forum.rebol.info/t/changing-strategies-on-avoiding-stdio-inclusion/1685.rss">Changing Strategies on Avoiding Stdio Inclusion</source>
+      </item>
+  </channel>
+</rss>

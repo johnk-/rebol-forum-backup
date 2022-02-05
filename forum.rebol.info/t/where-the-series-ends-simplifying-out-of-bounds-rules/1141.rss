@@ -1,0 +1,298 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Where the Series Ends: Simplifying Out of Bounds Rules</title>
+    <link>https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141</link>
+    <description>Most languages with arrays have you keep the index separate.  Languages that do something fancier typically abstract the process into &quot;iterators&quot;...which may be more complicated than simple integers.
+
+But Rebol made a strange decision to fold an integer into its arrays and strings (the ANY-SERIES!).  It is summarized by someone who didn&#39;t like it on the C2 Wiki page [&quot;Why isn&#39;t Rebol Popular&quot;](http://wiki.c2.com/?WhyIsntRebolPopular):
+
+&gt;     &gt;&gt; s: &quot;I hate this approach&quot;
+&gt;     == &quot;I hate this approach&quot;
+&gt;     &gt;&gt; s: next s
+&gt;     == &quot; hate this approach&quot;
+&gt;
+&gt;     But this &#39;I&#39; isn&#39;t lost.
+&gt;
+&gt;     &gt;&gt; back s
+&gt;     == &quot;I hate this approach&quot;
+&gt;     &gt;&gt; s
+&gt;     == &quot; hate this approach&quot;
+&gt;     &gt;&gt; s: head s
+&gt;     == &quot;I hate this approach&quot; 
+
+Whether you love it or hate it, **having a hidden index opens a tremendous can of worms**.
+
+If you ask around, few people would know the answers to semantic questions involving this.  You get an inkling of how complex it is if you just COPY a series that&#39;s not at its head...the data before the index is not copied.
+
+    &gt;&gt; x: next &quot;abcd&quot;
+    == &quot;bcd&quot;
+
+    &gt;&gt; y: copy x
+    == &quot;bcd&quot;
+
+    &gt;&gt; back x
+    == &quot;abcd&quot;
+
+    &gt;&gt; back y
+    == &quot;bcd&quot;
+    
+This issue crops up everywhere.  What about when you REDUCE a block into another?  What about if you COMPOSE?
+
+*(UPDATE 1/23/2021: Red has some acknowledgment of the category of problems, see [Red Issue #4810](https://github.com/red/red/issues/4810) and the linked tickets in, where differences between MAKE and COPY are mentioned)*
+
+It also means ANY-SERIES! are actually *iterators* on data that can be mutated through other references.  If you are pointing into a string or block at index 1000, and someone clears all the data out of that string, your value cell still holds the index at 1000.  What should the semantics be?
+
+## Firstly: why does Rebol have this feature at all?
+
+For such a weird thing you&#39;d have to think it would be good in some way.  And it does have several concrete advantages:
+
+* **It cuts memory use by more than half for series + index.**  The index is slipped into an otherwise-unused spot in a Rebol &quot;cell&quot;.  That spot is the size of a platform pointer.  (R3-Alpha actually had another spot available, but Ren-C utilizes this for &quot;binding&quot;, which is how blocks representing function bodies can stay connected to the *specific instance* of a function invocation they represent, to give &quot;specific binding&quot; on the words nested underneath them).  Storing an independent index would require another INTEGER! cell.  But it&#39;s worse than that, because that cell would need to live in a variable--meaning there&#39;d have to be a context key cell for it.
+
+* **It means you don&#39;t need multiple return values to return a series and an index**.  Multiple return values aren&#39;t very streamlined today (though there is an idea [on making them better floating around](https://forum.rebol.info/t/multiple-return-values/1134)).
+
+* **It reduces the amount of code you have to write.**  It&#39;s not just a matter of putting the series and index into the same variable for the storage size that represents.  It&#39;s all the storage and processing for the units of code in the *references*.  Where today you can just pass `series`, you would have to pass `series index`.  The multiple return values classically would have required `set [series index] some-function-returning-series-and-position`.
+
+So weird though it may be, it&#39;s pragmatic.  The language would be pretty different without it.
+
+## Beyond saving space, there&#39;s no &quot;magic&quot; involved
+
+There&#39;s not any kind of &quot;strong theoretical basis&quot; for Rebol&#39;s inclusion of an index in an ANY-SERIES! value.  It has all the weaknesses of an independent integer index in a C/JavaScript/Python-type language.  Sticking it in the value itself solves nothing.
+
+**So I think it&#39;s a bad idea to have the behavior be any different from if the index was being held independently.**
+
+This means series should be able to hold an arbitrary integer... negative, or past the end.  **back back back &quot;abc&quot;** should take 3 steps back from the head at 1, to be at index -2.  And it should take **next next next** to get it forward to the head.
+
+Every operation that can be done on a series with its internal index should thus be a synonym for doing that operation on **at series index** with an external index.  This means instead of defining two sets of behaviors, we only have to define one.
+
+I propose that molding a series that is not at its head should just include the index.  Something like:
+
+    &gt;&gt; mold series: &quot;abc&quot;
+    == {&quot;abc&quot;}
+
+    &gt;&gt; mold next series
+    == 2:{&quot;abc&quot;}
+
+FORM-ing can do as it does today.  And the console can have some friendly way of printing the molded value that trims it for you, as it trims other things:
+
+    &gt;&gt; mold skip &quot;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&quot; 40
+    == 40:...&quot;aaaaaaaa&quot;
+
+I don&#39;t know what FORM-ing things with indexes before the head should do, but the historical bias is to have that count as the whole series.
+
+This seems important.  It&#39;s a matter of acknowledging what this index represents, why it is there, and holding it to the same standards for acting like an index that is not in the series cell.  When it comes to BigNums, we should be able to have that platform-sized-pointer link to a node if it has to, so this isn&#39;t creating some second-class-citizen INTEGER! datatype.</description>
+    
+    <lastBuildDate>Thu, 22 Oct 2020 21:31:54 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Where the Series Ends: Simplifying Out of Bounds Rules</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="3" data-topic="1141">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Looking at some implementation code recently, I was again struck by just how easy it is to crash the system with out-of-bound series indices.</p>
+</blockquote>
+</aside>
+<p>Just to make this more concrete, let's look quickly at R3-Alpha.</p>
+<p>Here is the definition for BLK_SKIP():</p>
+<pre><code> #define BLK_SKIP(s, n)     (((REBVAL *)((s)-&gt;data))+(n))
+</code></pre>
+<p>That is a raw access of data by integer index.  If the data pointer <code>s-&gt;data</code> contains 10 things and your n is 11, you just went out of bounds.</p>
+<p><a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/include/sys-value.h#L661">Then there is VAL_BLK_DATA()</a> which does such an access using the stored series and index inside a cell:</p>
+<pre><code>#define VAL_BLK_DATA(v)    BLK_SKIP(VAL_SERIES(v), VAL_INDEX(v))
+</code></pre>
+<p>If we look at the <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/include/sys-value.h#L661">definition of VAL_INDEX()</a> we see there's nothing checking that the index is in range of the data for that series...it just fetches the value in the cell:</p>
+<pre><code>#define VAL_INDEX(v)    ((v)-&gt;data.series.index)
+</code></pre>
+<p>The only way this could be safe would be if the value cells somehow maintained a rule that the index would never get out of sync with the length of the data.  <em>But there's no such rule...</em> and as the code is written, there can't be.</p>
+<p>If you look at a function like <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/f-series.c#L151">Cmp_Block()</a> for block comparison, you'll see it blindly running VAL_BLK_DATA() on two series without checking to see if the indices are out of bounds.</p>
+<p>You may wonder why something so clearly broken wouldn't crash more often.  The answer boils down to two things:</p>
+<ul>
+<li>Making out of bounds series typically only happens when a series is modified through two references.</li>
+<li>Series memory is not typically reclaimed in R3-Alpha.</li>
+</ul>
+<p>So try this one out:</p>
+<pre><code>r3-alpha&gt;&gt; data: [a b c d e f g]     
+== [a b c d e f g]
+
+r3-alpha&gt;&gt; ref: skip data 4
+== [e f g]
+
+r3-alpha&gt;&gt; clear data
+== []
+
+r3-alpha&gt;&gt; [e f g] = ref
+== true
+
+r3-alpha&gt;&gt; ref
+== []
+</code></pre>
+<p>The MOLD of the reference data was sensitive to the idea that the index was past the updated series length, but the EQUAL? was not...so it used an out-of-bounds reference to compare.  All the CLEAR operation did was put an end marker at the head of the series...leaving the rest of the data intact, so the comparison succeeded on out of bounds memory.</p>
+<p>Red doesn't have this particular behavior...but there's nothing about their model that's any better.  So it's really kind of like how the rendering of <code>ref</code> knew to take the past-boundary condition into account.  Glancing at it, I gather their EQUAL? does a length calculation based on the index and the present series position before comparing item-wise.</p>
+<p><strong>Systemic Problems Need Systemic Solutions.</strong>  I wish there were some kind of smarter answer than paying for the cost of a length and bounds check on data accesses...and conservatively failing by default.  But the only better answers involve immutable arrays (e.g. Clojure).</p>
+<p><em>(Note: This means that functions like "VAL_BLK_DATA()" (now named VAL_ARRAY_AT()) necessarily need to be involved in checking the length--vs getting a pointer and trusting it can just run until it sees a terminator.  So I wondered if being index-based instead of terminator-based was not such a bad idea...you've already got the length in hand, so why not count it down...and then arrays don't have to be allocated at one past their needed size.  But I tried changing the code for this, and I didn't like it...much more obfuscating and risky.)</em></p>
+          <p><a href="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141/4</link>
+        <pubDate>Thu, 22 Oct 2020 21:31:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1141-4</guid>
+        <source url="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141.rss">Where the Series Ends: Simplifying Out of Bounds Rules</source>
+      </item>
+      <item>
+        <title>Where the Series Ends: Simplifying Out of Bounds Rules</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1141">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>There's not any kind of "strong theoretical basis" for Rebol's inclusion of an index in an ANY-SERIES! value. It has all the weaknesses of an independent integer index in a C/JavaScript/Python-type language. Sticking it in the value itself solves nothing.</p>
+</blockquote>
+</aside>
+<p>Looking at some implementation code recently, I was again struck by just how easy it is to crash the system with out-of-bound series indices.</p>
+<p>Because functions like NEXT and SKIP don't generate indices that are out of bound by default, you tend not to see series values which hold an index not supported by the data they point to.  This means it usually only arises when you have a non-head reference to a series somewhere when another reference does modifications.</p>
+<p>To see what happened, I tried changing the index to an unsigned value (an <code>intptr_t</code>) and created two separate accessors: one for unchecked access (<code>VAL_IDX()</code>), and left the typical reads as triggering failure if used and out of range (<code>VAL_INDEX()</code>).</p>
+<p><strong>Not much happened.</strong>  Most of the tests that errored were fairly esoteric, and fixable:</p>
+<pre><code>str: "12"
+same? str at str -2147483648
+</code></pre>
+<p>So this is just a case where the SAME? routine was written to compare the VAL_INDEX() of two series.  The system has no way to know that the code wasn't planning on taking the extracted VAL_INDEX() and using it to index into the data array...so it erred on the side of caution.  SAME? would be an example of one of the functions that would be specifically edited to test the raw indices.</p>
+<p>I'm pretty much okay with getting errors out of most routines:</p>
+<pre><code> &gt;&gt; copy at [a b c] -10
+ ** Error: operating on series with index &lt; 0
+</code></pre>
+<p>If you do index math and  your indices wind up out of range...or if someone edits a series out from under you...then I think it's good to get an error rather than cover it up.</p>
+<p>For the moment I made the answer to <strong>length of</strong> be #[void] if the series is out of range.  At this time, I don't know if that's better or worse than raising an error.</p>
+<h2>Main Question is How to Render Out-of-Bounds series</h2>
+<p>I don't particulalry feel that <strong>[]</strong> is a good choice for past-end series, and showing the whole series for a before-0 index seems bad as well.  Previously I suggested maybe folding how far they were offset into the notation, like <strong>+1[]</strong> or <strong>-3[]</strong>.</p>
+<p>There's never been a particularly good answer here.</p>
+<p>But other than that, it seems to me that nothing that significant happened with the change.  It's just a step toward being more stable and keeping from crashing due to memory errors.</p>
+          <p><a href="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141/3</link>
+        <pubDate>Thu, 22 Oct 2020 00:02:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1141-3</guid>
+        <source url="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141.rss">Where the Series Ends: Simplifying Out of Bounds Rules</source>
+      </item>
+      <item>
+        <title>Where the Series Ends: Simplifying Out of Bounds Rules</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Many moons after I made the proposal, hiiamboris has proposed the same idea for Red (in a way that is a lot harder to read):</p>
+<p><a href="https://github.com/red/red/wiki/%5BPROP%5D-Series-evolution" rel="nofollow noopener">https://github.com/red/red/wiki/[PROP]-Series-evolution</a></p>
+<p>He agrees generally on the need for more invariants, but specifically the idea of an unconstrained index:</p>
+<blockquote>
+<p>"An idea is to allow series' offset ( <code>index?</code> ) take  <strong>any integer</strong>  value."</p>
+</blockquote>
+<p>I've already tried to tackle the problem with the FIND matrix a bit:</p>
+<aside class="quote quote-modified" data-post="1" data-topic="1126">
+  <div class="title">
+    <div class="quote-controls"></div>
+    <img alt="" width="20" height="20" src="/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar">
+    <a href="https://forum.rebol.info/t/find-last-find-reverse-find-last-find-reverse/1126">Find/last, find/reverse =&gt; find-last, find-reverse</a> <a class="badge-wrapper  bullet" href="/c/development/internals"><span class="badge-category-parent-bg" style="background-color: #25AAE2;"></span><span class="badge-category-bg" style="background-color: #25AAE2;"></span><span style="" data-drop-close="true" class="badge-category clear-badge" title="Internals of the Rebol language">Internals</span></a>
+  </div>
+  <blockquote>
+    R3-Alpha's FIND function had a whole slew of refinements: 
+    /part -- Limits the search to a given length or position
+            length (number! series! pair!)
+    /only -- Treats a series value as only a single value
+    /case -- Characters are case-sensitive
+    /any -- Enables the * and ? wildcards  ; !!! Note: this didn't work
+    /with -- Allows custom wildcards  ; !!! neither did this
+            wild -- Specifies alternates for * and ? (string!)
+    /skip -- Treat the series as records…
+  </blockquote>
+</aside>
+
+          <p><a href="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141/2</link>
+        <pubDate>Sun, 03 Nov 2019 14:41:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1141-2</guid>
+        <source url="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141.rss">Where the Series Ends: Simplifying Out of Bounds Rules</source>
+      </item>
+      <item>
+        <title>Where the Series Ends: Simplifying Out of Bounds Rules</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Most languages with arrays have you keep the index separate.  Languages that do something fancier typically abstract the process into "iterators"...which may be more complicated than simple integers.</p>
+<p>But Rebol made a strange decision to fold an integer into its arrays and strings (the ANY-SERIES!).  It is summarized by someone who didn't like it on the C2 Wiki page <a href="http://wiki.c2.com/?WhyIsntRebolPopular">"Why isn't Rebol Popular"</a>:</p>
+<blockquote>
+<pre><code>&gt;&gt; s: "I hate this approach"
+== "I hate this approach"
+&gt;&gt; s: next s
+== " hate this approach"
+
+But this 'I' isn't lost.
+
+&gt;&gt; back s
+== "I hate this approach"
+&gt;&gt; s
+== " hate this approach"
+&gt;&gt; s: head s
+== "I hate this approach" 
+</code></pre>
+</blockquote>
+<p>Whether you love it or hate it, <strong>having a hidden index opens a tremendous can of worms</strong>.</p>
+<p>If you ask around, few people would know the answers to semantic questions involving this.  You get an inkling of how complex it is if you just COPY a series that's not at its head...the data before the index is not copied.</p>
+<pre><code>&gt;&gt; x: next "abcd"
+== "bcd"
+
+&gt;&gt; y: copy x
+== "bcd"
+
+&gt;&gt; back x
+== "abcd"
+
+&gt;&gt; back y
+== "bcd"
+</code></pre>
+<p>This issue crops up everywhere.  What about when you REDUCE a block into another?  What about if you COMPOSE?</p>
+<p><em>(UPDATE 1/23/2021: Red has some acknowledgment of the category of problems, see <a href="https://github.com/red/red/issues/4810">Red Issue #4810</a> and the linked tickets in, where differences between MAKE and COPY are mentioned)</em></p>
+<p>It also means ANY-SERIES! are actually <em>iterators</em> on data that can be mutated through other references.  If you are pointing into a string or block at index 1000, and someone clears all the data out of that string, your value cell still holds the index at 1000.  What should the semantics be?</p>
+<h2>Firstly: why does Rebol have this feature at all?</h2>
+<p>For such a weird thing you'd have to think it would be good in some way.  And it does have several concrete advantages:</p>
+<ul>
+<li>
+<p><strong>It cuts memory use by more than half for series + index.</strong>  The index is slipped into an otherwise-unused spot in a Rebol "cell".  That spot is the size of a platform pointer.  (R3-Alpha actually had another spot available, but Ren-C utilizes this for "binding", which is how blocks representing function bodies can stay connected to the <em>specific instance</em> of a function invocation they represent, to give "specific binding" on the words nested underneath them).  Storing an independent index would require another INTEGER! cell.  But it's worse than that, because that cell would need to live in a variable--meaning there'd have to be a context key cell for it.</p>
+</li>
+<li>
+<p><strong>It means you don't need multiple return values to return a series and an index</strong>.  Multiple return values aren't very streamlined today (though there is an idea <a href="https://forum.rebol.info/t/multiple-return-values/1134">on making them better floating around</a>).</p>
+</li>
+<li>
+<p><strong>It reduces the amount of code you have to write.</strong>  It's not just a matter of putting the series and index into the same variable for the storage size that represents.  It's all the storage and processing for the units of code in the <em>references</em>.  Where today you can just pass <code>series</code>, you would have to pass <code>series index</code>.  The multiple return values classically would have required <code>set [series index] some-function-returning-series-and-position</code>.</p>
+</li>
+</ul>
+<p>So weird though it may be, it's pragmatic.  The language would be pretty different without it.</p>
+<h2>Beyond saving space, there's no "magic" involved</h2>
+<p>There's not any kind of "strong theoretical basis" for Rebol's inclusion of an index in an ANY-SERIES! value.  It has all the weaknesses of an independent integer index in a C/JavaScript/Python-type language.  Sticking it in the value itself solves nothing.</p>
+<p><strong>So I think it's a bad idea to have the behavior be any different from if the index was being held independently.</strong></p>
+<p>This means series should be able to hold an arbitrary integer... negative, or past the end.  <strong>back back back "abc"</strong> should take 3 steps back from the head at 1, to be at index -2.  And it should take <strong>next next next</strong> to get it forward to the head.</p>
+<p>Every operation that can be done on a series with its internal index should thus be a synonym for doing that operation on <strong>at series index</strong> with an external index.  This means instead of defining two sets of behaviors, we only have to define one.</p>
+<p>I propose that molding a series that is not at its head should just include the index.  Something like:</p>
+<pre><code>&gt;&gt; mold series: "abc"
+== {"abc"}
+
+&gt;&gt; mold next series
+== 2:{"abc"}
+</code></pre>
+<p>FORM-ing can do as it does today.  And the console can have some friendly way of printing the molded value that trims it for you, as it trims other things:</p>
+<pre><code>&gt;&gt; mold skip "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 40
+== 40:..."aaaaaaaa"
+</code></pre>
+<p>I don't know what FORM-ing things with indexes before the head should do, but the historical bias is to have that count as the whole series.</p>
+<p>This seems important.  It's a matter of acknowledging what this index represents, why it is there, and holding it to the same standards for acting like an index that is not in the series cell.  When it comes to BigNums, we should be able to have that platform-sized-pointer link to a node if it has to, so this isn't creating some second-class-citizen INTEGER! datatype.</p>
+          <p><a href="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141/1</link>
+        <pubDate>Tue, 09 Apr 2019 00:16:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1141-1</guid>
+        <source url="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141.rss">Where the Series Ends: Simplifying Out of Bounds Rules</source>
+      </item>
+  </channel>
+</rss>

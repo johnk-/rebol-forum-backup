@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How Important is Knowing the BINDING OF ?</title>
+    <link>https://forum.rebol.info/t/how-important-is-knowing-the-binding-of/1493</link>
+    <description>With work on LET advancing, it raises the question of &quot;what is the answer to BINDING OF on a LET&quot;?
+
+    x: &lt;in-user-context&gt;
+    print [&quot;This is a giant object (the user context):&quot; mold binding of &#39;x]
+    do [
+        let x: 10
+        print [&quot;But what is this?&quot; mold binding of &#39;x]
+    ]
+    
+Efficiency tricks for making LET work pares the entity that represents the variable down to just 8 platform pointers.  That&#39;s 4 pointers for the value cell itself (the INTEGER! 10, in this case).  And then a header, the symbol (for X), and the two remaining pointers are used for bookkeeping.
+
+So there&#39;s no unifying &quot;object&quot; that ties LETs together.  One good aspect of this is that it gives you a finer grain of garbage collecting... if you define 10 LETs in a function and return a WORD! bound to just 1 of them, the other 9 can be GC&#39;d.
+
+*(The bad aspect is that the GC has to mark and sweep 10 individual things...which increases the load.  But I&#39;ve settled on the idea that your scenario can guide you as to if you think this is a problem or not...and bundle things as `&lt;local&gt;` if you feel it is problematic.)*
+
+So this makes us wonder if there is a rule that if BOUND? WORD is true, then:
+
+    (binding of word)/word = get word
+
+If that rule has to be true, we&#39;d need some new ANY-CONTEXT! along the lines of LET! for capturing individual variables...such that picking from that LET with its symbol would return the item.
+
+If the rule *doesn&#39;t* need to be true, then BINDING OF WORD could just return the word itself with the binding.  This is enough information that if the word were X, then  BIND &#39;X BINDING OF WORD could work.
+
+## How About FOR-EACH and USE?
+
+When you say **for-each x [1 2 3 4] [...]** it would be nice if it took advantage of the efficiency of the 8-pointer form of object to declare X.  It&#39;s also a likely savings if **for-each [x y] [1 2 3 4] [...]** used two instances of that form linked together instead of trying to make a full-blown OBJECT! for the two fields.
+
+However, using LET-style binding would mean that you wouldn&#39;t be able to navigate from BINDING OF &#39;X to get a context you could look up Y in.  Programmatically you couldn&#39;t link the X and the Y together as being from the same FOR-EACH.
+
+Is that important?  It might be.
+
+**But I think the main problem is that what people actually want out of binding aggregation is to be able to say &quot;bind this generated code as if it had been written here as source&quot;, and that is something Rebol wasn&#39;t designed to do.**  Too much of the binding process involves phases...and if you do something at a later phase, you&#39;ve missed the moment where the pointers were glued on and giving meaning.
+
+If we interpret **for-each [x y] [1 2 3 4] [...]** as equivalent to:
+
+    do [
+        let x 
+        let y
+        for-each [&#39;x &#39;y] 1 2 3 4 [...]
+    ]
+
+(Assuming quoted words reuse bindings instead of adding new ones.)
+
+... I think there are benefits, and these benefits likely outweigh the ability to navigate to a shared object.  If you&#39;re in one of the odd cases that you care, you could physically make the grouped object:
+
+    obj: make object! [x: y: _]
+    for-each in obj [&#39;x &#39;y] [1 2 3 4] [...]
+
+But making decisions about all of this should be scenario-driven.
+
+## So...should User and Lib Contexts Be Made Out Of &quot;LET!&quot;s?
+
+I&#39;ve mentioned the somewhat unpleasant property that the user and lib contexts have that they grow without bound, are indexed by integer, and never GC keys.
+
+This means adding to the context can be costly (if you need to reallocate).  And it imposes a sense of ordering that doesn&#39;t really have any meaning... at least not the way things like the fields in a FRAME! have meaning (for the order of arguments gathered at a callsite...as well as internal indexing referred to by the native code for a function).
+
+Binding directly to point at individual variables in the case of the LIB and USER context means an index isn&#39;t needed, as lookups have an invariant thing to point at.
+
+But knowing that something is &quot;in LIB&quot; is a meaningful status.  When you override the binding of something you reach to LIB to ask for getting back the original version.
+
+Is the USER context a different story?
+
+As usual with binding this is more questions than answers.</description>
+    
+    <lastBuildDate>Mon, 08 Feb 2021 19:45:30 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/how-important-is-knowing-the-binding-of/1493.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How Important is Knowing the BINDING OF ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>With work on LET advancing, it raises the question of "what is the answer to BINDING OF on a LET"?</p>
+<pre><code>x: &lt;in-user-context&gt;
+print ["This is a giant object (the user context):" mold binding of 'x]
+do [
+    let x: 10
+    print ["But what is this?" mold binding of 'x]
+]
+</code></pre>
+<p>Efficiency tricks for making LET work pares the entity that represents the variable down to just 8 platform pointers.  That's 4 pointers for the value cell itself (the INTEGER! 10, in this case).  And then a header, the symbol (for X), and the two remaining pointers are used for bookkeeping.</p>
+<p>So there's no unifying "object" that ties LETs together.  One good aspect of this is that it gives you a finer grain of garbage collecting... if you define 10 LETs in a function and return a WORD! bound to just 1 of them, the other 9 can be GC'd.</p>
+<p><em>(The bad aspect is that the GC has to mark and sweep 10 individual things...which increases the load.  But I've settled on the idea that your scenario can guide you as to if you think this is a problem or not...and bundle things as <code>&lt;local&gt;</code> if you feel it is problematic.)</em></p>
+<p>So this makes us wonder if there is a rule that if BOUND? WORD is true, then:</p>
+<pre><code>(binding of word)/word = get word
+</code></pre>
+<p>If that rule has to be true, we'd need some new ANY-CONTEXT! along the lines of LET! for capturing individual variables...such that picking from that LET with its symbol would return the item.</p>
+<p>If the rule <em>doesn't</em> need to be true, then BINDING OF WORD could just return the word itself with the binding.  This is enough information that if the word were X, then  BIND 'X BINDING OF WORD could work.</p>
+<h2>How About FOR-EACH and USE?</h2>
+<p>When you say <strong>for-each x [1 2 3 4] [...]</strong> it would be nice if it took advantage of the efficiency of the 8-pointer form of object to declare X.  It's also a likely savings if <strong>for-each [x y] [1 2 3 4] [...]</strong> used two instances of that form linked together instead of trying to make a full-blown OBJECT! for the two fields.</p>
+<p>However, using LET-style binding would mean that you wouldn't be able to navigate from BINDING OF 'X to get a context you could look up Y in.  Programmatically you couldn't link the X and the Y together as being from the same FOR-EACH.</p>
+<p>Is that important?  It might be.</p>
+<p><strong>But I think the main problem is that what people actually want out of binding aggregation is to be able to say "bind this generated code as if it had been written here as source", and that is something Rebol wasn't designed to do.</strong>  Too much of the binding process involves phases...and if you do something at a later phase, you've missed the moment where the pointers were glued on and giving meaning.</p>
+<p>If we interpret <strong>for-each [x y] [1 2 3 4] [...]</strong> as equivalent to:</p>
+<pre><code>do [
+    let x 
+    let y
+    for-each ['x 'y] 1 2 3 4 [...]
+]
+</code></pre>
+<p>(Assuming quoted words reuse bindings instead of adding new ones.)</p>
+<p>... I think there are benefits, and these benefits likely outweigh the ability to navigate to a shared object.  If you're in one of the odd cases that you care, you could physically make the grouped object:</p>
+<pre><code>obj: make object! [x: y: _]
+for-each in obj ['x 'y] [1 2 3 4] [...]
+</code></pre>
+<p>But making decisions about all of this should be scenario-driven.</p>
+<h2>So...should User and Lib Contexts Be Made Out Of "LET!"s?</h2>
+<p>I've mentioned the somewhat unpleasant property that the user and lib contexts have that they grow without bound, are indexed by integer, and never GC keys.</p>
+<p>This means adding to the context can be costly (if you need to reallocate).  And it imposes a sense of ordering that doesn't really have any meaning... at least not the way things like the fields in a FRAME! have meaning (for the order of arguments gathered at a callsite...as well as internal indexing referred to by the native code for a function).</p>
+<p>Binding directly to point at individual variables in the case of the LIB and USER context means an index isn't needed, as lookups have an invariant thing to point at.</p>
+<p>But knowing that something is "in LIB" is a meaningful status.  When you override the binding of something you reach to LIB to ask for getting back the original version.</p>
+<p>Is the USER context a different story?</p>
+<p>As usual with binding this is more questions than answers.</p>
+          <p><a href="https://forum.rebol.info/t/how-important-is-knowing-the-binding-of/1493/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-important-is-knowing-the-binding-of/1493/1</link>
+        <pubDate>Mon, 08 Feb 2021 19:45:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1493-1</guid>
+        <source url="https://forum.rebol.info/t/how-important-is-knowing-the-binding-of/1493.rss">How Important is Knowing the BINDING OF ?</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Ren-C Builds With 20 Year Old Compiler on Haiku!</title>
+    <link>https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710</link>
+    <description>I didn&#39;t realize bringing this up to date would take as long to tinker around with as it did (~ 8 hours), but...
+
+![ren-c-haiku-2021|610x500](upload://3hzkeScW0sVzoA6Gja01IpM2cT3.png) 
+**Why was it such a pain?...**
+
+# GCC 2.95.3 was Released [in March 2001](https://gcc.gnu.org/releases.html)
+
+**Don&#39;t let the 2017 build date fool you.**  That&#39;s a 20-year old compiler, which we assume has the occasional Haiku patch here and there.
+
+I knew the compiler that came with Haiku had been old.  But when I was making decisions about letting go of C89 support (in the core) I figured that Haiku would be bumping their versions to support C99 at some point...
+
+*Nope.*
+
+The reason Haiku is still so far back appears to be because they depend on GCC 2.95 features that enable them to get binary compatibility with old BeOS packages.
+
+You can install a more modern GCC if you like--but then you&#39;re off in the concerns of having multiple toolchains on your system.  And presumably it&#39;s harder to link up against the HaikuOS C++ platform APIs.  So I thought it would be a good proof of our light dependencies to build on what&#39;s there.
+
+## Note: Not Just Us, mbedTLS Dropped Their C89 Support
+
+Even the most die -hard of low-dependency systems have let go of the 80s.  In 2019, mbedTLS [ceased supporting C89](https://github.com/ARMmbed/mbedtls/issues/1484):
+
+&gt; *&quot;We&#39;ve internally decided to drop support for C89 in the development branch. We&#39;ve removed `-Wdeclaration-after-statement` to our build options in `CMakeLists.txt`. We run some builds with `gcc -std=c99 -pedantic` so we do test C99 compliance to a reasonable extent. Thus this issue is resolved.&quot;*
+
+## Options Were Either Give Up, Or Revive the C++98 Build
+
+At one point Ren-C was able to build as C++98.  I stopped seeing the point of maintaining this option...as it was silly to be keeping track of which features I could use from C++11 in which permutations.  So it was either you build as C or you build as C++11 (or higher).
+
+But there really is no other choice with this GCC 2.95.  The code is now styled:
+
+    printf(&quot;Here&#39;s a statement\n&quot;);
+
+    const char *str = &quot;Here&#39;s a declaration after a statement&quot;;
+
+The Haiku C compilation mode requires all your definitions to be before the statements:
+
+    const char *str; 
+
+    printf(&quot;Here&#39;s a statement\n&quot;);
+
+    str = &quot;Here&#39;s a declaration after a statement&quot;;
+ 
+*(Note: I hate that, because it makes maintenance much harder.  But [libuv is actually a holdout here](https://rdrr.io/cran/httpuv/f/src/libuv/CONTRIBUTING.md)...they&#39;re carrying the torch for C89 and committers still have to code in that style.)*
+
+In any case, C++98 was able to do that.  So I revived the setting.  It wasn&#39;t too hard...I just made it act like the C build *almost all of the time*.  Hence no use of inheritance in REBVAL or anything like that.  It deviates only when it has to for compiler semantics.
+
+## Building mbedTLS Was Saved By A --pedantic Quirk
+
+While Ren-C was designed to compile as C or C++, mbedTLS is plain C.  C++ compilers will choke on some of the permissive treatment of `void*`.
+
+I thought there&#39;d be no way around this; because C++ compilers have no way to disable these errors.  *...or so I thought...*!
+
+As it turns out, if you *raise* the error reporting level with &quot;pedantic&quot; warnings, the warning machinery notices the problems before the error!  And you can ignore warnings!
+
+So oddly enough, I actually could compile the encryption code on Haiku (without having to go in and edit it).
+
+## Small Rewrites Needed To Dodge Compiler Bugs 
+
+Minor changes were required to code that was triggering GCC 2.95 bugs that prevented the build.  I wouldn&#39;t be happy if I had to make a dozen changes for it, but it was a few.
+
+I guess even if you write code that is correct, if you notice it triggering a compiler bug that may be a sign that it involves something hard for compilers to get right.  One might be able to balance the annoyance of having to make the change with the potential that maybe fewer compilers would be getting that bit wrong.
+
+## Networking Doesn&#39;t Work, But After LibUV Switch, It Might!
+
+I built the entirety of LibUV into the executable (even though I didn&#39;t technically have to).  And the filesystem code--which is now on libuv--seems to be working.
+
+The networking isn&#39;t on libuv yet, and isn&#39;t seeming to work.  But maybe once it switches over, it will.  I mentioned that Haiku was one of the explicitly supported platforms of libuv.  So if all goes smoothly in that conversion, I imagine this will work!
+
+## No Action Item Here, Just Proving It Could Be Done
+
+This was a good head-check of what exactly has changed as Ren-C has refactored and evolved.  Letting certain dependencies creep in can make your source less adaptable and agile...and this helps be assured that things are still on track.
+
+What&#39;s important here isn&#39;t &quot;oh, now we can have millions of HaikuOS users&quot;.  Rather it serves as another example of managed dependency control--to lend confidence to the idea that porting to other new ones should be easy enough.</description>
+    
+    <lastBuildDate>Tue, 14 Dec 2021 22:43:19 +0000</lastBuildDate>
+    <category>Build System</category>
+    <atom:link href="https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Ren-C Builds With 20 Year Old Compiler on Haiku!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="cggong" data-post="2" data-topic="1710">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/letter_avatar_proxy/v4/letter/c/71c47a/40.png" class="avatar"> cggong:</div>
+<blockquote>
+<p>I'm new to Ren-C</p>
+</blockquote>
+</aside>
+<p>Hello there... and welcome... though we continue to be in an extremely experimental state which is really trying to explore what kinds of potentials there are in the odd medium of Rebol-like languages.  It's tough to onboard anyone as a user or participant, and so generally things just stay quiet, imagining that it would be the sort of thing that gets advertised "...someday".</p>
+<p>(There are some cool tricks, but also a huge mess of half-implemented and not-documented things.  I think of it more like an interesting game than I do a tool for "real work".  All of its quirky novelty isn't going to help anyone with a deadline.  However, there's certainly interesting things to see for those who are persistent with it.)</p>
+<aside class="quote no-group" data-username="cggong" data-post="2" data-topic="1710">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/letter_avatar_proxy/v4/letter/c/71c47a/40.png" class="avatar"> cggong:</div>
+<blockquote>
+<p>I just built Ren-C on my MacBook. It was a smooth experience</p>
+</blockquote>
+</aside>
+<p>Glad to hear it.  "rebmake" is kind of a disaster, and this post explains how it got that way:</p>
+<p><a href="https://forum.rebol.info/t/new-build-executables-new-build-strategy/1432/" class="inline-onebox">New Build Executables, New Build Strategy</a></p>
+<p>As crazy as maintaining a bootstrap for that is, it does help exercise more code.  The goal of Ren-C is to be a maximally skinnable and bendable language, so bending to act like older iterations of itself is one of those challenges.</p>
+<blockquote>
+<p>I like putting declarations before statements because I try to write C as portable assembly, keeping in mind how the assembly would look like when writing C.</p>
+</blockquote>
+<p>Philosophy of initializing variables at their point of declaration aside...you might be a good candidate for appreciating what Ren-C is attempting to accomplish.</p>
+<p>But please introduce yourself a bit in the <a href="https://forum.rebol.info/c/introductions/46">Introductions Section</a> and I can try to answer or address anything particular that has made you curious about the project.</p>
+          <p><a href="https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710/3</link>
+        <pubDate>Tue, 14 Dec 2021 22:43:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1710-3</guid>
+        <source url="https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710.rss">Ren-C Builds With 20 Year Old Compiler on Haiku!</source>
+      </item>
+      <item>
+        <title>Ren-C Builds With 20 Year Old Compiler on Haiku!</title>
+        <dc:creator><![CDATA[cggong]]></dc:creator>
+        <description><![CDATA[
+            <p>It's fascinating to know about Haiku, and that Ren-C is able to port there.<br>
+I'm new to Ren-C and I just built Ren-C on my MacBook. It was a smooth experience. I tried a few Rebol-derived binaries, and only Ren-C works out of the box on both of my MacBooks.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1710">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>The Haiku C compilation mode requires all your definitions to be before the statements:</p>
+</blockquote>
+</aside>
+<p>To be pedantic, definitions and declarations are <a href="https://stackoverflow.com/questions/1410563/what-is-the-difference-between-a-definition-and-a-declaration" rel="noopener nofollow ugc">different</a>, which you probably know.<br>
+Anyway, I like putting declarations before statements because I try to write C as portable assembly, keeping in mind how the assembly would look like when writing C. Putting declarations first makes it easier to reason about the assembly.</p>
+          <p><a href="https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710/2</link>
+        <pubDate>Tue, 14 Dec 2021 22:26:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1710-2</guid>
+        <source url="https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710.rss">Ren-C Builds With 20 Year Old Compiler on Haiku!</source>
+      </item>
+      <item>
+        <title>Ren-C Builds With 20 Year Old Compiler on Haiku!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I didn't realize bringing this up to date would take as long to tinker around with as it did (~ 8 hours), but...</p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/1702f61a03d022ee405643e5defaa1521f3b7dd5.png" data-download-href="https://forum.rebol.info/uploads/default/1702f61a03d022ee405643e5defaa1521f3b7dd5" title="ren-c-haiku-2021"><img src="https://forum.rebol.info/uploads/default/optimized/1X/1702f61a03d022ee405643e5defaa1521f3b7dd5_2_610x500.png" alt="ren-c-haiku-2021" data-base62-sha1="3hzkeScW0sVzoA6Gja01IpM2cT3" width="610" height="500" srcset="https://forum.rebol.info/uploads/default/optimized/1X/1702f61a03d022ee405643e5defaa1521f3b7dd5_2_610x500.png, https://forum.rebol.info/uploads/default/optimized/1X/1702f61a03d022ee405643e5defaa1521f3b7dd5_2_915x750.png 1.5x, https://forum.rebol.info/uploads/default/optimized/1X/1702f61a03d022ee405643e5defaa1521f3b7dd5_2_1220x1000.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/1702f61a03d022ee405643e5defaa1521f3b7dd5_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">ren-c-haiku-2021</span><span class="informations">1692×1386 184 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div><br>
+<strong>Why was it such a pain?...</strong></p>
+<h1>GCC 2.95.3 was Released <a href="https://gcc.gnu.org/releases.html">in March 2001</a>
+</h1>
+<p><strong>Don't let the 2017 build date fool you.</strong>  That's a 20-year old compiler, which we assume has the occasional Haiku patch here and there.</p>
+<p>I knew the compiler that came with Haiku had been old.  But when I was making decisions about letting go of C89 support (in the core) I figured that Haiku would be bumping their versions to support C99 at some point...</p>
+<p><em>Nope.</em></p>
+<p>The reason Haiku is still so far back appears to be because they depend on GCC 2.95 features that enable them to get binary compatibility with old BeOS packages.</p>
+<p>You can install a more modern GCC if you like--but then you're off in the concerns of having multiple toolchains on your system.  And presumably it's harder to link up against the HaikuOS C++ platform APIs.  So I thought it would be a good proof of our light dependencies to build on what's there.</p>
+<h2>Note: Not Just Us, mbedTLS Dropped Their C89 Support</h2>
+<p>Even the most die -hard of low-dependency systems have let go of the 80s.  In 2019, mbedTLS <a href="https://github.com/ARMmbed/mbedtls/issues/1484">ceased supporting C89</a>:</p>
+<blockquote>
+<p><em>"We've internally decided to drop support for C89 in the development branch. We've removed <code>-Wdeclaration-after-statement</code> to our build options in <code>CMakeLists.txt</code>. We run some builds with <code>gcc -std=c99 -pedantic</code> so we do test C99 compliance to a reasonable extent. Thus this issue is resolved."</em></p>
+</blockquote>
+<h2>Options Were Either Give Up, Or Revive the C++98 Build</h2>
+<p>At one point Ren-C was able to build as C++98.  I stopped seeing the point of maintaining this option...as it was silly to be keeping track of which features I could use from C++11 in which permutations.  So it was either you build as C or you build as C++11 (or higher).</p>
+<p>But there really is no other choice with this GCC 2.95.  The code is now styled:</p>
+<pre><code>printf("Here's a statement\n");
+
+const char *str = "Here's a declaration after a statement";
+</code></pre>
+<p>The Haiku C compilation mode requires all your definitions to be before the statements:</p>
+<pre><code>const char *str; 
+
+printf("Here's a statement\n");
+
+str = "Here's a declaration after a statement";
+</code></pre>
+<p><em>(Note: I hate that, because it makes maintenance much harder.  But <a href="https://rdrr.io/cran/httpuv/f/src/libuv/CONTRIBUTING.md">libuv is actually a holdout here</a>...they're carrying the torch for C89 and committers still have to code in that style.)</em></p>
+<p>In any case, C++98 was able to do that.  So I revived the setting.  It wasn't too hard...I just made it act like the C build <em>almost all of the time</em>.  Hence no use of inheritance in REBVAL or anything like that.  It deviates only when it has to for compiler semantics.</p>
+<h2>Building mbedTLS Was Saved By A --pedantic Quirk</h2>
+<p>While Ren-C was designed to compile as C or C++, mbedTLS is plain C.  C++ compilers will choke on some of the permissive treatment of <code>void*</code>.</p>
+<p>I thought there'd be no way around this; because C++ compilers have no way to disable these errors.  <em>...or so I thought...</em>!</p>
+<p>As it turns out, if you <em>raise</em> the error reporting level with "pedantic" warnings, the warning machinery notices the problems before the error!  And you can ignore warnings!</p>
+<p>So oddly enough, I actually could compile the encryption code on Haiku (without having to go in and edit it).</p>
+<h2>Small Rewrites Needed To Dodge Compiler Bugs</h2>
+<p>Minor changes were required to code that was triggering GCC 2.95 bugs that prevented the build.  I wouldn't be happy if I had to make a dozen changes for it, but it was a few.</p>
+<p>I guess even if you write code that is correct, if you notice it triggering a compiler bug that may be a sign that it involves something hard for compilers to get right.  One might be able to balance the annoyance of having to make the change with the potential that maybe fewer compilers would be getting that bit wrong.</p>
+<h2>Networking Doesn't Work, But After LibUV Switch, It Might!</h2>
+<p>I built the entirety of LibUV into the executable (even though I didn't technically have to).  And the filesystem code--which is now on libuv--seems to be working.</p>
+<p>The networking isn't on libuv yet, and isn't seeming to work.  But maybe once it switches over, it will.  I mentioned that Haiku was one of the explicitly supported platforms of libuv.  So if all goes smoothly in that conversion, I imagine this will work!</p>
+<h2>No Action Item Here, Just Proving It Could Be Done</h2>
+<p>This was a good head-check of what exactly has changed as Ren-C has refactored and evolved.  Letting certain dependencies creep in can make your source less adaptable and agile...and this helps be assured that things are still on track.</p>
+<p>What's important here isn't "oh, now we can have millions of HaikuOS users".  Rather it serves as another example of managed dependency control--to lend confidence to the idea that porting to other new ones should be easy enough.</p>
+          <p><a href="https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710/1</link>
+        <pubDate>Fri, 10 Sep 2021 17:28:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1710-1</guid>
+        <source url="https://forum.rebol.info/t/ren-c-builds-with-20-year-old-compiler-on-haiku/1710.rss">Ren-C Builds With 20 Year Old Compiler on Haiku!</source>
+      </item>
+  </channel>
+</rss>

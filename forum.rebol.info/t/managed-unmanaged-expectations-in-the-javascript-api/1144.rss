@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Managed/Unmanaged Expectations in the JavaScript API</title>
+    <link>https://forum.rebol.info/t/managed-unmanaged-expectations-in-the-javascript-api/1144</link>
+    <description>JavaScript is terribly non-cooperative in terms of letting anyone participate in its garbage collection model.  [There are **zero** hooks into its GC.](https://stackoverflow.com/questions/11864044/can-javascript-objects-have-an-on-garbage-collect-callback)  We cannot know how long clients are holding handles to things.
+
+libRebol tries to finesse its way around this as much as possible--and it has been doing an admirable 
+ job.  The idea is to make every &quot;unboxing&quot; routine an alternate interface to the evaluator.  Hence you don&#39;t have to deal with getting a complex API handle object back when all you wanted out of a bunch of code was something like an integer or boolean.  It drastically reduces the number of outstanding API handles in play.
+
+Still, people are going to write:
+
+    let text = &quot;etaf&quot;
+    reb.Elide(&quot;print [reverse&quot;, reb.Text(text), &quot;]&quot;)
+
+Today, that&#39;s a leak.  `reb.Text()` allocates a Rebol API handle.  They didn&#39;t store it anywhere...they just passed it in to reb.Elide, so it&#39;s impossible to free with `reb.Release()`.  You have to say:
+
+    let text = &quot;etaf&quot;
+    let handle = reb.Text(text)
+    reb.Elide(&quot;print [reverse&quot;, handle, &quot;]&quot;)
+    reb.Release(handle)
+
+There&#39;s a pretty cool trick of `reb.R()`, shorthand for `reb.RELEASING()`, e.g. a &quot;releasing reference&quot;:
+
+    let text = &quot;etaf&quot;
+    reb.Elide(&quot;print [reverse&quot;, reb.R(reb.Text(text)), &quot;]&quot;)
+
+This way the evaluator actually releases it as it passes by in the evaluation.
+
+Then there&#39;s a shorthand for that combination of reb.R and reb.Text, called simply reb.T:
+
+    let text = &quot;etaf&quot;
+    reb.Elide(&quot;print [reverse&quot;, reb.T(text), &quot;]&quot;)
+
+A little esoteric, but it&#39;s short!  And saves a mouthful in C.
+
+## But let&#39;s be real.
+
+Teaching the differences between reb.Text() and reb.T(), and explaining what the R in ArgR() means, is fighting a losing battle with new users.  And if their programs crash in ways they can&#39;t debug, it will make the whole thing seem unreliable.
+
+The good news is things have been set up to rarely need to create durable API handles at all.  When I renamed reb.Run() to reb.Value() I thought I&#39;d find a lot of cases, but there was just *one* in ReplPad, and zero in UI Builder.  I&#39;m facing a situation right now needing to create persistent API handles that outlast a function scope for the watchlist.  *First case that has actually needed it.*
+
+So I&#39;m thinking we should not be scared to make API handles JS objects, that are tracked in a mapping table from handle number to object.  Things like `reb.T()` would still return raw heap addresses.  But `reb.Text()`, `reb.Value()`, etc. would give JS objects that wrap up those addresses, that go bad at a deterministic time, and give clear errors if used after the point of death...but can GC otherwise.
+
+## Can function call completion be when handles die?
+
+When a function call completes, the handles could be left alive but marked invalid due to the owning frame expiring--so attempts to use them will notice the expired frame and error.  And when the GC pass goes through to clean up the expired frame, it will remove the object from the table, but tell it directly that it expired (so that if a use comes after the GC, you&#39;ll get an error).  So the object lives as long as the user has a reference to it (which if no `reb.Release()` is used, will be at least as long as the the period of time between the function call ending and a GC happening).  But the GC sweep will pull the system&#39;s reference to that object so only the user references (if any) remain.
+
+If you want a libRebol API handle to outlive the JS-AWAITER or JS-NATIVE it was allocated during, then you will have to &quot;unmanage&quot; it somehow, to extend its lifetime indefinitely until you ask to release it.  Since this has turned out to be pretty infrequent, I think it&#39;s okay to make it the thing you have to do explicitly.  If you don&#39;t, and try to use a handle outside its function, it would give you an error message directing you to `reb.Unmanage()`
+
+Then if this turned out to be inefficient for whatever case, there could be a mode where console messages tell you about places you didn&#39;t reb.Release() things.  People who care could turn that feature on as part of a performance audit.
+
+*(Another possibility would be a simple rule that API handles rtruly can only live as long as the function they&#39;re in--with no way to extend it.  So if you want to outlast that, you have to insert the value into some physical Rebol global map or array so you can find it again after your handle goes bad.  The watchlist is in fact doing that right now: the JavaScript isn&#39;t holding handle objects to Rebol nodes, but a Rebol `watches` array holds them and then the JS can retrieve them later by index.  That saves us on the design of any kind of reb.Unmanage() and the potential for leaking &quot;invisibly&quot;...you&#39;d be seeing some physical Rebol map filling up in userspace.  But it means every user would have to come up with their own ID scheme.  There are pros and cons to this...maybe enough of a pro to say it&#39;s the way we do it until further notice.)*
+
+## C will stay more or less how it is.
+
+It&#39;s possible in JavaScript to have a non-heap-address-thing which represents an allocation (a JS object), to act as a safe stub to prevent system crashes if it&#39;s used past a time when it bears some marking of expiration.  In C, you just crash.
+
+So there&#39;s no real way of doing what I propose above in C.  You can mark a handle you&#39;ve handed out a pointer to as being invalid.  But then, when do you free() that stub?  If you ever do, you&#39;ll run the risk of a client holding onto it crashing.
+
+This means the parallel to the method above--of considering handles expired after the function that was on the stack when it ran ends--would have a crashier outcome.  That&#39;s life in C.</description>
+    
+    <lastBuildDate>Thu, 18 Apr 2019 09:20:24 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/managed-unmanaged-expectations-in-the-javascript-api/1144.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Managed/Unmanaged Expectations in the JavaScript API</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>JavaScript is terribly non-cooperative in terms of letting anyone participate in its garbage collection model.  <a href="https://stackoverflow.com/questions/11864044/can-javascript-objects-have-an-on-garbage-collect-callback" rel="nofollow noopener">There are <strong>zero</strong> hooks into its GC.</a>  We cannot know how long clients are holding handles to things.</p>
+<p>libRebol tries to finesse its way around this as much as possible--and it has been doing an admirable<br>
+job.  The idea is to make every "unboxing" routine an alternate interface to the evaluator.  Hence you don't have to deal with getting a complex API handle object back when all you wanted out of a bunch of code was something like an integer or boolean.  It drastically reduces the number of outstanding API handles in play.</p>
+<p>Still, people are going to write:</p>
+<pre><code>let text = "etaf"
+reb.Elide("print [reverse", reb.Text(text), "]")
+</code></pre>
+<p>Today, that's a leak.  <code>reb.Text()</code> allocates a Rebol API handle.  They didn't store it anywhere...they just passed it in to reb.Elide, so it's impossible to free with <code>reb.Release()</code>.  You have to say:</p>
+<pre><code>let text = "etaf"
+let handle = reb.Text(text)
+reb.Elide("print [reverse", handle, "]")
+reb.Release(handle)
+</code></pre>
+<p>There's a pretty cool trick of <code>reb.R()</code>, shorthand for <code>reb.RELEASING()</code>, e.g. a "releasing reference":</p>
+<pre><code>let text = "etaf"
+reb.Elide("print [reverse", reb.R(reb.Text(text)), "]")
+</code></pre>
+<p>This way the evaluator actually releases it as it passes by in the evaluation.</p>
+<p>Then there's a shorthand for that combination of reb.R and reb.Text, called simply reb.T:</p>
+<pre><code>let text = "etaf"
+reb.Elide("print [reverse", reb.T(text), "]")
+</code></pre>
+<p>A little esoteric, but it's short!  And saves a mouthful in C.</p>
+<h2>But let's be real.</h2>
+<p>Teaching the differences between reb.Text() and reb.T(), and explaining what the R in ArgR() means, is fighting a losing battle with new users.  And if their programs crash in ways they can't debug, it will make the whole thing seem unreliable.</p>
+<p>The good news is things have been set up to rarely need to create durable API handles at all.  When I renamed reb.Run() to reb.Value() I thought I'd find a lot of cases, but there was just <em>one</em> in ReplPad, and zero in UI Builder.  I'm facing a situation right now needing to create persistent API handles that outlast a function scope for the watchlist.  <em>First case that has actually needed it.</em></p>
+<p>So I'm thinking we should not be scared to make API handles JS objects, that are tracked in a mapping table from handle number to object.  Things like <code>reb.T()</code> would still return raw heap addresses.  But <code>reb.Text()</code>, <code>reb.Value()</code>, etc. would give JS objects that wrap up those addresses, that go bad at a deterministic time, and give clear errors if used after the point of death...but can GC otherwise.</p>
+<h2>Can function call completion be when handles die?</h2>
+<p>When a function call completes, the handles could be left alive but marked invalid due to the owning frame expiring--so attempts to use them will notice the expired frame and error.  And when the GC pass goes through to clean up the expired frame, it will remove the object from the table, but tell it directly that it expired (so that if a use comes after the GC, you'll get an error).  So the object lives as long as the user has a reference to it (which if no <code>reb.Release()</code> is used, will be at least as long as the the period of time between the function call ending and a GC happening).  But the GC sweep will pull the system's reference to that object so only the user references (if any) remain.</p>
+<p>If you want a libRebol API handle to outlive the JS-AWAITER or JS-NATIVE it was allocated during, then you will have to "unmanage" it somehow, to extend its lifetime indefinitely until you ask to release it.  Since this has turned out to be pretty infrequent, I think it's okay to make it the thing you have to do explicitly.  If you don't, and try to use a handle outside its function, it would give you an error message directing you to <code>reb.Unmanage()</code></p>
+<p>Then if this turned out to be inefficient for whatever case, there could be a mode where console messages tell you about places you didn't reb.Release() things.  People who care could turn that feature on as part of a performance audit.</p>
+<p><em>(Another possibility would be a simple rule that API handles rtruly can only live as long as the function they're in--with no way to extend it.  So if you want to outlast that, you have to insert the value into some physical Rebol global map or array so you can find it again after your handle goes bad.  The watchlist is in fact doing that right now: the JavaScript isn't holding handle objects to Rebol nodes, but a Rebol <code>watches</code> array holds them and then the JS can retrieve them later by index.  That saves us on the design of any kind of reb.Unmanage() and the potential for leaking "invisibly"...you'd be seeing some physical Rebol map filling up in userspace.  But it means every user would have to come up with their own ID scheme.  There are pros and cons to this...maybe enough of a pro to say it's the way we do it until further notice.)</em></p>
+<h2>C will stay more or less how it is.</h2>
+<p>It's possible in JavaScript to have a non-heap-address-thing which represents an allocation (a JS object), to act as a safe stub to prevent system crashes if it's used past a time when it bears some marking of expiration.  In C, you just crash.</p>
+<p>So there's no real way of doing what I propose above in C.  You can mark a handle you've handed out a pointer to as being invalid.  But then, when do you free() that stub?  If you ever do, you'll run the risk of a client holding onto it crashing.</p>
+<p>This means the parallel to the method above--of considering handles expired after the function that was on the stack when it ran ends--would have a crashier outcome.  That's life in C.</p>
+          <p><a href="https://forum.rebol.info/t/managed-unmanaged-expectations-in-the-javascript-api/1144/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/managed-unmanaged-expectations-in-the-javascript-api/1144/1</link>
+        <pubDate>Sun, 14 Apr 2019 12:02:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1144-1</guid>
+        <source url="https://forum.rebol.info/t/managed-unmanaged-expectations-in-the-javascript-api/1144.rss">Managed/Unmanaged Expectations in the JavaScript API</source>
+      </item>
+  </channel>
+</rss>

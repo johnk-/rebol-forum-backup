@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Pivotal Design Question: Is Evaluator State Just A Block?</title>
+    <link>https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496</link>
+    <description>I ran into a hitch with LET and EVALUATE in single-stepping.
+
+It raises a pretty big question about how much we want to tie the hands of the evaluator in favor of &quot;simplicity&quot;.
+
+## The Problem
+
+On the surface a LET statement might seem impossible for step by step evaluation:
+
+    &gt;&gt; block: evaluate [let x: 10 print [&quot;X is&quot; x]]
+    == [print [&quot;X is&quot; x]]
+
+That LET statement declared a variable, but where did it go?  It only lives until the block is over.  It would seem that the PRINT is out of luck.
+
+*But...* I could make it work since a BLOCK! can carry along virtual binding state.  So, at each step you just get a little more state added on.  The **[print [&quot;X is x]]** is *different* from the block you&#39;d have gotten from saying SKIP 3 on the full block, due to this binding.
+
+**But what if you reposition the block?**
+
+    &gt;&gt; block: head block
+    == [let x: 10 print [&quot;X is&quot; x]]
+
+Now you have a block that has X defined in its bindings, and if you step through it you&#39;ll define it again.
+
+## Can This Be Solved?
+
+I think the cleanest and clearest way to solve it is to rethink EVALUATE so that it operates on a FRAME!...not a BLOCK!.  This would match the internal model better.
+
+Today, we have to tear down a frame and build up a new one each time you do a step.  This would say that you&#39;d be keeping it alive.
+
+You&#39;d be limited in terms of being able to look back over past values you had already evaluated.  That limitation would keep you from rewinding... if you wanted to go back and do things over, you&#39;d have to do that by working with your original block that started the whole process.
+
+What you&#39;d be able to do in terms of looking ahead would be more like what a variadic is able to do today.
+
+## The Big Philosophical Question
+
+I guess the big philosophical question is not necessarily so much about LET itself, but **should we rule out the existence of things like LET in general**.
+
+In other words: is it imperative to step the evaluator across a block and *not* accrue any state particular to that evaluation?
+
+I&#39;ve been kind of looking for a convergence between things like the evaluator and PARSE, and so asking what the restrictions on the evaluator are may be asking what the restrictions are on anything that tries to leverage the FRAME!-based processing of blocks...for tracking positions, giving errors, etc.  If we require them all to be amnesiacs after every step, this would make it hard to write things like the COLLECT/KEEP feature in parse with the rollback feature...because it would have to record its state in some external thing.
+
+@rgchris --^ please see that and think about it.  If EVALUATE returned a FRAME! representing the block and not a new position of a block, what kind of disruption would it be?  Do you see the accrual of state in the evaluator to be something that should be ruled out--thus killing off LET or anything like LET--to be worth it to have the feature of a memoryless evaluator?
+
+---
+
+**My leaning on this is to say that we would be crippling the language by ruling out LET-like things in the design.**
+
+Right now, I have this test code working.  Note it&#39;s three evaluation steps, because the LET is actually invisible (1 unit lookahead to see x and add the binding, then leaves `x: 10` to run normally)
+
+    x: &lt;in-user-context&gt;
+    output: &#39;~unset~
+    block: evaluate evaluate evaluate [let x: 10 output: x]
+    did all [
+        block = []
+        output = 10
+        x = &lt;in-user-context&gt;
+    ]
+
+And when you look at some of the other designs of how this is plugging together, I don&#39;t think we should turn back.  It&#39;s simply too hard to build abstractions on top of FUNC if the bodies cannot dynamically declare new variables, and I think forcing everyone in those situations to deal with USE is ergonomically just too awkward to feel like the language is living up to its promises.
+
+I don&#39;t want to give up on virtual binding and LET when it has come this far.  It may be broken, but its brokenness is already a better kind of broken than what was there before...and there&#39;s no proof yet that it can&#39;t be made better.
+
+Rebol&#39;s M.O. has been throwing imaginative *but I want the code to look like THIS* at a data structure and see how far that can go...without proof that it can or should work well.  Every now and again I think I should have the right to throw my own bad idea that looks good in there.  And maybe some poor sucker in the future can figure out the limits of how it can be made to seem like it works more.   :-)</description>
+    
+    <lastBuildDate>Wed, 10 Feb 2021 08:16:39 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Pivotal Design Question: Is Evaluator State Just A Block?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="2" data-topic="1496">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>it wouldn't be the worst thing if the return was FRAME so long as you can still somehow access the new position of the original series.</p>
+</blockquote>
+</aside>
+<p>So this actually exposes another point: should all evaluative steps be forced as a model into being steps on the original series at all.</p>
+<p>For instance, let's imagine I write a macro:</p>
+<pre><code>macro: twothings [x] [
+   return [print "Hi!" 1 +]
+]
+</code></pre>
+<p>The concept behind MACRO is to splice code into the execution stream.  But how can you single step across that?</p>
+<ul>
+<li>
+<p>We can argue such features are not worth their complexity and forbid them.  Such splicing is disallowed, because a step of execution no longer correspond to the original series.</p>
+</li>
+<li>
+<p>Or, we can allow them but only consider behaviors which force through the point of making "a step" match an input series position (e.g. run all the MACRO expansions in a step...including anything that adds partial material like the <code>1 +</code>, has to go ahead and finish running until it gets to something that is an actual position in the input series again).</p>
+</li>
+<li>
+<p>Or we can say that a FRAME!...once running...is operating on a virtualized series that you must process through the evaluator's point of view.</p>
+</li>
+</ul>
+<p>The evaluator restricts lookahead to help protect you from a "mirage".  Instructions downstream can have different meanings based on context...if you don't know about COMMENT you might not realize that the thing you looked ahead and saw isn't going to be part of the evaluation at all.  Things like MACRO are also part of that.</p>
+<p>(Another reason why you can only do one unit of lookahead has to do with being able to run code as a C variadic...a va_list cannot be traversed backwards.  So the frame only holds one item at a time.  This has become less relevant as performance has taken a backseat...frequently variadics are just converted into blocks anyway.)</p>
+<p><strong>We should dig up some various "DO/NEXT"-style usages to better understand what people are wanting to accomplish with the ability, and what the expectations are.</strong>  What has it been taken for granted traditionally that worked (that may have not, strictly, "worked") and what kinds of features must be forbidden or limited somehow to keep those expectations going...or if things should be done another way.</p>
+          <p><a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/4</link>
+        <pubDate>Wed, 10 Feb 2021 08:07:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1496-4</guid>
+        <source url="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496.rss">Pivotal Design Question: Is Evaluator State Just A Block?</source>
+      </item>
+      <item>
+        <title>Pivotal Design Question: Is Evaluator State Just A Block?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="2" data-topic="1496">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>What happens currently if you <strong>do [let x: 10 let x: 20 probe x]</strong> ?</p>
+</blockquote>
+</aside>
+<p>You can experiment with the current state in the ReplPad.</p>
+<p>What happens is that says X is 20.  Mechanically what's going on is that you are creating two variable "patches", and the most recently added one is the highest priority.</p>
+<p>Between the two X's, any X would latch onto the state prior to the second LET.</p>
+<pre><code>‌&gt;&gt; code: []
+== []
+
+&gt;&gt; do [let x: 10, append code [x + 1], let x: 20, probe x]
+== 20
+
+&gt;&gt; do code
+== 11
+</code></pre>
+<p>My broader point is "being able to do this kind of thing is more important than the evaluator being enforcedly simple in design to prohibit it".</p>
+<p>It may mean that those who wish to use a "hooked" evaluator have to bend a little more to its interface, but I think that if evaluator hacking gets more nuanced that's all right, if it means giving better user experience on the whole.</p>
+          <p><a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/3</link>
+        <pubDate>Tue, 09 Feb 2021 23:48:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1496-3</guid>
+        <source url="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496.rss">Pivotal Design Question: Is Evaluator State Just A Block?</source>
+      </item>
+      <item>
+        <title>Pivotal Design Question: Is Evaluator State Just A Block?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>I don't feel I understand FRAME! enough to appreciate its applicability. It would be preferable that the position returned from EVALUATE be the same series as the input. Presumably you'd have the same issues if you were evaluating a string:</p>
+<pre><code class="lang-nohighlight">text: evaluate evaluate evaluate "let x: 10 output: x" =&gt; ""
+</code></pre>
+<p>I apologise if I'm not reading this correctly, but I can see the similarities in my use of STATE in my Parse Machine—the actual currency of which the operative series becomes just one component. In which case it wouldn't be the worst thing if the return was FRAME so long as you can still somehow access the new position of the original series.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1496">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Now you have a block that has X defined in its bindings, and if you step through it you'll define it again.</p>
+</blockquote>
+</aside>
+<p>What happens currently if you <strong>do [let x: 10 let x: 20 probe x]</strong> ?</p>
+          <p><a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/2</link>
+        <pubDate>Tue, 09 Feb 2021 23:45:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1496-2</guid>
+        <source url="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496.rss">Pivotal Design Question: Is Evaluator State Just A Block?</source>
+      </item>
+      <item>
+        <title>Pivotal Design Question: Is Evaluator State Just A Block?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I ran into a hitch with LET and EVALUATE in single-stepping.</p>
+<p>It raises a pretty big question about how much we want to tie the hands of the evaluator in favor of "simplicity".</p>
+<h2>The Problem</h2>
+<p>On the surface a LET statement might seem impossible for step by step evaluation:</p>
+<pre><code>&gt;&gt; block: evaluate [let x: 10 print ["X is" x]]
+== [print ["X is" x]]
+</code></pre>
+<p>That LET statement declared a variable, but where did it go?  It only lives until the block is over.  It would seem that the PRINT is out of luck.</p>
+<p><em>But...</em> I could make it work since a BLOCK! can carry along virtual binding state.  So, at each step you just get a little more state added on.  The <strong>[print ["X is x]]</strong> is <em>different</em> from the block you'd have gotten from saying SKIP 3 on the full block, due to this binding.</p>
+<p><strong>But what if you reposition the block?</strong></p>
+<pre><code>&gt;&gt; block: head block
+== [let x: 10 print ["X is" x]]
+</code></pre>
+<p>Now you have a block that has X defined in its bindings, and if you step through it you'll define it again.</p>
+<h2>Can This Be Solved?</h2>
+<p>I think the cleanest and clearest way to solve it is to rethink EVALUATE so that it operates on a FRAME!...not a BLOCK!.  This would match the internal model better.</p>
+<p>Today, we have to tear down a frame and build up a new one each time you do a step.  This would say that you'd be keeping it alive.</p>
+<p>You'd be limited in terms of being able to look back over past values you had already evaluated.  That limitation would keep you from rewinding... if you wanted to go back and do things over, you'd have to do that by working with your original block that started the whole process.</p>
+<p>What you'd be able to do in terms of looking ahead would be more like what a variadic is able to do today.</p>
+<h2>The Big Philosophical Question</h2>
+<p>I guess the big philosophical question is not necessarily so much about LET itself, but <strong>should we rule out the existence of things like LET in general</strong>.</p>
+<p>In other words: is it imperative to step the evaluator across a block and <em>not</em> accrue any state particular to that evaluation?</p>
+<p>I've been kind of looking for a convergence between things like the evaluator and PARSE, and so asking what the restrictions on the evaluator are may be asking what the restrictions are on anything that tries to leverage the FRAME!-based processing of blocks...for tracking positions, giving errors, etc.  If we require them all to be amnesiacs after every step, this would make it hard to write things like the COLLECT/KEEP feature in parse with the rollback feature...because it would have to record its state in some external thing.</p>
+<p><a class="mention" href="/u/rgchris">@rgchris</a> --^ please see that and think about it.  If EVALUATE returned a FRAME! representing the block and not a new position of a block, what kind of disruption would it be?  Do you see the accrual of state in the evaluator to be something that should be ruled out--thus killing off LET or anything like LET--to be worth it to have the feature of a memoryless evaluator?</p>
+<hr>
+<p><strong>My leaning on this is to say that we would be crippling the language by ruling out LET-like things in the design.</strong></p>
+<p>Right now, I have this test code working.  Note it's three evaluation steps, because the LET is actually invisible (1 unit lookahead to see x and add the binding, then leaves <code>x: 10</code> to run normally)</p>
+<pre><code>x: &lt;in-user-context&gt;
+output: '~unset~
+block: evaluate evaluate evaluate [let x: 10 output: x]
+did all [
+    block = []
+    output = 10
+    x = &lt;in-user-context&gt;
+]
+</code></pre>
+<p>And when you look at some of the other designs of how this is plugging together, I don't think we should turn back.  It's simply too hard to build abstractions on top of FUNC if the bodies cannot dynamically declare new variables, and I think forcing everyone in those situations to deal with USE is ergonomically just too awkward to feel like the language is living up to its promises.</p>
+<p>I don't want to give up on virtual binding and LET when it has come this far.  It may be broken, but its brokenness is already a better kind of broken than what was there before...and there's no proof yet that it can't be made better.</p>
+<p>Rebol's M.O. has been throwing imaginative <em>but I want the code to look like THIS</em> at a data structure and see how far that can go...without proof that it can or should work well.  Every now and again I think I should have the right to throw my own bad idea that looks good in there.  And maybe some poor sucker in the future can figure out the limits of how it can be made to seem like it works more.   <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/1</link>
+        <pubDate>Tue, 09 Feb 2021 21:25:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1496-1</guid>
+        <source url="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496.rss">Pivotal Design Question: Is Evaluator State Just A Block?</source>
+      </item>
+  </channel>
+</rss>

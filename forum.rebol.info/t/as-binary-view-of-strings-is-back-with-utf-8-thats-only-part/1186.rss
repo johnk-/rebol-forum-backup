@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>AS BINARY! view of strings is back...with UTF-8! (that&#39;s only /PART!)</title>
+    <link>https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186</link>
+    <description>## Mutate strings aliased as BINARY!, and vice-versa, as in Rebol2!
+
+Rebol2&#39;s AS-BINARY and AS-STRING provided a convenient aliasing between binary and string as Latin1 single-byte characters:
+
+    rebol2&gt;&gt; b: as-binary s: &quot;hello&quot;
+    == #{68656C6C6F}
+
+    rebol2&gt;&gt; append b #{68}
+    == #{68656C6C6F68}
+
+    rebol2&gt;&gt; s
+    == &quot;helloh&quot;  ; binary mutation reflected in original string
+
+    rebol2&gt;&gt; append s &quot;ello&quot;
+    == &quot;hellohello&quot;
+
+    rebol2&gt;&gt; b
+    == #{68656C6C6F68656C6C6F}
+
+That was lost when R3-Alpha&#39;s internal string format became too unpredictable (swinging between Latin1 and UCS2) and was only canonized as UTF-8 for I/O.  Red suffered a similar fate.
+
+But with [UTF-8 Everywhere](https://forum.rebol.info/t/realistically-migrating-rebol-to-utf8-everywhere/374) as the fixed internal format of strings, Ren-C has done some voodoo to bring it back.
+
+It offers a more generic AS operation, along with higher-than-UCS2 codepoint support:
+
+    &gt;&gt; b: as binary! s: &quot;hello&quot;
+    == #{68656C6C6F}
+
+    &gt;&gt; to binary! &quot;🐱&quot;
+    == #{F09F90B1}
+
+    &gt;&gt; append b #{F09F90B1}  ; add that high-codepoint cat!
+    == #{68656C6C6FF09F90B1}
+
+    &gt;&gt; s
+    == &quot;hello🐱&quot;
+
+    &gt;&gt; append s &quot;hello🐱&quot;
+    == &quot;hello🐱hello🐱&quot;
+
+    &gt;&gt; b
+    == #{68656C6C6FF09F90B168656C6C6FF09F90B1}
+
+But a binary alias of a string is constrained to staying as valid UTF-8:
+
+    &gt;&gt; append b #{FEFEFEFE}
+    ** Internal Error: invalid UTF-8 byte sequence found during decoding
+
+You can actually alias WORD! as BINARY! also, without doing a separate allocation.  But it will be  read-only view, so all you&#39;re doing is saving on memory and GC load:
+
+    &gt;&gt; b: as binary! &#39;immutable-word
+    == #{696D6D757461626C652D776F7264}
+
+    &gt;&gt; append b #{1020}
+    ** Access Error: series is source or permanently locked, can&#39;t modify
+
+Similarly, you can alias words as strings...again without making a new allocation, but with the same read-only constraint:
+
+    &gt;&gt; t: as tag! &#39;append
+    == &lt;append&gt;
+
+    &gt;&gt; append t &quot;nope&quot;
+    ** Access Error: series is source or permanently locked, can&#39;t modify
+
+## The /PART refinement has just been implemented for UTF-8
+
+[The controversial behavior can be discussed on issue #2096](https://github.com/rebol/rebol-issues/issues/2096) (which you can discuss on that ticket).  But what R3-Alpha and Red choose to ([buggily](https://github.com/rebol/rebol-issues/issues/2383)) implement is that it applies to the target series only...and is thus measured in the units of *that* series:
+
+    &gt;&gt; append/part &quot;abc&quot; [100 &quot;de&quot; &quot;fg&quot;] 2
+    == &quot;abc10&quot;  ; 2 string units, not &quot;abc100de&quot; from 2 block units
+
+The argument is that COPY/PART on the source series gives you that form /PART if you need it, so this is &quot;strictly more powerful&quot;.  Rightly or wrongly... Ren-C is now doing it hopefully less buggily (though almost certainly with its own bugs), but with UTF-8 Everywhere support.
+
+If you like, you can limit how much of a binary you extract from UTF-8, counted in bytes:
+
+    &gt;&gt; to binary! &quot;🐱&quot;
+    == #{F09F90B1}
+
+    &gt;&gt; append/part #{} &quot;🐱&quot; 2  ; e.g. 2 bytes (half a cat)
+    == #{F09F}
+
+Extracting bytes from UTF-8 will always work.  Going the other way, not all binary strings are valid UTF-8.  But as long as the number of characters you ask for in that section of the binary are valid, having other invalid bytes isn&#39;t a problem...only when you ask for part out of the unchecked region:
+
+    &gt;&gt; append/part &quot;&quot; #{F09F90B1F09F90B1FEFEFEFE} 2  ; e.g. 2 characters
+    == &quot;🐱🐱&quot; 
+
+    &gt;&gt; append/part &quot;&quot; #{F09F90B1F09F90B1FEFEFEFE} 3
+    ** Internal Error: invalid UTF-8 byte sequence found during decoding
+
+If a binary is actually an alias of a UTF-8 string, this can be more efficient by not rescanning... *(though the code is still in its early life yet, so it has a number of areas for improvement)*.
+
+**Pretty cool, eh?**</description>
+    
+    <lastBuildDate>Tue, 23 Jul 2019 21:33:55 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>AS BINARY! view of strings is back...with UTF-8! (that&#39;s only /PART!)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p>The /PART refinement has just been implemented for UTF-8</p>
+</blockquote>
+<p>Enough people have been confused about the purpose of /PART that I wonder if /LIMIT makes more sense.  It seems /PART usually has more possibilities than just an INTEGER! of how many series units to add to the destination...where negative numbers can mean something other than "nothing" and series positions can be used.</p>
+<p>Philosophically I kind of agree that if /PART makes its way into too many functions where COPY/PART would suffice, it may have a viral nature <a href="https://forum.rebol.info/t/stopping-the-into-virus/705">like the /INTO virus</a>.  Finding a more general mechanic--such as being able to make "series slices" without copying them--could keep every routine from thinking it needs it.</p>
+          <p><a href="https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186/2</link>
+        <pubDate>Tue, 23 Jul 2019 21:33:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1186-2</guid>
+        <source url="https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186.rss">AS BINARY! view of strings is back...with UTF-8! (that&#39;s only /PART!)</source>
+      </item>
+      <item>
+        <title>AS BINARY! view of strings is back...with UTF-8! (that&#39;s only /PART!)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Mutate strings aliased as BINARY!, and vice-versa, as in Rebol2!</h2>
+<p>Rebol2's AS-BINARY and AS-STRING provided a convenient aliasing between binary and string as Latin1 single-byte characters:</p>
+<pre><code>rebol2&gt;&gt; b: as-binary s: "hello"
+== #{68656C6C6F}
+
+rebol2&gt;&gt; append b #{68}
+== #{68656C6C6F68}
+
+rebol2&gt;&gt; s
+== "helloh"  ; binary mutation reflected in original string
+
+rebol2&gt;&gt; append s "ello"
+== "hellohello"
+
+rebol2&gt;&gt; b
+== #{68656C6C6F68656C6C6F}
+</code></pre>
+<p>That was lost when R3-Alpha's internal string format became too unpredictable (swinging between Latin1 and UCS2) and was only canonized as UTF-8 for I/O.  Red suffered a similar fate.</p>
+<p>But with <a href="https://forum.rebol.info/t/realistically-migrating-rebol-to-utf8-everywhere/374">UTF-8 Everywhere</a> as the fixed internal format of strings, Ren-C has done some voodoo to bring it back.</p>
+<p>It offers a more generic AS operation, along with higher-than-UCS2 codepoint support:</p>
+<pre><code>&gt;&gt; b: as binary! s: "hello"
+== #{68656C6C6F}
+
+&gt;&gt; to binary! "🐱"
+== #{F09F90B1}
+
+&gt;&gt; append b #{F09F90B1}  ; add that high-codepoint cat!
+== #{68656C6C6FF09F90B1}
+
+&gt;&gt; s
+== "hello🐱"
+
+&gt;&gt; append s "hello🐱"
+== "hello🐱hello🐱"
+
+&gt;&gt; b
+== #{68656C6C6FF09F90B168656C6C6FF09F90B1}
+</code></pre>
+<p>But a binary alias of a string is constrained to staying as valid UTF-8:</p>
+<pre><code>&gt;&gt; append b #{FEFEFEFE}
+** Internal Error: invalid UTF-8 byte sequence found during decoding
+</code></pre>
+<p>You can actually alias WORD! as BINARY! also, without doing a separate allocation.  But it will be  read-only view, so all you're doing is saving on memory and GC load:</p>
+<pre><code>&gt;&gt; b: as binary! 'immutable-word
+== #{696D6D757461626C652D776F7264}
+
+&gt;&gt; append b #{1020}
+** Access Error: series is source or permanently locked, can't modify
+</code></pre>
+<p>Similarly, you can alias words as strings...again without making a new allocation, but with the same read-only constraint:</p>
+<pre><code>&gt;&gt; t: as tag! 'append
+== &lt;append&gt;
+
+&gt;&gt; append t "nope"
+** Access Error: series is source or permanently locked, can't modify
+</code></pre>
+<h2>The /PART refinement has just been implemented for UTF-8</h2>
+<p><a href="https://github.com/rebol/rebol-issues/issues/2096" rel="nofollow noopener">The controversial behavior can be discussed on issue #2096</a> (which you can discuss on that ticket).  But what R3-Alpha and Red choose to (<a href="https://github.com/rebol/rebol-issues/issues/2383" rel="nofollow noopener">buggily</a>) implement is that it applies to the target series only...and is thus measured in the units of <em>that</em> series:</p>
+<pre><code>&gt;&gt; append/part "abc" [100 "de" "fg"] 2
+== "abc10"  ; 2 string units, not "abc100de" from 2 block units
+</code></pre>
+<p>The argument is that COPY/PART on the source series gives you that form /PART if you need it, so this is "strictly more powerful".  Rightly or wrongly... Ren-C is now doing it hopefully less buggily (though almost certainly with its own bugs), but with UTF-8 Everywhere support.</p>
+<p>If you like, you can limit how much of a binary you extract from UTF-8, counted in bytes:</p>
+<pre><code>&gt;&gt; to binary! "🐱"
+== #{F09F90B1}
+
+&gt;&gt; append/part #{} "🐱" 2  ; e.g. 2 bytes (half a cat)
+== #{F09F}
+</code></pre>
+<p>Extracting bytes from UTF-8 will always work.  Going the other way, not all binary strings are valid UTF-8.  But as long as the number of characters you ask for in that section of the binary are valid, having other invalid bytes isn't a problem...only when you ask for part out of the unchecked region:</p>
+<pre><code>&gt;&gt; append/part "" #{F09F90B1F09F90B1FEFEFEFE} 2  ; e.g. 2 characters
+== "🐱🐱" 
+
+&gt;&gt; append/part "" #{F09F90B1F09F90B1FEFEFEFE} 3
+** Internal Error: invalid UTF-8 byte sequence found during decoding
+</code></pre>
+<p>If a binary is actually an alias of a UTF-8 string, this can be more efficient by not rescanning... <em>(though the code is still in its early life yet, so it has a number of areas for improvement)</em>.</p>
+<p><strong>Pretty cool, eh?</strong></p>
+          <p><a href="https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186/1</link>
+        <pubDate>Tue, 23 Jul 2019 21:33:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1186-1</guid>
+        <source url="https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186.rss">AS BINARY! view of strings is back...with UTF-8! (that&#39;s only /PART!)</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>When Should PARSE Notice Changes</title>
+    <link>https://forum.rebol.info/t/when-should-parse-notice-changes/1528</link>
+    <description>What do you think should happen in the following situation?
+
+    rule: [2 &quot;a&quot; (rule: [2 &quot;b&quot;])]
+
+    parse &quot;aabb&quot; [some rule]
+
+Should that be a successful PARSE, or not?
+
+Rebol2, R3-Alpha, and Red say yes.  **But I don&#39;t think it should succeed.**  I think that if you say **some rule** then the entirety of the SOME should be matching the same value.  
+
+## The Case For Making SOME RULE Capture the RULE
+
+Let&#39;s consider a parallel experience outside of PARSE.  Imagine a plain function called SOME, where a RULE variable is passed as an argument:
+
+    some: func [arg] [
+        until [not do arg]
+        return &lt;finished&gt;
+    ]
+
+    rule: [(rule: [false]) true]
+
+    &gt;&gt; some rule
+    ; infinite loop
+
+That would be an infinite loop, because SOME would latch onto a value for its **arg** and never let go of it.  It would get arg as [(rule: [false]) true]...and that&#39;s what arg would be regardless of what you do to rule.
+
+The only way you could get the above SOME to see that the RULE variable changed would be if it took its argument quoted.  It would then have to fetch the variable every time.
+
+    some: func [&#39;arg] [
+        until [not do (either word? arg [get arg] [arg])]
+        return &lt;finished&gt;
+    ]
+
+    rule: [(rule: [false]) true]
+
+    &gt;&gt; some rule  ; this version terminates
+    == &lt;finished&gt;
+
+Getting messier, *and quoting arguments to functions takes away the power of the evaluator.*  The SOME function becomes concerned about the details of variable fetching vs. literals.  Once it fetches, real code would have to type check and becomes convoluted. 
+
+You then have another issue: if the quoting abstraction wanted to support GROUP!s to calculate the argument to SOME, then you have to evaluate that argument each time.  Beyond performance, you have to worry about side-effects.
+
+Bringing it back to PARSE again: delegating to the &quot;power of the evaluator&quot; for PARSE actually means delegating to the parsing engine.  e.g. if I want to say **some 2 opt &quot;a&quot;** then that&#39;s a bit like passing an expression to a function.  There&#39;s no variable that contains [2 opt &quot;a&quot;], so you can&#39;t refer to it through an address.  SOME needs to be able to accept some sort of [&quot;parser combinator&quot;](https://en.wikipedia.org/wiki/Parser_combinator) *by value* that the parse engine builds and gives to it.
+
+## Not Capturing Is Either Slow, Or Broken
+
+I didn&#39;t think Red actually would look-up the variable each time, but it does.
+
+    red&gt;&gt; rule: [2 &quot;a&quot; (rule: [2 &quot;b&quot;] outer/2: &#39;surprise)]
+
+    red&gt;&gt; parse &quot;aabb&quot; outer: [some rule]
+    *** Script Error: PARSE - invalid rule or usage of rule: surprise
+    
+We modified the outer rule from `[some rule]` to `[some surprise]` and it saw that.  This is technically sound (on the surface, at least)...a bit like a quoting function...but I&#39;ve made the case above for why it isn&#39;t desirable.
+
+Rebol2 and R3-Alpha do not re-fetch the variable:
+
+    rebol2&gt;&gt; rule: [2 &quot;a&quot; (rule: [2 &quot;b&quot;] outer/2: &#39;surprise)]
+
+    rebol2&gt;&gt; parse &quot;aabb&quot; outer: [some rule]
+    == true
+
+If it didn&#39;t fetch the variable, how did it see the change?  :confused:   The answer is that SOME was doing a tricky thing that user code can&#39;t do... *it&#39;s holding onto a reference to a variable&#39;s value by its address*.
+
+Every time I see such things I know there&#39;s trouble.  Because addresses of variables aren&#39;t stable across arbitrary user code execution.  Objects can expand, moving memory around and GC&#39;ing the old memory.  Easy to break, just like this:
+
+     obj: make object! [
+          expand: does [
+              repeat n 100 [append obj to set-word! rejoin [&quot;var&quot; n]]  ; expand
+              recycle  ; reclaim memory
+              loop 10000 [make object! [x: y: #junk]]  ; try fill up old memory
+          ]
+
+          rule: [2 &quot;a&quot; (rule: [2 &quot;b&quot;] expand)]
+     ]
+
+     r3-alpha&gt;&gt; parse &quot;aabb&quot; bind [some rule] obj
+     ** Script error: PARSE - invalid rule or usage of rule: #junk
+
+What you get there is unpredictable...but in this case it just shows that the use of invalid memory happened to have a value in it that allowed for an error message.  Crashing could easily happen--it&#39;s stale memory.
+
+I&#39;d imagine you could probably crash Rebol2 also...because it&#39;s probably holding the address without actually GC marking the variable through PARSE.  Something like this should be able to crash it--though it didn&#39;t on a first try--but without source code I don&#39;t feel like trying any harder:
+
+     obj: make object! [
+          corrupt: does [
+              outer/2: &#39;not-rule
+              obj: &lt;unused&gt;
+              recycle  ; reclaim memory
+              loop 10000 [make object! [x: y: #junk]]  ; try fill up old memory
+          ]
+
+          rule: [2 &quot;a&quot; (rule: [2 &quot;b&quot;] corrupt)]
+     ]
+
+     parse &quot;aabb&quot; bind outer: copy [some rule] obj
+
+But generally speaking, you have a complex internal state that&#39;s hard to model to expose to userspace constructs like debugging...since you&#39;re using a feature usermode doesn&#39;t have (*references* to a variable&#39;s *value*).  Being buggy is just an ancillary fact of using that unsupported concept.
+
+## Conclusion
+
+**some rule** should evaluate what &quot;rule&quot; is once, and then repeat that for all the matches of the SOME.
+
+This aligns with a saner division of responsibility between the individual combinators like SOME/ANY/WHILE/etc. and the parse engine itself, by removing the expectation that they should be *able* to see changes in their arguments...which if they were expressions, would likely be bad to recalculate (and require backtracking of the rule block to implement).
+
+There exists a mechanism for getting the variable each time by triggering another parse block recursion, via **some [rule]**.  Those cases that truly need the behavior can do that...recognizing that it will be less performant.</description>
+    
+    <lastBuildDate>Tue, 02 Mar 2021 22:57:43 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/when-should-parse-notice-changes/1528.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>When Should PARSE Notice Changes</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1528">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Rebol2, R3-Alpha, and Red say yes. <strong>But I don't think it should succeed.</strong> I think that if you say <strong>some rule</strong> then the entirety of the SOME should be matching the same value.</p>
+</blockquote>
+</aside>
+<p>I posted this argument before I'd gotten UPARSE written.  But it should be obvious that my opinion on this was motivated by the combinators.</p>
+<p>The value should--by this point--be apparent.  As I establish, there is no loss of generality since you can put even a single word in a BLOCK!.  The block combinator iterates across the rules each time, re-fetching the elements...so this is the tradeoff you make if you don't want to be building hardened/reusable combinator functions.</p>
+          <p><a href="https://forum.rebol.info/t/when-should-parse-notice-changes/1528/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/when-should-parse-notice-changes/1528/5</link>
+        <pubDate>Tue, 02 Mar 2021 22:57:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1528-5</guid>
+        <source url="https://forum.rebol.info/t/when-should-parse-notice-changes/1528.rss">When Should PARSE Notice Changes</source>
+      </item>
+      <item>
+        <title>When Should PARSE Notice Changes</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>Agree on that this should not succeed feeling here.<br>
+PARSE is a complex operation in itself already and changing the rules during that operation is something that I would consider to be a feature that should not be allowed in software that is to be maintained (on par with the GOTO statement). When such a feature is needed perhaps it is better to test in two or more steps.<br>
+Someone should bring an awfully good case for this to be possible to the table for considering it to be allowed. I'd say if you do this, don't complain about unexpected results.</p>
+          <p><a href="https://forum.rebol.info/t/when-should-parse-notice-changes/1528/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/when-should-parse-notice-changes/1528/3</link>
+        <pubDate>Sun, 28 Feb 2021 10:57:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1528-3</guid>
+        <source url="https://forum.rebol.info/t/when-should-parse-notice-changes/1528.rss">When Should PARSE Notice Changes</source>
+      </item>
+      <item>
+        <title>When Should PARSE Notice Changes</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>This obviously merits a more considered response, but felt compelled to post this:</p>
+<p><img src="https://media1.tenor.com/images/a79e03ecbb88e6e5342f517be9809cc6/tenor.gif" alt="Gromit" width="290" height="198"></p>
+          <p><a href="https://forum.rebol.info/t/when-should-parse-notice-changes/1528/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/when-should-parse-notice-changes/1528/2</link>
+        <pubDate>Sun, 28 Feb 2021 03:16:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1528-2</guid>
+        <source url="https://forum.rebol.info/t/when-should-parse-notice-changes/1528.rss">When Should PARSE Notice Changes</source>
+      </item>
+      <item>
+        <title>When Should PARSE Notice Changes</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>What do you think should happen in the following situation?</p>
+<pre><code>rule: [2 "a" (rule: [2 "b"])]
+
+parse "aabb" [some rule]
+</code></pre>
+<p>Should that be a successful PARSE, or not?</p>
+<p>Rebol2, R3-Alpha, and Red say yes.  <strong>But I don't think it should succeed.</strong>  I think that if you say <strong>some rule</strong> then the entirety of the SOME should be matching the same value.</p>
+<h2>The Case For Making SOME RULE Capture the RULE</h2>
+<p>Let's consider a parallel experience outside of PARSE.  Imagine a plain function called SOME, where a RULE variable is passed as an argument:</p>
+<pre><code>some: func [arg] [
+    until [not do arg]
+    return &lt;finished&gt;
+]
+
+rule: [(rule: [false]) true]
+
+&gt;&gt; some rule
+; infinite loop
+</code></pre>
+<p>That would be an infinite loop, because SOME would latch onto a value for its <strong>arg</strong> and never let go of it.  It would get arg as [(rule: [false]) true]...and that's what arg would be regardless of what you do to rule.</p>
+<p>The only way you could get the above SOME to see that the RULE variable changed would be if it took its argument quoted.  It would then have to fetch the variable every time.</p>
+<pre><code>some: func ['arg] [
+    until [not do (either word? arg [get arg] [arg])]
+    return &lt;finished&gt;
+]
+
+rule: [(rule: [false]) true]
+
+&gt;&gt; some rule  ; this version terminates
+== &lt;finished&gt;
+</code></pre>
+<p>Getting messier, <em>and quoting arguments to functions takes away the power of the evaluator.</em>  The SOME function becomes concerned about the details of variable fetching vs. literals.  Once it fetches, real code would have to type check and becomes convoluted.</p>
+<p>You then have another issue: if the quoting abstraction wanted to support GROUP!s to calculate the argument to SOME, then you have to evaluate that argument each time.  Beyond performance, you have to worry about side-effects.</p>
+<p>Bringing it back to PARSE again: delegating to the "power of the evaluator" for PARSE actually means delegating to the parsing engine.  e.g. if I want to say <strong>some 2 opt "a"</strong> then that's a bit like passing an expression to a function.  There's no variable that contains [2 opt "a"], so you can't refer to it through an address.  SOME needs to be able to accept some sort of <a href="https://en.wikipedia.org/wiki/Parser_combinator">"parser combinator"</a> <em>by value</em> that the parse engine builds and gives to it.</p>
+<h2>Not Capturing Is Either Slow, Or Broken</h2>
+<p>I didn't think Red actually would look-up the variable each time, but it does.</p>
+<pre><code>red&gt;&gt; rule: [2 "a" (rule: [2 "b"] outer/2: 'surprise)]
+
+red&gt;&gt; parse "aabb" outer: [some rule]
+*** Script Error: PARSE - invalid rule or usage of rule: surprise
+</code></pre>
+<p>We modified the outer rule from <code>[some rule]</code> to <code>[some surprise]</code> and it saw that.  This is technically sound (on the surface, at least)...a bit like a quoting function...but I've made the case above for why it isn't desirable.</p>
+<p>Rebol2 and R3-Alpha do not re-fetch the variable:</p>
+<pre><code>rebol2&gt;&gt; rule: [2 "a" (rule: [2 "b"] outer/2: 'surprise)]
+
+rebol2&gt;&gt; parse "aabb" outer: [some rule]
+== true
+</code></pre>
+<p>If it didn't fetch the variable, how did it see the change?  <img src="https://forum.rebol.info/images/emoji/twitter/confused.png?v=9" title=":confused:" class="emoji" alt=":confused:">   The answer is that SOME was doing a tricky thing that user code can't do... <em>it's holding onto a reference to a variable's value by its address</em>.</p>
+<p>Every time I see such things I know there's trouble.  Because addresses of variables aren't stable across arbitrary user code execution.  Objects can expand, moving memory around and GC'ing the old memory.  Easy to break, just like this:</p>
+<pre><code> obj: make object! [
+      expand: does [
+          repeat n 100 [append obj to set-word! rejoin ["var" n]]  ; expand
+          recycle  ; reclaim memory
+          loop 10000 [make object! [x: y: #junk]]  ; try fill up old memory
+      ]
+
+      rule: [2 "a" (rule: [2 "b"] expand)]
+ ]
+
+ r3-alpha&gt;&gt; parse "aabb" bind [some rule] obj
+ ** Script error: PARSE - invalid rule or usage of rule: #junk
+</code></pre>
+<p>What you get there is unpredictable...but in this case it just shows that the use of invalid memory happened to have a value in it that allowed for an error message.  Crashing could easily happen--it's stale memory.</p>
+<p>I'd imagine you could probably crash Rebol2 also...because it's probably holding the address without actually GC marking the variable through PARSE.  Something like this should be able to crash it--though it didn't on a first try--but without source code I don't feel like trying any harder:</p>
+<pre><code> obj: make object! [
+      corrupt: does [
+          outer/2: 'not-rule
+          obj: &lt;unused&gt;
+          recycle  ; reclaim memory
+          loop 10000 [make object! [x: y: #junk]]  ; try fill up old memory
+      ]
+
+      rule: [2 "a" (rule: [2 "b"] corrupt)]
+ ]
+
+ parse "aabb" bind outer: copy [some rule] obj
+</code></pre>
+<p>But generally speaking, you have a complex internal state that's hard to model to expose to userspace constructs like debugging...since you're using a feature usermode doesn't have (<em>references</em> to a variable's <em>value</em>).  Being buggy is just an ancillary fact of using that unsupported concept.</p>
+<h2>Conclusion</h2>
+<p><strong>some rule</strong> should evaluate what "rule" is once, and then repeat that for all the matches of the SOME.</p>
+<p>This aligns with a saner division of responsibility between the individual combinators like SOME/ANY/WHILE/etc. and the parse engine itself, by removing the expectation that they should be <em>able</em> to see changes in their arguments...which if they were expressions, would likely be bad to recalculate (and require backtracking of the rule block to implement).</p>
+<p>There exists a mechanism for getting the variable each time by triggering another parse block recursion, via <strong>some [rule]</strong>.  Those cases that truly need the behavior can do that...recognizing that it will be less performant.</p>
+          <p><a href="https://forum.rebol.info/t/when-should-parse-notice-changes/1528/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/when-should-parse-notice-changes/1528/1</link>
+        <pubDate>Sat, 27 Feb 2021 19:59:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1528-1</guid>
+        <source url="https://forum.rebol.info/t/when-should-parse-notice-changes/1528.rss">When Should PARSE Notice Changes</source>
+      </item>
+  </channel>
+</rss>

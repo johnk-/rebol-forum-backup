@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Re-imagining DO/NEXT (now called EVALUATE)</title>
+    <link>https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767</link>
+    <description>&gt; **UPDATE:** Because it&#39;s confusing for DO to change the result it gives based on a refinement, the /NEXT refinement has been removed from DO...and the following behavior is given by a routine called EVALUATE.  So the DO/NEXT suggestion below is now implemented as EVALUATE/SET.
+
+### What if DO/NEXT returned the position, evaluated result into var?
+
+e.g. like this:
+
+    &gt;&gt; block: [1 + 2 10 + 20]
+
+    &gt;&gt; block: try do/next block &#39;var
+    == [10 + 20]
+
+    &gt;&gt; var
+    == 3
+
+    &gt;&gt; block: try do/next block &#39;var
+    == []
+
+    &gt;&gt; var
+    == 30
+
+    &gt;&gt; block: try do/next block &#39;var
+    == _
+
+    &gt;&gt; var
+    == 30
+
+This has a differentiated step for the end.  And if you try to execute a DO/NEXT on the end of a block, you get null back... *but it doesn&#39;t overwrite the var* if you were at the end.
+
+This offers a pleasing aspect to how it might be used in a while loop.  You can style the loop to just call DO/NEXT, without checking anything for the TAIL...
+
+    while [block: try do/next block &#39;var] [
+        ...
+    ]
+
+And in addition, you have access to the last evaluated value after the loop.  Nice, isn&#39;t it?
+
+That&#39;s using TRY, but since it obeys the null protocol, you&#39;re free to do other things...e.g. this code for finding the first non-null evaluated element in an array (something that might be used by a REJOIN-type operation)
+
+    until [
+        block: (do/next block &#39;base) else [return null]
+        set? &#39;base
+    ]
+
+### Not just &quot;nice&quot;, a solution for a nuanced problem (coincidence?)
+
+ELIDE is great, but it has had an unfortunate problem of running as part of the evaluation that precedes it. 
+ [The reasoning for the behavior was summarized here.](https://forum.rebol.info/t/issues-with-invisibles-a-truly-disappearing-comment/405/3?u=hostilefork)  Basically, if you are evaluating a block with a chain of DO/NEXT steps you don&#39;t want to get to your last evaluation and realize you&#39;ve only got invisibles left... when you wanted to evaluate to the last actual result--now thrown away.
+
+**But wait**... this could be applied to solving that.  Because of that last step in the DO/NEXT which returns the null but doesn&#39;t overwrite the variable.  If there happened to be some residual invisible data vs. just a tail, it works the same way.  For instance:
+
+    &gt;&gt; block: [elide (print &quot;a&quot;) 1 + 2 elide (print &quot;b&quot;) 10 + 20 elide (print &quot;c&quot;)]
+
+    &gt;&gt; block: try do/next block &#39;var
+    a
+    == [elide (print &quot;b&quot;) 10 + 20 elide (print &quot;c&quot;)]
+
+    &gt;&gt; var
+    == 3
+
+    &gt;&gt; block: try do/next block &#39;var
+    b
+    == [elide (print &quot;c&quot;)]
+
+    &gt;&gt; var
+    == 30
+
+    &gt;&gt; block: try do/next block &#39;var
+    c
+    == _
+
+    &gt;&gt; var
+    == 30
+
+Ta-da.  For ELIDE&#39;s &quot;lazy&quot; invisible category, this can be made to work.  It&#39;s pretty nifty that it doesn&#39;t interrupt the evaluation stream with *anything*...it can have side effects, yet the evaluations act like it&#39;s not there at all.
+
+This is easier said than done, but I&#39;ve got a preliminary experiment working--suggesting that I see no reason it couldn&#39;t be made to work.</description>
+    
+    <lastBuildDate>Wed, 22 Sep 2021 18:34:08 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Re-imagining DO/NEXT (now called EVALUATE)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="767">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>What if DO/NEXT returned the position, evaluated result into var?</p>
+</blockquote>
+</aside>
+<p>So Much Has Changed In 3 Years.  <img src="https://forum.rebol.info/images/emoji/twitter/mantelpiece_clock.png?v=9" title=":mantelpiece_clock:" class="emoji" alt=":mantelpiece_clock:"></p>
+<p>The above was written before <strong>^META</strong> values or <strong>[multiple returns]:</strong> it was a different landscape.  Problems that used to seem impossible to solve now seem tractable.</p>
+<p>And of course, there are new puzzles introduced by all the ambitious features.</p>
+<h2>I Still Don't Think DO Should Have /NEXT</h2>
+<p>DO is quite overloaded as it is.  You can just DO a FILE! or URL!, so should DO/NEXT work on that?</p>
+<p>In Red, the file %test.r:</p>
+<pre><code>Red []
+
+10 + 20
+print "Where's my Next?"
+</code></pre>
+<p>Then running it:</p>
+<pre><code>red&gt;&gt; do/next %test.r 'pos
+Where's my Next?
+
+red&gt;&gt; pos
+*** Script Error: pos has no value
+</code></pre>
+<p>It ignored the POS.  But I'd say it probably should have just been an error.</p>
+<p><em>DO has enough trouble with things like the /ARGS without tying it in with the concerns of /NEXT.</em>  It's probably right to say that evaluation goes in with EVAL.</p>
+<h2>The Main Result of An EVAL Should be The Result</h2>
+<p>I thought it would be nice to return the position in many cases, because evaluation is done in loops.  You always want to stop the loop when there's no new position...and I thought that NULL would be a good return result for the position to stop that loop.</p>
+<p>But with multi-returns, if you want the overall result to be the position, you can ask for it by "circling" it:</p>
+<pre><code>&gt;&gt; [value pos]: evaluate [1 + 2 10 + 20]  ; default returns first value
+== 3
+
+&gt;&gt; pos
+== [10 + 20]
+
+&gt;&gt; [value @pos]: evaluate [1 + 2 10 + 20]  ; circle position to return it
+== [10 + 20]
+
+&gt;&gt; value
+== 3
+</code></pre>
+<p>This means the enumeration can be separate from the return result.  And it really should be that the value is the primary return result, <em>because the primary result is the only one that can be truly invisible</em>.</p>
+<pre><code>&gt;&gt; [^value @pos]: evaluate [comment "Hi" 10 + 20]
+== [10 + 20]
+
+&gt;&gt; ^value  ; meta-meta-void is *true* invisibility
+== ~void~
+</code></pre>
+<h2>Bigger Issues Loom With Things Like LET</h2>
+<p>I've mentioned the bugaboo of evaluation...the question of whether a block alone can represent the entirety of accrued state in the evaluator.</p>
+<p><strong><a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496">Pivotal Design Question: Is Evaluator State Just a Block</a></strong></p>
+<p>That's a huge philosophical question that the historical design of DO/NEXT assumed.  If state is a block is the rule, then it means the LET construct as I've begun to imagine it should not be legal.  <strong>That's very difficult to reconcile with how useful LET is.</strong></p>
+<p>In any case, I just wanted to update this post with some modern observations...the old problems aren't really problems anymore, so there are new worries.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767/2</link>
+        <pubDate>Wed, 22 Sep 2021 18:34:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-767-2</guid>
+        <source url="https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767.rss">Re-imagining DO/NEXT (now called EVALUATE)</source>
+      </item>
+      <item>
+        <title>Re-imagining DO/NEXT (now called EVALUATE)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><strong>UPDATE:</strong> Because it's confusing for DO to change the result it gives based on a refinement, the /NEXT refinement has been removed from DO...and the following behavior is given by a routine called EVALUATE.  So the DO/NEXT suggestion below is now implemented as EVALUATE/SET.</p>
+</blockquote>
+<h3>What if DO/NEXT returned the position, evaluated result into var?</h3>
+<p>e.g. like this:</p>
+<pre><code>&gt;&gt; block: [1 + 2 10 + 20]
+
+&gt;&gt; block: try do/next block 'var
+== [10 + 20]
+
+&gt;&gt; var
+== 3
+
+&gt;&gt; block: try do/next block 'var
+== []
+
+&gt;&gt; var
+== 30
+
+&gt;&gt; block: try do/next block 'var
+== _
+
+&gt;&gt; var
+== 30
+</code></pre>
+<p>This has a differentiated step for the end.  And if you try to execute a DO/NEXT on the end of a block, you get null back... <em>but it doesn't overwrite the var</em> if you were at the end.</p>
+<p>This offers a pleasing aspect to how it might be used in a while loop.  You can style the loop to just call DO/NEXT, without checking anything for the TAIL...</p>
+<pre><code>while [block: try do/next block 'var] [
+    ...
+]
+</code></pre>
+<p>And in addition, you have access to the last evaluated value after the loop.  Nice, isn't it?</p>
+<p>That's using TRY, but since it obeys the null protocol, you're free to do other things...e.g. this code for finding the first non-null evaluated element in an array (something that might be used by a REJOIN-type operation)</p>
+<pre><code>until [
+    block: (do/next block 'base) else [return null]
+    set? 'base
+]
+</code></pre>
+<h3>Not just "nice", a solution for a nuanced problem (coincidence?)</h3>
+<p>ELIDE is great, but it has had an unfortunate problem of running as part of the evaluation that precedes it.<br>
+<a href="https://forum.rebol.info/t/issues-with-invisibles-a-truly-disappearing-comment/405/3?u=hostilefork">The reasoning for the behavior was summarized here.</a>  Basically, if you are evaluating a block with a chain of DO/NEXT steps you don't want to get to your last evaluation and realize you've only got invisibles left... when you wanted to evaluate to the last actual result--now thrown away.</p>
+<p><strong>But wait</strong>... this could be applied to solving that.  Because of that last step in the DO/NEXT which returns the null but doesn't overwrite the variable.  If there happened to be some residual invisible data vs. just a tail, it works the same way.  For instance:</p>
+<pre><code>&gt;&gt; block: [elide (print "a") 1 + 2 elide (print "b") 10 + 20 elide (print "c")]
+
+&gt;&gt; block: try do/next block 'var
+a
+== [elide (print "b") 10 + 20 elide (print "c")]
+
+&gt;&gt; var
+== 3
+
+&gt;&gt; block: try do/next block 'var
+b
+== [elide (print "c")]
+
+&gt;&gt; var
+== 30
+
+&gt;&gt; block: try do/next block 'var
+c
+== _
+
+&gt;&gt; var
+== 30
+</code></pre>
+<p>Ta-da.  For ELIDE's "lazy" invisible category, this can be made to work.  It's pretty nifty that it doesn't interrupt the evaluation stream with <em>anything</em>...it can have side effects, yet the evaluations act like it's not there at all.</p>
+<p>This is easier said than done, but I've got a preliminary experiment working--suggesting that I see no reason it couldn't be made to work.</p>
+          <p><a href="https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767/1</link>
+        <pubDate>Tue, 31 Jul 2018 06:17:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-767-1</guid>
+        <source url="https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767.rss">Re-imagining DO/NEXT (now called EVALUATE)</source>
+      </item>
+  </channel>
+</rss>

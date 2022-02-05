@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Where DO Variables go when you DO From a Module?</title>
+    <link>https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567</link>
+    <description>Classically, the idea of DO of a string is that it adds the variable to the ever-growing user context.
+
+    &gt;&gt; do &quot;x: 10&quot;
+    == 10
+
+    &gt;&gt; system/contexts/user/x
+    == 10
+
+    &gt;&gt; x
+    == 10
+
+It&#39;s because it lives in the user context that you can see it just by typing X in the console, as the console binds everything to the user context as well.  (So the console is really just running `do {do &quot;x: 10&quot;}` there.)
+
+But modules have their own contexts they are bound to.  They inherit LIB, but are not connected to USER.  So you wind up with a problem... (not Sea-of-Words-specific, this existed in R3-Alpha as well):
+    
+    r3-alpha&gt;&gt; m: module [] [do &quot;x: 20&quot;, print [x]]
+    ** Script Error: x word is not bound to a context
+
+    r3-alpha&gt;&gt; x
+    == 20  ; outside the module, visible to the user context.
+
+## It Doesn&#39;t Matter if It&#39;s a String or a FILE!/URL! that Points At One
+
+When you say **do %some-file.r** then if it&#39;s not a module, that&#39;s no different than a string.  There&#39;s no extra information.
+
+## Why Can&#39;t It Just Use The &quot;Currently Running Module&quot;...?
+
+*...there...is...no...currently...running...module...*!!
+
+Consider a case where you make and export your own custom IF-like construct from a module.  Then someone will use it and pass it a block... like **custom-if condition [do &quot;x: 10&quot;]**.  So when the DO runs the stack is actually underneath the CUSTOM-IF.  You wouldn&#39;t want it declaring X in the custom if module.
+
+So the question goes along with a lot of other unfortunate things, like not being able to get the &quot;currently running function&quot; in the way that people might often think they can get it.  The language simply doesn&#39;t work like that.  And not working like that is intrinsic to its idea of not drawing a line between keywords and functions.
+
+## Could DO be defined per-Module, as RETURN is per-Function?
+
+...maybe.  :-/
+
+But this would mean that any function that made use of DO in its implementation could wind up using the wrong DO.  A utility library that ran DO would be using the version from the utility library.
+
+     module [Name: Utility-Library] [
+         do-helper: func [source] [
+             print &quot;Adding helpful behavior to DO!&quot;
+             do source
+         ]
+     ]  
+
+Anyone who called DO-HELPER with %some-file.reb or &quot;x: 10&quot; would wind up creating any of the definitions inside of the Utility Library.
+
+That seems...wrong.
+
+## What if instead of DO, there was a per-Module INTERN function?
+
+Another idea builds on something we previously discussed, which was that strings themselves might have binding.
+
+So what if a TEXT! could have a binding saying what module it belonged to, and you could use a function provided on a per-module basis to glue that module&#39;s binding onto it?
+
+     module [] [  ; has its own BIND-STRING-TO-ME function defined
+         do bind-string-to-me &quot;x: 10&quot;  ; attaches module to string, DO heeds it
+     ]
+
+This would be able to get past the DO-HELPER scenario.
+
+However, you&#39;d also have to **do bind-string-to-me %some-file.reb** as well.  Meaning DO would be heeding the binding of a string only tangentially related.
+
+I&#39;ve proposed some wilder ideas about DO over time, like that **do 2** could mean &quot;Run the code in notepad 2&quot;.  The further you get away from the string to process and getting into &quot;values that is used to figure out to find the string to process&quot;, you find things that not only don&#39;t make sense to be carrying bindings but that may not be able to.
+
+String binding is a somewhat interesting feature, but probably this is a bad idea.
+
+## So, Should Everything Just Act Like Modules?
+
+One way of dispensing with the question would be to say that every string you execute effectively lives in its own module.
+
+If that&#39;s not what you want, you need to transcode the source and bind it manually.
+ 
+So this would mean isolation becomes implicit on all scripts.  The difference between DO is if you are calling something that is intended to have side-effects and want to pass it args (maybe) and get a result...while IMPORT is cached (only one instance of a module is used for all IMPORT, and you are asking to get access to some set of definitions inside of it).
+
+The compromise could be that each module gets an INTERN function specific to it, which means &quot;make this string or code part of this module&quot;.
+
+**This probably makes the most sense.**  Will pursue this direction.</description>
+    
+    <lastBuildDate>Sun, 21 Mar 2021 10:27:29 +0000</lastBuildDate>
+    <category>Modules</category>
+    <atom:link href="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Where DO Variables go when you DO From a Module?</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>Unless it was meant to use the "global" x with the DO of the string.</p>
+<p>It is hard to predict what someone is trying to DO (pun intended).</p>
+          <p><a href="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567/3</link>
+        <pubDate>Sun, 21 Mar 2021 10:27:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1567-3</guid>
+        <source url="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567.rss">Where DO Variables go when you DO From a Module?</source>
+      </item>
+      <item>
+        <title>Where DO Variables go when you DO From a Module?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I notice this was <a href="https://github.com/metaeducation/rebol-issues/issues/928">talked about in R3-Alpha</a>.</p>
+<p>BrianH's summary:</p>
+<blockquote>
+<p>While non-module scripts can ignore modules and use DO or the IMPORT function, modules need to be written modularly.</p>
+<p>This is by design, not a bug.</p>
+</blockquote>
+<p>Reading between the lines, he's saying there are two different models of programming...the "Script" universe and the "Module" universe.  But the script universe will basically set you up for a methodology that <em>won't work at all</em> in the module universe.</p>
+<p>Abstractly speaking, is the following <em>good?</em></p>
+<pre><code>&gt;&gt; x: 10
+== 10
+
+&gt;&gt; do "x: 20, reduce [&lt;result&gt; x * 10]"
+== [&lt;result&gt; 200]
+
+&gt;&gt; x
+== 20
+</code></pre>
+<p>...or does it seem like that should require some additional step, to make the connection between the X  in the string and the X in the user context?</p>
+<p><strong>I think we'd be better with a default like:</strong></p>
+<pre><code>&gt;&gt; x: 10
+== 10
+
+&gt;&gt; do "x: 20, reduce [&lt;result&gt; x * 10]"
+== [&lt;result&gt; 200]
+
+&gt;&gt; x
+== 10  ; the string's X was isolated
+</code></pre>
+<p><strong>But what I'm proposing is that every module context gets its own custom INTERN function...which combines LOADing with binding on strings, and can be used on blocks too.</strong></p>
+<pre><code>&gt;&gt; x: 10
+== 10
+
+&gt;&gt; do intern "x: 20, reduce [&lt;result&gt; x * 10]"
+== [&lt;result&gt; 200]
+
+&gt;&gt; x
+== 20
+</code></pre>
+<p><code>INTERN</code> would be a specialization of a lower-level <code>INTERN*</code> function that took where to do the interning as a parameter.</p>
+<p>I'll be referring to this concept as <em>"isolated DO"</em>.</p>
+          <p><a href="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567/2</link>
+        <pubDate>Sat, 20 Mar 2021 12:22:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1567-2</guid>
+        <source url="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567.rss">Where DO Variables go when you DO From a Module?</source>
+      </item>
+      <item>
+        <title>Where DO Variables go when you DO From a Module?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Classically, the idea of DO of a string is that it adds the variable to the ever-growing user context.</p>
+<pre><code>&gt;&gt; do "x: 10"
+== 10
+
+&gt;&gt; system/contexts/user/x
+== 10
+
+&gt;&gt; x
+== 10
+</code></pre>
+<p>It's because it lives in the user context that you can see it just by typing X in the console, as the console binds everything to the user context as well.  (So the console is really just running <code>do {do "x: 10"}</code> there.)</p>
+<p>But modules have their own contexts they are bound to.  They inherit LIB, but are not connected to USER.  So you wind up with a problem... (not Sea-of-Words-specific, this existed in R3-Alpha as well):</p>
+<pre><code>r3-alpha&gt;&gt; m: module [] [do "x: 20", print [x]]
+** Script Error: x word is not bound to a context
+
+r3-alpha&gt;&gt; x
+== 20  ; outside the module, visible to the user context.
+</code></pre>
+<h2>It Doesn't Matter if It's a String or a FILE!/URL! that Points At One</h2>
+<p>When you say <strong>do %some-file.r</strong> then if it's not a module, that's no different than a string.  There's no extra information.</p>
+<h2>Why Can't It Just Use The "Currently Running Module"...?</h2>
+<p><em>...there...is...no...currently...running...module...</em>!!</p>
+<p>Consider a case where you make and export your own custom IF-like construct from a module.  Then someone will use it and pass it a block... like <strong>custom-if condition [do "x: 10"]</strong>.  So when the DO runs the stack is actually underneath the CUSTOM-IF.  You wouldn't want it declaring X in the custom if module.</p>
+<p>So the question goes along with a lot of other unfortunate things, like not being able to get the "currently running function" in the way that people might often think they can get it.  The language simply doesn't work like that.  And not working like that is intrinsic to its idea of not drawing a line between keywords and functions.</p>
+<h2>Could DO be defined per-Module, as RETURN is per-Function?</h2>
+<p>...maybe.  :-/</p>
+<p>But this would mean that any function that made use of DO in its implementation could wind up using the wrong DO.  A utility library that ran DO would be using the version from the utility library.</p>
+<pre><code> module [Name: Utility-Library] [
+     do-helper: func [source] [
+         print "Adding helpful behavior to DO!"
+         do source
+     ]
+ ]  
+</code></pre>
+<p>Anyone who called DO-HELPER with %some-file.reb or "x: 10" would wind up creating any of the definitions inside of the Utility Library.</p>
+<p>That seems...wrong.</p>
+<h2>What if instead of DO, there was a per-Module INTERN function?</h2>
+<p>Another idea builds on something we previously discussed, which was that strings themselves might have binding.</p>
+<p>So what if a TEXT! could have a binding saying what module it belonged to, and you could use a function provided on a per-module basis to glue that module's binding onto it?</p>
+<pre><code> module [] [  ; has its own BIND-STRING-TO-ME function defined
+     do bind-string-to-me "x: 10"  ; attaches module to string, DO heeds it
+ ]
+</code></pre>
+<p>This would be able to get past the DO-HELPER scenario.</p>
+<p>However, you'd also have to <strong>do bind-string-to-me %some-file.reb</strong> as well.  Meaning DO would be heeding the binding of a string only tangentially related.</p>
+<p>I've proposed some wilder ideas about DO over time, like that <strong>do 2</strong> could mean "Run the code in notepad 2".  The further you get away from the string to process and getting into "values that is used to figure out to find the string to process", you find things that not only don't make sense to be carrying bindings but that may not be able to.</p>
+<p>String binding is a somewhat interesting feature, but probably this is a bad idea.</p>
+<h2>So, Should Everything Just Act Like Modules?</h2>
+<p>One way of dispensing with the question would be to say that every string you execute effectively lives in its own module.</p>
+<p>If that's not what you want, you need to transcode the source and bind it manually.</p>
+<p>So this would mean isolation becomes implicit on all scripts.  The difference between DO is if you are calling something that is intended to have side-effects and want to pass it args (maybe) and get a result...while IMPORT is cached (only one instance of a module is used for all IMPORT, and you are asking to get access to some set of definitions inside of it).</p>
+<p>The compromise could be that each module gets an INTERN function specific to it, which means "make this string or code part of this module".</p>
+<p><strong>This probably makes the most sense.</strong>  Will pursue this direction.</p>
+          <p><a href="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567/1</link>
+        <pubDate>Sat, 20 Mar 2021 02:47:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1567-1</guid>
+        <source url="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567.rss">Where DO Variables go when you DO From a Module?</source>
+      </item>
+  </channel>
+</rss>

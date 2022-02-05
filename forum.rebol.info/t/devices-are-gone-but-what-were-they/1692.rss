@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Devices are gone. (But what were they?)</title>
+    <link>https://forum.rebol.info/t/devices-are-gone-but-what-were-they/1692</link>
+    <description>Something in R3-Alpha that has been a major tax and holding back interesting development is &quot;The Device Layer&quot;.
+
+## What Was the Device Layer, Anyway?
+
+Carl wanted what most developers of a language would want: to factor out the logic of the language from the details of any particular operating system.
+
+Thus you need some kind of abstraction.
+
+One might think that PORT! is this level of abstraction for Rebol.  You would develop a TCP PORT! for POSIX, and a TCP PORT! for Windows.  Each would implement the same READ and WRITE and OPEN methods as appropriate for the operating system.
+
+But instead, he wanted to have there be one codebase for the TCP PORT! (or the file PORT!, or whatever) and it would talk to an &quot;abstracted OS&quot;.  This abstracted OS was a placeholder for any operating system that knew nothing about Rebol datatypes or values, and you could only communicate with it using raw C datatypes and structures.
+
+**This actually isn&#39;t a terrible idea, in theory.** And it&#39;s kind of what libuv is.
+
+**But in practice, it was a bad implementation.**  Rebol paid the price in stagnant development due to its obfuscating and limiting nature.
+
+## A Layer Entirely Of Make-Work
+
+Communicating with the device layer was done with a structure called a REBREQ.  A REBREQ was basically a bag of anything that might be interesting to any request.  So the prototypes for absolutely everything looked the same.
+
+    DEVICE_CMD Open_Socket(REBREQ *sock)
+
+    DEVICE_CMD Read_File(REBREQ *file)
+
+    DEVICE_CMD Query_Event(REBREQ *event)
+
+etc.
+
+A REBREQ was a giant mystery box--a structure filled with fields and flags.  It was both input and output.  Some were relevant to whatever it was you were trying to do...some not.  There were barely any invariants or asserts to keep it sane.
+
+So if you were implementing something like the READ operation on a file port:
+
+* you would have to dissect the Rebol arguments in order to pack them all into a REBREQ, guessing and hoping which fields or flags you should pay attention to.
+
+* Then you&#39;d have to go over to the Windows implementation for the device layer of Read_File and unpack those parameters--all pure C structs--and call the windows ReadFile() function.
+
+* Then you&#39;d have to do the same with the POSIX calling read(), or any other OS
+
+* You&#39;d also for each OS have to proxy whatever you read back into the REBREQ--again remembering you can&#39;t assemble any Rebol values yet...because that is done once you get back to the PORT!&#39;s READ.
+
+## But did it Do *Anything* Useful?
+
+So this is where the problem is.  For synchronous operations, no.  It was entirely make-work. And the asynchronous code was a mire.
+
+The reason it didn&#39;t get ripped out sooner was because it was playing a role in asynchronous operations.  A weird and nearly impossible to see role, that tried to implement a generic linked list that could handle the needs of any interface.
+
+I think it&#39;s much clearer to have each extension maintain its own linked lists if it wants to.
+
+## Was Carl Not Serious About Simplicity?
+
+Well, it was a couple of decades ago, so one should cut some slack.  If one were to be generous, one might say he was aiming to accomplish something like libuv.
+
+But big picture, I think this is what happened:
+
+Carl knew that to get performance, you&#39;d have to be close to the core of Rebol...knowing the internals of the bits of the values etc.  And he wasn&#39;t intending to publish the source for that.  But he wanted the platform support to be implementable by third parties.
+
+Hence the concept became *&quot;in the port implementation, we&#39;ll efficiently strip it down to the bit layer with the knowledge we have...and the device layer will be that little last bit, devices won&#39;t really do anything.&quot;*
+
+In truth, devices do a lot.  They are what you get when people with computers want to do things.  And you wind up in a mess when the 7 verbs you thought of with READ, WRITE, CONNECT, OPEN, CLOSE are missing huge swaths of what you want to do with a GPS or anything else that comes down the pipe.
+
+So anyway, it&#39;s in a better direction now...without the make-work.  All the usermode code for TLS and HTTP seem to still be working, but report any problems.</description>
+    
+    <lastBuildDate>Sun, 29 Aug 2021 08:38:55 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/devices-are-gone-but-what-were-they/1692.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Devices are gone. (But what were they?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Something in R3-Alpha that has been a major tax and holding back interesting development is "The Device Layer".</p>
+<h2>What Was the Device Layer, Anyway?</h2>
+<p>Carl wanted what most developers of a language would want: to factor out the logic of the language from the details of any particular operating system.</p>
+<p>Thus you need some kind of abstraction.</p>
+<p>One might think that PORT! is this level of abstraction for Rebol.  You would develop a TCP PORT! for POSIX, and a TCP PORT! for Windows.  Each would implement the same READ and WRITE and OPEN methods as appropriate for the operating system.</p>
+<p>But instead, he wanted to have there be one codebase for the TCP PORT! (or the file PORT!, or whatever) and it would talk to an "abstracted OS".  This abstracted OS was a placeholder for any operating system that knew nothing about Rebol datatypes or values, and you could only communicate with it using raw C datatypes and structures.</p>
+<p><strong>This actually isn't a terrible idea, in theory.</strong> And it's kind of what libuv is.</p>
+<p><strong>But in practice, it was a bad implementation.</strong>  Rebol paid the price in stagnant development due to its obfuscating and limiting nature.</p>
+<h2>A Layer Entirely Of Make-Work</h2>
+<p>Communicating with the device layer was done with a structure called a REBREQ.  A REBREQ was basically a bag of anything that might be interesting to any request.  So the prototypes for absolutely everything looked the same.</p>
+<pre><code>DEVICE_CMD Open_Socket(REBREQ *sock)
+
+DEVICE_CMD Read_File(REBREQ *file)
+
+DEVICE_CMD Query_Event(REBREQ *event)
+</code></pre>
+<p>etc.</p>
+<p>A REBREQ was a giant mystery box--a structure filled with fields and flags.  It was both input and output.  Some were relevant to whatever it was you were trying to do...some not.  There were barely any invariants or asserts to keep it sane.</p>
+<p>So if you were implementing something like the READ operation on a file port:</p>
+<ul>
+<li>
+<p>you would have to dissect the Rebol arguments in order to pack them all into a REBREQ, guessing and hoping which fields or flags you should pay attention to.</p>
+</li>
+<li>
+<p>Then you'd have to go over to the Windows implementation for the device layer of Read_File and unpack those parameters--all pure C structs--and call the windows ReadFile() function.</p>
+</li>
+<li>
+<p>Then you'd have to do the same with the POSIX calling read(), or any other OS</p>
+</li>
+<li>
+<p>You'd also for each OS have to proxy whatever you read back into the REBREQ--again remembering you can't assemble any Rebol values yet...because that is done once you get back to the PORT!'s READ.</p>
+</li>
+</ul>
+<h2>But did it Do <em>Anything</em> Useful?</h2>
+<p>So this is where the problem is.  For synchronous operations, no.  It was entirely make-work. And the asynchronous code was a mire.</p>
+<p>The reason it didn't get ripped out sooner was because it was playing a role in asynchronous operations.  A weird and nearly impossible to see role, that tried to implement a generic linked list that could handle the needs of any interface.</p>
+<p>I think it's much clearer to have each extension maintain its own linked lists if it wants to.</p>
+<h2>Was Carl Not Serious About Simplicity?</h2>
+<p>Well, it was a couple of decades ago, so one should cut some slack.  If one were to be generous, one might say he was aiming to accomplish something like libuv.</p>
+<p>But big picture, I think this is what happened:</p>
+<p>Carl knew that to get performance, you'd have to be close to the core of Rebol...knowing the internals of the bits of the values etc.  And he wasn't intending to publish the source for that.  But he wanted the platform support to be implementable by third parties.</p>
+<p>Hence the concept became <em>"in the port implementation, we'll efficiently strip it down to the bit layer with the knowledge we have...and the device layer will be that little last bit, devices won't really do anything."</em></p>
+<p>In truth, devices do a lot.  They are what you get when people with computers want to do things.  And you wind up in a mess when the 7 verbs you thought of with READ, WRITE, CONNECT, OPEN, CLOSE are missing huge swaths of what you want to do with a GPS or anything else that comes down the pipe.</p>
+<p>So anyway, it's in a better direction now...without the make-work.  All the usermode code for TLS and HTTP seem to still be working, but report any problems.</p>
+          <p><a href="https://forum.rebol.info/t/devices-are-gone-but-what-were-they/1692/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/devices-are-gone-but-what-were-they/1692/1</link>
+        <pubDate>Sun, 29 Aug 2021 04:19:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1692-1</guid>
+        <source url="https://forum.rebol.info/t/devices-are-gone-but-what-were-they/1692.rss">Devices are gone. (But what were they?)</source>
+      </item>
+  </channel>
+</rss>

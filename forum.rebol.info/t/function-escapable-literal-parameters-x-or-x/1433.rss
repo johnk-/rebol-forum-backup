@@ -1,0 +1,454 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Function Escapable Literal Parameters... :X or &#39;:X ?</title>
+    <link>https://forum.rebol.info/t/function-escapable-literal-parameters-x-or-x/1433</link>
+    <description>## Background with GROUP!s (prior to GET-GROUP! existing)
+
+ Sometimes you don&#39;t pass a literal block of code to a conditional, but the callsite runs code that generates the branch--or fetches it out of a variable.
+
+Historical Rebol has this behavior for GROUP!s in conditionals:
+
+     rebol2&gt;&gt; branches: [[print &quot;Apple&quot;] [print &quot;Banana&quot;]]
+
+     rebol2&gt;&gt; either false (print &quot;one&quot; take branches) (print &quot;two&quot; take branches)
+     one
+     two
+     Banana
+
+Doesn&#39;t seem ideal.  But having both groups run is the only choice you have if the branches are evaluative parameters.  The GROUP!s are evaluated before EITHER has a chance to say anything about it.
+
+I pointed out that this was inconsistent with things like historical CASE:
+
+     rebol2&gt;&gt; branches: [[print &quot;Apple&quot;] [print &quot;Banana&quot;]]
+
+     rebol2&gt;&gt; case [
+          false (print &quot;one&quot; take branches)
+          true (print &quot;two&quot; take branches)
+     ]
+     two
+     Apple
+     == true  ; ignore silly `true` (Ren-C &amp; Red give PRINT&#39;s result)
+
+## Ren-C Takes Branches Literally and Was Able To Sync This Up
+
+Ren-C had begun requiring branches be single literal values for other reasons, namely to give it access to the quote status of the argument:
+
+    ren-c&gt;&gt; if true &#39;a
+    == a
+
+    ren-c&gt;&gt; if true &#39;[a b c]
+    == [a b c]
+
+So to provide code you&#39;d have to put it in a group (unless it&#39;s a single variable, where you could use a GET-WORD! or GET-PATH!)  For technically fiddly reasons, it also means that **if (...) else (...)** is fully swappable with **either (...) (...)**  when they would not be quite exact replacements otherwise.
+
+**So long as we&#39;re going this way, conditionals have the choice to see the GROUP! which would evaluate to produce a branch, yet decide not to run it.**  There were enough :heart: clicked on the idea to support this, so that&#39;s what we have now:
+
+     ren-c&gt;&gt; branches: [[print &quot;Apple&quot;] [print &quot;Banana&quot;]]
+
+     ren-c&gt;&gt; either false (print &quot;one&quot; take branches) (print &quot;two&quot; take branches)
+     two
+     Apple
+
+This goes further into the rabbit-hole of bending parameter conventions to suit the likely intent of usage.  But I think it&#39;s a good example of where it&#39;s worth it.  It&#39;s better than twisting around to get the reverse consistency...forcing CASE to run its GROUP!s regardless of the condition matching.
+
+## Soft Literal Parameters vs. Hard Literal Parameters
+
+Rebol2 introduced the variations of &quot;hard literal&quot; as :X and &quot;soft literal&quot; as &#39;X.  Hard literals would always give you the callsite value literally...
+
+    rebol2&gt;&gt; hard: func [:x] [print mold x]
+
+    rebol2&gt;&gt; var: &#39;foo
+
+    rebol2&gt;&gt; hard var
+    == var
+
+    rebol2&gt;&gt; hard :var
+    == :var
+
+    rebol2&gt;&gt; hard (first [foo bar])
+    == (first [foo bar])
+
+Soft literals would make GET-WORD!, GET-PATH! evaluative...with everything else literally what was at the callsite:
+
+    rebol2&gt;&gt; soft: func [&#39;x] [print mold x]
+
+    rebol2&gt;&gt; var: &#39;foo
+
+    rebol2&gt;&gt; soft var
+    == var
+
+    rebol2&gt;&gt; soft :var
+    == foo
+
+    rebol2&gt;&gt; soft (first [foo bar])
+    == (first [foo bar])
+
+R3-Alpha added a twist: that soft quotes would evaluate GROUP!s vs. taking them literally:
+
+    r3-alpha&gt;&gt; soft (first [foo bar])
+    == foo
+
+Two big points:
+
+* **This looks backwards for :x and &#39;x**.  Shouldn&#39;t it be that the thing with GET-WORD! in the parameter name is the one that&#39;s &quot;colon-reactive&quot;?
+
+* **The picture gets even more consistent if we use GET-GROUP! for the code escape**.  Then all the quoting subversion is colon&#39;d, and regular GROUP!s can go back to not being &quot;soft&quot; as in Rebol2.
+
+This makes the branch quoting example work with soft branches.  SO you get control if you want to get back to the &quot;run the code whether you take the branch or not&quot; situation:
+
+     ren-c&gt;&gt; branches: [[print &quot;Apple&quot;] [print &quot;Banana&quot;]]
+
+     ren-c&gt;&gt; either false :(print &quot;one&quot; take branches) :(print &quot;two&quot; take branches)
+     one
+     two
+     Banana
+
+I hope all the above makes sense.  *Please speak up if it does not make sense.*
+
+## So... Should Escapable Literals Be `:param` or `&#39;:param` ?
+
+One truism is that unless you have a very good reason to need to quote GET-WORD!s, GET-PATH!s, and GET-GROUP!s...your construct should permit escaping to make it easy for callsites to tunnel in what they want without resorting to APPLY.  This likely guided R3-Alpha to make escapability the default behavior for the common `&#39;param` form.
+
+So if we&#39;re asking people to default all literal parameter callsites to the escapable convention, then **:param** is nicer to look at than **&#39;:param**, even if the latter is &quot;more communicative&quot;.
+
+One factor to weigh would be if there were an interesting meaning for **:param** that didn&#39;t involve literalness.  Let&#39;s review the new escapable literal concept, and pretend for a moment we say it&#39;s a quoted get-word!:
+
+     &gt;&gt; soft: func [&#39;:param] [print mold param]
+
+     &gt;&gt; var: &#39;foo
+
+     &gt;&gt; soft var
+     == var
+
+     &gt;&gt; soft :var
+     == foo
+
+     &gt;&gt; soft (first [foo bar])
+     == (first [foo bar])
+
+     &gt;&gt; soft :(first [foo bar])
+     == foo
+
+So is there any meaning for &quot;plain escapable&quot;?
+
+     &gt;&gt; huh: func [:param] [print mold param]
+ 
+     &gt;&gt; huh ... ?
+
+Presumably this would similarly be an instruction to how :x, :x/y, and :(x y) are handled at the callsite.  But if you&#39;re not escaping the quoting, what *are* you escaping?
+
+It would be silly to say you are &quot;escaping evaluation&quot;:
+
+     &gt;&gt; huh :(a)
+     == a
+
+That is done more cleanly with quoting, as a generic &quot;escaping evaluation&quot; tool for evaluative parameters...and doesn&#39;t raise questions about how to treat **huh :(a b)**
+
+    &gt;&gt; huh &#39;a
+    == a
+
+There are some other choices for what it might mean, like &quot;optional&quot;.  That&#39;s something that doesn&#39;t apply to literal parameters (because you can&#39;t get NULL literally).
+
+    func [:arg [any-value!]] [...]  &lt;=&gt; func [arg [&lt;opt&gt; any-value!]]
+
+I don&#39;t know that it makes a whole lot of sense.  And having a way to recognize NULL in-band in the type block is important:
+
+     &gt;&gt; match [&lt;opt&gt; integer!] null then [print &quot;This should run&quot;]
+     This should run
+
+---
+
+## Brainstorm On One Aspect of Distinction
+
+So trying to make the change I tripped up on some edge cases, which suggests that for some functions they are more willing to let soft quoted sites come from the evaluation of more than one cell.
+
+We might imagine for instance that **&#39;:x** or **:x** controls how enfix is handled.  Consider the following:
+
+    &gt;&gt; integer! = type of 1
+    == #[true]
+
+    &gt;&gt; integer! = :(second [length type]) of 1
+    == #[true]
+
+For OF, this is how you want the interaction to shake out when you are midstream in an enfix evaluation... `integer! = (type of 1)`.  But other constructs might want to consider an in-progress enfix something not to interrupt...and treat it like the left was more-or-less in a GET-GROUP!.
+
+As an example, consider the [most vexing evaluation](https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361):
+
+    &gt;&gt; if true [&lt;branch&gt;] then x -&gt; [print [&quot;THEN&quot; x]] else [print &quot;ELSE&quot;]
+    THEN &lt;branch&gt;
+
+    &gt;&gt; if false [&lt;branch&gt;] then x -&gt; [print [&quot;THEN&quot; x]] else [print &quot;ELSE&quot;]
+    ELSE
+
+The THEN and ELSE branches want to see their argument literally, e.g. if it&#39;s quoted.  But it wants branches to be escapable (so you can use the GET-GROUP! to run the branch regardless), *and* it wants enfix to be able to overrule it.  That&#39;s different from the left argument for OF, which wants escapable literalness but does *not* want the enfix equality operator to win.
+
+We might then say that **&#39;:x** is the strict form of &quot;only one value on the left is inspected&quot;.  e.g. it is quoted, and *then* it is escaped.  Then **:x** could mean &quot;it&#39;s accepted if it&#39;s already in mid-evaluation, otherwise it is quoted, then escaped&quot;.
+
+So **:x** would be saying *&quot;I don&#39;t out-prioritize enfix&quot;* while **&#39;:x** says *&quot;I beat enfix just as &#39;x would, but then the escaping is automatic so you don&#39;t have to do it inside your function body&quot;*.
+
+Continuing the thought experiement...you&#39;d have SOFT
+
+    &gt;&gt; soft: func [:x] [print [mold x], 10]
+
+    &gt;&gt; soft add 1 2
+    add
+    == 2  ; (soft add) 1 2
+
+    &gt;&gt; soft 1 + 2
+    3
+    == 10  ; soft (1 + 2)
+
+    &gt;&gt; soft :(1 + 2)
+    3
+    == 10 
+
+Then MEDIUM
+
+    &gt;&gt; medium: func [&#39;:x] [print [mold x], 10]
+
+    &gt;&gt; medium add 1 2
+    add
+    == 2  ; (medium add) 1 2
+
+    &gt;&gt; medium 1 + 2
+    1
+    == 12  ; (medium 1) + 2
+
+    &gt;&gt; medium :(1 + 2)
+    3
+    == 10
+
+    &gt;&gt; medium (1 + 2)
+    (1 + 2)
+    == 10
+
+And HARD would be as you expect, always exactly the callsite parameter.
+
+*While I&#39;m admittedly a bit wary of super complex parameter conventions, I also like having full coverage of the potential desires.*  What worries me a little is that this feels like the &quot;tight&quot; parameter convention coming up again...though it&#39;s backwards and maybe a little more logical, saying the only places you can ask for looseness is in parameters that are &quot;weird&quot; by virtue of quoting.  While it&#39;s late and I don&#39;t really have a full articulation of why this is more coherent... I think it likely is.
+
+But...mucking with the code and seeing impact across the system in the tests is the way to test that theory.
+
+---
+
+## Bonus Question... what might **:[get blocks]** do with escaping?
+
+It seems that if GET-WORD!, GET-PATH!, and GET-GROUP! evaluate for **:SOFT** parameters, then there might be some kind of magic for GET-BLOCK!s.
+
+    &gt;&gt; soft :[what&#39;s this for?]
+    == ???
+
+Even if we can&#39;t think of anything right now, I&#39;d think they should error to reserve for future use (vs. pass the GET-BLOCK! through as if it were any other type).  Or just to keep from seeming inconsistent.</description>
+    
+    <lastBuildDate>Sun, 13 Dec 2020 23:30:36 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/function-escapable-literal-parameters-x-or-x/1433.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Function Escapable Literal Parameters... :X or &#39;:X ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Background with GROUP!s (prior to GET-GROUP! existing)</h2>
+<p>Sometimes you don't pass a literal block of code to a conditional, but the callsite runs code that generates the branch--or fetches it out of a variable.</p>
+<p>Historical Rebol has this behavior for GROUP!s in conditionals:</p>
+<pre><code> rebol2&gt;&gt; branches: [[print "Apple"] [print "Banana"]]
+
+ rebol2&gt;&gt; either false (print "one" take branches) (print "two" take branches)
+ one
+ two
+ Banana
+</code></pre>
+<p>Doesn't seem ideal.  But having both groups run is the only choice you have if the branches are evaluative parameters.  The GROUP!s are evaluated before EITHER has a chance to say anything about it.</p>
+<p>I pointed out that this was inconsistent with things like historical CASE:</p>
+<pre><code> rebol2&gt;&gt; branches: [[print "Apple"] [print "Banana"]]
+
+ rebol2&gt;&gt; case [
+      false (print "one" take branches)
+      true (print "two" take branches)
+ ]
+ two
+ Apple
+ == true  ; ignore silly `true` (Ren-C &amp; Red give PRINT's result)
+</code></pre>
+<h2>Ren-C Takes Branches Literally and Was Able To Sync This Up</h2>
+<p>Ren-C had begun requiring branches be single literal values for other reasons, namely to give it access to the quote status of the argument:</p>
+<pre><code>ren-c&gt;&gt; if true 'a
+== a
+
+ren-c&gt;&gt; if true '[a b c]
+== [a b c]
+</code></pre>
+<p>So to provide code you'd have to put it in a group (unless it's a single variable, where you could use a GET-WORD! or GET-PATH!)  For technically fiddly reasons, it also means that <strong>if (...) else (...)</strong> is fully swappable with <strong>either (...) (...)</strong>  when they would not be quite exact replacements otherwise.</p>
+<p><strong>So long as we're going this way, conditionals have the choice to see the GROUP! which would evaluate to produce a branch, yet decide not to run it.</strong>  There were enough <img src="https://forum.rebol.info/images/emoji/twitter/heart.png?v=9" title=":heart:" class="emoji" alt=":heart:"> clicked on the idea to support this, so that's what we have now:</p>
+<pre><code> ren-c&gt;&gt; branches: [[print "Apple"] [print "Banana"]]
+
+ ren-c&gt;&gt; either false (print "one" take branches) (print "two" take branches)
+ two
+ Apple
+</code></pre>
+<p>This goes further into the rabbit-hole of bending parameter conventions to suit the likely intent of usage.  But I think it's a good example of where it's worth it.  It's better than twisting around to get the reverse consistency...forcing CASE to run its GROUP!s regardless of the condition matching.</p>
+<h2>Soft Literal Parameters vs. Hard Literal Parameters</h2>
+<p>Rebol2 introduced the variations of "hard literal" as :X and "soft literal" as 'X.  Hard literals would always give you the callsite value literally...</p>
+<pre><code>rebol2&gt;&gt; hard: func [:x] [print mold x]
+
+rebol2&gt;&gt; var: 'foo
+
+rebol2&gt;&gt; hard var
+== var
+
+rebol2&gt;&gt; hard :var
+== :var
+
+rebol2&gt;&gt; hard (first [foo bar])
+== (first [foo bar])
+</code></pre>
+<p>Soft literals would make GET-WORD!, GET-PATH! evaluative...with everything else literally what was at the callsite:</p>
+<pre><code>rebol2&gt;&gt; soft: func ['x] [print mold x]
+
+rebol2&gt;&gt; var: 'foo
+
+rebol2&gt;&gt; soft var
+== var
+
+rebol2&gt;&gt; soft :var
+== foo
+
+rebol2&gt;&gt; soft (first [foo bar])
+== (first [foo bar])
+</code></pre>
+<p>R3-Alpha added a twist: that soft quotes would evaluate GROUP!s vs. taking them literally:</p>
+<pre><code>r3-alpha&gt;&gt; soft (first [foo bar])
+== foo
+</code></pre>
+<p>Two big points:</p>
+<ul>
+<li>
+<p><strong>This looks backwards for :x and 'x</strong>.  Shouldn't it be that the thing with GET-WORD! in the parameter name is the one that's "colon-reactive"?</p>
+</li>
+<li>
+<p><strong>The picture gets even more consistent if we use GET-GROUP! for the code escape</strong>.  Then all the quoting subversion is colon'd, and regular GROUP!s can go back to not being "soft" as in Rebol2.</p>
+</li>
+</ul>
+<p>This makes the branch quoting example work with soft branches.  SO you get control if you want to get back to the "run the code whether you take the branch or not" situation:</p>
+<pre><code> ren-c&gt;&gt; branches: [[print "Apple"] [print "Banana"]]
+
+ ren-c&gt;&gt; either false :(print "one" take branches) :(print "two" take branches)
+ one
+ two
+ Banana
+</code></pre>
+<p>I hope all the above makes sense.  <em>Please speak up if it does not make sense.</em></p>
+<h2>So... Should Escapable Literals Be <code>:param</code> or <code>':param</code> ?</h2>
+<p>One truism is that unless you have a very good reason to need to quote GET-WORD!s, GET-PATH!s, and GET-GROUP!s...your construct should permit escaping to make it easy for callsites to tunnel in what they want without resorting to APPLY.  This likely guided R3-Alpha to make escapability the default behavior for the common <code>'param</code> form.</p>
+<p>So if we're asking people to default all literal parameter callsites to the escapable convention, then <strong>:param</strong> is nicer to look at than <strong>':param</strong>, even if the latter is "more communicative".</p>
+<p>One factor to weigh would be if there were an interesting meaning for <strong>:param</strong> that didn't involve literalness.  Let's review the new escapable literal concept, and pretend for a moment we say it's a quoted get-word!:</p>
+<pre><code> &gt;&gt; soft: func [':param] [print mold param]
+
+ &gt;&gt; var: 'foo
+
+ &gt;&gt; soft var
+ == var
+
+ &gt;&gt; soft :var
+ == foo
+
+ &gt;&gt; soft (first [foo bar])
+ == (first [foo bar])
+
+ &gt;&gt; soft :(first [foo bar])
+ == foo
+</code></pre>
+<p>So is there any meaning for "plain escapable"?</p>
+<pre><code> &gt;&gt; huh: func [:param] [print mold param]
+
+ &gt;&gt; huh ... ?
+</code></pre>
+<p>Presumably this would similarly be an instruction to how :x, :x/y, and :(x y) are handled at the callsite.  But if you're not escaping the quoting, what <em>are</em> you escaping?</p>
+<p>It would be silly to say you are "escaping evaluation":</p>
+<pre><code> &gt;&gt; huh :(a)
+ == a
+</code></pre>
+<p>That is done more cleanly with quoting, as a generic "escaping evaluation" tool for evaluative parameters...and doesn't raise questions about how to treat <strong>huh :(a b)</strong></p>
+<pre><code>&gt;&gt; huh 'a
+== a
+</code></pre>
+<p>There are some other choices for what it might mean, like "optional".  That's something that doesn't apply to literal parameters (because you can't get NULL literally).</p>
+<pre><code>func [:arg [any-value!]] [...]  &lt;=&gt; func [arg [&lt;opt&gt; any-value!]]
+</code></pre>
+<p>I don't know that it makes a whole lot of sense.  And having a way to recognize NULL in-band in the type block is important:</p>
+<pre><code> &gt;&gt; match [&lt;opt&gt; integer!] null then [print "This should run"]
+ This should run
+</code></pre>
+<hr>
+<h2>Brainstorm On One Aspect of Distinction</h2>
+<p>So trying to make the change I tripped up on some edge cases, which suggests that for some functions they are more willing to let soft quoted sites come from the evaluation of more than one cell.</p>
+<p>We might imagine for instance that <strong>':x</strong> or <strong>:x</strong> controls how enfix is handled.  Consider the following:</p>
+<pre><code>&gt;&gt; integer! = type of 1
+== #[true]
+
+&gt;&gt; integer! = :(second [length type]) of 1
+== #[true]
+</code></pre>
+<p>For OF, this is how you want the interaction to shake out when you are midstream in an enfix evaluation... <code>integer! = (type of 1)</code>.  But other constructs might want to consider an in-progress enfix something not to interrupt...and treat it like the left was more-or-less in a GET-GROUP!.</p>
+<p>As an example, consider the <a href="https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361">most vexing evaluation</a>:</p>
+<pre><code>&gt;&gt; if true [&lt;branch&gt;] then x -&gt; [print ["THEN" x]] else [print "ELSE"]
+THEN &lt;branch&gt;
+
+&gt;&gt; if false [&lt;branch&gt;] then x -&gt; [print ["THEN" x]] else [print "ELSE"]
+ELSE
+</code></pre>
+<p>The THEN and ELSE branches want to see their argument literally, e.g. if it's quoted.  But it wants branches to be escapable (so you can use the GET-GROUP! to run the branch regardless), <em>and</em> it wants enfix to be able to overrule it.  That's different from the left argument for OF, which wants escapable literalness but does <em>not</em> want the enfix equality operator to win.</p>
+<p>We might then say that <strong>':x</strong> is the strict form of "only one value on the left is inspected".  e.g. it is quoted, and <em>then</em> it is escaped.  Then <strong>:x</strong> could mean "it's accepted if it's already in mid-evaluation, otherwise it is quoted, then escaped".</p>
+<p>So <strong>:x</strong> would be saying <em>"I don't out-prioritize enfix"</em> while <strong>':x</strong> says <em>"I beat enfix just as 'x would, but then the escaping is automatic so you don't have to do it inside your function body"</em>.</p>
+<p>Continuing the thought experiement...you'd have SOFT</p>
+<pre><code>&gt;&gt; soft: func [:x] [print [mold x], 10]
+
+&gt;&gt; soft add 1 2
+add
+== 2  ; (soft add) 1 2
+
+&gt;&gt; soft 1 + 2
+3
+== 10  ; soft (1 + 2)
+
+&gt;&gt; soft :(1 + 2)
+3
+== 10 
+</code></pre>
+<p>Then MEDIUM</p>
+<pre><code>&gt;&gt; medium: func [':x] [print [mold x], 10]
+
+&gt;&gt; medium add 1 2
+add
+== 2  ; (medium add) 1 2
+
+&gt;&gt; medium 1 + 2
+1
+== 12  ; (medium 1) + 2
+
+&gt;&gt; medium :(1 + 2)
+3
+== 10
+
+&gt;&gt; medium (1 + 2)
+(1 + 2)
+== 10
+</code></pre>
+<p>And HARD would be as you expect, always exactly the callsite parameter.</p>
+<p><em>While I'm admittedly a bit wary of super complex parameter conventions, I also like having full coverage of the potential desires.</em>  What worries me a little is that this feels like the "tight" parameter convention coming up again...though it's backwards and maybe a little more logical, saying the only places you can ask for looseness is in parameters that are "weird" by virtue of quoting.  While it's late and I don't really have a full articulation of why this is more coherent... I think it likely is.</p>
+<p>But...mucking with the code and seeing impact across the system in the tests is the way to test that theory.</p>
+<hr>
+<h2>Bonus Question... what might <strong>:[get blocks]</strong> do with escaping?</h2>
+<p>It seems that if GET-WORD!, GET-PATH!, and GET-GROUP! evaluate for <strong>:SOFT</strong> parameters, then there might be some kind of magic for GET-BLOCK!s.</p>
+<pre><code>&gt;&gt; soft :[what's this for?]
+== ???
+</code></pre>
+<p>Even if we can't think of anything right now, I'd think they should error to reserve for future use (vs. pass the GET-BLOCK! through as if it were any other type).  Or just to keep from seeming inconsistent.</p>
+          <p><a href="https://forum.rebol.info/t/function-escapable-literal-parameters-x-or-x/1433/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/function-escapable-literal-parameters-x-or-x/1433/1</link>
+        <pubDate>Sun, 13 Dec 2020 02:08:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1433-1</guid>
+        <source url="https://forum.rebol.info/t/function-escapable-literal-parameters-x-or-x/1433.rss">Function Escapable Literal Parameters... :X or &#39;:X ?</source>
+      </item>
+  </channel>
+</rss>

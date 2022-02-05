@@ -1,0 +1,697 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Planning Ahead for BigNum INTEGER!</title>
+    <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623</link>
+    <description>I&#39;ve long been an advocate for the idea that INTEGER! should be an [arbitrary precision implementation](https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic).  It doesn&#39;t make sense to me why a high-level language which is targeting future applications would constrain itself to 32-bit, or (in R3-Alpha&#39;s case) 64-bit INTEGER! values.  I&#39;ve been trying--for instance--to [&quot;futureproof&quot; conversions of INTEGER! to BINARY!](https://trello.com/c/I6Y3NWlR), in anticipation of the change.
+
+Now, due to Red&#39;s desire to be involved in cryptocurrency, they are adding BIGNUM! as a distinct datatype from INTEGER!.  Which is not the way I would do it.  INTEGER! already has to detect math overflows in order to give an error when your math is out of range.  **I would prefer INTEGER! to start out using CPU register-size integers, and instead of erroring on overflows, promote the representation into a bignum...on demand.**
+
+### The Identity Problem
+
+I suggested that INTEGER! could not hurt for performance for most applications, if it was merely promoted to bignum internal representations on overflow.  But there&#39;s an issue of identity in bignum operations.
+
+Today this is the behavior for integers:
+
+     foo: func [x [integer!]] [add x 1]
+     smallnum: 0
+     foo smallnum
+     print smallnum  ; prints 0, unaffected
+
+So each integer cell has its own identity (as an ANY-IMMEDIATE!, [&quot;immediate value&quot;](https://en.wikipedia.org/wiki/Value_(computer_science)#R-values_and_addresses)).
+
+**ADD** or **+** do not go in and fiddle the bits in a way that is seen by &quot;other instances of that integer&quot;, the way that **APPEND** reaches into the &quot;data node&quot; behind a series and affects all instances.
+
+But with BigNums, making a new identity on each addition can be costly:
+
+    bignum: 123456789012345678901234567890
+    loop 1000000 [
+        bignum: bignum + 1
+    ]
+
+How many bignum structures should that be &quot;malloc()&quot; ing?  Naively done, that would be a million or more allocations, because each addition in Rebol is expected to produce a new-and-disconnected integer.
+
+Getting around this by making ADD mutate BigNum--when it doesn&#39;t mutate other things--seems inconsistent.  It&#39;s not  a new problem, there were some issues with ADD of VECTOR!.  In Red too, see [&quot;Adding a number to a vector changes the vector itself&quot;](https://github.com/red/red/issues/2216)
+
+### Proposal: Mutating ADD, non-mutating +
+
+The thought I had would be that INTEGER!s would not be immediate by their nature, but that literals would be LOCK&#39;d by default.
+
+     &gt;&gt; x: 10
+     &gt;&gt; add x 20
+     ** Error, locked integer
+
+     &gt;&gt; x: make integer! 10
+     &gt;&gt; add x 20
+     &gt;&gt; print x
+     30
+
+Then, + would basically be using ADD with a COPY, and locking the result:
+
+     +: enfix func [a b] [
+         lock add copy a b
+     ]
+
+For non-bignums, this could be optimized internally so that if the input was a register-size integer...and the output was a register-size integer...no identity node ever need be created.
+
+So someone can still do an inefficient bignum loop with +, if they really wanted to.  But a savvy crypto-person would use ADD so they are modifying the existing bignum in place.
+
+What this does is bolster Rebol&#39;s &quot;mutability by default&quot; story about operations like APPEND, bringing it further to ADD.  It addresses the issue with VECTOR!, by saying that **+** will create a new vector while **add** would mutate the existing one.  And it avoids introducing a new BIGNUM! datatype.
+
+Like other changes, this can be skinned with Rebol2/R3-Alpha compatibility to make **add 1 2** work in old code that needs it to.
+
+*(Note: as a side-benefit, this could remove the need for 64-bit math emulation code on 32-bit platforms.  Currently, in an I-believe-to-be-misguided-standardization-effort, Rebol has tried to give those using the interpreter a baseline confidence that INTEGER! has 64-bit representation...even if that&#39;s not the native integer type.  All that code could go, replaced by bignum code that&#39;s needed anyway, if you have any cryptography.)*</description>
+    
+    <lastBuildDate>Wed, 04 Nov 2020 07:27:44 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>Right,</p>
+<aside class="quote no-group" data-username="drkameleon" data-post="15" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/drkameleon/40/257_2.png" class="avatar"> drkameleon:</div>
+<blockquote>
+<p>Well, bignum support sounds to me like an absolute must.</p>
+<p>And given that GMP is already there, with thousands of hours invested in the project, why reinvent the wheel?</p>
+</blockquote>
+</aside>
+<p>That is correct, and the way to handle stuff. But there is a dependency issue with this.</p>
+<aside class="quote no-group" data-username="drkameleon" data-post="16" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/drkameleon/40/257_2.png" class="avatar"> drkameleon:</div>
+<blockquote>
+<p>Python's approach - everything being a bignum - seems like a total overkill to me.</p>
+<p>Let me put it this way: what are the chances that you <em>will</em> be constantly using bignums, with all the overhead that it brings?</p>
+</blockquote>
+</aside>
+<p>Completely agree on this too. As I said, most of the integers one encounters are staying well within the limit of the given bits.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="22" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>(Though my intent is using mbedTLS BigNums, for smaller code size and because it's what our encryption already uses.)</p>
+</blockquote>
+</aside>
+<p>Right. For things as MySQL support, I only need this for my webdevelopment, talking to the MySQL database my provider hosts for me. So I need to install the MySQL (or MariaDB) libs for that case only. But when I want BIGNUM's, I want this available in a general sense. Having a dependency on GMP makes everybody that want to use it have a copy of the gmp library used, and if you want to compile the newest Ren-C you will need the gmp source library as well. So we get yet another dependency on the other project. Everybody in Ren-C world will need one, and to be able to debug and help each other we need the SAME version of the sources used. Then we are also depending on the GMP project not to introduce bugs in the latest versions...</p>
+<p>The dependency on the AGG library (or for that matter any other GUI library) for R2 has a similar problem making the open sourcing of Rebol back in the day an extra problem, where R2 closed source could just use the AGG library of choice and ship with that built-in.<br>
+I call this for myself the "moving target problem", knowing that this project is also a moving target.<br>
+I also now have 96 libgmp.so libs on my system.</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/23">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/23</link>
+        <pubDate>Wed, 04 Nov 2020 07:27:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-23</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>That's a series, which presumably have an allocation, which lets you do that.  How would you do it with a 32-bit or 64-bit number?</p>
+<p>So for the example to apply to integers, then it comes back to your question:</p>
+<aside class="quote no-group" data-username="drkameleon" data-post="16" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/drkameleon/40/257_2.png" class="avatar"> drkameleon:</div>
+<blockquote>
+<p>So, if the most likely scenario is using smaller (32- or 64-bit) integers, why not stick to that as the "default" type and switch internally to GMP big ints when needed?</p>
+</blockquote>
+</aside>
+<p>You wouldn't wait because the GMP offers you the allocation of an identity for the number.</p>
+<p>(Though my intent is using mbedTLS BigNums, for smaller code size and because it's what our encryption already uses.)</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/22">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/22</link>
+        <pubDate>Tue, 03 Nov 2020 17:12:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-22</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[drkameleon]]></dc:creator>
+        <description><![CDATA[
+            <p>And here's some bignum handling (the last example shows an int64 overflow):</p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/16ea0a0e70812679c76fa83e3e777d1e3f15bf0b.png" data-download-href="https://forum.rebol.info/uploads/default/16ea0a0e70812679c76fa83e3e777d1e3f15bf0b" title="Screenshot 2020-11-03 at 18.09.25"><img src="https://forum.rebol.info/uploads/default/optimized/1X/16ea0a0e70812679c76fa83e3e777d1e3f15bf0b_2_690x430.png" alt="Screenshot 2020-11-03 at 18.09.25" data-base62-sha1="3gHVJxdFwu3ihLqKz3OPU2sQHB9" width="690" height="430" srcset="https://forum.rebol.info/uploads/default/optimized/1X/16ea0a0e70812679c76fa83e3e777d1e3f15bf0b_2_690x430.png, https://forum.rebol.info/uploads/default/optimized/1X/16ea0a0e70812679c76fa83e3e777d1e3f15bf0b_2_1035x645.png 1.5x, https://forum.rebol.info/uploads/default/optimized/1X/16ea0a0e70812679c76fa83e3e777d1e3f15bf0b_2_1380x860.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/16ea0a0e70812679c76fa83e3e777d1e3f15bf0b_2_10x10.png"><div class="meta"><svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">Screenshot 2020-11-03 at 18.09.25</span><span class="informations">2286×1426 828 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg></div></a></div></p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/21</link>
+        <pubDate>Tue, 03 Nov 2020 17:10:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-21</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[drkameleon]]></dc:creator>
+        <description><![CDATA[
+            <p>I will reply with an example.</p>
+<p>Hint: <code>++</code> stands for <code>append</code> (in Arturo a symbol is nothing but the infix version of a prefix-word)</p>
+<p>a) "normal" append with values.<br>
+b) "in-place" append<br>
+c) "in-place" append after <code>new</code> assignment</p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/2f13ae96d7efe43ab74c197acb0246d5a55a4be1.jpeg" data-download-href="https://forum.rebol.info/uploads/default/2f13ae96d7efe43ab74c197acb0246d5a55a4be1" title="Screenshot 2020-11-03 at 18.01.54"><img src="https://forum.rebol.info/uploads/default/optimized/1X/2f13ae96d7efe43ab74c197acb0246d5a55a4be1_2_545x500.jpeg" alt="Screenshot 2020-11-03 at 18.01.54" data-base62-sha1="6IsBNdCcZNdZFuf70eRNFOwo20p" width="545" height="500" srcset="https://forum.rebol.info/uploads/default/optimized/1X/2f13ae96d7efe43ab74c197acb0246d5a55a4be1_2_545x500.jpeg, https://forum.rebol.info/uploads/default/optimized/1X/2f13ae96d7efe43ab74c197acb0246d5a55a4be1_2_817x750.jpeg 1.5x, https://forum.rebol.info/uploads/default/optimized/1X/2f13ae96d7efe43ab74c197acb0246d5a55a4be1_2_1090x1000.jpeg 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/2f13ae96d7efe43ab74c197acb0246d5a55a4be1_2_10x10.png"><div class="meta"><svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">Screenshot 2020-11-03 at 18.01.54</span><span class="informations">1402×1286 207 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg></div></a></div></p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/20</link>
+        <pubDate>Tue, 03 Nov 2020 17:03:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-20</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="drkameleon" data-post="18" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/drkameleon/40/257_2.png" class="avatar"> drkameleon:</div>
+<blockquote>
+<p>So, in a few words, in this last case, the operation is much more sustainable... and allocation-free (even in the case of bignums).</p>
+</blockquote>
+</aside>
+<p>I'd have to understand what your notion of identity is, and how that identity can be transferred around.</p>
+<p>If I say <strong>x: y</strong> does <strong>add 'x 1</strong> then change <strong>y</strong> as well?  It doesn't seem it would if you didn't a-priori have an allocation of a bignum (or at the very least, force an allocation on that assignment and sync it in both variables).</p>
+<p>If it doesn't transfer, then you have the situation where your in-place mechanics are confined to a single variable name in a single scope, and becomes a new allocation when it leaves the scope.</p>
+<aside class="quote no-group" data-username="drkameleon" data-post="18" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/drkameleon/40/257_2.png" class="avatar"> drkameleon:</div>
+<blockquote>
+<pre><code>; in-place addition
+'b + c
+add 'b c
+</code></pre>
+</blockquote>
+</aside>
+<p>It's good to consider degrees of freedom like this, and how the language parts can be used.</p>
+<p>But an infix addition operator that modifies its left argument seems like an unwanted axis.  And taking a WORD! to ADD seems to me stranger than just being willing to say that all ADDs mutate.</p>
+<p><em>(If you want to use + as prefix, you would write <strong><code>+ -&lt; b c</code></strong> ... <a href="https://forum.rebol.info/t/show-the-love-for-shove/1039">see SHOVE</a>)</em></p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/19</link>
+        <pubDate>Tue, 03 Nov 2020 16:51:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-19</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[drkameleon]]></dc:creator>
+        <description><![CDATA[
+            <p>Regarding what you've mentioned (disclaimer: I have absolutely no idea how Rebol handles this), here's what I'm doing:</p>
+<p>the vast majority of functions (<code>add</code> included) can take either 2 simple values/parameters (in the case, of <code>add</code> 2 <code>:integer</code>/<code>:floating</code> type variables) <strong>or</strong> a literal parameter + another one - or more (in this case, an <code>:integer</code>/<code>:floating</code>).</p>
+<p>In the first case, it would work as usual. In the second case, it would work as an <em>in-place</em> operation:</p>
+<p>e.g.</p>
+<pre><code class="lang-auto">; normal addition
+a: b + c
+a: add b c
+
+; in-place addition
+'b + c
+add 'b c
+</code></pre>
+<p>So, in a few words, in this last case, the operation is much more sustainable... and allocation-free (even in the case of bignums).</p>
+<hr>
+<p>P.S. I'm generally <em>really</em> fond of in-place operations/functions, for speed of course, plus... having a clear distinction (pretty much in a Ruby fashion: see <code>!</code> functions) makes things easiers. I mean... I absolutely hate it when a function modifies a parameter without me explicitly allowing it to, or vice versa. So, simple rules: you pass a literal? That's in-place. If you pass values, then no modification will take place, and the result will basically imply a new allocation or copy.</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/18</link>
+        <pubDate>Tue, 03 Nov 2020 16:32:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-18</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="drkameleon" data-post="16" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/drkameleon/40/257_2.png" class="avatar"> drkameleon:</div>
+<blockquote>
+<p>So, if the most likely scenario is using smaller (32- or 64-bit) integers, why not stick to that as the "default" type and switch internally to GMP big ints when needed?</p>
+</blockquote>
+</aside>
+<p>The question comes down to whether you want to expose the ability to modify a bignum's bits in-place.  If you offer that semantic, then the identity of the integer is important...even if it starts out small...because that identity has to be the same after you've done math to it.  That necessitates an allocation.</p>
+<p>If you don't want to offer that, then you're saying that no matter how big a bignum gets...even adding one to it will have to allocate something the GC has to track.  If someone does a loop with <strong>x: x + 1</strong> and they cross into bignum range...then oh well.  Guess they'll get a lot of allocations.</p>
+<p>If you don't like the sound of that (which I do not) then you have to think of ways to offer in-place variants.  You can do this by making that the M.O. of a separate BIGNUM! type with its own roster of math functions...where you're expected to consciously manage it just like any other type that requires an allocation.  Or you can rethink your INTEGER! so it deals with the concept in some nuanced way.</p>
+<p>My schematic of solution is the latter one:</p>
+<ul>
+<li>Source-level integers are immutable and choose a platform integer representation if possible, otherwise use a copy-on-write allocated bignum.</li>
+<li>Things like <strong>add</strong> are mutating of their first argument.  So <strong>add 1 2</strong> would be illegal.</li>
+<li>Things like <strong>+</strong> don't mutate their first argument, and return an immutable result.  This allows them to make their returned result a platform integer if it can fit.  So <strong>1 + 2</strong> would be legal.</li>
+<li>
+<strong>copy</strong> can make a mutable integer out of an immutable one.  So <strong>add (copy 1) 2</strong> would be legal.</li>
+</ul>
+<p>More details if you read from the top of the thread.</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/17</link>
+        <pubDate>Tue, 03 Nov 2020 15:39:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-17</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[drkameleon]]></dc:creator>
+        <description><![CDATA[
+            <p>Python's approach - everything being a bignum - seems like a total overkill to me.</p>
+<p>Let me put it this way: what are the chances that you <em>will</em> be constantly using bignums, with all the overhead that it brings?</p>
+<p>So, if the most likely scenario is using smaller (32- or 64-bit) integers, why not stick to that as the "default" type and switch internally to GMP big ints when needed?</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/16</link>
+        <pubDate>Tue, 03 Nov 2020 09:03:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-16</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[drkameleon]]></dc:creator>
+        <description><![CDATA[
+            <p>Well, bignum support sounds to me like an absolute must.</p>
+<p>And given that GMP is already there, with thousands of hours invested in the project, why reinvent the wheel?</p>
+<p>In the very initial versions of Arturo, I had 2 distinct types: one for "normal" integers and one for "big" integers. In the end, it proved to be too much fuss.</p>
+<p>Given that we are all aiming for a (very) high-level language, having to struggle with 2 different types of things that are still integers seems to me unnecessarily low-level.</p>
+<p>So, the way Arturo handles things right now: we just have the <code>:integer</code> type. And that's it.</p>
+<p>Whether this <code>:integer</code> is a small integer or a bit integer, or if <code>x + 1</code> leads to an overflow, and all that, is handled internally, without the user having to bother at all, whether a simple integer has 1 or 1001 digits. <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<hr>
+<p><strong>Source:</strong> My father is a mathematician. First thing he always does when trying a language is check the craziest Mersenne he can think of for primality. The test was convincing enough to make me totally eliminate the distinction between integers lol</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/15</link>
+        <pubDate>Tue, 03 Nov 2020 09:00:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-15</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>So from the page on Python I posted before, in Python2 the integer type was a regular integer and when an overflow occurred, it was promoted to a bignum type. In Python3 this construction has been dropped and here all integers are of the bignum type.</p>
+<p>We will have to think over which of these are best suited for Ren-C.</p>
+<p>My view on this is that really most of the time plain integers are good enough for the values that they contain.</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/14</link>
+        <pubDate>Sun, 01 Nov 2020 13:33:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-14</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>Just did a</p>
+<pre><code>locate libgmp.so
+</code></pre>
+<p>on my system, result 96 hits!<br>
+<img src="https://forum.rebol.info/images/emoji/twitter/rofl.png?v=9" title=":rofl:" class="emoji only-emoji" alt=":rofl:"></p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/13</link>
+        <pubDate>Wed, 28 Oct 2020 14:31:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-13</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="iArnold" data-post="11" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>You mentioned the bignum already in the sourcecode <a href="https://github.com/metaeducation/ren-c/blob/master/extensions/crypt/mbedtls/library/bignum.c">it is now here</a> which also could be used. (Except these are all C functions, they are present but how to call them from Ren-C.)</p>
+</blockquote>
+</aside>
+<p>I have a bignum branch where I have a basic concept of how to interoperate with it going.</p>
+<p>There's some issue with it building to Wasm.  (We've never built the crypto extension for Wasm before, so I hadn't run into it.)  It's on my agenda.</p>
+<p>I'm trying to consider if it would be possible to do a build which has no BigNums and just fails on overflow.  I've also wondered about letting people swap in different BigNum implementations.  Really it's still kind of up in the air.</p>
+<aside class="quote no-group" data-username="iArnold" data-post="11" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>The integer when overflow occurs should use this, so operators must know when to use the bignum arithmetic versus the standard routines.</p>
+<p>How would this work given the way integers are handled today?</p>
+</blockquote>
+</aside>
+<p>Overflow detection is non-trivial.  Sometimes there are special functions in the compiler to help you do additions or multiplication with overflow detection...but this varies from one compiler to another and isn't part of the C standard.</p>
+<p>Atronix added some wrappers that would pick compiler functions when available:</p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/master/src/include/sys-int-funcs.h">src/include/sys-int-funcs.h</a></p>
+<p>One disadvantage there is that it makes you say whether you want to use 32-bit or 64-bit math.  I was thinking of using <code>intptr_t</code> so that the 32-bit builds would switch to BigNum at the 32-bit boundary and 64-bit builds at the 64-bit boundary, just so we could say the system could compile on architectures that didn't have 64-bit integers (as not all C embedded platforms do).</p>
+<p>It's still on my mind how to do it...but certainly I'm still committed that an arbitrary precision INTEGER! is non-negotiable for the language.  Just a lot of things to think about...</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/12</link>
+        <pubDate>Tue, 27 Oct 2020 05:04:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-12</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>Been a while since last post about this.</p>
+<p>I found an implementation of bignums up to 1024 bits here<br>
+<a href="https://github.com/kokke/tiny-bignum-c">Tiny Bignum C</a><br>
+and this looks to me like it is tiny indeed and it is relatively easy to understand how this works.<br>
+The GMP MP library was mentioned before and this implementation contains many more functions and also floating points arithmetic and on an on. How this handles growing integers is described on this<br>
+<a href="https://gmplib.org/manual/Integer-Internals#Integer-Internals">GMP MP Internals</a> documentation page. (Erlang also uses the GMP MP).<br>
+(And a <a href="https://www.cs.colorado.edu/~srirams/courses/csci2824-spr14/gmpTutorial.html">tutorial on using GMP</a> )</p>
+<p>Adding a new dependency for something that could be expected to be built in in the next generation of programming languages is not the way a small project is waiting for.</p>
+<p>Maintaining all interfaces/bindings for the new releases of every added library is not what I consider fun in programming.</p>
+<p>You mentioned the bignum already in the sourcecode <a href="https://github.com/metaeducation/ren-c/blob/master/extensions/crypt/mbedtls/library/bignum.c">it is now here</a> which also could be used. (Except these are all C functions, they are present but how to call them from Ren-C.)</p>
+<p>The integer when overflow occurs should use this, so operators must know when to use the bignum arithmetic versus the standard routines.</p>
+<p>How would this work given the way integers are handled today?</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/11</link>
+        <pubDate>Mon, 26 Oct 2020 09:07:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-11</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I would prefer INTEGER! to start out using CPU register-size integers, and instead of erroring on overflows, promote the representation into a bignum...on demand.</p>
+</blockquote>
+</aside>
+<p>cc: <a class="mention" href="/u/mark-hi">@Mark-hi</a></p>
+<p>I was thinking about what these "CPU register-size integers" should be.  :-/</p>
+<p>R3-Alpha tried to standardize on a platform-supported 64-bit integer, prior to formal C99 specification of the int64_t type.  So it figured out based on <code>long long</code> and <code>long</code> and other factors what got you 64-bits on a practical set of compilers.  <em>(We still do that when C99 isn't available, but use a portable version of <code>&lt;stdint.h&gt;</code> written by other people...which uses the agreed upon names, and has even more platforms accounted for.)</em></p>
+<p>But even if you're targeting "guaranteed" C99, things aren't as obvious as you might think:</p>
+<p><a href="https://en.cppreference.com/w/c/types/integer" rel="nofollow noopener">https://en.cppreference.com/w/c/types/integer</a></p>
+<p>First of all, the platform need not provide a data type that's <em>exactly</em> any particular size...only <em>at least</em> a certain size.  If you want to line things up in memory one 32-bit thing after another, you might find that <code>int32_t</code> isn't defined -- yet your compiler is still standard C99.  :-/</p>
+<p>Moreover, it sounds like some platforms that say they're C99-ish don't offer 64-bit types.</p>
+<p>Next we get into the notion of whether we're looking to prolong the range for which a bignum need not be made, or to figure a 33-bit type is big enough that it might as well be a 128-bit type for all we care.  This might make us want to use <code>int32_fast_t</code> so that math is the fastest that can provided and still do 32-bit numeric calculations.</p>
+<p>But... then there's the fact that INTEGER! has been a surrogate for a proper POINTER! in the FFI.  This makes it seem like pointer-sized integers could be the smartest choice.  But if you read the fine print, once again C99 is not guaranteed to provide <code>intptr_t</code> as pointer-sized integers!</p>
+<p>However, there are lots of <code>intptr_t</code> used internally to the code; this is in order to try to lay out structures at nice alignments that don't skew pointer fields.  So it's basically a dependency.</p>
+<h2>I think intptr_t is probably best</h2>
+<p>R3-Alpha tried to standardize on a 64-bit value based on the idea that it would keep users from worrying about the differences in their code based on 32-bit vs. 64-bit platforms.</p>
+<p>With BigNums as the user-exposed abstraction for INTEGER!, then it's actually a benefit <em>not</em> to standardize the internals to one bit size.  Making sure the C code doesn't assume the size of the native non-bignum format helps ensure builds are being tested that can take available of different sizes.</p>
+<p>By using an intptr_t type, that has the benefit of knowing your integer can represent a platform pointer without having to instantiate a bignum.  Space-wise, it leaves a series slot on the table in the integer cell...32 "wasted" bits on 32-bit platforms and 64 "wasted" bits on 64-bit platforms.  That might seem bad, -but- if it stays available then it's big enough for a pointer or other data that could help it in other creative ways or optimizations.  Leaving room for that isn't a bad thing...</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/10</link>
+        <pubDate>Sat, 19 Sep 2020 17:48:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-10</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="8" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>For the record I am adding the link that I posted in the chat that describes the working of the bignum in Python. <a href="https://rushter.com/blog/python-integer-implementation/" rel="nofollow noopener">https://rushter.com/blog/python-integer-implementation/</a></p>
+</blockquote>
+</aside>
+<p>Good to look at.  However, the BigNum implementation most relevant to build on is the one that is in mbedTLS:</p>
+<p><a href="https://github.com/ARMmbed/mbedtls/blob/development/include/mbedtls/bignum.h" rel="nofollow noopener">/include/mbedtls/bignum.h</a><br>
+<a href="https://github.com/ARMmbed/mbedtls/blob/development/include/mbedtls/bn_mul.h" rel="nofollow noopener">/include/mbedtls/bn_mul.h</a><br>
+<a href="https://github.com/ARMmbed/mbedtls/blob/development/library/bignum.c" rel="nofollow noopener">/library/bignum.c</a></p>
+<p>What's advantageous about this library is that it's written in pure C, maintained for bugs, and is also used in the mbedTLS cryptography.</p>
+<p>I've poked a bit into it to look at how it might be integrated...and it's awfully tempting to try and hack it up just a little bit so that it leverages some of the trickery in the guts of Ren-C.  However, those temptations are probably misguided in the near term... and it's better to leave the files unmodified and save that optimization for later.</p>
+<p>But I definitely think the writing is on the wall that trying to establish some common denominator of 64-bit integers on 32-bit platforms as well as 64-bit ones is basically a fool's errand.  You either use integers the size of your pointers...or if that's not enough you go to bignums.</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/9</link>
+        <pubDate>Mon, 14 Sep 2020 23:48:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-9</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>For the record I am adding the link that I posted in the chat that describes the working of the bignum in Python. <a href="https://rushter.com/blog/python-integer-implementation/" rel="nofollow noopener">https://rushter.com/blog/python-integer-implementation/</a></p>
+<p>In short this comes down to using base 2^30</p>
+<blockquote>
+<p>The representation of 123456789101112131415 will look as follows:</p>
+<pre><code>ob_size 3
+ob_digit 437976919 87719511 107
+</code></pre>
+<p>Algorithm of converting our representation back:</p>
+<pre><code>(437976919∗2^(30∗0))+(87719511∗2^(30∗1))+(107∗2^(30∗2))
+</code></pre>
+</blockquote>
+<p>In PHP a module bcmath is optionally available</p>
+<p><a href="https://www.php.net/manual/en/book.bc.php" rel="nofollow noopener">BCMath Arbitrary Precision Mathematics</a></p>
+<pre><code>This extension is an interface to the GNU implementation 
+as a library of the Basic Calculator utility by Philip Nelson; hence the name.</code></pre>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/8</link>
+        <pubDate>Sun, 13 Sep 2020 08:11:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-8</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p>Just for your information.</p>
+</blockquote>
+<p>Another Brian doing a pretty good job of 'xplainin;</p>
+<div class="lazyYT" data-youtube-id="ZhuHCtR3xq8" data-youtube-title="Brian Beckman: Don't fear the Monad" data-width="480" data-height="270" data-parameters="feature=oembed&amp;wmode=opaque"></div>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/7</link>
+        <pubDate>Wed, 25 Mar 2020 10:15:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-7</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p>Just for your information.<br>
+There is a <em>big</em> difference between needing the result of c^d mod n and obtaining said result by modding c^d by n. Nobody does the latter, for good reason: most of the work in calculating c^d is useless wasted effort. Instead, the calculation is done incrementally, multiplying by c and reducing it to a remainder every time the product exceeds n. So it is <em>always</em> a single operation (function) that takes three arguments, and <em>never</em> an expression with the two operators "power" and "modulo".<br>
+Still need the bignum math though, since in typical usage c, d, and n are all many, many digits.</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/6</link>
+        <pubDate>Tue, 24 Mar 2020 23:49:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-6</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>I recently had a look at erlang where I had a look at the tail recursion for factorial calculation.<br>
+Basically it had to do with calculating the value that results in a number that is far too big for a normal INT or even a float, giving about 1750 digits.<br>
+The code is as expected: (in fac_func.erl)<br>
+-module(fac_func).<br>
+-export([another_factorial/1]).<br>
+another_factorial(0) -&gt; 1;<br>
+another_factorial(N) -&gt; N * another_factorial(N-1).<br>
+1&gt; c(fac_func).<br>
+{ok,fac_func}<br>
+2&gt; fac_func:another_factorial(200).<br>
+788657867364790503552363213932185062295135977687173263294742533244359449963403342920304284011984623904177212138919638830257642790242637105061926624952829931113462857270763317237396988943922445621451664240254033291864131227428294853277524242407573903240321257405579568660226031904170324062351700858796178922222789623703897374720000000000000000000000000000000000000000000000000<br>
+3&gt; fac_func:another_factorial(2000).<br>
+331627509245063324117539338057632403828111720810578039457193543706038077905600822400273230859732592255402352941225834109258084817415293796131386633526343688905634058556163940605117252571870647856393544045405243957467037674108722970434684158343752431580877533645127487995436859247408032408946561507233250652797655757179671536718689359056112815871601717232657156110004214012420433842573712700175883547796899921283528996665853405579854903657366350133386550401172012152635488038268152152246920995206031564418565480675946497051552288205234899995726450814065536678969532101467622671332026831552205194494461618239275204026529722631502574752048296064750927394165856283531779574482876314596450373991327334177263608852490093506621610144459709412707821313732563831572302019949914958316470942774473870327985549674298608839376326824152478834387469595829257740574539837501585815468136294217949972399813599481016556563876034227312912250384709872909626622461971076605931550201895135583165357871492290916779049702247094611937607785165110684432255905648736266530377384650390788049524600712549402614566072254136302754913671583406097831074945282217490781347709693241556111339828051358600690594619965257310741177081519922564516778571458056602185654760952377463016679422488444485798349801548032620829890965857381751888619376692828279888453584639896594213952984465291092009103710046149449915828588050761867924946385180879874512891408019340074625920057098729578599643650655895612410231018690556060308783629110505601245908998383410799367902052076858669183477906558544700148692656924631933337612428097420067172846361939249698628468719993450393889367270487127172734561700354867477509102955523953547941107421913301356819541091941462766417542161587625262858089801222443890248677182054959415751991701271767571787495861619665931878855141835782092601482071777331735396034304969082070589958701381980813035590160762908388574561288217698136182483576739218303118414719133986892842344000779246691209766731651433494437473235636572048844478331854941693030124531676232745367879322847473824485092283139952509732505979127031047683601481191102229253372697693823670057565612400290576043852852902937606479533458179666123839605262549107186663869354766108455046198102084050635827676526589492393249519685954171672419329530683673495544004586359838161043059449826627530605423580755894108278880427825951089880635410567917950974017780688782869810219010900148352061688883720250310665922068601483649830532782088263536558043605686781284169217133047141176312175895777122637584753123517230990549829210134687304205898014418063875382664169897704237759406280877253702265426530580862379301422675821187143502918637636340300173251818262076039747369595202642632364145446851113427202150458383851010136941313034856221916631623892632765815355011276307825059969158824533457435437863683173730673296589355199694458236873508830278657700879749889992343555566240682834763784685183844973648873952475103224222110561201295829657191368108693825475764118886879346725191246192151144738836269591643672490071653428228152661247800463922544945170363723627940757784542091048305461656190622174286981602973324046520201992813854882681951007282869701070737500927666487502174775372742351508748246720274170031581122805896178122160747437947510950620938556674581252518376682157712807861499255876132352950422346387878954850885764466136290394127665978044202092281337987115900896264878942413210454925003566670632909441579372986743421470507213588932019580723064781498429522595589012754823971773325722910325760929790733299545056388362640474650245080809469116072632087494143973000704111418595530278827357654819182002449697761111346318195282761590964189790958117338627206088910432945244978535147014112442143055486089639578378347325323595763291438925288393986256273242862775563140463830389168421633113445636309571965978466338551492316196335675355138403425804162919837822266909521770153175338730284610841886554138329171951332117895728541662084823682817932512931237521541926970269703299477643823386483008871530373405666383868294088487730721762268849023084934661194260180272613802108005078215741006054848201347859578102770707780655512772540501674332396066253216415004808772403047611929032210154385353138685538486425570790795341176519571188683739880683895792743749683498142923292196309777090143936843655333359307820181312993455024206044563340578606962471961505603394899523321800434359967256623927196435402872055475012079854331970674797313126813523653744085662263206768837585132782896252333284341812977624697079543436003492343159239674763638912115285406657783646213911247447051255226342701239527018127045491648045932248108858674600952306793175967755581011679940005249806303763141344412269037034987355799916009259248075052485541568266281760815446308305406677412630124441864204108373119093130001154470560277773724378067188899770851056727276781247198832857695844217588895160467868204810010047816462358220838532488134270834079868486632162720208823308727819085378845469131556021728873121907393965209260229101477527080930865364979858554010577450279289814603688431821508637246216967872282169347370599286277112447690920902988320166830170273420259765671709863311216349502171264426827119650264054228231759630874475301847194095524263411498469508073390080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000<br>
+4&gt;</p>
+<p>Is this what you have in mind?</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/5</link>
+        <pubDate>Tue, 24 Mar 2020 20:39:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-5</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>After 8 months since I posted about it, PLUS still <em>seems</em> sound</p>
+</blockquote>
+</aside>
+<p>It's been a year since I've weighed in on the ideas surrounding BigNum arithmetic.  But we still need it, and the idea that written-in-C Rebol extensions can always lean on INTEGER! via libRebol to get their fast BigNum math is very appealing.  Look at how you have to write <code>m = c^d mod n</code> in the <a href="https://github.com/metaeducation/ren-c/blob/4ad92eb807ba30dd42b56c5e0c0bed4e44395b2f/extensions/crypt/rsa/rsa.c#L259" rel="nofollow noopener">Crypt module's rsa.c</a>:</p>
+<pre><code>bigint *RSA_private(const RSA_CTX *c, bigint *bi_msg)
+{
+#ifdef CONFIG_BIGINT_CRT
+    return bi_crt(c-&gt;bi_ctx, bi_msg, c-&gt;dP, c-&gt;dQ, c-&gt;p, c-&gt;q, c-&gt;qInv);
+#else
+    BI_CTX *ctx = c-&gt;bi_ctx;
+    ctx-&gt;mod_offset = BIGINT_M_OFFSET;
+    return bi_mod_power(ctx, bi_msg, c-&gt;d);
+#endif
+}
+</code></pre>
+<p>If your bigints were just <code>REBVAL*</code> to INTEGER!, you could say:</p>
+<pre><code> rebValue(c, "pow", d, "mod", n)
+</code></pre>
+<p>I picked a small sample as the tip of that iceberg, and if you look around in that file you can see just what a PITA the <code>bi_xxx</code> routines are when it comes to allocation, freeing, etc.</p>
+<p><strong>Arbitrary precision the way of the world now, and the BigNums our TLS uses should be the same BigNums the language uses, or we are failing.</strong></p>
+<hr>
+<p>The main musing I've been having is that we may not want to tie ourselves to any one BigNum implementation.  Some are lighter, some are heavier.  We <em>could</em> make  BIGNUM! an extension-provided type distinct from INTEGER! (as Red does) and force you into a conscious decision of which you are using... thus allowing you to compile with or without it.  But I don't like this line of thinking.</p>
+<p>An alternative would be to have an overflow/underflow hook for the native integer math.  The default would just FAIL...so you could build a thin Rebol that only worked with platform ints.  But if an extension registered a hook, then the overflow would pass control to the extension to re-engineer the cell to point to a dynamic structure of its choice.  You could build with one-and-only-one such hook installed (could be enforced by the uniqueness requirements of linking, and the "NoBigInt Extension" could be the extension that just gave the dummy that fails).</p>
+<p>(Demoting back to a platform-sized int would be at the discretion of the extension when handing back a result from any math operation.)</p>
+<p>Anyway: just wanted to mention this interesting point about switching it around so that any C powered crypto escapes out to use Rebol INTEGER! to back its arithmetic operations, via calls to libRebol.</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/4</link>
+        <pubDate>Tue, 04 Feb 2020 21:10:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-4</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-username="hostilefork" data-post="1" data-topic="623">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I would prefer INTEGER! to start out using CPU register-size integers, and instead of erroring on overflows, promote the representation into a bignum…on demand.</p>
+</blockquote>
+</aside>
+<p>This is another one of those "things that have to get figured out before Beta/One".</p>
+<h2>We don't actually need the implementation to be bignum yet...</h2>
+<p>...moreover I don't think there's time for it.  There's just too much to do.  <em>(It's looking like a fully insane promise to ship this year as it is...adding and vetting BigNums is one of those things that could take months on its own!)</em></p>
+<p>The only thing we <em>need</em> for Beta/One is the operators to be consistent with how they'd work w.r.t. the numeric mutability a bignum-based system would require.</p>
+<p>Remember the rationale...you don't want to do a loop like:</p>
+<pre><code> bignum: 123456789012345678901234567890
+ loop 1000000 [
+     bignum: bignum + 1
+ ]
+</code></pre>
+<p>You'd rather have <em>one</em> bignum that's getting incremented, not a million dynamically allocated bignums that have to be copied on each addition.  Conceptually think of it like doing math operators on a big vector of numbers and not wanting to make a copy each time.  Except it's a big vector of digits representing a single number.</p>
+<p>Today ADD is not mutating:</p>
+<pre><code> foo: func [x [integer!]] [add x 1]
+ smallnum: 0
+ foo smallnum
+ print smallnum  ; prints 0, unaffected
+</code></pre>
+<p>But I'm proposing ADD be the prefix mutating operator on arbitrary-precision integers (and vectors, and anything else you might ADD to).  So this <em>could</em> run and print 1, without raising an error.</p>
+<p>However, I think the default for this code should be to raise an error on the ADD.  It seems to me that this <em>very strongly parallels</em> the inadvertent mutation of source blocks.  Except here you'd be mutating the 0 that's referenced by the memory cell between <code>smallnum:</code> and <code>foo</code> (!)</p>
+<p>Note that I said "that's referenced by the memory cell" and not "that lives in the memory cell".  This is a very good argument for having source integers be LOCK'd...<em>not</em> CONST.  Because if there's any chance people wanted to be thinking about someone having a "reference" to that integer down the line and wanting to influence it through that reference, they had to be handed some kind of indirection from the get-go.  But if it was permanently locked and fit in a cell, then it will always fit in a cell--no indirection needed.</p>
+<p>But once you've gone ahead and made your COPY of that INTEGER! from a cell, you can do all the CONST and MUTABLE on it you like.  You paid for the node, might as well use it.</p>
+<h2>After 8 months since I posted about it, PLUS still <em>seems</em> sound</h2>
+<p>Having PLUS as the prefix form of +, as a non-modifying variant of ADD, probably handles things.  You don't see a tremendous number of ADD and SUBTRACT calls in source anyway, so changing them to PLUS and MINUS doesn't seem like that big a deal.</p>
+<p>A naive version of PLUS would look like this:</p>
+<pre><code>plus: chain [adapt 'add [value1: copy value1 | :lock]]
++: enfix :plus
+</code></pre>
+<p>That's naive because it's paying the cost we want to avoid for small numbers...namely creating an indirection node for an ephemeral mutable value, that's only going to get locked later.  To get the performance we're used to on basic numeric operations on CPU-sized numbers, PLUS has to be smarter than this:</p>
+<pre><code>plus: chain [
+    adapt 'add [
+         if integer? :value [return plus-integer-optimized value1 value2]
+         value: copy value1
+    ] | :lock
+]
+</code></pre>
+<p>So something more like that, but in native code.  It should only promote cell-sized integers to memory indirections via COPY if it absolutely has to.</p>
+<p><em>(Again: today's memory indirections would not be BigNums and all the issues they bring into this, but just 64-bit integers...to get the interface right so bignums would have the right foundation to work.)</em></p>
+<h2>This needs review and doing if it's going to be done.</h2>
+<p>What would be very helpful to me would be if someone could learn a bit more about Red's BIGNUM! and give me a summary of it, and raise any relevant challenges to my proposal here.  I'd like to know about any hard down-the-road issues that are going to come up on integrating bignums into Rebol before I start.  We need a table of names for everything and an understanding of which operators on numbers today would modify and which would not.</p>
+<h2>...afterthought: could this make us build fully standard C89?</h2>
+<p>One of the "won't build on older C compilers" aspects of R3-Alpha is its use of <code>long long</code>, in order to try and standardize to a 64-bit INTEGER! type.  If that standard were removed (by having arbitrary precision on all platforms) then long long could be optional; using whatever maximum legal int there was.</p>
+<p>We might envision a world where if all the <code>//</code> comments were merely auto-translated into <code>/* ... */</code>, the codebase would have only one issue keeping it from being fully C89 pedantic... the use of declarations after statements within a code block.   Technically speaking, a simple auto-generator could probably take care of that too... just introduce a new scope each time it happens (!)</p>
+<pre><code> void foo() {
+     int x = 1;
+     x = x + 1;
+     int y = 2;
+     y = y + 2;
+ }
+</code></pre>
+<p>That gives:</p>
+<pre><code>test.c:4:10: warning: ISO C90 forbids mixed declarations and code [-Wdeclaration-after-statement]
+      int y = 2;
+      ^~~
+</code></pre>
+<p>But if it were auto-transform'd:</p>
+<pre><code> void foo() {
+     int x = 1;
+     x = x + 1;
+     { int y = 2;
+     y = y + 2; }
+ }
+</code></pre>
+<p>That would be fine!   If you have the interest, <a class="mention" href="/u/mark-hi">@Mark-hi</a>, you might look at <a class="mention" href="/u/brett">@Brett</a>'s <a href="https://github.com/metaeducation/ren-c/blob/4588ce18d76ae20ece29edfbc20f148c27104d0c/make/tools/c-lexicals.r">C lexicals</a> and see if you could twist that to make a PARSE-based preprocessor that can transform the existing sources to build as C89 w.r.t. declaration after statement and comments.  Then when bignum gets rid of the long long dependency, it'll be possible.</p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/3</link>
+        <pubDate>Sun, 06 Jan 2019 06:40:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-3</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+      <item>
+        <title>Planning Ahead for BigNum INTEGER!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've long been an advocate for the idea that INTEGER! should be an <a href="https://en.wikipedia.org/wiki/Arbitrary-precision_arithmetic">arbitrary precision implementation</a>.  It doesn't make sense to me why a high-level language which is targeting future applications would constrain itself to 32-bit, or (in R3-Alpha's case) 64-bit INTEGER! values.  I've been trying--for instance--to <a href="https://trello.com/c/I6Y3NWlR">"futureproof" conversions of INTEGER! to BINARY!</a>, in anticipation of the change.</p>
+<p>Now, due to Red's desire to be involved in cryptocurrency, they are adding BIGNUM! as a distinct datatype from INTEGER!.  Which is not the way I would do it.  INTEGER! already has to detect math overflows in order to give an error when your math is out of range.  <strong>I would prefer INTEGER! to start out using CPU register-size integers, and instead of erroring on overflows, promote the representation into a bignum...on demand.</strong></p>
+<h3>The Identity Problem</h3>
+<p>I suggested that INTEGER! could not hurt for performance for most applications, if it was merely promoted to bignum internal representations on overflow.  But there's an issue of identity in bignum operations.</p>
+<p>Today this is the behavior for integers:</p>
+<pre><code> foo: func [x [integer!]] [add x 1]
+ smallnum: 0
+ foo smallnum
+ print smallnum  ; prints 0, unaffected
+</code></pre>
+<p>So each integer cell has its own identity (as an ANY-IMMEDIATE!, <a href="https://en.wikipedia.org/wiki/Value_(computer_science)#R-values_and_addresses">"immediate value"</a>).</p>
+<p><strong>ADD</strong> or <strong>+</strong> do not go in and fiddle the bits in a way that is seen by "other instances of that integer", the way that <strong>APPEND</strong> reaches into the "data node" behind a series and affects all instances.</p>
+<p>But with BigNums, making a new identity on each addition can be costly:</p>
+<pre><code>bignum: 123456789012345678901234567890
+loop 1000000 [
+    bignum: bignum + 1
+]
+</code></pre>
+<p>How many bignum structures should that be "malloc()" ing?  Naively done, that would be a million or more allocations, because each addition in Rebol is expected to produce a new-and-disconnected integer.</p>
+<p>Getting around this by making ADD mutate BigNum--when it doesn't mutate other things--seems inconsistent.  It's not  a new problem, there were some issues with ADD of VECTOR!.  In Red too, see <a href="https://github.com/red/red/issues/2216">"Adding a number to a vector changes the vector itself"</a></p>
+<h3>Proposal: Mutating ADD, non-mutating +</h3>
+<p>The thought I had would be that INTEGER!s would not be immediate by their nature, but that literals would be LOCK'd by default.</p>
+<pre><code> &gt;&gt; x: 10
+ &gt;&gt; add x 20
+ ** Error, locked integer
+
+ &gt;&gt; x: make integer! 10
+ &gt;&gt; add x 20
+ &gt;&gt; print x
+ 30
+</code></pre>
+<p>Then, + would basically be using ADD with a COPY, and locking the result:</p>
+<pre><code> +: enfix func [a b] [
+     lock add copy a b
+ ]
+</code></pre>
+<p>For non-bignums, this could be optimized internally so that if the input was a register-size integer...and the output was a register-size integer...no identity node ever need be created.</p>
+<p>So someone can still do an inefficient bignum loop with +, if they really wanted to.  But a savvy crypto-person would use ADD so they are modifying the existing bignum in place.</p>
+<p>What this does is bolster Rebol's "mutability by default" story about operations like APPEND, bringing it further to ADD.  It addresses the issue with VECTOR!, by saying that <strong>+</strong> will create a new vector while <strong>add</strong> would mutate the existing one.  And it avoids introducing a new BIGNUM! datatype.</p>
+<p>Like other changes, this can be skinned with Rebol2/R3-Alpha compatibility to make <strong>add 1 2</strong> work in old code that needs it to.</p>
+<p><em>(Note: as a side-benefit, this could remove the need for 64-bit math emulation code on 32-bit platforms.  Currently, in an I-believe-to-be-misguided-standardization-effort, Rebol has tried to give those using the interpreter a baseline confidence that INTEGER! has 64-bit representation...even if that's not the native integer type.  All that code could go, replaced by bignum code that's needed anyway, if you have any cryptography.)</em></p>
+          <p><a href="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623/1</link>
+        <pubDate>Tue, 15 May 2018 16:01:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-623-1</guid>
+        <source url="https://forum.rebol.info/t/planning-ahead-for-bignum-integer/623.rss">Planning Ahead for BigNum INTEGER!</source>
+      </item>
+  </channel>
+</rss>

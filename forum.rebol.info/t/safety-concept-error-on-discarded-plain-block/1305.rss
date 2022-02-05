@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Safety Concept: Error on discarded plain BLOCK! ?</title>
+    <link>https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305</link>
+    <description>I just had a bug that was rather frustrating to find.  I changed:
+
+    foo: func [
+        {Description}
+        param [...]
+        /refine
+    ][
+        ...
+    ]
+
+into:
+
+    foo-core: func [
+        {Description}
+        param [...]
+        /refine
+    ][
+        ...
+    ]
+
+    foo: adapt &#39;foo-core [
+        {Description}
+    ][
+        ...
+    ]
+
+**But ADAPT doesn&#39;t take two parameters.**  I should have eliminated the &quot;spec&quot; block from the ADAPT entirely, but I only deleted the parameters.  This effectively gave me:
+
+    foo: adapt &#39;foo-core [
+        {Description}
+    ]  ; &quot;spec&quot; block treated as the adapt &quot;prelude&quot;
+
+    [...]  ; stray random block, thrown out
+
+There&#39;s no warning in this case, because a plain BLOCK! evaluates to a plain BLOCK! and gets thrown out.
+
+## There&#39;s nothing we can do.  Or... is there?
+
+This kind of thing almost always represents an error.  This got me to wondering about generalized quoting.  Might it help us?
+
+*What if plain unevaluated BLOCK! was an error in evaluation if it was not a parameter to anything, and not a result of anything*...?
+
+So maybe this would be an error:
+
+    all [
+        a = b
+        c = d
+        [this block does nothing]
+    ]
+
+But this would not:
+
+    data: all [
+        a = b
+        c = d
+        [assignment target, it&#39;s okay]
+    ]
+
+And this would also be fine:
+
+    foo: func [return: [block!] a b c d] [
+        all [
+            a = b
+            c = d
+            [result of function so it gets used]
+        ]
+    ]
+
+Maybe quoting could let you subvert the rule:
+
+     all [
+        a = b
+        c = d
+        &#39;[just throw this out, don&#39;t complain]
+    ]
+
+Note COMPOSE has power for this kind of thing built-in:
+
+     block: [thing to throw out]
+     data: all compose [
+        a = b
+        c = d
+        &#39;(block)  ; the tick would also suppress ACTION! evaluation, etc.
+    ]
+
+I don&#39;t know if the QUOTED! exemption is necessary or not, because this could run into problems as well of throwing out a quoted thing.
+
+**Challenge: when is non-evaluation utilized?**
+
+There&#39;s been some play with the fact that things don&#39;t evaluate to make constructs that have markup in them.  Think of for example a modification of EITHER that lets you label the branches:
+
+     my-either condition [&lt;tag&gt; ...code...] [&lt;tag&gt; ...code...]
+
+Skipping the tag silently might be considered a feature, because the code is looked at.  I don&#39;t know, maybe having to skip that tag before executing is better practice.
+
+Just asking the philosophical question here of &quot;why is throwing away inert interstitial expressions of great value&quot;.  We have ELIDE and COMMENT.  Might we do more for the sanity of the language if we noticed and errored if values were being silently discarded?
+
+*Usually trying to implement a rule like this shows problematic cases, but I tend to write it up as a way of seeing if I can talk myself out of it by coming up with a disproof before bothering to try writing it...*</description>
+    
+    <lastBuildDate>Mon, 29 Nov 2021 13:58:11 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Safety Concept: Error on discarded plain BLOCK! ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>And yet again I get bit by this...</p>
+<p>I was adding functionality to make UPARSE able to work on PATH!, TUPLE!, and URL!.</p>
+<p>Here was what I wrote:</p>
+<pre><code>case [
+    any-sequence? input [input: as block! input]
+    url? input [input: as text! input]
+]
+</code></pre>
+<p>Seems simple enough, but I had perplexing problems that took way too long to sort out.</p>
+<p><strong>Turns out it's because UPARSE has a /CASE refinement (like PARSE)</strong></p>
+<p>So CASE was simply either <strong>NULL</strong> or a <strong>#</strong> meant it was evaluated and discarded, and that block never evaluated.</p>
+<p>I'm sure having a stepwise debugger would help.  But still, I wonder if there's something we could do.  A customizable evaluator hook, where you can pick if you want warnings on this?  I dunno.</p>
+          <p><a href="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305/4</link>
+        <pubDate>Mon, 29 Nov 2021 13:58:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1305-4</guid>
+        <source url="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305.rss">Safety Concept: Error on discarded plain BLOCK! ?</source>
+      </item>
+      <item>
+        <title>Safety Concept: Error on discarded plain BLOCK! ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1305">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<ul>
+<li>for blocks as a quick way to comment out big chunks of code during debugging, and</li>
+<li>for strings as an experiment to get "live" comments which could be inspected during runtime.</li>
+</ul>
+</blockquote>
+</aside>
+<p><code>comment [...]</code> and <code>comment {...}</code> cover both uses; as the code remains in the source and would be inert in evaluative contexts.  Though not as "quick".  I'd proposed <code>**</code> as being a "comment-to-end-of-line" operator at one time, which I haven't really pushed on...but for quickness, it would help.</p>
+<p>I'd suggest that if you are doing some kind of debug session then making:</p>
+<p><code>!!debug-foo: :comment</code></p>
+<p>Or something more visible might be good to use.  Because you could have that at the top of the file. Then everywhere you were debugging something relative to a FOO problem, you would notice that you'd left the commenting-out in.</p>
+          <p><a href="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305/3</link>
+        <pubDate>Mon, 20 Jul 2020 23:31:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1305-3</guid>
+        <source url="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305.rss">Safety Concept: Error on discarded plain BLOCK! ?</source>
+      </item>
+      <item>
+        <title>Safety Concept: Error on discarded plain BLOCK! ?</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I  have used this feature</p>
+<ul>
+<li>
+<p>for blocks as a quick way to comment out big chunks of code during debugging, and</p>
+</li>
+<li>
+<p>for strings as an experiment to get "live" comments which could be inspected during runtime.</p>
+</li>
+</ul>
+<p>I am not sure how these usages weigh against finding the class of errors you mention above.</p>
+          <p><a href="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305/2</link>
+        <pubDate>Mon, 20 Jul 2020 16:26:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1305-2</guid>
+        <source url="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305.rss">Safety Concept: Error on discarded plain BLOCK! ?</source>
+      </item>
+      <item>
+        <title>Safety Concept: Error on discarded plain BLOCK! ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I just had a bug that was rather frustrating to find.  I changed:</p>
+<pre><code>foo: func [
+    {Description}
+    param [...]
+    /refine
+][
+    ...
+]
+</code></pre>
+<p>into:</p>
+<pre><code>foo-core: func [
+    {Description}
+    param [...]
+    /refine
+][
+    ...
+]
+
+foo: adapt 'foo-core [
+    {Description}
+][
+    ...
+]
+</code></pre>
+<p><strong>But ADAPT doesn't take two parameters.</strong>  I should have eliminated the "spec" block from the ADAPT entirely, but I only deleted the parameters.  This effectively gave me:</p>
+<pre><code>foo: adapt 'foo-core [
+    {Description}
+]  ; "spec" block treated as the adapt "prelude"
+
+[...]  ; stray random block, thrown out
+</code></pre>
+<p>There's no warning in this case, because a plain BLOCK! evaluates to a plain BLOCK! and gets thrown out.</p>
+<h2>There's nothing we can do.  Or... is there?</h2>
+<p>This kind of thing almost always represents an error.  This got me to wondering about generalized quoting.  Might it help us?</p>
+<p><em>What if plain unevaluated BLOCK! was an error in evaluation if it was not a parameter to anything, and not a result of anything</em>...?</p>
+<p>So maybe this would be an error:</p>
+<pre><code>all [
+    a = b
+    c = d
+    [this block does nothing]
+]
+</code></pre>
+<p>But this would not:</p>
+<pre><code>data: all [
+    a = b
+    c = d
+    [assignment target, it's okay]
+]
+</code></pre>
+<p>And this would also be fine:</p>
+<pre><code>foo: func [return: [block!] a b c d] [
+    all [
+        a = b
+        c = d
+        [result of function so it gets used]
+    ]
+]
+</code></pre>
+<p>Maybe quoting could let you subvert the rule:</p>
+<pre><code> all [
+    a = b
+    c = d
+    '[just throw this out, don't complain]
+]
+</code></pre>
+<p>Note COMPOSE has power for this kind of thing built-in:</p>
+<pre><code> block: [thing to throw out]
+ data: all compose [
+    a = b
+    c = d
+    '(block)  ; the tick would also suppress ACTION! evaluation, etc.
+]
+</code></pre>
+<p>I don't know if the QUOTED! exemption is necessary or not, because this could run into problems as well of throwing out a quoted thing.</p>
+<p><strong>Challenge: when is non-evaluation utilized?</strong></p>
+<p>There's been some play with the fact that things don't evaluate to make constructs that have markup in them.  Think of for example a modification of EITHER that lets you label the branches:</p>
+<pre><code> my-either condition [&lt;tag&gt; ...code...] [&lt;tag&gt; ...code...]
+</code></pre>
+<p>Skipping the tag silently might be considered a feature, because the code is looked at.  I don't know, maybe having to skip that tag before executing is better practice.</p>
+<p>Just asking the philosophical question here of "why is throwing away inert interstitial expressions of great value".  We have ELIDE and COMMENT.  Might we do more for the sanity of the language if we noticed and errored if values were being silently discarded?</p>
+<p><em>Usually trying to implement a rule like this shows problematic cases, but I tend to write it up as a way of seeing if I can talk myself out of it by coming up with a disproof before bothering to try writing it...</em></p>
+          <p><a href="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305/1</link>
+        <pubDate>Sat, 18 Jul 2020 19:16:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1305-1</guid>
+        <source url="https://forum.rebol.info/t/safety-concept-error-on-discarded-plain-block/1305.rss">Safety Concept: Error on discarded plain BLOCK! ?</source>
+      </item>
+  </channel>
+</rss>

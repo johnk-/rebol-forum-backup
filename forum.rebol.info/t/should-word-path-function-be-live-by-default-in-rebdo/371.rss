@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</title>
+    <link>https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371</link>
+    <description>*To make a medium-size story short:* **No, I don&#39;t believe so.**
+
+&gt; **Beta/One Update March 2019**: The final decision is to give people the choice; all operators come in &quot;live&quot; and &quot;quoted&quot; forms.  The live forms have names like `rebRun()` or `rebSpell()`.  The quoting forms have names like `rebRunQ()` or `rebSpellQ()`.  Additional rebQ()-quoting and rebU()-unquoting operators let you raise or lower the quoting level of splices in mid-expression.
+&gt;
+&gt;  Hence one could say &quot;I&#39;ve changed my mind&quot; because the &quot;default&quot; without the Q is to splice the value as-is.  But it&#39;s been made as easy as a single letter to make the choice, so certainly making it easy is still a priority.  [See the complete rationale here](https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebrun-and-rebrunq/1095)
+
+---
+
+*To make a medium-size story long:* ...
+
+Let&#39;s imagine you have a simple situation that generates a function and stores it in an API handle value:
+
+    REBVAL *foo = rebDo(&quot;function [x] [print x]&quot;, END);
+ 
+What should happen if you tried to use a SET-WORD! in code to assign it to another variable?
+
+    rebDo(&quot;also-foo:&quot;, foo, END);
+
+Perhaps one thinks that looks most like accessing a function through a WORD! `foo`.  That might imply referring to it by its C variable name would *execute* it by default.  Hence the burden would be upon you to do some kind of trick to &quot;disarm&quot; it, such as:
+
+    rebDo(&quot;also-foo: quote&quot;, foo, END);
+
+However, the idea that referring to the C variable name executes it is *not* generally what happens.  Had you written code as a simple C assignment:
+
+    REBVAL *also_foo = foo;
+
+`foo` would not try to execute, and it can&#39;t.  In plain C there&#39;s no opportunity for such a statement to execute arbitrary code.  At least in that context, a simple reference to a C variable *has* to be inert...and its mere appearance does not imply execution.
+
+This means you would bias things the other way.  If you wanted an execution, [you would use an EVAL](https://forum.rebol.info/t/meet-the-eval-native/311).
+
+    rebDo(&quot;eval&quot;, foo, &quot;10&quot;, END); // to print 10
+
+This concept feels like it makes sense, because mostly what I see in C code is that the calculation to produce the values has already occurred.  You don&#39;t want them to undergo a double evaluation.  Consider this:
+
+    REBVAL *value = rebPath(&quot;a/b/c&quot;);
+    // now value holds an item of type PATH!
+    rebDo(&quot;target:&quot;, value, END);
+
+Here you&#39;re abstracting through a variable that doesn&#39;t look like a path at all.  It seems sketchy to be pulling out &quot;live&quot; behavior when it&#39;s not requested, because think about how the following would act:
+
+    value: &#39;a/b/c
+    ;-- now value holds an item of type PATH!
+    target: value
+
+This provides convincing evidence that access through a C variable should be seen as more akin to picking something out of a Rebol variable via a GET-WORD!.  It should be seen as inert to the evaluator on the first pass, and it takes something more than just running the evaluator across it once to get it to execute.  You either COMPOSE it into a block and DO it, or use EVAL.
+
+I&#39;m curious about what might be possible notationally for a fast/API-level EVAL:
+
+    rebDo(rebEval(), foo, &quot;10&quot;, END); // 0-arity a bit confusing
+    rebDo(rebEvalNative(), foo, &quot;10&quot;, END); // a bit wordy
+    rebDo(rebEval(foo), &quot;10&quot;, END); // unusual but nicer
+
+The last one seems coolest to me, even though it&#39;s &quot;strange&quot;.  But EVAL is strange...it takes one argument and then potentially bounces it and keeps on going.  This suggests the return result of `rebEval(foo)` would not be a finalized REBVAL, rather something that has to be spliced into a rebDo() chain...a new datatype.  Such things are tricky, but possible...</description>
+    
+    <lastBuildDate>Fri, 04 Jan 2019 14:14:24 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="371">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Once again, yay for <em>thinking</em> !</p>
+</blockquote>
+</aside>
+<p>I think the answer gets even better: we can quote by default on all splices for <strong>rebRun()</strong> and friends.  But then offer another entry point--something with a name like <strong>rebBuild()</strong>--which doesn't execute anything, and splices as-is by default.</p>
+<p>Quoting by default is nice for entry points like <strong>rebSpell(word)</strong>, where you want to get the spelling, but you don't want to have to say you don't want it to evaluate (who wants to write <code>rebSpell(rebQ(word))</code>?  <em>plus</em> you'd forget, <em>plus</em> it's an extra API call and instruction allocation overhead).  But you want the executable bias if you are going to say something like <strong>rebSpell("first", block)</strong>, so any scanned text runs become live.</p>
+<p>And you want to be able to override the quotedness, though I don't know if I like <strong>rebU()</strong> for unquote...</p>
+<pre><code> block = rebRun(rebU(action), "arg1 arg2");
+</code></pre>
+<p>While it's mechanically consistent to call it unquote (with rebRun always adding a quote level unless you ask it to) rebE() seems more meaningful for "make evaluative".</p>
+<p>If you can escape into-and-out-of the building vs. running forms, I think it would cover pretty much everything.  Let's say rebB for the build instruction:</p>
+<pre><code> block = rebRun(rebE(action), "arg1", v1, v2, rebB("[", v4, v5, "]"));
+</code></pre>
+<p>So that would splice v1 and v2 quoted, but v4 and v5 as is.  If you had omitted the rebB, you'd have gotten a block with quoted values in it as the last item.</p>
+<p><em>(If you don't follow quite the difference between an "instruction" and an ordinary API entry point, instructions generate transient entities that are freed automatically and can only be used in variadic calls.  They're easier to use than worrying about an API handle, if you are really going to have something you are using just once.)</em></p>
+          <p><a href="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371/4</link>
+        <pubDate>Fri, 04 Jan 2019 14:10:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-371-4</guid>
+        <source url="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371.rss">Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</source>
+      </item>
+      <item>
+        <title>Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="371">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Having experimented with this for a bit, I will say that requiring <strong>rebEval()</strong> to make a value provided from C “live” vs. merely “spliced” is a little bit annoying at times But I’m still pretty sure it makes sense as the right answer.</p>
+</blockquote>
+</aside>
+<p>Coming back to this topic, there's some exciting news related to the advent of <a href="https://github.com/metaeducation/ren-c/pull/901" rel="nofollow noopener">arbitrary levels of escaping</a>.</p>
+<p>The API frequently would get in situations where you'd be building blocks of code that were intended to run, but you didn't want values to "double evaluate".  You'd be unable to pass nulls, for instance:</p>
+<pre><code> ... = rebRun("if condition [some-function", value_may_be_null, "]");
+</code></pre>
+<p>That has to create a BLOCK! before it can run.  But NULLs can't be spliced into blocks.  You end up having to make up something along the lines of:</p>
+<pre><code>  uneval: func [x [&lt;opt&gt; any-value]] [
+       if null? :x [return quote (null)] ;-- when run, produces NULL
+       return as group! compose/only [quote (:x)]
+  ]
+
+  ... = rebRun("if condition [some-function uneval", value_may_be_null, "]");
+</code></pre>
+<p>So you'd fabricate an expression that would produce null when evaluated, for instance.  You could optimize that to notice if you had something with no evaluator behavior, like an INTEGER!, and just return it.  But it's all very dicey.</p>
+<p>No longer do you need this, you only need to escape your value!  <a class="mention" href="/u/giuliolunati">@giuliolunati</a> proposes this escaping keep the name quoting, so it becomes nice:</p>
+<pre><code> ... = rebRun("if condition [some-function", rebQ(value_may_be_null), "]");
+</code></pre>
+<p>So what happens when the API streams across that and builds a block, is that the block really just contains a single value cell.  If value was 1, the evaluator will see <strong><code>[some-function '1]</code></strong>.  If it was null, the evaluator will see <strong><code>[some-function ']</code></strong>.  If it was <code>''(1 + 2)</code>, then <strong><code>[some-function '''(1 + 2)]</code></strong>.  Etc.</p>
+<p>The previous trick for getting a similar effect complicated the code.  This is going to be a big win.  Once again, yay for <em>thinking</em>!  <img src="//forum.rebol.info/images/emoji/twitter/brain.png?v=7" title=":brain:" class="emoji" alt=":brain:"></p>
+          <p><a href="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371/3</link>
+        <pubDate>Sat, 29 Dec 2018 08:28:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-371-3</guid>
+        <source url="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371.rss">Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</source>
+      </item>
+      <item>
+        <title>Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Having experimented with this for a bit, I will say that requiring <strong>rebEval()</strong> to make a value provided from C "live" vs. merely "spliced" is a little bit annoying at times  But I'm still pretty sure it makes sense as the right answer.</p>
+<p>One good reason for it would be that there are other "splicing" scenarios to which evaluation shouldn't apply.  For instance, a variadic constructor for BLOCK!s:</p>
+<pre><code>REBVAL *block = rebBlock("10", value, "20", END);
+</code></pre>
+<p>The person who wanted to make a 3 element block presumably meant to splice <code>value</code> in there, and doesn't want to worry about any execution.  I'd suggest they'd want the same behavior with:</p>
+<pre><code>REBVAL *block = rebDo("[", "10", value, "20]", END);
+</code></pre>
+<p>This actually brings up the point of what to do with a rebEval() in such a situation...since it's inside a block, the evaluator never "sees" it.  So what should this do?</p>
+<pre><code>REBVAL *block = rebDo("[", "10", rebEval(value), "20]", END);
+</code></pre>
+<p>I think that should be an error.  But whatever it does, hopefully this helps drive home my point about why splicing without evaluation should be the default.</p>
+<p>In the shorthands department, I'm thinking <strong>rebE()</strong> for rebEval().  We'll have to be a little careful with these, and see what ones get used most in practice before picking them, but rebEval() will be used very frequently.</p>
+          <p><a href="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371/2</link>
+        <pubDate>Tue, 13 Feb 2018 11:40:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-371-2</guid>
+        <source url="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371.rss">Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</source>
+      </item>
+      <item>
+        <title>Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><em>To make a medium-size story short:</em> <strong>No, I don't believe so.</strong></p>
+<blockquote>
+<p><strong>Beta/One Update March 2019</strong>: The final decision is to give people the choice; all operators come in "live" and "quoted" forms.  The live forms have names like <code>rebRun()</code> or <code>rebSpell()</code>.  The quoting forms have names like <code>rebRunQ()</code> or <code>rebSpellQ()</code>.  Additional rebQ()-quoting and rebU()-unquoting operators let you raise or lower the quoting level of splices in mid-expression.</p>
+<p>Hence one could say "I've changed my mind" because the "default" without the Q is to splice the value as-is.  But it's been made as easy as a single letter to make the choice, so certainly making it easy is still a priority.  <a href="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebrun-and-rebrunq/1095">See the complete rationale here</a></p>
+</blockquote>
+<hr>
+<p><em>To make a medium-size story long:</em> ...</p>
+<p>Let's imagine you have a simple situation that generates a function and stores it in an API handle value:</p>
+<pre><code>REBVAL *foo = rebDo("function [x] [print x]", END);
+</code></pre>
+<p>What should happen if you tried to use a SET-WORD! in code to assign it to another variable?</p>
+<pre><code>rebDo("also-foo:", foo, END);
+</code></pre>
+<p>Perhaps one thinks that looks most like accessing a function through a WORD! <code>foo</code>.  That might imply referring to it by its C variable name would <em>execute</em> it by default.  Hence the burden would be upon you to do some kind of trick to "disarm" it, such as:</p>
+<pre><code>rebDo("also-foo: quote", foo, END);
+</code></pre>
+<p>However, the idea that referring to the C variable name executes it is <em>not</em> generally what happens.  Had you written code as a simple C assignment:</p>
+<pre><code>REBVAL *also_foo = foo;
+</code></pre>
+<p><code>foo</code> would not try to execute, and it can't.  In plain C there's no opportunity for such a statement to execute arbitrary code.  At least in that context, a simple reference to a C variable <em>has</em> to be inert...and its mere appearance does not imply execution.</p>
+<p>This means you would bias things the other way.  If you wanted an execution, <a href="https://forum.rebol.info/t/meet-the-eval-native/311">you would use an EVAL</a>.</p>
+<pre><code>rebDo("eval", foo, "10", END); // to print 10
+</code></pre>
+<p>This concept feels like it makes sense, because mostly what I see in C code is that the calculation to produce the values has already occurred.  You don't want them to undergo a double evaluation.  Consider this:</p>
+<pre><code>REBVAL *value = rebPath("a/b/c");
+// now value holds an item of type PATH!
+rebDo("target:", value, END);
+</code></pre>
+<p>Here you're abstracting through a variable that doesn't look like a path at all.  It seems sketchy to be pulling out "live" behavior when it's not requested, because think about how the following would act:</p>
+<pre><code>value: 'a/b/c
+;-- now value holds an item of type PATH!
+target: value
+</code></pre>
+<p>This provides convincing evidence that access through a C variable should be seen as more akin to picking something out of a Rebol variable via a GET-WORD!.  It should be seen as inert to the evaluator on the first pass, and it takes something more than just running the evaluator across it once to get it to execute.  You either COMPOSE it into a block and DO it, or use EVAL.</p>
+<p>I'm curious about what might be possible notationally for a fast/API-level EVAL:</p>
+<pre><code>rebDo(rebEval(), foo, "10", END); // 0-arity a bit confusing
+rebDo(rebEvalNative(), foo, "10", END); // a bit wordy
+rebDo(rebEval(foo), "10", END); // unusual but nicer
+</code></pre>
+<p>The last one seems coolest to me, even though it's "strange".  But EVAL is strange...it takes one argument and then potentially bounces it and keeps on going.  This suggests the return result of <code>rebEval(foo)</code> would not be a finalized REBVAL, rather something that has to be spliced into a rebDo() chain...a new datatype.  Such things are tricky, but possible...</p>
+          <p><a href="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371/1</link>
+        <pubDate>Thu, 09 Nov 2017 19:13:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-371-1</guid>
+        <source url="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371.rss">Should WORD!, PATH!, FUNCTION! be &quot;live&quot; by default in rebDo()</source>
+      </item>
+  </channel>
+</rss>

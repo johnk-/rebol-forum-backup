@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ALL and ANY chaining</title>
+    <link>https://forum.rebol.info/t/all-and-any-chaining/331</link>
+    <description>&gt; **2021 UPDATE: This post uses some very outdated language from thinking circa 2017, where &quot;void&quot; was what we would call NULL today.  But the modern behavior of ~void~ isotopes and invisibility are much more relevant, and bring the sought-after power into practice.  [See the explanation in this other thread...](https://forum.rebol.info/t/what-should-do-of-empty-block-do-do/1426/17)**
+
+There were several edge cases in ALL and ANY, in historical Rebol.  I was reminded of the importance of these edge cases today when I noticed how Red treats commented-out code:
+
+    red&gt; if any [false comment [foo] false] [print &quot;Sigh.&quot;]
+    Sigh.
+
+The comment evaluated to an &quot;unset!&quot;, which in Red&#39;s world is considered to be &quot;truthy&quot;:
+
+    red&gt; if () [print &quot;Red treats unsets as true?  :-/&quot;]
+    Red treats unsets as true?  :-/
+
+So you can&#39;t throw a comment in and expect ANY to pretend it&#39;s not there.  But if you changed &quot;unset!&quot; to be &quot;falsey&quot; you&#39;d end up with the converse problem... an ALL would fail when it shouldn&#39;t.
+
+    red&gt; if all [true comment [foo] true] [print &quot;Sigh if unset were falsey&quot;]
+    ;-- no output, in today&#39;s world
+
+R3-Alpha correctly--I believe--considered &quot;unset!&quot; to be neither true nor false.  It was illegal to appear in the conditional slot of an IF (or EITHER, or CASE, etc):
+
+    r3-alpha&gt; if () [print &quot;Won&#39;t get here.&quot;]
+    ** Script error: if does not allow unset! for its condition argument
+
+But this did inspire debate on what its behavior inside an ANY or ALL should be, as this **status.important** [issue from 2009 says](https://github.com/rebol/rebol-issues/issues/564).  Should it be an error, or ignored?  
+
+The answer was that it was ignored, *mostly*, unless it was the very last thing.
+
+Gregg thought it was bad for them to be able to return an UNSET!, presumably due to the difficulty of using them in conditionals.  BrianH said he had &quot;always been surprised that it doesn’t throw an error, as that is the main difference between the unset! and none! types.&quot;  At first, I agreed with both of these statements...but in time I reversed my opinion.
+
+**I now believe that it is best when voids opt-out of a &quot;vote&quot; in an ANY and an ALL, and that the only way to get a void result from ANY or ALL is if there were no votes.**
+
+There is a slight increased cost on ALL for this...because making `all [1 + 1 ()]` return `2` requires holding on to the just-evaluated result, in case a subsequent evaluation fails.
+
+*(As a thought-experiment I&#39;ve actually been slightly obsessed with figuring out a way to avoid this cost by initializing the result cell to a bit pattern and then making voids never overwrite that bit pattern.  But it&#39;s fairly negligible in the scheme of things.)*
+
+The result of this decision gives you some surprisingly clever compositional power, especially now that void results are the lingua-franca of conditionals saying &quot;no branches ran&quot;.  And being able to return a void when there are no votes is a feature, not a bug.  Consider:
+
+    condition1: condition2: condition3: false
+    number3: 3
+
+    if all [
+        if condition1 [&quot;A&quot;]
+        case [condition2 [&quot;B&quot;] condition3 [&quot;C&quot;]]
+        switch number3 [1 [&quot;D&quot;] 2 [&quot;E&quot;]]
+    ][
+       print &quot;Should you run this code or not?&quot;
+    ]
+
+It seems bad to run the code, since no conditions were true and no votes occurred.  So returning void leverages the stopping power of it in a conditional context.  Triggering an error for IF is the right thing to do, and easy enough to fix if you *meant* to do that by throwing true on the end of the list.  You got a potentially useful warning.
+
+There&#39;s also *the chaining power of it*.  
+
+    any [a b all [c d any [e f] g h] i j]
+
+The curious property you get by not forcing the result to something truthy or falsey is that the opt-out property can propagate.  This is why in Ren-C, `any []` and `all []` are void.  The base case is &quot;I don&#39;t know enough to tell you anything&quot;.
+
+How useful this all is depends on whether you use it.  But there&#39;s reasoning behind it, which took a long time to decide on--for better or worse!</description>
+    
+    <lastBuildDate>Sun, 20 Jun 2021 03:19:46 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/all-and-any-chaining/331.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>ALL and ANY chaining</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><strong>2021 UPDATE: This post uses some very outdated language from thinking circa 2017, where "void" was what we would call NULL today.  But the modern behavior of ~void~ isotopes and invisibility are much more relevant, and bring the sought-after power into practice.  <a href="https://forum.rebol.info/t/what-should-do-of-empty-block-do-do/1426/17">See the explanation in this other thread...</a></strong></p>
+</blockquote>
+<p>There were several edge cases in ALL and ANY, in historical Rebol.  I was reminded of the importance of these edge cases today when I noticed how Red treats commented-out code:</p>
+<pre><code>red&gt; if any [false comment [foo] false] [print "Sigh."]
+Sigh.
+</code></pre>
+<p>The comment evaluated to an "unset!", which in Red's world is considered to be "truthy":</p>
+<pre><code>red&gt; if () [print "Red treats unsets as true?  :-/"]
+Red treats unsets as true?  :-/
+</code></pre>
+<p>So you can't throw a comment in and expect ANY to pretend it's not there.  But if you changed "unset!" to be "falsey" you'd end up with the converse problem... an ALL would fail when it shouldn't.</p>
+<pre><code>red&gt; if all [true comment [foo] true] [print "Sigh if unset were falsey"]
+;-- no output, in today's world
+</code></pre>
+<p>R3-Alpha correctly--I believe--considered "unset!" to be neither true nor false.  It was illegal to appear in the conditional slot of an IF (or EITHER, or CASE, etc):</p>
+<pre><code>r3-alpha&gt; if () [print "Won't get here."]
+** Script error: if does not allow unset! for its condition argument
+</code></pre>
+<p>But this did inspire debate on what its behavior inside an ANY or ALL should be, as this <strong>status.important</strong> <a href="https://github.com/rebol/rebol-issues/issues/564">issue from 2009 says</a>.  Should it be an error, or ignored?</p>
+<p>The answer was that it was ignored, <em>mostly</em>, unless it was the very last thing.</p>
+<p>Gregg thought it was bad for them to be able to return an UNSET!, presumably due to the difficulty of using them in conditionals.  BrianH said he had "always been surprised that it doesn’t throw an error, as that is the main difference between the unset! and none! types."  At first, I agreed with both of these statements...but in time I reversed my opinion.</p>
+<p><strong>I now believe that it is best when voids opt-out of a "vote" in an ANY and an ALL, and that the only way to get a void result from ANY or ALL is if there were no votes.</strong></p>
+<p>There is a slight increased cost on ALL for this...because making <code>all [1 + 1 ()]</code> return <code>2</code> requires holding on to the just-evaluated result, in case a subsequent evaluation fails.</p>
+<p><em>(As a thought-experiment I've actually been slightly obsessed with figuring out a way to avoid this cost by initializing the result cell to a bit pattern and then making voids never overwrite that bit pattern.  But it's fairly negligible in the scheme of things.)</em></p>
+<p>The result of this decision gives you some surprisingly clever compositional power, especially now that void results are the lingua-franca of conditionals saying "no branches ran".  And being able to return a void when there are no votes is a feature, not a bug.  Consider:</p>
+<pre><code>condition1: condition2: condition3: false
+number3: 3
+
+if all [
+    if condition1 ["A"]
+    case [condition2 ["B"] condition3 ["C"]]
+    switch number3 [1 ["D"] 2 ["E"]]
+][
+   print "Should you run this code or not?"
+]
+</code></pre>
+<p>It seems bad to run the code, since no conditions were true and no votes occurred.  So returning void leverages the stopping power of it in a conditional context.  Triggering an error for IF is the right thing to do, and easy enough to fix if you <em>meant</em> to do that by throwing true on the end of the list.  You got a potentially useful warning.</p>
+<p>There's also <em>the chaining power of it</em>.</p>
+<pre><code>any [a b all [c d any [e f] g h] i j]
+</code></pre>
+<p>The curious property you get by not forcing the result to something truthy or falsey is that the opt-out property can propagate.  This is why in Ren-C, <code>any []</code> and <code>all []</code> are void.  The base case is "I don't know enough to tell you anything".</p>
+<p>How useful this all is depends on whether you use it.  But there's reasoning behind it, which took a long time to decide on--for better or worse!</p>
+          <p><a href="https://forum.rebol.info/t/all-and-any-chaining/331/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/all-and-any-chaining/331/1</link>
+        <pubDate>Tue, 10 Oct 2017 02:27:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-331-1</guid>
+        <source url="https://forum.rebol.info/t/all-and-any-chaining/331.rss">ALL and ANY chaining</source>
+      </item>
+  </channel>
+</rss>

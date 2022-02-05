@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should refinement arguments be REFINEMENT! if used?</title>
+    <link>https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735</link>
+    <description>In Rebol2, a refinement argument would be #[true] or #[none]:
+
+    rebol2&gt; foo: func [/bar] [print mold bar]
+    rebol2&gt; foo/bar
+    true ;-- actually LOGIC! #[true], not the WORD! true
+    rebol2&gt; foo
+    none ;-- actually a NONE! value, not the WORD! none
+
+One thing that annoyed me about it was that you couldn&#39;t check refinements with AND, OR, etc... since NONE! couldn&#39;t be arithmetically AND-ed with things.  So I thought it should always be LOGIC!, as #[true] or #[false], and that had a feeling of consistency.
+
+Then it came on the table that [AND and OR would be conditional](https://github.com/rebol/rebol-issues/issues/1879).  In the meantime, I joined the camp of saying it was okay to just use ANY or ALL... so the idea of the not-present state being NONE! (blank! in Ren-C) didn&#39;t seem so bad.
+
+But that made it seem like it would be cool if the truthy value had some particular *use*.
+
+### Early Ren-C experiment: use WORD! or BLANK!
+
+Rebol2 couldn&#39;t accept refinements by GET-WORD! or in a GROUP! calculation (you couldn&#39;t say **append/(second [dup only])**, for example).  But Ren-C added that.  This meant for chaining, it could be leveraged if used refinement values were a WORD! name of the refinement itself:
+
+    oldrenc&gt; foo: func [/bar] [print mold bar]
+    oldrenc&gt; foo/bar
+    bar
+    oldrenc&gt; foo
+    _
+
+If one function took `/only` and called another function that also took an `/only`, then your refinement could be called only, and you could just say `chained-function/(only)` and that would either resolve to `chained-function/(_)` or `chained-function/(&#39;only)`... so it would &quot;just work&quot;.  That depended on BLANK! just being ignored when passed to a function.
+
+Some people were a bit uncomfortable at the &quot;Inception-like&quot; idea that the word &quot;only&quot; would look up to &quot;only&quot;.  Today I&#39;d suggest it&#39;s probably better to have the variable look up to a REFINEMENT!, hence being `/only`.  That would help make what&#39;s going on a little clearer I think.
+
+But one thing I noticed quickly is that while it was useful, it wasn&#39;t as useful as it might at first seem.  Most of the time, it only comes up when a refinement has no arguments.  Because if a refinement does have arguments, you&#39;d have to not just opt out of it...but also opt out of its arguments even *being* there!
+
+    append/(if condition [/dup]) block data ??
+    print &quot;arity gets changed based on refinement with arg use, bug!&quot;
+
+You&#39;d end up having to change the structure of the code itself at a higher level, with COMPOSE or similar.  Ren-C had the mechanism of disallowing NULL as a refinement, so this was done with always supplying the refinement and then having NULL used to revoke it, like this:
+
+    append/dup block data if condition [...]
+
+Also, as specializations/adaptations/etc. became the main way of building compositions it became less critical...and less common for you to want to take a refinement from one function and call another with it.  The naming overlap started seeming somewhat coincidental, if the functions weren&#39;t somehow derived from each other.
+
+But given that it was still demonstrably useful for refinements with no arguments, something had to make it seem like a bad idea to get cut.  What got me to cut the feature--back then--was concern over what it did to the variability and typechecking of frames:
+
+    oldrenc&gt; foo: func [/bar] [print mold bar]
+    oldrenc&gt; f: make frame! :foo
+    oldrenc&gt; f/bar: true
+    oldrenc&gt; do f ;-- run once
+    bar
+    oldrenc&gt; do f ;-- run twice
+    ** Error: bar must be LOGIC! and not WORD!
+
+**The evaluator seemed to be editorializing.**  It was changing false to blank, and true to refinements.  Of course, it could be made to accept refinements instead of logic, and blanks instead of false.  But I didn&#39;t like the idea of it taking any &quot;truthy&quot; thing.  Should you be able to say `only: &#39;dup` and have it resolve that to `only`?  Forcing you to supply LOGIC! made it seem more like you knew what you were doing.
+
+It made me feel uncomfortable, because I had the idea that the evaluator would be treating frames as read-only so they could be used multiple times.  Yet this required mutating the frame to conform it.  I decided to back it out and focus on the function compositions.
+
+## Once again, the times have changed...!
+
+Here&#39;s some new knowledge to inform this decision:
+
+* FRAME!s do not get reused.  Every time you DO a FRAME!, the evaluator takes ownership.  Callers are expected to COPY frames before calling DO if they plan to use it again.
+* It&#39;s already the case that the evaluator has to modify refinement cells.  If you MAKE FRAME! :SOME-FUNC, all the cells in that frame are initially empty.  However, you don&#39;t have to go through and set every refinement to FALSE before you DO the frame!   It sets them to false for you, so you don&#39;t wind up with unset arguments...so it&#39;s changing stuff as it is.
+* A hard rule has emerged that you can&#39;t use NULL in PATH!s.  So **append/()** is not legal, nor is **append/(if false [])**.  You need a BLANK! to opt out of a path step, e.g. a refinement to a function--which means putting together conditionals to opt out always needs to look like **append/(try ...expression...)**.
+* We now have the conditional AND, OR, XOR that were only theorized before...and they&#39;re better than anyone might have thought they would be.
+* Being overly protective about the input types for refinements on APPLY seems like a somewhat inconsequential detail.  If you&#39;re forced to say **some-refine: did expr** how much did that really gain the system?  Every IF statement has an &quot;implied TO LOGIC!&quot; on its condition, and now we have protections against voids and nulls, so that seems like enough.
+
+## All factors weighed, I&#39;m thinking this should go in
+
+I&#39;ve missed this feature, and the fact that you can&#39;t opt out of PATH! slots with null have made it seem all the more necessary.
+
+The frame-based technical points that concerned me before don&#39;t really exist anymore.  The specialization mechanics are such that once it becomes a REFINEMENT! and gets flagged as type checked, it won&#39;t be checked again.  So even concerns over what it might do for performance--checking the spelling each time etc, aren&#39;t an issue.
+
+If we switch it to REFINEMENT!, that seems like it would reduce people&#39;s confusion.
+
+All told, I think it&#39;s a win for chaining.  It might even *speed up* the system.  Do people have any comments/questions/reservations?</description>
+    
+    <lastBuildDate>Wed, 04 Nov 2020 09:41:47 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should refinement arguments be REFINEMENT! if used?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm splitting "frame fulfillment" and "type checking" into two conceptually separate passes.  Which is looking pretty good, but it is forcing me to revisit this little wart.</p>
+<p>To review: If you specialize a function that takes a refinement, it's nice if you can fill the frame slot with a LOGIC! vs. having to do something more awkward:</p>
+<pre><code> some-func: func [/some-refinement] [...]
+
+ specialize 'some-func [
+     some-refinement: if x = y ['/some-refinement]  ; awkward
+     some-refinement: x = y  ; easier
+ ]
+</code></pre>
+<p>But I've explained why some guarantee of a canonization is needed.  You don't want some dispatches to the function saying NULL for no refinement use, and some saying false, and others saying blank.  It needs to be consistent.</p>
+<p><em>Choosing a LOGIC! canon form just doesn't feel right.</em>  In the thread above I mention the contrast with a LOGIC!-taking refinement:</p>
+<pre><code>foo: func [/mutate [logic!]] [...]
+</code></pre>
+<p>This refinement can be NULL (unspecified--e.g. the refinement was not used at all), or #[true] or #[false] when it is specified. So compared to a refinement that's just "used or unused" then a LOGIC! false state would be implicitly misleading. It needs a NULL and then a single truthy state.</p>
+<p><strong>We don't want typechecking to modify frames.</strong>  So ideally there's no canonization at all by the function dispatch process, it just errors if you didn't set up the frame right.  But we don't want it to be a PITA to get that canon.</p>
+<p>So how do we sort out this irritation?</p>
+<h2>A Modern Proposal: <a href="https://forum.rebol.info/t/sending-values-into-a-blackhole/1347">Use BLACKHOLE!</a>  <code>(#)</code>
+</h2>
+<p>While BLANK! works nicely as a falsey unit type, we've been lacking a truthy unit type.</p>
+<p><strong>But with the unification of issues and characters, the appealing truthy "kind-of-a-unit-type" of # exists.</strong>  And its meaning of "please opt-in" is a good match for refinements.</p>
+<ul>
+<li>Space-wise fits in a single cell with no allocation, like BLANK!</li>
+<li>It's not a series so it's not mutable and has very few operations it responds to.</li>
+<li>It's one easily-visible character.</li>
+<li>And again, it is truthy.</li>
+</ul>
+<p>So for starters, you get away from the inconvenience of name repetition:</p>
+<pre><code> specialize 'some-func [
+     some-refinement: if x = y [#]  ; slot will be either null or #
+ ]
+</code></pre>
+<p>The term "blackhole" isn't set in stone...but it's alludes to the fact that <strong>set # (...)</strong> will silently succeed.</p>
+<p>First reflex might be to make a TO-BLACKHOLE or similar:</p>
+<pre><code> specialize 'some-func [
+     some-refinement: to-blackhole x = y
+ ]
+</code></pre>
+<p>But I actually think the <strong>if condition [#]</strong> looks pretty nice.  It's unambiguous and you get the idea.  "check this box, else leave it empty".  I don't think that needs another name besides IF which puts the # right in front of you...short and obvious!</p>
+<h2>This Loses Chaining in PATH! Dispatch...but, oh well</h2>
+<p>Putting the name in the refinement was an idea born of trying to eliminate this redundancy:</p>
+<pre><code> bar: func [arg /ref1] [...]
+
+ foo: func [arg /ref1] [
+     bar/(ref1) arg
+ ]
+</code></pre>
+<p>But there are tons of reasons why this isn't that compelling.  You make derived functions that are built on top of other functions with much better tools like ADAPT or ENCLOSE or SPECIALIZE, when they are in the same family and share refinement names.  If you try to leverage this "refinements having the same name" trick then it's probably about as likely to bite you as help you.</p>
+<p><strong>I don't think we need to shed any tears over it, and instead should be happy to have a clean and clear difference between the tristate of <code>func [/ref [logic!]]</code> and the used-or-not state of <code>func [/ref]</code></strong></p>
+<p>This feels like a good and learnable answer to a longstanding thorn.</p>
+          <p><a href="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735/4</link>
+        <pubDate>Wed, 04 Nov 2020 08:19:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-735-4</guid>
+        <source url="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735.rss">Should refinement arguments be REFINEMENT! if used?</source>
+      </item>
+      <item>
+        <title>Should refinement arguments be REFINEMENT! if used?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="735">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I've mentioned how <strong>foo/(if only [/only])</strong> won't work, you have to say <strong>foo/(try if only [/only])</strong></p>
+</blockquote>
+</aside>
+<p>This feature is back in the news, because with the de-stigmatization of NULL access I'm feeling like having the NULL vaporize here is probably good.  Hence no TRY needed.</p>
+<p>Before, I was afraid of what this might mean for typos, like <strong>foo/(:some-varable)</strong>.  If NULL was silently accepted, this seemed dangerous.  Now that typo situation would be a VOID!.</p>
+<p>Not all types have to accept this as vaporization.  What this means is that in the PATH!-processing logic, it's now up to the type getting the argument as to whether a NULL is tolerated.  ACTION! paths can say it's all right, MAP! or OBJECT! access can error.  <em>(Previously it was illegal at a path dispatch level, so no data type could accept it.)</em></p>
+<p>For compatibility we can accept BLANK! here as well too for now.</p>
+<p>To rephrase the title question in the current environment:</p>
+<blockquote>
+<p><strong>Should refinements taking no arguments be REFINEMENT! if used?</strong></p>
+</blockquote>
+<p>First off, I definitely like the concept of NULL if unused, better than false.  Because a LOGIC!-refinement in the new framing is effectively a tristate:</p>
+<pre><code>foo: func [/mutate [logic!]] [...]
+</code></pre>
+<p>This refinement can be NULL (unspecified), or #[true] or #[false] when specified.  So I think for refinements being their own arguments...then a LOGIC! false state would be implicitly misleading.  It needs a NULL and then a single truthy state.</p>
+<p><em>It's hard not to like the ability to chain.</em>  So some word form of the refinement carrying its name should be the value.  Since REFINEMENT! no longer exists (it's a PATH!), there's a likely cost to using this form instead of something like <strong><span class="mention">@ref-name</span></strong>, where being a non-reducible form has the advantage of being able to compose nicely.</p>
+<p>So I think the jury is still out on whether this should be a PATH! or not.  But at least I think a couple of other points are settled into place.</p>
+          <p><a href="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735/3</link>
+        <pubDate>Fri, 06 Dec 2019 08:51:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-735-3</guid>
+        <source url="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735.rss">Should refinement arguments be REFINEMENT! if used?</source>
+      </item>
+      <item>
+        <title>Should refinement arguments be REFINEMENT! if used?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I should add that one area I found started to benefit that I hadn't thought about was debugging.  Look at this test:</p>
+<blockquote>
+<p><strong>UPDATE a year later:</strong> With the <a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120">refinements as their own arguments change</a>, the following is different; a refinement with an argument would not have a form where it is named in this fashion (nor would it need a name to be chained)</p>
+</blockquote>
+<pre><code>foo: func [/A aa /B bb /C cc] [
+    return compose [
+        (if A [/A]) (:aa)
+        (if B [/B]) (:bb)
+        (if C [/C]) (:cc)
+    ]
+]
+
+fooBC: :foo/B/C
+fooCB: :foo/C/B
+
+did all [
+    [/B 10 /C 20] = fooBC 10 20
+    [/A 30 /B 10 /C 20] = fooBC/A 10 20 30
+
+    [/B 20 /C 10] = fooCB 10 20
+    [/A 30 /B 20 /C 10] = fooCB/A 10 20 30
+
+    error? trap [fooBC/B 1 2 3 4 5 6]
+    error? trap [fooBC/C 1 2 3 4 5 6]
+    error? trap [fooCB/B 1 2 3 4 5 6]
+    error? trap [fooCB/C 1 2 3 4 5 6]
+]
+</code></pre>
+<p>Firstly, that is a cool test, look at it.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>But that suggests that if an in-use refinement is already the REFINEMENT! itself, that has applications in the display arena.  You wouldn't need <code>if A [/A]</code>, you'd just say A.  (Obviously more of an advantage the longer the refinement name.)</p>
+<p>And I've mentioned how <strong>foo/(if only [/only])</strong> won't work, you have to say <strong>foo/(try if only [/only])</strong>.  I think it falls under more-good-than-harm to be able to say <strong>foo/:only</strong> or <strong>foo/(only)</strong>.</p>
+          <p><a href="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735/2</link>
+        <pubDate>Thu, 12 Jul 2018 21:47:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-735-2</guid>
+        <source url="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735.rss">Should refinement arguments be REFINEMENT! if used?</source>
+      </item>
+      <item>
+        <title>Should refinement arguments be REFINEMENT! if used?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In Rebol2, a refinement argument would be #[true] or #[none]:</p>
+<pre><code>rebol2&gt; foo: func [/bar] [print mold bar]
+rebol2&gt; foo/bar
+true ;-- actually LOGIC! #[true], not the WORD! true
+rebol2&gt; foo
+none ;-- actually a NONE! value, not the WORD! none
+</code></pre>
+<p>One thing that annoyed me about it was that you couldn't check refinements with AND, OR, etc... since NONE! couldn't be arithmetically AND-ed with things.  So I thought it should always be LOGIC!, as #[true] or #[false], and that had a feeling of consistency.</p>
+<p>Then it came on the table that <a href="https://github.com/rebol/rebol-issues/issues/1879" rel="nofollow noopener">AND and OR would be conditional</a>.  In the meantime, I joined the camp of saying it was okay to just use ANY or ALL... so the idea of the not-present state being NONE! (blank! in Ren-C) didn't seem so bad.</p>
+<p>But that made it seem like it would be cool if the truthy value had some particular <em>use</em>.</p>
+<h3>Early Ren-C experiment: use WORD! or BLANK!</h3>
+<p>Rebol2 couldn't accept refinements by GET-WORD! or in a GROUP! calculation (you couldn't say <strong>append/(second [dup only])</strong>, for example).  But Ren-C added that.  This meant for chaining, it could be leveraged if used refinement values were a WORD! name of the refinement itself:</p>
+<pre><code>oldrenc&gt; foo: func [/bar] [print mold bar]
+oldrenc&gt; foo/bar
+bar
+oldrenc&gt; foo
+_
+</code></pre>
+<p>If one function took <code>/only</code> and called another function that also took an <code>/only</code>, then your refinement could be called only, and you could just say <code>chained-function/(only)</code> and that would either resolve to <code>chained-function/(_)</code> or <code>chained-function/('only)</code>... so it would "just work".  That depended on BLANK! just being ignored when passed to a function.</p>
+<p>Some people were a bit uncomfortable at the "Inception-like" idea that the word "only" would look up to "only".  Today I'd suggest it's probably better to have the variable look up to a REFINEMENT!, hence being <code>/only</code>.  That would help make what's going on a little clearer I think.</p>
+<p>But one thing I noticed quickly is that while it was useful, it wasn't as useful as it might at first seem.  Most of the time, it only comes up when a refinement has no arguments.  Because if a refinement does have arguments, you'd have to not just opt out of it...but also opt out of its arguments even <em>being</em> there!</p>
+<pre><code>append/(if condition [/dup]) block data ??
+print "arity gets changed based on refinement with arg use, bug!"
+</code></pre>
+<p>You'd end up having to change the structure of the code itself at a higher level, with COMPOSE or similar.  Ren-C had the mechanism of disallowing NULL as a refinement, so this was done with always supplying the refinement and then having NULL used to revoke it, like this:</p>
+<pre><code>append/dup block data if condition [...]
+</code></pre>
+<p>Also, as specializations/adaptations/etc. became the main way of building compositions it became less critical...and less common for you to want to take a refinement from one function and call another with it.  The naming overlap started seeming somewhat coincidental, if the functions weren't somehow derived from each other.</p>
+<p>But given that it was still demonstrably useful for refinements with no arguments, something had to make it seem like a bad idea to get cut.  What got me to cut the feature--back then--was concern over what it did to the variability and typechecking of frames:</p>
+<pre><code>oldrenc&gt; foo: func [/bar] [print mold bar]
+oldrenc&gt; f: make frame! :foo
+oldrenc&gt; f/bar: true
+oldrenc&gt; do f ;-- run once
+bar
+oldrenc&gt; do f ;-- run twice
+** Error: bar must be LOGIC! and not WORD!
+</code></pre>
+<p><strong>The evaluator seemed to be editorializing.</strong>  It was changing false to blank, and true to refinements.  Of course, it could be made to accept refinements instead of logic, and blanks instead of false.  But I didn't like the idea of it taking any "truthy" thing.  Should you be able to say <code>only: 'dup</code> and have it resolve that to <code>only</code>?  Forcing you to supply LOGIC! made it seem more like you knew what you were doing.</p>
+<p>It made me feel uncomfortable, because I had the idea that the evaluator would be treating frames as read-only so they could be used multiple times.  Yet this required mutating the frame to conform it.  I decided to back it out and focus on the function compositions.</p>
+<h2>Once again, the times have changed...!</h2>
+<p>Here's some new knowledge to inform this decision:</p>
+<ul>
+<li>FRAME!s do not get reused.  Every time you DO a FRAME!, the evaluator takes ownership.  Callers are expected to COPY frames before calling DO if they plan to use it again.</li>
+<li>It's already the case that the evaluator has to modify refinement cells.  If you MAKE FRAME! :SOME-FUNC, all the cells in that frame are initially empty.  However, you don't have to go through and set every refinement to FALSE before you DO the frame!   It sets them to false for you, so you don't wind up with unset arguments...so it's changing stuff as it is.</li>
+<li>A hard rule has emerged that you can't use NULL in PATH!s.  So <strong>append/()</strong> is not legal, nor is <strong>append/(if false [])</strong>.  You need a BLANK! to opt out of a path step, e.g. a refinement to a function--which means putting together conditionals to opt out always needs to look like <strong>append/(try ...expression...)</strong>.</li>
+<li>We now have the conditional AND, OR, XOR that were only theorized before...and they're better than anyone might have thought they would be.</li>
+<li>Being overly protective about the input types for refinements on APPLY seems like a somewhat inconsequential detail.  If you're forced to say <strong>some-refine: did expr</strong> how much did that really gain the system?  Every IF statement has an "implied TO LOGIC!" on its condition, and now we have protections against voids and nulls, so that seems like enough.</li>
+</ul>
+<h2>All factors weighed, I'm thinking this should go in</h2>
+<p>I've missed this feature, and the fact that you can't opt out of PATH! slots with null have made it seem all the more necessary.</p>
+<p>The frame-based technical points that concerned me before don't really exist anymore.  The specialization mechanics are such that once it becomes a REFINEMENT! and gets flagged as type checked, it won't be checked again.  So even concerns over what it might do for performance--checking the spelling each time etc, aren't an issue.</p>
+<p>If we switch it to REFINEMENT!, that seems like it would reduce people's confusion.</p>
+<p>All told, I think it's a win for chaining.  It might even <em>speed up</em> the system.  Do people have any comments/questions/reservations?</p>
+          <p><a href="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735/1</link>
+        <pubDate>Thu, 12 Jul 2018 21:05:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-735-1</guid>
+        <source url="https://forum.rebol.info/t/should-refinement-arguments-be-refinement-if-used/735.rss">Should refinement arguments be REFINEMENT! if used?</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,377 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>More on the mechanics of void</title>
+    <link>https://forum.rebol.info/t/more-on-the-mechanics-of-void/165</link>
+    <description>&gt; **UPDATE:** This is a very dated post which uses terminology to talk about &quot;void&quot; as if it were the thing we now call NULL.  The best place to read about what evolved from this is probably: [
+NULL, BLANK!, VOID!: History Under Scrutiny](https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249).  Experience with the NULL-described as-void here contributed to that outcome.
+
+---
+
+I&#39;ve previously argued why whatever it is that you consider to be a variable being &quot;unset&quot; should not be something you can put into a block as a value:
+
+https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113
+
+To me it seems it should be obvious...in the way that it&#39;s a bad idea to make an acid that can eat through anything.  (&quot;What would you put it in?&quot;)  If there is such a value that you can find while enumerating the data in a block, that is indistinguishable from a variable which has no value... that&#39;s too tough to distinguish from an error state.
+
+Note that I&#39;m not prohibiting the idea of something which--when evaluated and assigned to a variable--unsets it.  Ren-C has actually become more liberal about this, allowing `x: ()` or `x: void`, where void is effectively `void: does []`.  Here I&#39;ll talk a little bit more about the issue, updated from some earlier writing.
+
+---
+
+- There is no &quot;UNSET! datatype&quot;.  `type-of do []` isn&#39;t a DATATYPE! at all...it&#39;s a _blank value_, e.g. **blank? type-of ()** is TRUE.  This is not to be confused with **blank? ()**...which is false.
+
+- An evaluation which produces an entity with no type is said to be &quot;void&quot;--considered the _absence of a value_ (as opposed to a value whose type is void! or unset! or what-have-you).
+
+- Because voids are not Rebol values, they may not be stored in a BLOCK! or other ANY-ARRAY!.  Operations like APPEND, REDUCE, INSERT etc. are thus free to define meanings for what to do when they see them.  This is on a case-by-case basis, e.g. **`join [a b c] ()`** is **`[a b c]`**, while **reduce [a () b]** is an error by default.  _(A construct like reduce-each could give more fine-grained control for handling this and other cases, e.g. `collect [reduce-each x [1 + 2 () 3 + 4] [keep/only either set? &#39;x [:x] [&#39;it-was-void]]]. =&gt; [3 it-was-void 7]`_
+
+- When a context has a value for a word, it is said that &quot;the variable is set&quot;.  If it does not have a value for a word, it is said that &quot;the variable is not set&quot; or &quot;the variable is unset&quot;.  This is a terminology shift--and because of it the **unset?** routine is deprecated, because proper usage would be **unset? &#39;some-var** and not **unset? :some-var**.  It will be revived with the correct meaning in the future, but for now **not set? &#39;some-var** is to be used...as UNSET? is gradually replaced with VOID? in legacy modules.
+
+- I&#39;ll restate it for emphasis, that **void?** is _not_ a test for a **void!** type.  There is no void! or unset!.  There is no construction syntax for a void! or unset!, because it is not a value...you can&#39;t write **do [x: #[unset!]]** anymore because the source block could not hold a non-value in that second spot of the block.  void? is a standalone routine you only call on a transient evaluative result.
+
+&gt; Note: This worldview makes, I think, much more sense:
+&gt; 
+&gt;     set &#39;x value
+&gt;     assert [set? &#39;x]
+&gt; 
+&gt;     unset &#39;x
+&gt;     assert [unset? &#39;x]
+&gt; 
+&gt; &quot;Setness&quot; and &quot;unsetness&quot; does much better as a property of a variable, than a value.  Being liberated from having variables that are set to UNSET! (e.g. the interpreter source had code like `SET_UNSET(value)`)...and all the confusions that go with that, is very nice.
+
+By pushing void into this new role, users work with it in many more places where BLANK! (&quot;none!&quot;) might have been used previously.  As the default return result of conditional expressions and loops, with a pervasive distinct meaning for &quot;opting out&quot;... there are many much more elegant ways of doing things.  It takes over many cases of what BLANK! used to be for--(which helps clarify the roles of BLANK! specifically as a purposeful positional placeholder that is used in blocks and should -not- be omitted).
+
+    &gt;&gt; compose [a (if false [&#39;b]) c]
+    == [a #[none] c] ;-- R3-Alpha/Red 0.6.0
+    == [a c] ;-- Ren-C
+
+    &gt;&gt; compose [a (switch 1 [2 [&#39;b] 3 [&#39;c]]) d]
+    == [a #[none] d] ;-- R3-Alpha/Red 0.6.0
+    == [a d] ;-- Ren-C
+
+    &gt;&gt; rejoin [&quot;a&quot; (while [1 &gt; 2] [&quot;b&quot;]) &quot;c&quot;]
+    == &quot;anonec&quot; ;-- R3-Alpha/Red 0.6.0
+    == &quot;ac&quot; ;-- Ren-C
+
+The more places that void is not allowed to make sense for, the more features open up.  For instance: you cannot pass a void value as a refinement argument, so they can be used to _revoke_ refinements:
+
+     &gt;&gt; condition: true
+     &gt;&gt; append/dup copy [a b c] [d e] if condition [2]
+     [a b c d e d e]
+
+     &gt;&gt; condition: false
+     &gt;&gt; append/dup copy [a b c] [d e] if condition [2]
+     [a b c d e]
+
+&gt; Note: There is one portability pitfall to be aware of, in the sense of &quot;creates problems that can be hard to find&quot;.  It&#39;s not terribly common, but is sort of along these lines:
+&gt; 
+&gt;
+&gt;     &gt;&gt; all [true (if 1 &gt; 2 [true]) true]
+&gt;     == #[none] ;-- R3-Alpha/Red 0.6.0
+&gt;     == true ;-- Ren-C
+&gt; 
+&gt; So here we see that returning void made Ren-C consider the condition to opt-out.  e.g. &quot;if 1 &lt; 2 then [I do not have a vote to contribute to this ALL&quot;](https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154).  While R3-Alpha and Red saw the whole expression as being logically false.  I strongly believe the Ren-C interpretation is the more powerful and useful one, and it fits perfectly with the other findings.)
+&gt; 
+&gt; Also, there is room here for tools like `if?` ... which would return TRUE if the condition was taken and FALSE if it was not, ignoring the result of the block.  This is potentially more generically useful in some places, allowing one to not worry about what falls out the bottom of the block.
+
+### Familiarity Breeds Factoring
+
+These new features are all fine and well to use with inline IF or WHILE or SWITCH or CASE.  But if you can do something inline, it isn&#39;t long before people want to factor out the expression.  If you can write **all [... case [...] ...]** it&#39;s quite natural to want to change that to **expr: case [...] | all [... :expr ...]**
+
+But when it comes to assigning &quot;voids&quot;, R3-Alpha, Rebol2, and Red 0.6.0 make it a bit difficult.  This produces an error in all three:
+
+     &gt;&gt; code: []
+     &gt;&gt; result: do code
+     ** Script error: result: needs a value
+
+To work around this, one must use a function call to SET with a refinement, /ANY.  _(In Ren-C the refinement is called /OPT which ties into saying it&#39;s an &quot;optional set&quot;..as well as tying it to the OPT primitive that converts BLANK! to void and passes through all other values.)_
+
+    &gt;&gt; code: []
+    &gt;&gt; set/any &#39;result do code
+    &gt;&gt; if unset? :result [print &quot;It was unset&quot;]
+    It was unset
+
+There&#39;s already a mismatch here, between **set &#39;result (...)** and **result: (...)** when compared with **get &#39;result** and **:result**, demonstrated if we use a plain GET.
+
+    &gt;&gt; code: []
+    &gt;&gt; set/any &#39;result do code
+    &gt;&gt; if unset? get &#39;result [print &quot;It was unset&quot;]
+    ** Script error: result has no value
+
+In other words, **:result** is effectively GET/ANY while **result:** is just SET, as opposed to SET/ANY.
+
+One reasoning could be because &quot;getting&quot; has two entry points via words...one that is the plain undecorated use of a word (e.g. **result** vs **:result**) while &quot;setting&quot; has only one hook (**result:**).  But note that it&#39;s not appropriate to think of the leading **:** as /ANY, and without as just GET...because GET doesn&#39;t call functions the way an undecorated word does!  So **:result** is the only real entry point to GET, and it&#39;s a GET/ANY.
+
+After considerable reflection, and trying things multiple ways...in Ren-C **result:** acts as SET/OPT, and **:result** acts as GET/OPT.  The unrefined GET and SET operations give errors if passed a void.  This has a number of benefits, here are a few:
+
+- As explained, it provides parity in the definitions for setting and getting.
+
+- Instead of those who can handle &quot;opted-out&quot; variables (or are willing to just have a &quot;downstream&quot; error) being _forced_ to use the ugly **set/opt &#39;foo (...)**, the people for whom assurances have extra value _can optionally_ use the _prettier_ **set &#39;foo (...)**.  Ren-C offers even more choices, like **foo: ensure (...)** and that would work as **ensure foo: (...)** as well.
+
+&gt; Note: One consideration on wanting to shift the burden for &quot;it would be nice to check&quot; onto those who think it&#39;s valuable is the idea that really, checking the return result of a function for _just void_ is awfully specific.  If you call a function and expect it to be an integer, but it comes back a BLANK!, then are you any &quot;safer&quot;?  Quite arguably you are _less_ safe, because when you go to use the assigned result and it&#39;s a BLANK! then you won&#39;t get any errors, such as with **x: some-function | append data x**.  Where the void will complain, the BLANK! wouldn&#39;t.  This shows how the previous checking was very much an illusion, and it gets in the way of much more interesting code when everything is piped together.  **ensure integer! x: (...)** is an example of expanding the concepts.
+
+- Convenient means of unsetting: **foo: ()**
+
+- Cleaner expressivity of conditional sets.  For instance, if one wishes to conditionally set or unset a key in a map one can write **map/key: if condition [code]** and it will be removed should the condition be false.  This is more convenient than **either condition [map/key: (code)] [unset &#39;map/key]**. 
+
+- Avoids separate test for presence and lookup in a map...e.g. **unless void? value: :map/key [do stuff with value]**
+
+&gt; Note: This builds on the idea that allowing any legal value to be in the mapped-to range of a map is an important feature.  Regardless of the legal kinds of _keys_ that a map permits, having the full range of _values_ ... including BLANK! in that range... is useful.  There&#39;s simply a lot that can be done.  See #253 for more on how this has cleaned things up.
+
+Overall, this has held up much better (in my opinion) than the previous design.</description>
+    
+    <lastBuildDate>Wed, 28 Jun 2017 18:05:25 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>More on the mechanics of void</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h3>Thinking Point 2.1: Unused Refinement Args are Not Set</h3>
+<p>I said if you're not using modules then typos could screw you up.  And you might be the kind of person who says fine, you'll keep not-using-modules and go with the <strong>all [...]</strong> instead of <strong>if ... [...]</strong> pattern, and then use <strong>opt</strong> on references.  Basically you'll enjoy the new inline forms when putting <em>IF/SWITCH/CASE/WHILE</em>* into something that can handle optionality...but when you factor, you'll stick to the convention of making sure your variables are assigned NONE! and then un-none-i-fy them.  Because you didn't really want to put NONE!s in blocks before, and you're not going to start now.</p>
+<blockquote>
+<p>Note: You might want to start thinking about it, because "NONE! is a lot more FUN!" when its literal form is just _.  Before it was a terror, looking like a word when it shouldn't... you really don't like writing #[none] very much, and # never seemed right.  But with _, you start having more ideas for it in dialects, and you <em>do</em> want to compose it into blocks and such.</p>
+</blockquote>
+<p>That's fine when it's your code and you're making the rules, but refinement arguments are now voids whenever the refinement isn't used.  That's a property of MAKE FUNCTION! itself... not FUNC or FUNCTION.</p>
+<p>So again, without module protection on bindings, if you write something like:</p>
+<pre><code>foo: func [bar /ref1 baz /ref2 mumble] [
+     zapf: any [:baz | :mumblle | ...] ;-- typo, uncaught! might miss mumble
+     ...
+ ]
+</code></pre>
+<p>By default there's a nice guard in here that keeps the average coder from accidentally using a refinement argument that wasn't supplied, because they're not set if their corresponding refinement is none.  Ordinary word access will fail on them.   But if you were accustomed to Rebol2/R3-Alpha's choice to make refinements NONE! by default, then you don't want to have to test <code>ref1</code> or <code>ref2</code> before accessing their arguments because that's "redundant"...and you use GET-WORD!, and there could be an issue.</p>
+<p>I could just repeat <em>"well, reading something you shouldn't isn't that different from writing something you shouldn't, you're just used to the old problem and not the new one, you need modules anyway so look at all the other benefits"</em>.  And I will say that.  But I gave an alternative before so it seems there should be some alternatives here.</p>
+<p>One is defaults, which I have said is a likely addition.  This covers a lot of cases, even if you just want a default of BLANK!:</p>
+<pre><code>x: 100
+foo: func [bar /ref1 baz (x * 100) /ref2 mumble (_)] [
+     zapf: any [baz | mumble | ...] ;-- typo gets caught, mumble undefined
+     ...
+ ]
+</code></pre>
+<p>The leading idea on defaults is they would come from the generator, e.g. this would actually be doing:</p>
+<pre><code>make function! [[bar /ref1 baz /ref2 mumble] [
+    baz: any [:baz 10000]
+    mumble: any [:mumble _] 
+    zapf: any [baz | mumblle | ...]
+]]
+</code></pre>
+<p>So the expressions are evaluated once at function generation time and then get grafted into the body as code (probably use a tweaked <strong>default</strong> which only acts on unset variables).</p>
+          <p><a href="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/more-on-the-mechanics-of-void/165/4</link>
+        <pubDate>Wed, 28 Jun 2017 18:05:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-165-4</guid>
+        <source url="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165.rss">More on the mechanics of void</source>
+      </item>
+      <item>
+        <title>More on the mechanics of void</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h3>Thinking Point 2: Typos</h3>
+<p>One thing that happens as a result of this shift is that people use <strong>:foo</strong> a lot more often than they did before.  Using a GET-WORD! instead of a plain WORD! indicates "I know it may not be set...but that's okay, because this is a spot where I want to use a void to signal an opt-out"</p>
+<pre><code>extra: if need-extra-stuff ["...something extra"]
+print ["main message" :extra]
+</code></pre>
+<p>And that's pretty elegant...<strong>but</strong> there's now a danger of making typos that go uncaught.  The reason is because "references" to words get bound before they ever "see" a "declaration":</p>
+<pre><code>&gt;&gt; foo: does [print variable] ;-- variable word is already bound here
+&gt;&gt; variable: 10 ;-- is re-using the "definition" that the does already made
+&gt;&gt; foo
+10
+</code></pre>
+<p>Since everything is bound...no matter how it's spelled, then you can get in trouble once you consider a variable with no content as being "interesting" and not just an error.</p>
+<p>The good-ish news here is that it's not a new problem...and it is something the module system has to handle.  And among the features that it does handle in its current condition, this is one of the things it can do.  Though usually the problem it was worried about was not reading, but writing: using stray variable names and creating new globals with each stray name.  So more like this:</p>
+<pre><code>&gt;&gt; foo: does [varable: variable + 10] ;-- typo...
+&gt;&gt; variable: 10
+&gt;&gt; foo
+&gt;&gt; print variable
+10 ;-- "wait, it's supposed to be 20..."
+</code></pre>
+<p>So it's a mirror of that, just from reading things that <em>shouldn't</em> have a binding but get one anyway since the user context is so permissive by default.</p>
+<p>I guess the moral of the story is that if you're not using modules, you might stick with using NONE! to carry conditions when you put them into variables.  That way you can use a normal word fetch (that would fail if undefined) and then use OPT to convert the NONE! into a void:</p>
+<pre><code>extra: either need-extra-stuff ["...something extra"] [none]
+print ["main message" (opt extra)]
+</code></pre>
+<p>There are other ways to write this in Ren-C</p>
+<pre><code>extra: to-value if need-extra-stuff ["...something extra"]
+
+extra: either need-extra-stuff ["...something extra"] _
+
+extra: all [need-extra-stuff | "...something extra"]
+</code></pre>
+<p>The last one is the best, and it shows a case of how by thinking about the difference between what NONE!/"BLANK!" is for the problem can be seen in a new light.  (ALL and ANY cannot return a void or a false).</p>
+          <p><a href="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/more-on-the-mechanics-of-void/165/3</link>
+        <pubDate>Wed, 28 Jun 2017 18:05:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-165-3</guid>
+        <source url="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165.rss">More on the mechanics of void</source>
+      </item>
+      <item>
+        <title>More on the mechanics of void</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h3>Thinking Point 1: Get-Function vs Optional Get</h3>
+<p>With ERROR! "disarmed", the only "live" types which remained that needed GET-WORD! to inspect their values in R3-Alpha were UNSET! and ANY-FUNCTION!.  Ren-C has pared ANY-FUNCTION! down to just one universal type, FUNCTION!...with the best qualities of functions and closures all together in one.</p>
+<p>But I've come to think it's not a good idea to use <strong>:some-func</strong> if we expect some-func to be defined.  Instead, use <strong>get 'some-func</strong>.  So the schematic is:</p>
+<ul>
+<li>
+<p>Want a value vs a function call...variable shouldn't be unset, think it might be a function: <strong>get 'foo</strong></p>
+</li>
+<li>
+<p>Want to invoke value if it's a function or get something back otherwise, shouldn't be unset: <strong>foo</strong></p>
+</li>
+<li>
+<p>Variable may be unset, and would like to evaluate to a void if so...may or may not be a function: <strong>:foo</strong></p>
+</li>
+</ul>
+<p>This will help avoid the accidental tolerance of unset variables when all you wanted was to suppress the function call.</p>
+<p>Note that in the matrix of possibilities this leaves something out: <em>"The variable may be unset, in which case I want a void back and no error...but if it's a function I want to run it, and if it's not I want the value."</em>  So basically <code>if set? 'foo [foo]</code>.  This isn't necessarily an uncommon desire, but seeing whether it needed its own operation would have to come from looking at practice.  If an operation did take a single <code>'foo</code> argument, the operation would either have to be variadic (likely bad) or enforce that foo was arity 0, so perhaps the <code>if set?</code> form is the best idea.</p>
+          <p><a href="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/more-on-the-mechanics-of-void/165/2</link>
+        <pubDate>Wed, 28 Jun 2017 18:04:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-165-2</guid>
+        <source url="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165.rss">More on the mechanics of void</source>
+      </item>
+      <item>
+        <title>More on the mechanics of void</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><strong>UPDATE:</strong> This is a very dated post which uses terminology to talk about "void" as if it were the thing we now call NULL.  The best place to read about what evolved from this is probably: <a href="https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249"><br>
+NULL, BLANK!, VOID!: History Under Scrutiny</a>.  Experience with the NULL-described as-void here contributed to that outcome.</p>
+</blockquote>
+<hr>
+<p>I've previously argued why whatever it is that you consider to be a variable being "unset" should not be something you can put into a block as a value:</p>
+<aside class="quote quote-modified" data-post="1" data-topic="113">
+  <div class="title">
+    <div class="quote-controls"></div>
+    <img alt="" width="20" height="20" src="/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar">
+    <a href="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113">Why (or why not) have UNSET! in Rebol-like Languages</a> <a class="badge-wrapper  bullet" href="/c/development/datatypes"><span class="badge-category-parent-bg" style="background-color: #25AAE2;"></span><span class="badge-category-bg" style="background-color: #25AAE2;"></span><span style="" data-drop-close="true" class="badge-category clear-badge" title="The datatypes category is for the discussion of the specific properties of datatypes themselves.  Sample topics might include:">Datatypes</span></a>
+  </div>
+  <blockquote>
+    (UPDATE: I've edited this post to reflect the terminology change to NULL.  But also, I found a post on Carl's blog titled <a href="http://www.rebol.net/r3blogs/0318.html" rel="nofollow noopener">"UNSET! is not first-class"</a>.  It doesn't particularly add anything new, but shows signs of a desire to differentiate the state...which seems to naturally culminate in Ren-C's choice to make it impossible to store it in BLOCK!s.) 
+Question asked of me was: 
+
+Could you explain in laymen terms why unset! is there in Rebol type languages, and why it's there? 
+To my brain, somethi…
+  </blockquote>
+</aside>
+
+<p>To me it seems it should be obvious...in the way that it's a bad idea to make an acid that can eat through anything.  ("What would you put it in?")  If there is such a value that you can find while enumerating the data in a block, that is indistinguishable from a variable which has no value... that's too tough to distinguish from an error state.</p>
+<p>Note that I'm not prohibiting the idea of something which--when evaluated and assigned to a variable--unsets it.  Ren-C has actually become more liberal about this, allowing <code>x: ()</code> or <code>x: void</code>, where void is effectively <code>void: does []</code>.  Here I'll talk a little bit more about the issue, updated from some earlier writing.</p>
+<hr>
+<ul>
+<li>
+<p>There is no "UNSET! datatype".  <code>type-of do []</code> isn't a DATATYPE! at all...it's a <em>blank value</em>, e.g. <strong>blank? type-of ()</strong> is TRUE.  This is not to be confused with <strong>blank? ()</strong>...which is false.</p>
+</li>
+<li>
+<p>An evaluation which produces an entity with no type is said to be "void"--considered the <em>absence of a value</em> (as opposed to a value whose type is void! or unset! or what-have-you).</p>
+</li>
+<li>
+<p>Because voids are not Rebol values, they may not be stored in a BLOCK! or other ANY-ARRAY!.  Operations like APPEND, REDUCE, INSERT etc. are thus free to define meanings for what to do when they see them.  This is on a case-by-case basis, e.g. <strong><code>join [a b c] ()</code></strong> is <strong><code>[a b c]</code></strong>, while <strong>reduce [a () b]</strong> is an error by default.  <em>(A construct like reduce-each could give more fine-grained control for handling this and other cases, e.g. <code>collect [reduce-each x [1 + 2 () 3 + 4] [keep/only either set? 'x [:x] ['it-was-void]]]. =&gt; [3 it-was-void 7]</code></em></p>
+</li>
+<li>
+<p>When a context has a value for a word, it is said that "the variable is set".  If it does not have a value for a word, it is said that "the variable is not set" or "the variable is unset".  This is a terminology shift--and because of it the <strong>unset?</strong> routine is deprecated, because proper usage would be <strong>unset? 'some-var</strong> and not <strong>unset? :some-var</strong>.  It will be revived with the correct meaning in the future, but for now <strong>not set? 'some-var</strong> is to be used...as UNSET? is gradually replaced with VOID? in legacy modules.</p>
+</li>
+<li>
+<p>I'll restate it for emphasis, that <strong>void?</strong> is <em>not</em> a test for a <strong>void!</strong> type.  There is no void! or unset!.  There is no construction syntax for a void! or unset!, because it is not a value...you can't write <strong>do [x: #[unset!]]</strong> anymore because the source block could not hold a non-value in that second spot of the block.  void? is a standalone routine you only call on a transient evaluative result.</p>
+</li>
+</ul>
+<blockquote>
+<p>Note: This worldview makes, I think, much more sense:</p>
+<pre><code>set 'x value
+assert [set? 'x]
+
+unset 'x
+assert [unset? 'x]
+</code></pre>
+<p>"Setness" and "unsetness" does much better as a property of a variable, than a value.  Being liberated from having variables that are set to UNSET! (e.g. the interpreter source had code like <code>SET_UNSET(value)</code>)...and all the confusions that go with that, is very nice.</p>
+</blockquote>
+<p>By pushing void into this new role, users work with it in many more places where BLANK! ("none!") might have been used previously.  As the default return result of conditional expressions and loops, with a pervasive distinct meaning for "opting out"... there are many much more elegant ways of doing things.  It takes over many cases of what BLANK! used to be for--(which helps clarify the roles of BLANK! specifically as a purposeful positional placeholder that is used in blocks and should -not- be omitted).</p>
+<pre><code>&gt;&gt; compose [a (if false ['b]) c]
+== [a #[none] c] ;-- R3-Alpha/Red 0.6.0
+== [a c] ;-- Ren-C
+
+&gt;&gt; compose [a (switch 1 [2 ['b] 3 ['c]]) d]
+== [a #[none] d] ;-- R3-Alpha/Red 0.6.0
+== [a d] ;-- Ren-C
+
+&gt;&gt; rejoin ["a" (while [1 &gt; 2] ["b"]) "c"]
+== "anonec" ;-- R3-Alpha/Red 0.6.0
+== "ac" ;-- Ren-C
+</code></pre>
+<p>The more places that void is not allowed to make sense for, the more features open up.  For instance: you cannot pass a void value as a refinement argument, so they can be used to <em>revoke</em> refinements:</p>
+<pre><code> &gt;&gt; condition: true
+ &gt;&gt; append/dup copy [a b c] [d e] if condition [2]
+ [a b c d e d e]
+
+ &gt;&gt; condition: false
+ &gt;&gt; append/dup copy [a b c] [d e] if condition [2]
+ [a b c d e]
+</code></pre>
+<blockquote>
+<p>Note: There is one portability pitfall to be aware of, in the sense of "creates problems that can be hard to find".  It's not terribly common, but is sort of along these lines:</p>
+<pre><code>&gt;&gt; all [true (if 1 &gt; 2 [true]) true]
+== #[none] ;-- R3-Alpha/Red 0.6.0
+== true ;-- Ren-C
+</code></pre>
+<p>So here we see that returning void made Ren-C consider the condition to opt-out.  e.g. "if 1 &lt; 2 then <a href="https://forum.rebol.info/t/philosophy-of-any-and-all-w-r-t-voids/154">I do not have a vote to contribute to this ALL"</a>.  While R3-Alpha and Red saw the whole expression as being logically false.  I strongly believe the Ren-C interpretation is the more powerful and useful one, and it fits perfectly with the other findings.)</p>
+<p>Also, there is room here for tools like <code>if?</code> ... which would return TRUE if the condition was taken and FALSE if it was not, ignoring the result of the block.  This is potentially more generically useful in some places, allowing one to not worry about what falls out the bottom of the block.</p>
+</blockquote>
+<h3>Familiarity Breeds Factoring</h3>
+<p>These new features are all fine and well to use with inline IF or WHILE or SWITCH or CASE.  But if you can do something inline, it isn't long before people want to factor out the expression.  If you can write <strong>all [... case [...] ...]</strong> it's quite natural to want to change that to <strong>expr: case [...] | all [... :expr ...]</strong></p>
+<p>But when it comes to assigning "voids", R3-Alpha, Rebol2, and Red 0.6.0 make it a bit difficult.  This produces an error in all three:</p>
+<pre><code> &gt;&gt; code: []
+ &gt;&gt; result: do code
+ ** Script error: result: needs a value
+</code></pre>
+<p>To work around this, one must use a function call to SET with a refinement, /ANY.  <em>(In Ren-C the refinement is called /OPT which ties into saying it's an "optional set"..as well as tying it to the OPT primitive that converts BLANK! to void and passes through all other values.)</em></p>
+<pre><code>&gt;&gt; code: []
+&gt;&gt; set/any 'result do code
+&gt;&gt; if unset? :result [print "It was unset"]
+It was unset
+</code></pre>
+<p>There's already a mismatch here, between <strong>set 'result (...)</strong> and <strong>result: (...)</strong> when compared with <strong>get 'result</strong> and <strong>:result</strong>, demonstrated if we use a plain GET.</p>
+<pre><code>&gt;&gt; code: []
+&gt;&gt; set/any 'result do code
+&gt;&gt; if unset? get 'result [print "It was unset"]
+** Script error: result has no value
+</code></pre>
+<p>In other words, <strong>:result</strong> is effectively GET/ANY while <strong>result:</strong> is just SET, as opposed to SET/ANY.</p>
+<p>One reasoning could be because "getting" has two entry points via words...one that is the plain undecorated use of a word (e.g. <strong>result</strong> vs <strong>:result</strong>) while "setting" has only one hook (<strong>result:</strong>).  But note that it's not appropriate to think of the leading <strong>:</strong> as /ANY, and without as just GET...because GET doesn't call functions the way an undecorated word does!  So <strong>:result</strong> is the only real entry point to GET, and it's a GET/ANY.</p>
+<p>After considerable reflection, and trying things multiple ways...in Ren-C <strong>result:</strong> acts as SET/OPT, and <strong>:result</strong> acts as GET/OPT.  The unrefined GET and SET operations give errors if passed a void.  This has a number of benefits, here are a few:</p>
+<ul>
+<li>
+<p>As explained, it provides parity in the definitions for setting and getting.</p>
+</li>
+<li>
+<p>Instead of those who can handle "opted-out" variables (or are willing to just have a "downstream" error) being <em>forced</em> to use the ugly <strong>set/opt 'foo (...)</strong>, the people for whom assurances have extra value <em>can optionally</em> use the <em>prettier</em> <strong>set 'foo (...)</strong>.  Ren-C offers even more choices, like <strong>foo: ensure (...)</strong> and that would work as <strong>ensure foo: (...)</strong> as well.</p>
+</li>
+</ul>
+<blockquote>
+<p>Note: One consideration on wanting to shift the burden for "it would be nice to check" onto those who think it's valuable is the idea that really, checking the return result of a function for <em>just void</em> is awfully specific.  If you call a function and expect it to be an integer, but it comes back a BLANK!, then are you any "safer"?  Quite arguably you are <em>less</em> safe, because when you go to use the assigned result and it's a BLANK! then you won't get any errors, such as with <strong>x: some-function | append data x</strong>.  Where the void will complain, the BLANK! wouldn't.  This shows how the previous checking was very much an illusion, and it gets in the way of much more interesting code when everything is piped together.  <strong>ensure integer! x: (...)</strong> is an example of expanding the concepts.</p>
+</blockquote>
+<ul>
+<li>
+<p>Convenient means of unsetting: <strong>foo: ()</strong></p>
+</li>
+<li>
+<p>Cleaner expressivity of conditional sets.  For instance, if one wishes to conditionally set or unset a key in a map one can write <strong>map/key: if condition [code]</strong> and it will be removed should the condition be false.  This is more convenient than <strong>either condition [map/key: (code)] [unset 'map/key]</strong>.</p>
+</li>
+<li>
+<p>Avoids separate test for presence and lookup in a map...e.g. <strong>unless void? value: :map/key [do stuff with value]</strong></p>
+</li>
+</ul>
+<blockquote>
+<p>Note: This builds on the idea that allowing any legal value to be in the mapped-to range of a map is an important feature.  Regardless of the legal kinds of <em>keys</em> that a map permits, having the full range of <em>values</em> ... including BLANK! in that range... is useful.  There's simply a lot that can be done.  See <span class="hashtag">#253</span> for more on how this has cleaned things up.</p>
+</blockquote>
+<p>Overall, this has held up much better (in my opinion) than the previous design.</p>
+          <p><a href="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/more-on-the-mechanics-of-void/165/1</link>
+        <pubDate>Wed, 28 Jun 2017 18:04:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-165-1</guid>
+        <source url="https://forum.rebol.info/t/more-on-the-mechanics-of-void/165.rss">More on the mechanics of void</source>
+      </item>
+  </channel>
+</rss>

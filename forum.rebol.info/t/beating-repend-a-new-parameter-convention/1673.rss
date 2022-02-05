@@ -1,0 +1,421 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Beating REPEND: A New Parameter Convention?</title>
+    <link>https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673</link>
+    <description>When you do an **append a reduce b**, the REDUCE generates a new series... let&#39;s call it **rb**.  Then **rb** is spliced into **a**.  And then **rb** needs to be GC&#39;d.
+
+The idea behind **repend a b** is that you never make **rb**.  Instead, expressions are evaluated one by one and put onto **a** as you go.  The savings are twofold...reduced memory overhead and reduced tax on the GC by not making extra series nodes.
+
+That might sound like a great savings, but here is a heated debate in Red about the questionable benefit of REPEND (as well as /INTO):
+
+  https://github.com/red/red/issues/3340
+
+I guess I&#39;m halfway on DocKimbel&#39;s side there...in that if REPEND isn&#39;t showing a benefit it&#39;s probably more to do with a bug in REPEND vs. that the idea doesn&#39;t represent a savings.
+
+But I *hate* the word REPEND.  Things like REMOLD are double monstrous, and REFORM?  Give me a break.  These make a terrible impression.
+
+More generally, I don&#39;t like the idea that every function would have to come in two flavors and create anxiety on the part of the caller as to if they&#39;re using the optimized one or not.  I&#39;d like any optimization to be more &quot;under the hood&quot; so the caller doesn&#39;t have to fret about it.
+
+This got me to thinking...
+
+## A New Voodoo for GET-params!
+
+Let&#39;s imagine that we have a new rule for params that look like GET-WORD!:
+
+* If the argument is a GET-XXX!, it is passed literally
+
+* If the argument is anything else, it is evaluated normally and the product is passed in with one quoting level added.
+
+Here&#39;s an example definition
+
+    appender: func [
+        block [block!]
+        :value [any-value!]
+    ][
+       print [&quot;Block is&quot; mold block]
+       print [&quot;Value is&quot; mold value]
+       if get-block? value [
+           append block reduce as block! value
+       ] else [
+           append block unquote value
+       ]
+    ]
+
+Let&#39;s look at some concrete examples:
+
+    &gt;&gt; appender [1 2 3] 2 + 2
+    Block is [1 2 3]
+    Value is &#39;4
+    == [1 2 3 4]
+
+    &gt;&gt; data: [[a b c] [d e f]]
+    &gt;&gt; appender [1 2 3] second data
+    Block is [1 2 3]
+    Value is &#39;[d e f]
+    == [1 2 3 d e f]
+
+    &gt;&gt; appender [1 2 3] :[10 + 20 100 + 200]
+    Block is [1 2 3]
+    Value is :[10 + 20 100 + 200]  ; not quoted!
+    == [1 2 3 30 300]
+
+At the source level, the user doesn&#39;t really have to worry about the parameter convention.  They get the same outcome as if the REDUCE had been done by the evaluator, but the APPENDER becomes complicit.
+
+And look what happens if the GET-BLOCK! is in a variable...
+
+    &gt;&gt; data: the :[10 + 20 100 + 200]
+    &gt;&gt; appender [1 2 3] data
+    Block is [1 2 3]
+    Value is &#39;:[10 + 20 100 + 20]
+    ** Error: Cannot append evaluative items...
+
+**A ha!** We could tell that this was an evaluative get-block product, and not meant to participate in our little trick.  *(Erroring is actually the right answer here, you would need to use **only data** or **^data** or **quote data** etc. to APPEND an evaluative GET-BLOCK! under the new rules.)*
+
+This is neat, because it means users can express intention to reduce at the callsite...and it is something that you can optimize on an as-needed basis.  
+
+## As One Would Expect, There Are Some Glitches...
+
+There are some seeming semantic glitches when a function takes these and they&#39;re not the last parameter, where you might see variations along the lines of:
+
+     &gt;&gt; takes-first-args-normally :[elide print &quot;A&quot;, 1 + 2] (print &quot;B&quot;, &lt;x&gt;)
+     A
+     B
+     3
+     &lt;x&gt; 
+
+    &gt;&gt; takes-first-arg-specially: :[elide print &quot;A&quot;, 1 + 2] (print &quot;B&quot;, &lt;x&gt;)
+    A
+    B
+    &lt;x&gt;
+    3
+
+Basically: **If you somehow relied on side effects happening in left-to-right parameter order at the callsite, then moving the REDUCE of any parameters other than the last one into the body of the operation will change that order.**
+
+This is nothing new for this line of thinking in optimization: imagine if APPEND and REPEND took their arguments in the reverse order, so that the block wasn&#39;t the last item.  You couldn&#39;t just blindly substitute APPEND REDUCE for REPEND in that case, if you were dependent on argument-ordering effects...if there was an evaluation in the first parameter&#39;s reduction that was needed for the second parameter.
+
+But the difference is that the person editing APPEND REDUCE =&gt; REPEND made  a change at the callsite.  If you change the parameter convention and don&#39;t touch the callsites--with the intent that they stay working and you&#39;re just adding an optimization--it starts to matter.
+
+We have some control here, though!  We can define how GET-BLOCK!s act as arguments to function calls, and we can say that they don&#39;t actually perform their REDUCE until the function executes.  That leaves breathing room for people who wish to add the optimization later...knowing they won&#39;t break the expectations.
+
+*Whew, that solves that problem!  Good thing it&#39;s the only one!  Oh, no, wait...*  :face_with_head_bandage: 
+
+## Not All REPEND Operations Take Literal Blocks
+
+You see **repend data [...]** a lot of the time, but there&#39;s also **repend block1 block2**. 
+
+So **append data :[...]** can be finessed as an optimization for the first case, but doesn&#39;t solve the second.
+
+To shore it up, we&#39;d have to say that **`:(...)`** means &quot;reduce the result of what&#39;s in the expression&quot;.
+
+    &gt;&gt; :(reverse [1 + 2 10 + 20])  ; -&gt; :[20 + 10 2 + 1]
+    == [30 3]
+
+This way, we could actually pass the APPEND an expression to reduce the product of.  We&#39;d need to do the evaluation at the moment we passed the parameter (I think), and then alias it as a GET-BLOCK!, so:
+
+    &gt;&gt; appender [1 2 3] :(reverse [1 + 2 10 + 20])
+    Block is [1 2 3]
+    Value is :[20 + 10 2 + 1]
+    == [1 2 3 3 30]
+
+## Where Are GET-WORD!, GET-PATH!, GET-TUPLE! in all of this?
+
+We don&#39;t have GET-WORD! mean &quot;reduce the product of fetching the word&quot;:
+
+    &gt;&gt; block: [1 + 2]
+
+    &gt;&gt; :block
+    == [1 + 2]  ; not [3]
+
+But it seems it would be inconsistent to not put these other GET-XXX! types into the family of parameters that are captured as-is.  So the above code would get this behavior:
+
+    &gt;&gt; appender [1 2 3] :foo
+    Block is [1 2 3]
+    Value is :foo
+    ** Error: Cannot append evaluative items...
+
+Instead of a REDUCE it would need a GET.  But this makes a good argument for why REDUCE of a GET-WORD! should work as a word fetch, for generality... it makes routines like this easier to write correctly.
+
+I don&#39;t think it&#39;s worth shuffling the symbols around so that **:foo** does a reduce and we pick something else for GET.  It seems to me that **:(foo)** is fine enough.
+
+But even though GET-WORD! won&#39;t run arbitrary code, you can be impacted by ordering problems, where someone might pass a **:foo** argument and then in the next parameter change the value of foo.  Hence for consistency, we&#39;d be saying that normal parameters would likely have to delay their get of foo until all the parameters were given...this way you could change the parameter convention without affecting callsites.
+
+But likely the best way to go about that would be to protect the word from modification:
+
+    &gt;&gt; some-func :foo (foo: 20, &lt;arg&gt;)
+    ** Error: FOO captured by GET-WORD! in parameter slot, can&#39;t modify
+          while gathering arguments
+
+## I&#39;m Probably Over-Worrying About It
+
+...these protection mechanisms I mention in order to make it painless to change a parameter convention are not likely suited to being the kind of concern that applies.
+
+But it&#39;s good to articulate what the limits of a design are...</description>
+    
+    <lastBuildDate>Fri, 03 Dec 2021 08:43:54 +0000</lastBuildDate>
+    <category>Optimization</category>
+    <atom:link href="https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Beating REPEND: A New Parameter Convention?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I haven't implemented the parameter convention described in this proposal, though I think about it a lot.  It's a pretty interesting thought.</p>
+<p>One point I keep contemplating is this asymmetry:</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1673">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>We don't have GET-WORD! mean "reduce the product of fetching the word":</p>
+<pre><code>&gt;&gt; block: [1 + 2]
+
+&gt;&gt; :block
+== [1 + 2]  ; not [3]
+</code></pre>
+</blockquote>
+</aside>
+<p><strong>But what if :var reduced it?</strong>  How would you fetch actions as-is?</p>
+<p>Well, maybe that's what terminal dot could be for:</p>
+<pre><code>&gt;&gt; apply append. [[a b c] 'd]
+== [a b c d]
+</code></pre>
+<p>Terminal dot already means "don't run actions", but it errors on actions.  This would simply act like a GET-WORD! used to.</p>
+<p>So this would wind up meaning that calling <strong>:x</strong> a GET-WORD! would be a misnomer.  It'd be a REDUCE-WORD!.  :-/</p>
+<h2>Is This A Good Idea?</h2>
+<p>I'm not hating the idea of using periods to suppress function evaluations.</p>
+<pre><code>apply :append [[a b c] 'd]
+
+apply append. [[a b c] 'd]
+</code></pre>
+<p>And having a shorthand for <strong>reduce foo</strong> as just <strong>:foo</strong> which would then be consistent with <strong>:[...]</strong> seems rather tempting.</p>
+<p>It fills in the missing link for the REPEND / REFORM / REXXX finesse, by allowing you to defer the reduction of a variable until the function gets it.  Recalling the rules of the weird <strong>:arg</strong> parameter convention:</p>
+<pre><code>&gt;&gt; block: [1 + 2]
+
+&gt;&gt; append data :block
+; append receives literally `:block`
+; can use optimized tactic and avoid intermediate series
+
+&gt;&gt; append data block
+; append receives evaluative product '[1 + 2]
+; never sees the word "block"
+</code></pre>
+<h2>Bonus Feature: Alternative To UNMETA</h2>
+<p>Another place this fills in is that we don't have anything to act as a complement to META-WORD!, e.g. ^X</p>
+<pre><code>&gt;&gt; x: ~bad~
+== ~bad~  ; isotope
+
+&gt;&gt; temp: ^x
+== ~bad~
+
+&gt;&gt; unmeta temp
+== ~bad~  ; isotope
+</code></pre>
+<p>We have to invoke the word "unmeta" there.  But if <strong>:temp</strong> meant "reduce temp" in a way that accepted quoted items (with BAD-WORD!s becoming isotopes) then it would be a complement (though it would actually handle more cases than UNMETA does, since that errors on BLOCK!s instead of reducing them.)</p>
+<h2>Wishful Thinking Addendum: Symbols for UNMETA-XXX!</h2>
+<p>I wish there were a symbol for the complement to meta.</p>
+<p><code>&gt;&gt;</code> <strong>x: first [a]</strong><br>
+<code>==</code> <code>a</code></p>
+<p><code>&gt;&gt;</code> <strong>y: ^x</strong><br>
+<code>==</code> <code>'a</code></p>
+<p><code>&gt;&gt;</code> <strong><sub>∨</sub>y</strong><br>
+<code>==</code> <code>a</code></p>
+<p>But there's not (that's a subscripted character, that's slightly better than the letter v for the purpose, but still not great).</p>
+<p>Up and down arrows would actually be nice for this.</p>
+<pre><code>&gt;&gt; x: first [a]
+== a
+
+&gt;&gt; y: ↑x
+== 'a 
+
+&gt;&gt; ↓y
+== a
+</code></pre>
+<p>In fact, if we consider leading caret and leading colon to be a workaround for not having the symbols, we could call them UP-WORD! and DOWN-WORD!.  Because calling things GET-WORD! when they don't really relate to the GET operation is confusing.</p>
+<p>It's like naming particles in physics...you've only got so many words.</p>
+          <p><a href="https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673/3</link>
+        <pubDate>Sat, 23 Oct 2021 08:26:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1673-3</guid>
+        <source url="https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673.rss">Beating REPEND: A New Parameter Convention?</source>
+      </item>
+      <item>
+        <title>Beating REPEND: A New Parameter Convention?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1673">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Here's an example definition</p>
+<pre><code>appender: func [
+    block [block!]
+    :value [any-value!]
+][
+   print ["Block is" mold block]
+   print ["Value is" mold value]
+   if get-block? value [
+       append block reduce as block! value
+   ] else [
+       append block unquote value
+   ]
+]
+</code></pre>
+</blockquote>
+</aside>
+<p>Functions like this can give us pretty profound guidance on what the behavior of operations on various datatypes should be.</p>
+<p>For instance: here we see that we want to REDUCE a GET-BLOCK! (and any GET-XXX! type), and we want to unquote quoted items.  Well doesn't that make it seem like a good idea to make REDUCE of a quoted item unquote it?</p>
+<pre><code>&gt;&gt; first ['foo]
+== 'foo
+
+&gt;&gt; reduce first ['foo]
+== foo
+</code></pre>
+<p>That makes the above shorter:</p>
+<pre><code>appender: func [
+    block [block!]
+    :value [any-value!]
+][
+   print ["Block is" mold block]
+   print ["Value is" mold value]
+   append block reduce value
+]
+</code></pre>
+<p>Internally there's all kinds of shortcuts you could take with this...empty blocks being no-ops, or blocks with just one inert item not kicking into a reduce.</p>
+<p>I think that we might want to avoid making REDUCE accept just any type, like WORD!s etc, but here we can see that if you were wiring up operations and you wanted to line it up so some input to REDUCE was a no-op you'd know how: <em>you'd quote it</em>.</p>
+          <p><a href="https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673/2</link>
+        <pubDate>Thu, 19 Aug 2021 22:39:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1673-2</guid>
+        <source url="https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673.rss">Beating REPEND: A New Parameter Convention?</source>
+      </item>
+      <item>
+        <title>Beating REPEND: A New Parameter Convention?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When you do an <strong>append a reduce b</strong>, the REDUCE generates a new series... let's call it <strong>rb</strong>.  Then <strong>rb</strong> is spliced into <strong>a</strong>.  And then <strong>rb</strong> needs to be GC'd.</p>
+<p>The idea behind <strong>repend a b</strong> is that you never make <strong>rb</strong>.  Instead, expressions are evaluated one by one and put onto <strong>a</strong> as you go.  The savings are twofold...reduced memory overhead and reduced tax on the GC by not making extra series nodes.</p>
+<p>That might sound like a great savings, but here is a heated debate in Red about the questionable benefit of REPEND (as well as /INTO):</p>
+<p><a href="https://github.com/red/red/issues/3340">https://github.com/red/red/issues/3340</a></p>
+<p>I guess I'm halfway on DocKimbel's side there...in that if REPEND isn't showing a benefit it's probably more to do with a bug in REPEND vs. that the idea doesn't represent a savings.</p>
+<p>But I <em>hate</em> the word REPEND.  Things like REMOLD are double monstrous, and REFORM?  Give me a break.  These make a terrible impression.</p>
+<p>More generally, I don't like the idea that every function would have to come in two flavors and create anxiety on the part of the caller as to if they're using the optimized one or not.  I'd like any optimization to be more "under the hood" so the caller doesn't have to fret about it.</p>
+<p>This got me to thinking...</p>
+<h2>A New Voodoo for GET-params!</h2>
+<p>Let's imagine that we have a new rule for params that look like GET-WORD!:</p>
+<ul>
+<li>
+<p>If the argument is a GET-XXX!, it is passed literally</p>
+</li>
+<li>
+<p>If the argument is anything else, it is evaluated normally and the product is passed in with one quoting level added.</p>
+</li>
+</ul>
+<p>Here's an example definition</p>
+<pre><code>appender: func [
+    block [block!]
+    :value [any-value!]
+][
+   print ["Block is" mold block]
+   print ["Value is" mold value]
+   if get-block? value [
+       append block reduce as block! value
+   ] else [
+       append block unquote value
+   ]
+]
+</code></pre>
+<p>Let's look at some concrete examples:</p>
+<pre><code>&gt;&gt; appender [1 2 3] 2 + 2
+Block is [1 2 3]
+Value is '4
+== [1 2 3 4]
+
+&gt;&gt; data: [[a b c] [d e f]]
+&gt;&gt; appender [1 2 3] second data
+Block is [1 2 3]
+Value is '[d e f]
+== [1 2 3 d e f]
+
+&gt;&gt; appender [1 2 3] :[10 + 20 100 + 200]
+Block is [1 2 3]
+Value is :[10 + 20 100 + 200]  ; not quoted!
+== [1 2 3 30 300]
+</code></pre>
+<p>At the source level, the user doesn't really have to worry about the parameter convention.  They get the same outcome as if the REDUCE had been done by the evaluator, but the APPENDER becomes complicit.</p>
+<p>And look what happens if the GET-BLOCK! is in a variable...</p>
+<pre><code>&gt;&gt; data: the :[10 + 20 100 + 200]
+&gt;&gt; appender [1 2 3] data
+Block is [1 2 3]
+Value is ':[10 + 20 100 + 20]
+** Error: Cannot append evaluative items...
+</code></pre>
+<p><strong>A ha!</strong> We could tell that this was an evaluative get-block product, and not meant to participate in our little trick.  <em>(Erroring is actually the right answer here, you would need to use <strong>only data</strong> or <strong>^data</strong> or <strong>quote data</strong> etc. to APPEND an evaluative GET-BLOCK! under the new rules.)</em></p>
+<p>This is neat, because it means users can express intention to reduce at the callsite...and it is something that you can optimize on an as-needed basis.</p>
+<h2>As One Would Expect, There Are Some Glitches...</h2>
+<p>There are some seeming semantic glitches when a function takes these and they're not the last parameter, where you might see variations along the lines of:</p>
+<pre><code> &gt;&gt; takes-first-args-normally :[elide print "A", 1 + 2] (print "B", &lt;x&gt;)
+ A
+ B
+ 3
+ &lt;x&gt; 
+
+&gt;&gt; takes-first-arg-specially: :[elide print "A", 1 + 2] (print "B", &lt;x&gt;)
+A
+B
+&lt;x&gt;
+3
+</code></pre>
+<p>Basically: <strong>If you somehow relied on side effects happening in left-to-right parameter order at the callsite, then moving the REDUCE of any parameters other than the last one into the body of the operation will change that order.</strong></p>
+<p>This is nothing new for this line of thinking in optimization: imagine if APPEND and REPEND took their arguments in the reverse order, so that the block wasn't the last item.  You couldn't just blindly substitute APPEND REDUCE for REPEND in that case, if you were dependent on argument-ordering effects...if there was an evaluation in the first parameter's reduction that was needed for the second parameter.</p>
+<p>But the difference is that the person editing APPEND REDUCE =&gt; REPEND made  a change at the callsite.  If you change the parameter convention and don't touch the callsites--with the intent that they stay working and you're just adding an optimization--it starts to matter.</p>
+<p>We have some control here, though!  We can define how GET-BLOCK!s act as arguments to function calls, and we can say that they don't actually perform their REDUCE until the function executes.  That leaves breathing room for people who wish to add the optimization later...knowing they won't break the expectations.</p>
+<p><em>Whew, that solves that problem!  Good thing it's the only one!  Oh, no, wait...</em>  <img src="https://forum.rebol.info/images/emoji/twitter/face_with_head_bandage.png?v=9" title=":face_with_head_bandage:" class="emoji" alt=":face_with_head_bandage:"></p>
+<h2>Not All REPEND Operations Take Literal Blocks</h2>
+<p>You see <strong>repend data [...]</strong> a lot of the time, but there's also <strong>repend block1 block2</strong>.</p>
+<p>So <strong>append data :[...]</strong> can be finessed as an optimization for the first case, but doesn't solve the second.</p>
+<p>To shore it up, we'd have to say that <strong><code>:(...)</code></strong> means "reduce the result of what's in the expression".</p>
+<pre><code>&gt;&gt; :(reverse [1 + 2 10 + 20])  ; -&gt; :[20 + 10 2 + 1]
+== [30 3]
+</code></pre>
+<p>This way, we could actually pass the APPEND an expression to reduce the product of.  We'd need to do the evaluation at the moment we passed the parameter (I think), and then alias it as a GET-BLOCK!, so:</p>
+<pre><code>&gt;&gt; appender [1 2 3] :(reverse [1 + 2 10 + 20])
+Block is [1 2 3]
+Value is :[20 + 10 2 + 1]
+== [1 2 3 3 30]
+</code></pre>
+<h2>Where Are GET-WORD!, GET-PATH!, GET-TUPLE! in all of this?</h2>
+<p>We don't have GET-WORD! mean "reduce the product of fetching the word":</p>
+<pre><code>&gt;&gt; block: [1 + 2]
+
+&gt;&gt; :block
+== [1 + 2]  ; not [3]
+</code></pre>
+<p>But it seems it would be inconsistent to not put these other GET-XXX! types into the family of parameters that are captured as-is.  So the above code would get this behavior:</p>
+<pre><code>&gt;&gt; appender [1 2 3] :foo
+Block is [1 2 3]
+Value is :foo
+** Error: Cannot append evaluative items...
+</code></pre>
+<p>Instead of a REDUCE it would need a GET.  But this makes a good argument for why REDUCE of a GET-WORD! should work as a word fetch, for generality... it makes routines like this easier to write correctly.</p>
+<p>I don't think it's worth shuffling the symbols around so that <strong>:foo</strong> does a reduce and we pick something else for GET.  It seems to me that <strong>:(foo)</strong> is fine enough.</p>
+<p>But even though GET-WORD! won't run arbitrary code, you can be impacted by ordering problems, where someone might pass a <strong>:foo</strong> argument and then in the next parameter change the value of foo.  Hence for consistency, we'd be saying that normal parameters would likely have to delay their get of foo until all the parameters were given...this way you could change the parameter convention without affecting callsites.</p>
+<p>But likely the best way to go about that would be to protect the word from modification:</p>
+<pre><code>&gt;&gt; some-func :foo (foo: 20, &lt;arg&gt;)
+** Error: FOO captured by GET-WORD! in parameter slot, can't modify
+      while gathering arguments
+</code></pre>
+<h2>I'm Probably Over-Worrying About It</h2>
+<p>...these protection mechanisms I mention in order to make it painless to change a parameter convention are not likely suited to being the kind of concern that applies.</p>
+<p>But it's good to articulate what the limits of a design are...</p>
+          <p><a href="https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673/1</link>
+        <pubDate>Thu, 19 Aug 2021 22:29:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1673-1</guid>
+        <source url="https://forum.rebol.info/t/beating-repend-a-new-parameter-convention/1673.rss">Beating REPEND: A New Parameter Convention?</source>
+      </item>
+  </channel>
+</rss>

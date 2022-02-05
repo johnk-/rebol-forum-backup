@@ -1,0 +1,334 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Errors - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/errors/54</link>
+    <description>Topics in the &#39;Errors&#39; category For discussion of error handling and error mechanisms.</description>
+    
+      <lastBuildDate>Sat, 02 Oct 2021 19:54:57 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/errors/54.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>About the Errors category</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Errors</category>
+          <description><![CDATA[
+            <p>For discussion of error handling and error mechanisms.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/about-the-errors-category/1734">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/about-the-errors-category/1734</link>
+          <pubDate>Sat, 02 Oct 2021 19:54:57 +0000</pubDate>
+          <discourse:topicPinned>Yes</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1734</guid>
+          <source url="https://forum.rebol.info/t/about-the-errors-category/1734.rss">About the Errors category</source>
+        </item>
+        <item>
+          <title>The Need To Rethink ERROR!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Errors</category>
+          <description><![CDATA[
+            <p>Looking around at how people deal with failure conditions, <em>there's a pretty strong trend against exceptions--a trend which has grown stronger in the last batch of popular languages</em>.</p>
+<p>Exceptions operate on a dubious principle: that a trigger condition originating transitively in a deep stack of code can be meaningfully handled when passed up through intermediary stacks.  There's an uncomfortable violation of abstraction: you are no longer dealing with a return result that was clearly formalized in the contract between caller-and-callee.  <em>"The function you called couldn't handle an error... but you're trying to do it without even knowing what that function called that failed...?"</em></p>
+<p>Even exception advocates agree that they should not be used lightly...the name suggests it is only for "exceptional" circumstances.  So things that are very reasonable to expect to occur during operation--like a filesystem API trying to open the file and it not being there--should fit into the normal return results.  This is a slippery slope and subject to what your program considers "normal"...but the intent is that it's supposed to be more for things like "ran out of memory" or "network cable was unplugged during transfer".</p>
+<p>But there are many who are against exceptions.  e.g. Google's is against them: <a href="https://google.github.io/styleguide/cppguide.html#Exceptions"><em>"We do not use C++ exceptions."</em></a>  When the pros and cons are weighed, they think it's just not worth it.</p>
+<p>Rebol code that uses TRAP (old TRY) or ATTEMPT frequently shows that Rebol has an even greater weakness of the approach than usual: any arbitrary typo inside the executing code can be interpreted as the wrong kind of failure.  Conflating a syntax error with something like file-not-found is much too easy.</p>
+<p>Another key contributor to exception unpopularity is <strong>exceptions don't work well with asynchronous programming</strong>.  Code that triggered a request can be off the stack while a handler is running.  So there is nowhere to put a <code>catch {}</code> above the stack for the problem.</p>
+<h2>Emergent Pattern: Branching Returns</h2>
+<p>Across languages you see a consistent pattern of functions formalizing the return of a branched result: either a "successful" return or an "error" return...and labeling the return value as such.</p>
+<ul>
+<li>
+<p>Haskell has "the <a href="https://wiki.haskell.org/Handling_errors_in_Haskell#Error_using_the_Either_type"><code>Either</code></a> monad"...which bundles a value with a label of "left" and "right".  By convention, if the value is labeled "left" it is an error value...and if it is labeled "right" it is a successful return.  There is no "umbrella" error datatype--so strings labeled "left" or other common tuples are typically used.</p>
+</li>
+<li>
+<p>Haskell-inspired Rust has <a href="https://doc.rust-lang.org/stable/rust-by-example/error/result.html"><code>result</code></a>, which has a similar labeling scheme...though it specializes the purpose and gives the labels the names "Ok" and "Err".  It suggests (but does not enforce) that Err-labeled values be instances of the <a href="https://doc.rust-lang.org/std/error/trait.Error.html"><code>std::error::Error</code></a> datatype...which meets the basic expectations of what an error should be able to do (e.g. print itself out, show a call stack of where it originated).</p>
+</li>
+<li>
+<p>JavaScript ES6 handles asynchronous scenarios by making it so that <code>async</code> functions don't return their result with <code>return</code>, but with either <code>resolve()</code> or <code>reject()</code>.  If resolve is called, then callsites will trigger <code>then()</code> handling, otherwise they will trigger <code>catch()</code> handling.  If <code>await</code> is used vs. then/catch, a failed promise will resort to throwing the error (e.g. an exception).</p>
+</li>
+<li>
+<p>Node.js used the <a href="https://nodejs.org/en/knowledge/errors/what-are-the-error-conventions/">"callback convention"</a> where asynchronous functions return errors as the first parameter to a callback, and if that is null the other arguments are assumed valid...but this is now typically <a href="https://medium.com/better-programming/converting-callbacks-to-promises-like-a-pro-in-node-js-f5d4d466a1a7">converted into ES6 promises</a> where errors produce</p>
+</li>
+<li>
+<p>Go uses <a href="https://www.digitalocean.com/community/tutorials/handling-errors-in-go#:~:text=When%20a%20function%20returns%20multiple,value%20to%20a%20zero%20value.">multiple return values for errors</a>, with a convention that the <em>last</em> value in the return sequence is the error...with all other values being "zero values" of their type.</p>
+</li>
+</ul>
+<p>So if your own unsatisfying experiences with "throw/catch" and "fail/trap" solutions isn't enough to convince you...there's a pretty strong batch of added evidence.</p>
+<h2>Using The Parts In The Box Effectively</h2>
+<p>Something I had in the back of my mind ever since THEN could conveniently take a parameter value via lambdas, was what if ELSE could too.</p>
+<p>At the moment ELSE only triggers on NULL.  But what might happen if THEN didn't take ERROR!s or nulls, but ELSE did.  Something like:</p>
+<pre><code> (make error! "how about this?") then value -&gt; [
+     print ["This would not run:" value]
+ ] else error -&gt; [
+     print ["This would run:" error]
+ ]
+</code></pre>
+<p>But that crude sketch shows a weak basis for doing error handling:</p>
+<ul>
+<li>
+<p>It operates in the "single return result" realm...so to use it, you'd have to conflate ERROR! values in with a function's ordinary return values.  That would be tricky to avoid including ERROR! itself, if it can return ANY-VALUE! (e.g. you can PICK an ERROR! out of an array)</p>
+</li>
+<li>
+<p>There's nothing guaranteeing you handle an error...you could just forget and leave off the ELSE  (The "good" versions of the branched error approaches make sure you never accidentally ignore them, you have to consciously throw them away.)</p>
+</li>
+<li>
+<p>It may be (probably is?) a bad fit to fold this into ELSE...which isn't really about error handling, but whether branches are taken.</p>
+</li>
+</ul>
+<p>Using SET-BLOCK! for <a href="https://forum.rebol.info/t/forward-to-multiple-return-values-and-return-value-forwarding/1271">multiple return values</a> wedged open the door for being more effective in this space.  But we can think through this some more.</p>
+<p>One thing I notice in JavaScript and Go is that the error result is distinguished, but positioning is set by convention instead of by name.  As a random sample thought, we could syntactically push errors out somehow, e.g. with a TUPLE!</p>
+<pre><code>; function that returns 3 values and a possible error
+;
+[a b c].err: some-func arg1 arg2 arg3
+</code></pre>
+<p>I didn't say it was a great idea--just pointing out a degree of freedom.</p>
+<h2>Could We Get More Mileage Out Of ERROR!</h2>
+<p>Rebol2's ERROR! had an interesting aspect to it, as being an "ornery" value...like a VOID!...that you couldn't inspect normally.  You had to DISARM it and view it as an object in order to pick apart its properties.</p>
+<p>R3-Alpha's ERROR! was neutered and became just another flavor of OBJECT!.  It carries a bit of standardized information about what line and location it originated from...but arguably this could be a useful feature for any value <em>(internally to the system for debugging, I have functions like Touch() which will tag a value with the last place that modified it...and it comes in handy a lot)</em>.</p>
+<p>Maybe it's all right as it is... and what we're missing is more like Rust's <strong><code>result</code></strong>.  But I can't help but feel that in a universe of possible designs...that "OBJECT! that reports a different type" is weak.</p>
+<p>Again: I don't have any great ideas right now.  This is just noticing something and brainstorming.  Having multiple returns in the mix is good, but I'd like to see something that's at least as good as what other languages have.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/the-need-to-rethink-error/1371">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-need-to-rethink-error/1371</link>
+          <pubDate>Fri, 23 Oct 2020 07:48:00 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1371</guid>
+          <source url="https://forum.rebol.info/t/the-need-to-rethink-error/1371.rss">The Need To Rethink ERROR!</source>
+        </item>
+        <item>
+          <title>More Comprehensible Errors With per-Cell Labeling!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Errors</category>
+          <description><![CDATA[
+            <p>There's been a long-running complaint in the Redbol world that if you don't run a function directly from a WORD! or PATH!, it doesn't know a name for it:</p>
+<pre><code>r3-alpha&gt;&gt; append 1 &lt;d&gt;  ; dispatched as WORD!
+** Script error: append does not allow integer! for its series argument
+
+r3-alpha&gt;&gt; do compose [(:append) 1 &lt;d&gt;]  ; dispatched as ACTION!
+** Script error: -unnamed- does not allow integer! for its series argument
+</code></pre>
+<p>To try and improve on this, Red climbs the stack a bit to find something with a name...but the resulting error is gibberish:</p>
+<pre><code>red&gt;&gt; do compose [(:append) 1 &lt;d&gt;]
+*** Script Error: do does not allow integer for its series argument
+</code></pre>
+<p>The problem this is showing is that ACTION!s are things that can be known by many names, and when they get "extracted" from a WORD! they lose the label.</p>
+<p>Today I did something that's kind of obvious-seeming: <em>to make it so that GET-WORD! and GET-PATH! evaluations cache the name in the action cell instance</em>.  This isn't doing anything to the shared data for the action, just poking a pointer to the word's spelling data in the cell.</p>
+<p>It's a welcome improvement:</p>
+<pre><code>&gt;&gt; do compose [(:append) 1 &lt;d&gt;]
+** Script Error: append does not allow #[datatype! integer!]
+     for its series argument
+
+&gt;&gt; do compose [(:append/only) 1 &lt;d&gt;]
+** Script Error: append does not allow #[datatype! integer!]
+    for its series argument
+</code></pre>
+<p>The details of why this would be tricky just relate to the fact that bits don't grow on trees...and the "rules of the game" limit cells to 4 platform pointers in size.  To make a long-story-short: while ACTION! "archetypes" can't spare a pointer at this time, ACTION! <em>instances</em> can...and the distinction of whether an action is an archetype or not is made by detecting the properties of the pointed-to-series being a WORD-spelling or action-descriptor-array.</p>
+<p>If you write a function that processes a function to create a derived one, you'll need some tools for working with this cached symbol...otherwise you'd lose it just by storing actions in temporary variables.  Expect to see a few cases of that.  I'll look into it when time permits.  But this is already a <em>lot</em> better.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357</link>
+          <pubDate>Mon, 05 Oct 2020 22:53:04 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1357</guid>
+          <source url="https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357.rss">More Comprehensible Errors With per-Cell Labeling!</source>
+        </item>
+        <item>
+          <title>FAIL-ing with Grace</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Errors</category>
+          <description><![CDATA[
+            <p>Now that <a href="https://forum.rebol.info/t/skip-able-arguments/1013/2"><code>&lt;skip&gt;</code>-able arguments have been firmed up</a>, and are a confirmed Beta/One feature, it's time to deploy one of my early ideas for using them... FAIL.</p>
+<p>If you haven't been using FAIL, you should!  I've pointed out in the past you can just say <strong>case [... fail]</strong> and that's enough to get a failure and point to that location.  But it now lets you just point at any arbitrary value via a quoted word and it will complain about that word and its value:</p>
+<pre><code>&gt;&gt; foo: 10
+
+&gt;&gt; fail 'foo
+** Error: foo is invalid: 10
+** Where: fail console
+** Near: [fail 'foo ~~]
+</code></pre>
+<p>It works for paths too:</p>
+<pre><code>&gt;&gt; obj: make object! [field: &lt;I've been a bad, bad field...&gt;]
+
+&gt;&gt; fail 'obj/field
+** Error: obj/field is invalid: &lt;I've been a bad, bad field...&gt;
+** Where: fail console
+** Near: [fail 'obj/field ~~]
+</code></pre>
+<p>So this should be your lazy go-to for reporting errors, you get more information and type less than using PRINTs or longer-winded messages.</p>
+<h2>But the real strength is implicating callsites, vs FAILs</h2>
+<p>If you don't provide a place to blame, the only thing the evaluator knows is the whole stack and the place the failure was.</p>
+<pre><code> my-api: func [x y z] [
+     if true [
+         if y &lt; 100 [
+              fail "Who's failing?  one of those IFs?  Or MY-API?"
+        ]
+     ]
+ ]
+
+&gt;&gt; my-api 1 2 3
+** Error: Who's failing?  one of those IFs?  Or MY-API?
+** Where: fail if if my-api console
+** Near: [
+    fail "Who's failing?  one of those IFs?  Or MY-API?" ~...
+</code></pre>
+<p>That's not a terribly informative error message, but the evaluator doesn't know any more unless you tell it.  Previously you'd do this with FAIL/WHERE and pass it a WORD! from the frame you wanted to complain about.  But now, it's cleaner!</p>
+<pre><code>my-api: func [x y z] [
+     if true [
+         if y &lt; 100 [
+              fail 'y ["Value must be &gt;= 100, not" y]
+        ]
+     ]
+ ]
+
+&gt;&gt; my-api 1 2 3
+** Error: Value must be &gt;= 100, not 2
+** Where: my-api console
+** Near: [... 1 2 3 ~~]
+</code></pre>
+<p>Now the IFs are gone from the reporting stack, and you're indicating the callsite but not the FAIL itself.  <em>(Ideally the error message would point to the exact block position where the parameter you are complaining about originated from.  But that information is not preserved at the moment.  In the future it might be kept...maybe in a special slot that would go unused otherwise in 64-bit builds.  So the error report would improve!)</em></p>
+<p>Again, you could be lazy and just say <code>fail 'y</code> and get a fair amount of information.  In this case a bit of better information than in the custom message provided--in terms of the right name of the bad parameter!</p>
+<h2>This isn't arcane C magic, it's usermode Rebol!</h2>
+<p>You can <a href="https://github.com/metaeducation/ren-c/blob/599fab575e085ec702d33da22e820b9bd3b18d60/src/mezz/base-funcs.r#L962">read and help improve FAIL any day you feel like it</a>.  Please do!</p>
+            <p><small>7 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/fail-ing-with-grace/1027">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/fail-ing-with-grace/1027</link>
+          <pubDate>Tue, 22 Jan 2019 09:33:21 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1027</guid>
+          <source url="https://forum.rebol.info/t/fail-ing-with-grace/1027.rss">FAIL-ing with Grace</source>
+        </item>
+        <item>
+          <title>WORD!, PATH!, and URL!s as ERROR! ids</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Errors</category>
+          <description><![CDATA[
+            <p>R3-Alpha gave all the built in errors categories and a WORD! for an id.  These were established in the %errors.r file:</p>
+<p><a href="https://github.com/rebol/rebol/blob/master/src/boot/errors.r"><code>https://github.com/rebol/rebol/blob/master/src/boot/errors.r</code></a></p>
+<p>Each category had an integer "base" number, and the errors were numbered according to that.  Adding and removing errors would disrupt these numbers... so the idea was presumably that these would settle over time.  At some point of stability, errors removed from the middle would not have their numbers reused, while new errors would be added at the end of their groups.</p>
+<p>But the usage of integers for error codes isn't very "ecology friendly".  I question the wisdom of even having <em>error numbers</em> in Rebol...IDs may collide, but numbers will do so even quicker.  A lot of places you might imagine they'd be useful they aren't really; for instance, exit status codes for processes on UNIX are <a href="https://en.wikipedia.org/wiki/Exit_status">limited to bytes</a>...and even in that limited range they use conventions other than Rebol's numbers.</p>
+<p>To mitigate collisions, I've wondered if errors might be based on some kind of hierarchy, in which you could choose to refer to errors by WORD!, PATH!, or URL!.</p>
+<pre><code>error/id ~= 'missing-delimiter
+error/id ~= 'syntax/missing-delimiter
+error/id ~= http://rebol.info/e/syntax/missing-delimiter
+</code></pre>
+<p>So the idea being that the error IDs would be fully qualified somehow, but when you trapped them you could use a level of specificity that met your particular desires for rigor.  If you were worried there was some other kind of 'missing-delimiter error that could be thrown affecting your particular code, you might use a full URL.  I made up the <code>~=</code> operator here as something you might use which would gloss this difference.</p>
+<p>This isn't really a concrete proposal...just pointing out that I don't think numbering errors has a lot of point.  While the names have changed here and there, the numbers have thus far had basically no meaning.  It seems to me any future-forward strategy would avoid inventing error numbers entirely (an error of course might include a number as part of its parameterization if it's referring to a non-Rebol system, e.g. HTTP error codes).</p>
+<p>So if we killed the numbering, would anyone notice?</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/word-path-and-url-s-as-error-ids/559">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/word-path-and-url-s-as-error-ids/559</link>
+          <pubDate>Wed, 07 Mar 2018 21:23:41 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-559</guid>
+          <source url="https://forum.rebol.info/t/word-path-and-url-s-as-error-ids/559.rss">WORD!, PATH!, and URL!s as ERROR! ids</source>
+        </item>
+        <item>
+          <title>Embracing Host Language Exception Model in the API</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Errors</category>
+          <description><![CDATA[
+            <p>When first adding the variadic rebDo() <em>(now, <code>rebRun()</code>)</em>, it would return a value "handle" of the evaluative result.  As a first attempt of defining what it would do about errors, it returned NULL in that case.  Those who were interested in bulletproofing their code could add in check for NULL and then call a function for fetching the last error.</p>
+<p>But a handle has a NULL state as an option.  What if the result was just a boolean, like with the proposed behavior of <code>rebDid()</code>?  The idea of being able to write:</p>
+<pre><code>if (rebDid("all [", rebEval(fun), val, 3, "empty? block]")) {
+    ...
+}
+</code></pre>
+<p>...seems far preferable to:</p>
+<pre><code>REBVAL *all_result = rebRun("all [", rebEval(fun), val, 3, "empty? block]");
+if (all_result != NULL) { // value handle, must be released or has GC cost
+    if (rebUnboxLogic(all_result)) {
+        ...
+    }
+    rebRelease(all_result);
+}
+else { ... }
+</code></pre>
+<p>Yet if rebDid() was executor of code, logic unboxer, and automatic releaser of values...it had no way to return a result besides TRUE or FALSE.  So no channel to inform you about an error.</p>
+<p>This makes it seem desirable to work within the exception-handling model of the host language.  So you want to see things like:</p>
+<pre><code>try { 
+     var three = rebInteger(3); 
+     var block = rebRun("[1 (2", three, ") 4 5]"); 
+     rebElide("append/dup", block, "{string literal} 2"); 
+     ... 
+ } catch (e) { 
+     if (e instanceof RebolError) { 
+         console.log(e); 
+         ... 
+     } 
+ } 
+</code></pre>
+<p>There are a couple of issues, though:</p>
+<ol>
+<li>
+<p>While C++ and JavaScript have a standard exception-handling model (try/catch)...C doesn't have one.</p>
+</li>
+<li>
+<p>Even if a "standard"-seeming exception is thrown from the guts of code running on the behalf of an API call, <em>the API must catch it for processing</em> before passing it on.  This is because it has to clean up the Rebol stack levels that were crossed, because the next thing that might happen to the error once it's returned is it might be caught by the API caller and not processed further.</p>
+</li>
+</ol>
+<p>The first point can really only be addressed with a specialized routine for C API clients.  Ruby has <a href="http://silverhammermba.github.io/emberb/c/#rescue">something called "rescue"</a> which is basically what's needed.  If you promise that you're a C client--no one has to worry about you catching an exception before processing--because you can't.  You either set up a top-level trap or you crash (same as in Ruby).</p>
+<p>The second point could be fixed by a contract that says "if you are going to catch a Rebol error yourself, instead of letting it propagate to a stack higher than yourself, you have to call rebCleanupAfterError()".  But that sounds like a bad contract.</p>
+<p>It's a little bit unfortunate to think that <em>every</em> operation needs to be guarded--down to extracting the index out of a value <em>(INDEX-OF $10 raises an error...)</em>.  However:</p>
+<ul>
+<li>
+<p>There could be a mode you ask to put the API in that says you will not be catching any Rebol exceptions (or exceptions like stack overflows) yourself using a catch()...or that if you did, you would call rebCleanupAfterError().  Sounds like it would be easy to screw up, but it's easier to add this kind of thing on top of an otherwise working model than to add a working model on top of something broken.</p>
+</li>
+<li>
+<p>Modern C++ try/catch has what's called <a href="https://stackoverflow.com/a/13836329/211160">zero-cost exceptions</a>, you only pay for the try/catch if the exception occurs.</p>
+</li>
+<li>
+<p>The focus of this API is on readability and usability for the crossover points into Rebol that are made, while keeping as much of the logic separated into host and Rebol as possible. The crossover points shouldn't be the bottleneck.  If it is, then probably another approach is needed (like writing your own native).</p>
+</li>
+</ul>
+<p>So it's not insurmountable, just something that has to be kept in mind.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/embracing-host-language-exception-model-in-the-api/555">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/embracing-host-language-exception-model-in-the-api/555</link>
+          <pubDate>Sun, 04 Mar 2018 23:21:29 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-555</guid>
+          <source url="https://forum.rebol.info/t/embracing-host-language-exception-model-in-the-api/555.rss">Embracing Host Language Exception Model in the API</source>
+        </item>
+        <item>
+          <title>Hooking FAIL and PANIC...should DO of an ERROR! be &quot;unhookable&quot;?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Errors</category>
+          <description><![CDATA[
+            <p>One interesting feature that's coming online a bit here and there is the ability to hook <em>some</em> panics and <em>some</em> errors.</p>
+<p>The way the hook is done is that there are native PANIC and FAIL functions which have trivial implementations.  C code calls out to these natives by using the evaluator.  Then, early in the bootstrap process these natives are HIJACK'd with usermode implementations.  If your app then desires, it can further HIJACK those hijackings with adaptations that augment or replace the functionality with additional code.</p>
+<p>In the case of panics, I say only "some" are hookable, because panics originating from the core need to terminate the executable.  <em>(They're a sort of "blue screen of death", implying that continuing to run Rebol code would be unwise due to some fundamental corruption or problem.)</em>  But there are also panics which could be safely recovered from, or have things write to log files before exiting, e.g. direct calls to the PANIC or PANIC-VALUE natives from usermode code.</p>
+<p><em>(It may be that extensions using the rebPanic() API would mean the "softer" form of panic, or maybe they too have some kind of corruption of their state they don't want you to recover from.  Maybe there need to be two different APIs...what's more serious than a failure, but less serious than a panic?  rebProblem()?)</em></p>
+<p>In the case of errors, I say only "some" are hookable because there <strong>must</strong> be a way to invoke an error without it being hooked.  Consider today's implementation of FAIL, which will construct an error object out of whatever you pass it (if it isn't an ERROR! in the first place) and calls DO on it.  If that DO turned around and called into the fail hook again, you'd have an infinite regress.</p>
+<p>One simple answer is to say that DO of an ERROR! is an <em>unhookable failure</em>.  That would mean no longer casually writing <strong>do make error! ...</strong>.  But if we assume those people are willing to change that to <strong>fail make error! ...</strong> then this seems the easiest way to get the baseline unhookable error.  And since there's no appearance of FAIL at the callsite, people wouldn't be too surprised that hijacking FAIL wouldn't find out about these particular errors.</p>
+<p>At one point, I'd made DO not accept ERROR!s, because FAIL seemed much better at the callsite.  But I realized the only thing taking the ERROR! parameter away would be doing would be raising an "invalid type" error, obscuring what the error was.  :-/  So when that was combined ultimately with the idea that FAIL needed some way to invoke the errors that it was building, I put it back.</p>
+<p>So is this a good answer?  That DO of an ERROR! is the low level mechanic for error delivery used in functions like FAIL which you will not get hooked when you HIJACK fail?  It makes some sense to me, but it means that almost no one should be using DO of an ERROR!, unless you are writing a FAIL implementation.</p>
+<p>What worries me is if people don't get on board with this, or find it too hard to understand that DO of an ERROR! is not how you should be error'ing, then someone who wants to hook just FAIL would start hooking DO "just to be sure" in case it was passed an ERROR!.  :-/</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/hooking-fail-and-panic-should-do-of-an-error-be-unhookable/484">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/hooking-fail-and-panic-should-do-of-an-error-be-unhookable/484</link>
+          <pubDate>Sun, 21 Jan 2018 12:53:30 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-484</guid>
+          <source url="https://forum.rebol.info/t/hooking-fail-and-panic-should-do-of-an-error-be-unhookable/484.rss">Hooking FAIL and PANIC...should DO of an ERROR! be &quot;unhookable&quot;?</source>
+        </item>
+  </channel>
+</rss>

@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Meet the REEVALUATE (REEVAL) native</title>
+    <link>https://forum.rebol.info/t/meet-the-reevaluate-reeval-native/311</link>
+    <description># Part 1: The menace that was variadic DO
+
+Rebol historically avoided variadic functions.  People might have wanted to say something like **do [summation 1 2 3 4]**, but **summation [1 2 3 4]** was considered a better interface. 
+
+While there was no end-user feature implementing variadic functions, there was one loophole.  DO looked like it was arity-1, but it could effectively act with an arity of *(1 + the arity of a function passed to it)*
+
+    rebol2&gt; do :negate 1 ;; 2 arguments to DO
+    == -1
+
+    rebol2&gt; do :add 10 20 ;; 3 arguments to DO
+    == 30
+
+It&#39;s not obvious to everyone that DO is acting variadically; they might say &quot;it&#39;s not DO, it&#39;s the function&quot;.  But how did that function get executed?  Who is running it?  If you tried to write your own MY-DO, would you have been able to?
+
+The answer is no, and you can see this if you tried writing something like the following wrapper *(leaving off refinement processing like /NEXT, which is particularly annoying in old-school Rebol, prior to ADAPT and CHAIN and SPECIALIZE and such)*.
+
+    old-do: :do
+    do: func [value [any-value!]] [
+        if value = %dangerous-file.reb [
+            fail &quot;dangerous-file is not allowed to be run in this Rebol&quot;
+        ]
+        old-do :value
+    ]
+
+Well, what&#39;s wrong with this wrapper?  If you try calling the new DO with a FUNCTION!, the wrapping won&#39;t work as expected, because when it gets to **old-do :value** and that value turns out to be something like the ADD function, it will try and gather the arguments from the callsite of OLD-DO.  Which is the wrong place to be gathering them.
+
+The perceived &quot;un-wrappability&quot; of variadics is one of the reasons that they were deemed a menace, and rejected from the language.  In fact, it seems Red hasn&#39;t made DO variadic at this time (you can ask them if the plan is never to, which would be my suggestion).
+
+    red&gt; do :add 10 20
+    == 20
+
+Doing a FUNCTION! in Red seemingly just returns it, so DO :ADD was discarded and you got the 20 as the last result:
+
+    red&gt; do :add
+    == make action! [[
+        &quot;Returns the sum of the two values&quot; 
+         value1...
+
+# Part 2: Enter REEVAL
+
+My impression was that the biggest problem with DO performing variadic evaluation was that the DO function had rich behavior and *was used for other things*.  e.g. running scripts from a filename, you might want to wrap it.  If you tried your wrapper could never keep the behavior when a FUNCTION! was passed.
+
+But what if there was a function whose *sole purpose was variadic evaluation of inline values*?  It would be &quot;impossible&quot; to wrap, but who would want to?  It only has one job.  Hence REEVAL was born.
+
+*(Note: REEVALUATE/REEVAL were initially called EVAL.  However that has been taken for a more fundamental task, [which is the replacement for DO/NEXT...where a new interface was needed](https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767).)*
+
+    &gt;&gt; reeval :add 1 2
+    == 3
+
+    &gt;&gt; x: 10
+    &gt;&gt; reeval (quote x:) 20
+    &gt;&gt; print x
+    20
+
+    &gt;&gt; reeval [some block]
+    == [some block]
+
+    &gt;&gt; some-group: quote (1 + 2) 
+    &gt;&gt; reeval some-group
+    == 3
+
+We see that from the behavior with not doing anything to a BLOCK! that it&#39;s a different operation from DO.  It&#39;s something that gets a value and then continues inline processing as if that value was the start of a single do step.  So you might approximate **eval x y z...** as something akin to:
+
+     do/next compose/only [(x) y z...]
+
+So REEVAL is a variadic function which exposes the functionality of a single evaluator step.  Because Ren-C allows you to [define variadic functions](https://trello.com/c/Y17CEywN/131-extremely-flexible-varargs-variadic-functions-with), it would be *theoretically* possible to write such a function yourself in Rebol code.  In practice, doing so would mean re-implementing a bunch of the Rebol evaluator in Rebol, which would be a pain to try.</description>
+    
+    <lastBuildDate>Sun, 29 Sep 2019 00:42:19 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/meet-the-reevaluate-reeval-native/311.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Meet the REEVALUATE (REEVAL) native</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h1>Part 1: The menace that was variadic DO</h1>
+<p>Rebol historically avoided variadic functions.  People might have wanted to say something like <strong>do [summation 1 2 3 4]</strong>, but <strong>summation [1 2 3 4]</strong> was considered a better interface.</p>
+<p>While there was no end-user feature implementing variadic functions, there was one loophole.  DO looked like it was arity-1, but it could effectively act with an arity of <em>(1 + the arity of a function passed to it)</em></p>
+<pre><code>rebol2&gt; do :negate 1 ;; 2 arguments to DO
+== -1
+
+rebol2&gt; do :add 10 20 ;; 3 arguments to DO
+== 30
+</code></pre>
+<p>It's not obvious to everyone that DO is acting variadically; they might say "it's not DO, it's the function".  But how did that function get executed?  Who is running it?  If you tried to write your own MY-DO, would you have been able to?</p>
+<p>The answer is no, and you can see this if you tried writing something like the following wrapper <em>(leaving off refinement processing like /NEXT, which is particularly annoying in old-school Rebol, prior to ADAPT and CHAIN and SPECIALIZE and such)</em>.</p>
+<pre><code>old-do: :do
+do: func [value [any-value!]] [
+    if value = %dangerous-file.reb [
+        fail "dangerous-file is not allowed to be run in this Rebol"
+    ]
+    old-do :value
+]
+</code></pre>
+<p>Well, what's wrong with this wrapper?  If you try calling the new DO with a FUNCTION!, the wrapping won't work as expected, because when it gets to <strong>old-do :value</strong> and that value turns out to be something like the ADD function, it will try and gather the arguments from the callsite of OLD-DO.  Which is the wrong place to be gathering them.</p>
+<p>The perceived "un-wrappability" of variadics is one of the reasons that they were deemed a menace, and rejected from the language.  In fact, it seems Red hasn't made DO variadic at this time (you can ask them if the plan is never to, which would be my suggestion).</p>
+<pre><code>red&gt; do :add 10 20
+== 20
+</code></pre>
+<p>Doing a FUNCTION! in Red seemingly just returns it, so DO :ADD was discarded and you got the 20 as the last result:</p>
+<pre><code>red&gt; do :add
+== make action! [[
+    "Returns the sum of the two values" 
+     value1...
+</code></pre>
+<h1>Part 2: Enter REEVAL</h1>
+<p>My impression was that the biggest problem with DO performing variadic evaluation was that the DO function had rich behavior and <em>was used for other things</em>.  e.g. running scripts from a filename, you might want to wrap it.  If you tried your wrapper could never keep the behavior when a FUNCTION! was passed.</p>
+<p>But what if there was a function whose <em>sole purpose was variadic evaluation of inline values</em>?  It would be "impossible" to wrap, but who would want to?  It only has one job.  Hence REEVAL was born.</p>
+<p><em>(Note: REEVALUATE/REEVAL were initially called EVAL.  However that has been taken for a more fundamental task, <a href="https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767">which is the replacement for DO/NEXT...where a new interface was needed</a>.)</em></p>
+<pre><code>&gt;&gt; reeval :add 1 2
+== 3
+
+&gt;&gt; x: 10
+&gt;&gt; reeval (quote x:) 20
+&gt;&gt; print x
+20
+
+&gt;&gt; reeval [some block]
+== [some block]
+
+&gt;&gt; some-group: quote (1 + 2) 
+&gt;&gt; reeval some-group
+== 3
+</code></pre>
+<p>We see that from the behavior with not doing anything to a BLOCK! that it's a different operation from DO.  It's something that gets a value and then continues inline processing as if that value was the start of a single do step.  So you might approximate <strong>eval x y z...</strong> as something akin to:</p>
+<pre><code> do/next compose/only [(x) y z...]
+</code></pre>
+<p>So REEVAL is a variadic function which exposes the functionality of a single evaluator step.  Because Ren-C allows you to <a href="https://trello.com/c/Y17CEywN/131-extremely-flexible-varargs-variadic-functions-with" rel="nofollow noopener">define variadic functions</a>, it would be <em>theoretically</em> possible to write such a function yourself in Rebol code.  In practice, doing so would mean re-implementing a bunch of the Rebol evaluator in Rebol, which would be a pain to try.</p>
+          <p><a href="https://forum.rebol.info/t/meet-the-reevaluate-reeval-native/311/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/meet-the-reevaluate-reeval-native/311/1</link>
+        <pubDate>Mon, 25 Sep 2017 21:33:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-311-1</guid>
+        <source url="https://forum.rebol.info/t/meet-the-reevaluate-reeval-native/311.rss">Meet the REEVALUATE (REEVAL) native</source>
+      </item>
+  </channel>
+</rss>

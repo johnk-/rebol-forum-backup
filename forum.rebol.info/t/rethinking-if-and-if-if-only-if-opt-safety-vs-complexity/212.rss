@@ -1,0 +1,497 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+    <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212</link>
+    <description>&gt; **UPDATE:** This thread is retained for historical purposes, but the issues discussed are now being attacked through various mechanisms... such as quoted branches:
+&gt;
+&gt;     &gt;&gt; if true &#39;[print &quot;hi&quot;] else [print &quot;hi&quot;]
+&gt;     == [print &quot;hi&quot;]
+&gt;
+&gt;     &gt;&gt; if true &#39;[print &quot;hi&quot;] else [print &quot;hi&quot;]
+&gt;     hi
+&gt;
+&gt; The techniques have grown as the available datatypes have grown, even leading to things like branches that are reduced if they are GET-BLOCK!
+&gt;
+&gt;     &gt;&gt; if true :[1 + 2 10 + 20]
+&gt;     == [3 30]
+&gt;
+&gt; Hence this thread just shows the genesis of the thoughts that pushed from the R3-Alpha status quo into that direction.
+
+An experimental feature that some people have wound up using--while others have not--is that it was possible to use non-blocks in conditional slots.  The rationale being that Rebol&#39;s desire for expressiveness exceeded its desire for boilerplate.
+
+For instance, in terms of &quot;character economy&quot;, you might prefer to see **if (x = blah) 3 foo** instead of **if x = blah [3] foo**.  This might make it clearer that 3 is not an argument to blah with foo the body, but rather 3 is the desired result.  Or you could write **x: default [if condition 4]** and compact things.  It seems the decision to be permissive runs with other core beliefs--including why one does not need to put the condition of IF in a BLOCK! in the first place.
+
+In the early days of open sourcing, Carl was persuaded, and it was [committed to GitHub rebol/rebol](https://github.com/rebol/rebol/pull/170).
+
+Yet given the fact that blocks would be executed instead of handled as raw values, it seemed a parallel situation to things like APPEND was arising.  If you were just writing **if condition value**, and you didn&#39;t realize the variance in behavior between when value was a block vs not...you might be surprised when trying to write generic code...when it worked fine until all of a sudden you used a block.  Adding an /ONLY refinement seemed like how APPEND dealt with this, so it seemed to make sense to give generic code authors a similar tool.
+
+Since that time, conditionals like IF have gathered more features:
+
+* A protection on the condition against use of literal blocks; any blocks must come from an evaluation in the condition slot.  **if [x = 1] [print &quot;you can&#39;t write this&quot;]** but **var: [x = 1] | if var [print &quot;this is okay, though it isn&#39;t going to do the comparison, just say the block is truthy&quot;]** and **if identity [x = 1] [print &quot;this is okay too, if identity is a [function that returns its input](https://en.wikipedia.org/wiki/Identity_function), and may be useful if you&#39;re dealing with code generation&quot;]**
+
+* Yet-another-refinement, currently called /OPT (and specialized as `IF*`).  The goal of this is to duck the &quot;blankification&quot; that occurs on ordinary IFs.  Without blankification, a void-returning branch can&#39;t be distinguished from a failed branch...so **`if true [print &quot;this would print&quot;] else [print &quot;this also would print&quot;]`**  But some situations actually want to void their output, e.g. those that are trying to chain other function results that purposefully returned void.
+
+So IF has gained some complexity.  And when your job is to balance complexity with benefit, it should be scrutinized.  One thing I have come to think is that /ONLY is a hard thing to remember to use if you need it; you don&#39;t get an obvious error if you&#39;ve omitted it.  Also, **if/only condition [x]** is not that much better than **if condition [[x]]**, arguably worse.  So the question is whether there&#39;s a simpler, more effective, and more helpful way to get the desired help with the **if/only condition var** case.
+
+The compromise I have in mind is similar to other recent compromises, of a kind of &quot;expert mode&quot; and a &quot;casual/convenient&quot; mode.  Casual mode would include a check on branch bodies similar to the one for the condition, except it would only permit evaluated elements if they were blocks.  Hence should you ever see **if condition var** it would check you to make sure var was a BLOCK!, and not some other value.  It would still tolerate literals like **if condition 3**.  It would also do the blankification.
+
+The &quot;expert mode&quot; would not have the checks on either the condition or the body, no blankification, and assume you knew what you were doing.  If you don&#39;t blankify the body, and end it with a void, then an ELSE clause will run.  If `var` is 3 and you say **`if* condition var`** it will assume that&#39;s fine.
+
+This seems to me like the best of both worlds.  It means we can roughly model `IF` on top of `IF*` as something like:
+
+    if condition [body]
+        =&gt;
+    if* (ensure-non-lit-block :condition) [
+        to-value do compose [(ensure-lit-or-else-evaluated-block :body)]
+    ]
+
+...though implemented as natives for efficiency.  As for what to call `IF*`, for those who don&#39;t like that naming convention, I dunno.  It might be appropriate to have this take IF/ONLY.
+
+It might seem this would only affect those who have bothered to try using the feature so far, of which there aren&#39;t too many instances.  But there&#39;s an instance it would change with CASE...you could still write **case [false 1 | true 2]** but not **one: 1 | two: 2 | case [false one | true two]**, because only blocks would be allowed in evaluative branches unless you used `CASE*`.  otoh, **one: [1] | two: [1 + 1] | case [false one | true two]** would be legal.</description>
+    
+    <lastBuildDate>Fri, 21 Jul 2017 19:17:55 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've gone ahead and <a href="https://github.com/metaeducation/ren-c/commit/cac3b1892e56624754e1aaae3eb709ab02646fc3" rel="nofollow noopener">merged the /ONLY and /OPT refinements as /ONLY</a>.</p>
+<p>I don't believe there were many instances of IF/ONLY, UNLESS/ONLY, EITHER/ONLY, CASE/ONLY, or SWITCH/ONLY, in the wild... and I was probably the only user of the very new IF/OPT, UNLESS/OPT, EITHER/OPT, CASE/OPT or SWITCH/OPT.  So there is no attention to migration concerns.</p>
+<p>But <a class="mention" href="/u/draegtun">@draegtun</a>, since you misunderstood what /ONLY was trying to be previously, it might be worth a search to excise the calls.</p>
+<p>Note as the commit says, this isn't the final word on how the evaluated/unevaluated bit will be propagated.</p>
+<p>I feel that all things considered, the /ONLY name is fitting for what this does... better than /OPT.  But since many usages will be through <code>IF*</code>, it should be easier to change than other things.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/12</link>
+        <pubDate>Fri, 21 Jul 2017 18:39:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-12</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="9" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/draegtun/40/230_2.png" class="avatar"> draegtun:</div>
+<blockquote>
+<p>However i may go for FOR / ELSE instead especially if we did enforce BLOCK!s on EITHER</p>
+</blockquote>
+</aside>
+<p>Good thinking, though remember that ELSE hadn't been solved as a fully viable either replacement until... <a href="https://github.com/metaeducation/ren-c/commit/4ee0f2360e88d7fd494c31c460965005d3a290cf" rel="nofollow noopener">about ten hours ago</a>.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<aside class="quote no-group" data-post="9" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/draegtun/40/230_2.png" class="avatar"> draegtun:</div>
+<blockquote>
+<p>&gt;&gt; ten: [5 + 5]</p>
+<p>&gt;&gt; if true ten<br>
+== 10</p>
+</blockquote>
+</aside>
+<p>The others are illegal, but this one would stay legal.  Passing evaluated <em>blocks</em> as branches is part of the name of the abstraction game.  We like being able to say <code>if condition body</code>.</p>
+<p>My complaint is just that if we get too abstract about it, like <code>if condition value</code> for ANY-VALUE!, people might start using that for arbitrary values that aren't blocks...and then suddenly get bit when it is a block and gets executed.  The idea is to break them of the habit with normal IF by only letting them use literals for expedience.  Then whenever they see an evaluation in a branch slot, they know it will make sure it's a block.</p>
+<aside class="quote no-group" data-post="9" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/draegtun/40/230_2.png" class="avatar"> draegtun:</div>
+<blockquote>
+<p>they would continue to work with refinement-formerly-known-as-/OPT is used?</p>
+</blockquote>
+</aside>
+<p>Correct.  We assume people using that know what they're doing, and are aware that blocks execute and other things don't.  That kind of awareness exists elsewhere; people who use APPEND have to know that blocks splice and other things don't.  Though there, the risks are slightly lower, as it doesn't (immediately) involve code execution.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/11</link>
+        <pubDate>Fri, 21 Jul 2017 16:59:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-11</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[draegtun]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="8" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But it is still clutter, even with a *.  And there are issues of invariance as people change code from if condition [unspaced {lit} {eral}] through some simplification like if condition {literal}.  Or vice-versa, the if* condition {literal} could be changed into if* condition [print "literal"] and then someone absent-mindedly turns that to if* condition [print "literal"] else [print "this runs even if condition is true"].</p>
+</blockquote>
+</aside>
+<p>The IF* ELSE problem isn't nice <img src="//forum.rebol.info/images/emoji/twitter/frowning.png?v=7" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>This gives me an idea, if we put "expert mode" to one side just for now,  what about renaming the avoid-blankification IF* to WHEN.  The convention being you don't follow WHEN with an ELSE.   And we can also change UNLESS to IF-NOT and UNLESS* to UNLESS.</p>
+<p>WHEN looks quite nice with append:</p>
+<pre><code>&gt;&gt; append list when ok? [add-to]
+</code></pre>
+<p>And if ADD-TO returns VOID then APPEND doesn't happen.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/10</link>
+        <pubDate>Fri, 21 Jul 2017 16:51:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-10</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[draegtun]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="7" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>It's elegant to be able to choose in common cases with literals without a refinement, think of:</p>
+</blockquote>
+</aside>
+<p>Now that I know /ONLY is superfluous then that is definitely nicer.    However i may go for FOR / ELSE instead especially if we did enforce BLOCK!s on EITHER <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<pre><code>spaced ["(CONSOLE" if proto-skin/updated? {was} else {wasn't} "updated)"]
+</code></pre>
+<p>In fact i wouldn't even rule out using PICK here...</p>
+<pre><code>spaced ["(CONSOLE" pick [{was} {wasn't}] proto-skin/updated? "updated)"]
+</code></pre>
+<p>Anyway we digress.</p>
+<p>Can I clarify your proposal, so the following would become illegal...</p>
+<pre><code>&gt;&gt; ten: [5 + 5]
+
+&gt;&gt; if true ten
+== 10
+
+&gt;&gt; either true 1 + 1 4 + 4   
+== 2
+
+&gt;&gt; either false x: 1 y: 2    
+== 2
+</code></pre>
+<p>The above all currently work in Ren/C.  And they would continue to work with <code>refinement-formerly-known-as-/OPT</code> is used?</p>
+<p>BTW - x is set to 1 in last test!  Bug?</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/9</link>
+        <pubDate>Fri, 21 Jul 2017 16:48:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-9</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="6" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/draegtun/40/230_2.png" class="avatar"> draegtun:</div>
+<blockquote>
+<p>What d'ya think?</p>
+</blockquote>
+</aside>
+<p>But, on the other hand, there are a couple of interesting points:</p>
+<ul>
+<li>
+<p>I'm proposing that the <code>/OPT</code> or <code>/ONLY</code> variation be available as <code>IF*</code>, <code>EITHER*</code>, etc.  It's not the end of the world to have to type.</p>
+</li>
+<li>
+<p>The avoiding-blankification properties of <code>IF*</code> and <code>EITHER*</code> are not relevant to literals, as <code>if* condition {literal}</code> never returns a void on its true branch.  Hence should you use it with a literal, it could be argued the only reason you did so was to exploit the ability to use literals.</p>
+</li>
+</ul>
+<p>But it is still clutter, even with a <code>*</code>.  And there are issues of invariance as people change code from <code>if condition [unspaced {lit} {eral}]</code> through some simplification like <code>if condition {literal}</code>.  Or vice-versa, the <code>if* condition {literal}</code> could be changed into <code>if* condition [print "literal"]</code> and then someone absent-mindedly turns that to <code>if* condition [print "literal"] else [print "this runs even if condition is true"]</code>.</p>
+<p>I think it's best to not have people using the <code>*</code> versions of conditionals unless they're very sure what they're doing, writing expert-level code.  You shouldn't see them in things written by the average user--and they wouldn't appear in tutorials.  But I think literals as conditional branches is something the average user should be using, to appreciate the freedom/elegance.</p>
+<p>Like I said, the real agenda is just to embrace the ability to reject boilerplate.  I'm interested to see how more runtime analysis through the evaluated/unevaluated bit can help.  I also think excessive caution in this area would be remedied a lot by a step-by-step automatable debugger, which as I've mentioned, might not be too far out of reach...</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/8</link>
+        <pubDate>Thu, 20 Jul 2017 17:06:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-8</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="6" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/draegtun/40/230_2.png" class="avatar"> draegtun:</div>
+<blockquote>
+<p>I think this adds extra pragmatism (back) to EITHER.</p>
+</blockquote>
+</aside>
+<p>It's elegant to be able to choose in common cases with literals without a refinement, think of:</p>
+<pre><code>spaced ["(CONSOLE" (either proto-skin/updated? {was} {wasn't}) "updated)"]
+</code></pre>
+<p>That expression goes with two delimiters, and seems to me gives you more than 4 delimiters with:</p>
+<pre><code>spaced ["(CONSOLE" either proto-skin/updated? [{was}] [{wasn't}] "updated)"]
+</code></pre>
+<p>By contrast, note that <strong>either true yes no</strong> wouldn't be legal already under my proposed rules (nor would <strong>if true yes else no</strong>) because YES and NO are WORD!s and evaluative, then they evaluate to non-blocks.  It would have to be a plain literal, which would be an uncommon thing to just leave stray after an EITHER where you forgot your branch (whereas a word could be a function call sitting after, or as we've seen the <a href="https://github.com/metaeducation/ren-c/blob/18962283d5ec9a60a2ee86b53d281ed449314d00/src/os/host-start.r#L681" rel="nofollow noopener">stray assignment problem</a>, picked up accidentally as a branch).</p>
+<p>Generically in DO, throwaway literals in midstream are uncommon, as are throwaway blocks (which is what provided the previous "pragmatism"--if we're on the same page about that).  "Dialects" like SPACED are different, but the consumption of stray elements will have observable impact.  I feel the benefit is worth the risk.</p>
+<p>Also, by the rules I'm proposing, <strong>either proto-skin/updated? msg1: {was} msg2: {wasn't}</strong> would also not be legal unless you used the <em>refinement-formerly-known-as-/OPT</em>.  This puts some extra safety on the construct for missed second-branches due to its commonality.  But I'll point out that the safety is not there for really much anything else in the system, which is part of why the original permissive proposal was endorsed by Carl.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/7</link>
+        <pubDate>Thu, 20 Jul 2017 16:06:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-7</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[draegtun]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I am pleased.  It feels like getting closer to the essential complexity limits of these kinds of problems, in a generalized way.</p>
+</blockquote>
+</aside>
+<p>My comment is dishing on IF (and therefore UNLESS) far too much.  Instead it's really aimed at group of errors that EITHER can introduce!</p>
+<p>So EITHER currently works like this...</p>
+<pre><code>&gt;&gt; either true ["yes"] ["no"]
+== "yes"
+
+&gt;&gt; either/only true ["yes"] ["no"]
+== ["yes"]
+
+&gt;&gt; either/only true "yes" "no" 
+== "yes"
+</code></pre>
+<p>All good.  However my compromise suggestion is below should fail (instead of returning "yes")...</p>
+<pre><code>&gt;&gt; either true "yes" "no"  
+== "yes"
+</code></pre>
+<p>So EITHER sans /ONLY always requires two BLOCK!s</p>
+<p>I think this adds extra pragmatism (back) to EITHER.   And we lose no expressiveness because we still have IF &amp; ELSE....</p>
+<pre><code>&gt;&gt; if true "yes" else "no" 
+== "yes"
+</code></pre>
+<p>What d'ya think?</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/6</link>
+        <pubDate>Thu, 20 Jul 2017 13:21:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-6</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>There is, however, one drawback with this approach of detection.  That is if you want to wrap something and inherit the conditional protective nature of IF.</p>
+<p>Consider the classic example of wanting to write IF-NOT (pretending UNLESS was not in the box)</p>
+<pre><code>if-not: func [
+    return: [&lt;opt&gt; any-value!]
+    condition [any-value!]
+    body [any-value!]
+][
+    if not :condition :body
+]
+</code></pre>
+<p>It would work if the body was a block.  But if you tried to use it with something passed literally to IF-NOT, it would see <code>:body</code> as a point of evaluation.  You would not be able to write <strong>if-not condition 3</strong>.  Also, this IF-NOT construct wouldn't have the safety check on if the condition were a literal block, so <strong>if-not [x = 1] [print "This code would never run, and not warn you about that"]</strong></p>
+<hr>
+<p>I'll point out that this problem of transmitting the evaluated/unevaluated ("semiquoted?") bit isn't a particularly new class of problem.  Any function which quotes its arguments has similar problems in chaining...</p>
+<pre><code>my-quote: func [:value [any-value!]] [
+    print "Do some extra MY-QUOTE stuff"
+    quote :value
+]
+</code></pre>
+<p>That will always return <code>:value</code>, instead of doing "whatever QUOTE would have done in the calling context".<br>
+One might imagine that you could work around this by not using the parameter to make a QUOTE call directly, but to build source through composition...to mimic the callsite pattern, and then DO it.</p>
+<pre><code>my-quote: func [:value [any-value!]] [
+    print "Do some extra MY-QUOTE stuff"
+    do compose/only [quote (:value)]
+]
+</code></pre>
+<p>More generally to do such a bypass, one would use APPLY.  APPLY has you build the FRAME! as you meant it, rather than going through the evaluator.  This completely bypasses the callee's parameter conventions...even hard quoting.</p>
+<pre><code>my-quote: func [:value [any-value!]] [
+    print "Do some extra MY-QUOTE stuff"
+    apply 'quote [value: :value]
+]
+</code></pre>
+<hr>
+<p>Those tricks won't work for propagating the evaluated or unevaluated bit.  My point is just to notice some powerful features put a burden on the person trying to mimic those powers in a wrapper, and they are problems that can be reasoned about.</p>
+<p>One answer might be that fetching a function parameter (through a GET-WORD!, GET, etc.) inherits the evaluated or unevaluated status of that parameter, until it is changed locally.  This means that although you couldn't write <strong>x: 10 | if condition x</strong> without getting a complaint, you could write <strong>foo: func [x] [if condition x] | foo 10</strong> and have it work (but not <strong>foo: func [x] [x: x + 20 | if condition x] | foo 10</strong>).</p>
+<p>Anyway, it seems worth a try.  Regardless of how the experiments go, I think the old IF/ONLY behavior turned out to be fairly bad so it should go.  Beyond that, it doesn't hurt to have conditional callsites obey a couple more rules that might get relaxed later.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/5</link>
+        <pubDate>Wed, 19 Jul 2017 20:56:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-5</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="212">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/draegtun/40/230_2.png" class="avatar"> draegtun:</div>
+<blockquote>
+<p>I was expecting those last two would throw an error because they're not using a BLOCK!</p>
+</blockquote>
+</aside>
+<p>I like the elegance of allowing literals.  Consider <a href="https://github.com/metaeducation/ren-c/blob/18962283d5ec9a60a2ee86b53d281ed449314d00/src/os/host-start.r#L779" rel="nofollow noopener">here</a>, where it says:</p>
+<pre><code> unspaced ["(CONSOLE " unless/only proto-skin/updated? {not } "updated)"]
+</code></pre>
+<p>That gets nicer if we start by using SPACED of course, and dropping the /ONLY is an improvement.  But if you were to choose where delimiters would help improve it, are you better off with:</p>
+<pre><code> spaced ["(CONSOLE" unless proto-skin/updated? [{not}] "updated)"]
+</code></pre>
+<p>...or...</p>
+<pre><code> spaced ["(CONSOLE" (unless proto-skin/updated? {not}) "updated)"]
+</code></pre>
+<p>...or just having no delimiters at all?</p>
+<pre><code> spaced ["(CONSOLE" unless proto-skin/updated? {not} "updated)"]
+</code></pre>
+<p><em>(Note: I'll point out I've had slight qualms about the role of BAR! as a newline in this context, taking away the option of <code>spaced ["(CONSOLE" | unless proto-skin/updated? {not} | "updated)"]</code>, but it seemed worth the tradeoff to get an easy way to make newlines that is also spacing-and-omissions aware.)</em></p>
+<p>In any case, I think having the ability to make these choices is in the spirit of Rebol's "most freeform language" ethos.  But having implemented the proposal I give above, it feels ultimately more effective to chop it to only two modalities and add a little more safety to the common one.  I am pleased.  It feels like getting closer to the <a href="https://en.wikipedia.org/wiki/No_Silver_Bullet" rel="nofollow noopener">essential complexity</a> limits of these kinds of problems, in a generalized way.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/4</link>
+        <pubDate>Wed, 19 Jul 2017 17:13:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-4</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[draegtun]]></dc:creator>
+        <description><![CDATA[
+            <p>I'd wrongly assumed that the IF/ONLY &amp; EITHER/ONLY change only added this behaviour...</p>
+<pre><code>&gt;&gt; ten: [5 + 5]
+== [5 + 5]
+
+&gt;&gt; if true ten
+== 10
+
+&gt;&gt; if/only true ten
+== [5 + 5]
+
+&gt;&gt; if/only true {ten}
+== "ten"
+
+&gt;&gt; if/only true 10
+== 10
+</code></pre>
+<p>This makes sense.  But I hadn't realised that the change also added this behaviour...</p>
+<pre><code>&gt;&gt; if true {ten}
+== "ten"
+
+&gt;&gt; if true 10
+== 10
+</code></pre>
+<p>I was expecting those last two would throw an error because they're not using a BLOCK!  <img src="//forum.rebol.info/images/emoji/twitter/frowning.png?v=7" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/3</link>
+        <pubDate>Wed, 19 Jul 2017 15:27:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-3</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I should point out that this protects against one of the bug classes I saw pop up with the original idea of not enforcing blocks...people forgetting to add an either branch, or dropping one and forgetting they did.  Note this bug was caught by the change:</p>
+<aside class="onebox githubblob">
+  <header class="source">
+      <a href="https://github.com/metaeducation/ren-c/blob/18962283d5ec9a60a2ee86b53d281ed449314d00/src/os/host-start.r#L681" target="_blank" rel="nofollow noopener">github.com</a>
+  </header>
+  <article class="onebox-body">
+    <h4><a href="https://github.com/metaeducation/ren-c/blob/18962283d5ec9a60a2ee86b53d281ed449314d00/src/os/host-start.r#L681" target="_blank" rel="nofollow noopener">metaeducation/ren-c/blob/18962283d5ec9a60a2ee86b53d281ed449314d00/src/os/host-start.r#L681</a></h4>
+<pre class="onebox"><code class="lang-r"><ol class="start lines" start="671" style="counter-reset: li-counter 670 ;">
+<li>        import do compose [module (code)]</li>
+<li>    ][</li>
+<li>        sys/do-needs first+ code</li>
+<li>        do intern code</li>
+<li>    ]</li>
+<li>    quit ;ignore user script and "--do" argument</li>
+<li>]</li>
+<li>
+</li>
+<li>; Evaluate any script argument, e.g. `r3 test.r` or `r3 --script test.r`</li>
+<li>;</li>
+<li class="selected">either file? o/script [</li>
+<li>    trap/with [</li>
+<li>        do/only/args o/script script-args ;-- /ONLY so QUIT/WITH exit code bubbles out</li>
+<li>    ] func [error &lt;with&gt; return] [</li>
+<li>        print error</li>
+<li>        return 1</li>
+<li>    ]</li>
+<li>]</li>
+<li>host-start: 'done</li>
+<li>
+</li>
+<li>; Evaluate the DO string, e.g. `r3 --do "print {Hello}"`</li>
+</ol></code></pre>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>The EITHER was presumably an IF that lost its FALSEY? branch.  <code>host-start: 'done</code> would always be run, and a failed condition would just mean an expression would evaluate to the WORD! done and fall off into the ether.  So no actual observable problem, but it goes to show how one plays a bit with fire when boilerplate requirements are thrown out.</p>
+<p>Of course, that's a typical day in Rebol for you...but, still I think it's a good compromise to raise sensitivity regarding executable slots.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/2</link>
+        <pubDate>Wed, 19 Jul 2017 13:57:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-2</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+      <item>
+        <title>Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><strong>UPDATE:</strong> This thread is retained for historical purposes, but the issues discussed are now being attacked through various mechanisms... such as quoted branches:</p>
+<pre><code>&gt;&gt; if true '[print "hi"] else [print "hi"]
+== [print "hi"]
+
+&gt;&gt; if true '[print "hi"] else [print "hi"]
+hi
+</code></pre>
+<p>The techniques have grown as the available datatypes have grown, even leading to things like branches that are reduced if they are GET-BLOCK!</p>
+<pre><code>&gt;&gt; if true :[1 + 2 10 + 20]
+== [3 30]
+</code></pre>
+<p>Hence this thread just shows the genesis of the thoughts that pushed from the R3-Alpha status quo into that direction.</p>
+</blockquote>
+<p>An experimental feature that some people have wound up using--while others have not--is that it was possible to use non-blocks in conditional slots.  The rationale being that Rebol's desire for expressiveness exceeded its desire for boilerplate.</p>
+<p>For instance, in terms of "character economy", you might prefer to see <strong>if (x = blah) 3 foo</strong> instead of <strong>if x = blah [3] foo</strong>.  This might make it clearer that 3 is not an argument to blah with foo the body, but rather 3 is the desired result.  Or you could write <strong>x: default [if condition 4]</strong> and compact things.  It seems the decision to be permissive runs with other core beliefs--including why one does not need to put the condition of IF in a BLOCK! in the first place.</p>
+<p>In the early days of open sourcing, Carl was persuaded, and it was <a href="https://github.com/rebol/rebol/pull/170">committed to GitHub rebol/rebol</a>.</p>
+<p>Yet given the fact that blocks would be executed instead of handled as raw values, it seemed a parallel situation to things like APPEND was arising.  If you were just writing <strong>if condition value</strong>, and you didn't realize the variance in behavior between when value was a block vs not...you might be surprised when trying to write generic code...when it worked fine until all of a sudden you used a block.  Adding an /ONLY refinement seemed like how APPEND dealt with this, so it seemed to make sense to give generic code authors a similar tool.</p>
+<p>Since that time, conditionals like IF have gathered more features:</p>
+<ul>
+<li>
+<p>A protection on the condition against use of literal blocks; any blocks must come from an evaluation in the condition slot.  <strong>if [x = 1] [print "you can't write this"]</strong> but <strong>var: [x = 1] | if var [print "this is okay, though it isn't going to do the comparison, just say the block is truthy"]</strong> and <strong>if identity [x = 1] [print "this is okay too, if identity is a <a href="https://en.wikipedia.org/wiki/Identity_function">function that returns its input</a>, and may be useful if you're dealing with code generation"]</strong></p>
+</li>
+<li>
+<p>Yet-another-refinement, currently called /OPT (and specialized as <code>IF*</code>).  The goal of this is to duck the "blankification" that occurs on ordinary IFs.  Without blankification, a void-returning branch can't be distinguished from a failed branch...so <strong><code>if true [print "this would print"] else [print "this also would print"]</code></strong>  But some situations actually want to void their output, e.g. those that are trying to chain other function results that purposefully returned void.</p>
+</li>
+</ul>
+<p>So IF has gained some complexity.  And when your job is to balance complexity with benefit, it should be scrutinized.  One thing I have come to think is that /ONLY is a hard thing to remember to use if you need it; you don't get an obvious error if you've omitted it.  Also, <strong>if/only condition [x]</strong> is not that much better than <strong>if condition [[x]]</strong>, arguably worse.  So the question is whether there's a simpler, more effective, and more helpful way to get the desired help with the <strong>if/only condition var</strong> case.</p>
+<p>The compromise I have in mind is similar to other recent compromises, of a kind of "expert mode" and a "casual/convenient" mode.  Casual mode would include a check on branch bodies similar to the one for the condition, except it would only permit evaluated elements if they were blocks.  Hence should you ever see <strong>if condition var</strong> it would check you to make sure var was a BLOCK!, and not some other value.  It would still tolerate literals like <strong>if condition 3</strong>.  It would also do the blankification.</p>
+<p>The "expert mode" would not have the checks on either the condition or the body, no blankification, and assume you knew what you were doing.  If you don't blankify the body, and end it with a void, then an ELSE clause will run.  If <code>var</code> is 3 and you say <strong><code>if* condition var</code></strong> it will assume that's fine.</p>
+<p>This seems to me like the best of both worlds.  It means we can roughly model <code>IF</code> on top of <code>IF*</code> as something like:</p>
+<pre><code>if condition [body]
+    =&gt;
+if* (ensure-non-lit-block :condition) [
+    to-value do compose [(ensure-lit-or-else-evaluated-block :body)]
+]
+</code></pre>
+<p>...though implemented as natives for efficiency.  As for what to call <code>IF*</code>, for those who don't like that naming convention, I dunno.  It might be appropriate to have this take IF/ONLY.</p>
+<p>It might seem this would only affect those who have bothered to try using the feature so far, of which there aren't too many instances.  But there's an instance it would change with CASE...you could still write <strong>case [false 1 | true 2]</strong> but not <strong>one: 1 | two: 2 | case [false one | true two]</strong>, because only blocks would be allowed in evaluative branches unless you used <code>CASE*</code>.  otoh, <strong>one: [1] | two: [1 + 1] | case [false one | true two]</strong> would be legal.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/1</link>
+        <pubDate>Wed, 19 Jul 2017 11:42:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-212-1</guid>
+        <source url="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212.rss">Rethinking IF and IF* - IF/ONLY, IF/OPT, safety vs. complexity</source>
+      </item>
+  </channel>
+</rss>

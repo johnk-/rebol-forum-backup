@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Rethinking READ</title>
+    <link>https://forum.rebol.info/t/rethinking-read/1741</link>
+    <description>My recent mantra has been *&quot;callbacks are bad, mmmkay?&quot;*  They should be looked at as a low-level mechanic on par with mutexes...used internally to implement other abstractions.  A modern script language should provide infrastructure to allow people to code their algorithms in what *looks* like a mostly-synchronous style.  Languages like Go do this by design (though they do have mutexes for special low-level features), and languages like JavaScript began to shun callbacks for being able to write code synchronously via async/await.
+
+This means I&#39;ve come to the same conclusion as the author of [&quot;what color is your function&quot;](https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/)...that Go&#39;s methodology is the closest-to-right one.  *(And here is a [talk from the creator of Zig](https://kristoff.it/blog/zig-colorblind-async-await/) who feels that Go left out an easy way to get the result from a gofunction; it&#39;s not hard to make a closure and send it to a channel, but he has a point that Go lacks typechecking to tell you about the unused result.  And not being as easy as it should be is a valid critique too.)*
+
+Anyway: all READ operations should *look* synchronous.  It&#39;s just that when they are holding up the code (&quot;blocking&quot;), other code will be able to run.  Long term this would be by means of stackless &quot;green threads&quot;...but I don&#39;t have that many qualms about using regular old threads until that time.  *(libuv offers a thread abstraction layer that participates with the event loop, we could use that...but stackless isn&#39;t really all *that* far off, I&#39;ve been bending things toward it for a year now.)*
+
+I&#39;ve mentioned the [catharsis of getting rid of what was there before](https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733/2).  But chopping out a lot of awkward and brittle stuff has still left behind a semantic soup.
+
+## READ&#39;s Historical Properties
+
+Let&#39;s start with how it has worked:
+
+1. If you passed READ a URL! or FILE!, it did an OPEN... then what Go would call a [&quot;ReadAll()&quot;](https://pkg.go.dev/io#ReadAll) to get everything until the end of input.  Then it CLOSEd the port.  It gives back the data that was read.  This has always been synchronous.
+
+2. If you passed READ an opened (non-filesystem) PORT!, it would immediately return that PORT! right back.  You could keep running other code...but at some point you would call WAIT.  With that WAIT on the stack, the port&#39;s AWAKE handler would be called with an EVENT! labeled &quot;read&quot;...and find some (fairly arbitrary) amount of data in the `port.data` field.  If your handler felt the amount of data in `port.data` wasn&#39;t enough, then it could issue another READ request and return false (&quot;not awake yet&quot;).  The next callback would have additional data at the tail of `port.data`.
+
+    * A filesystem port which had READ called on it would return everything to the end.  This is because there was no such thing as asynchonous file I/O.  *(Though libuv has that: the idea is that it might take time for a file request to be fulfilled--disk access is by no means instantaneous relative to CPU cycles.  And if the file is on a network file system it could be as long as any other network request, with all the potential for failures that go with it.)*
+
+3. If you passed READ a /PART this would give back *at most* that amount of data.  This was only offered on synchronous sources... so it would work on file ports, and on literal FILE! (which opened a file port).  But it wasn&#39;t supported by the network ports...so there was no asynchronous semantic.
+
+    * If you wanted to know if you hit the end of file before your request was filled, you&#39;d have to check the length of what you got back and ask if it was the same as the /PART request you made.  If it was less, then you hit the end.
+
+## I&#39;m Clearly Saying That (2) Is Out...
+
+What about the rest?
+
+It&#39;s weird to have a 1-arg call to READ sometimes mean *&quot;read all&quot;* and sometimes mean *&quot;read as much as the underlying data source feels like giving us at this moment&quot;*.  Since people (including myself) are attached to `read url` giving back all the data...then I think that means plain READ needs to always mean read all.
+
+READ/PART (3) on the surface looks like Go&#39;s basic Read()...in the sense that you&#39;re passing in a maximum amount to read and you might get less than that.  But on file ports (the only place this worked) it was historically guaranteed to read either that amount or be truncated at EOF.  So you would feel confident that if you asked for a READ/PART of 100 and got only 50 back that you must have reached the end of the file.  That&#39;s not the semantics of a stream Read() in Go.... you can ask for 100 and get 50 back, but there may be more coming later.
+
+I think that the /PART operations giving you truncation without any signal saying so is something that is systemically bad.  It&#39;s bad on READ/PART, it&#39;s bad on COPY/PART, and there should be some way through requesting another return result to say that truncation is okay.
+
+There&#39;s nothing in these operations for *&quot;read at least n bytes&quot;*, like Go&#39;s [ReadAtLeast()](https://pkg.go.dev/io#ReadAtLeast).
+
+## Who Wants &quot;Give Me As Much As You&#39;ve Got, Right Now&quot;?
+
+I explained in the comparison with Go that the &quot;give me as much as you&#39;ve got right now, up to some limit&quot; was tailored to the convenience for those *implementing new data sources*.
+
+End users of streams don&#39;t want that.  If you get more than you want for a particular call, you have to worry about what to do with the excess.  If you get less than you want, you have to call it again.
+
+**But piped sources want to move in chunks, and they may not know intrinsically how big a chunk to go by.**
+
+Let&#39;s say you are the HTTP protocol.  Assume you&#39;ve read a TCP connection enough to get to the Content-Length in the header of a transfer.  It says the ensuing transfer will be two gigabytes in size.
+
+As the person writing the HTTP protocol, you now know how much to ask for.  But do you want to say READ/PART of 2GB from the TCP connection?  That might seem okay if you were going to return the 2GB to the client if they asked for **read url** all at once.  But if you&#39;re running that through another pipe like something that compresses or encrypts then you want to be able to get started on that sooner.
+
+You might say it&#39;s the job of that client to ask for a /PART that&#39;s a good chunk size for them.  But what if they don&#39;t particularly care, and want to be as efficient as possible?  Making up an arbitrary /PART number that forces the creation of a binary of exactly that size could be inefficient...when compared to just letting the http layer pass through a blob that&#39;s as big as it got.
+
+So this motivates why one would have a /PART that means &quot;as much as you feel like giving me&quot;... where that implies &quot;as much as your buffering chunk size considers to be efficient&quot;.  The expectation is that a networking layer would not treat &quot;as much as I feel like&quot; as implying 2 GB would be acceptable...but it seems there&#39;s no way to avoid that besides picking an arbitrary number.
+
+I&#39;ll keep thinking about it.  The good news is that we have a lot of streaming-capable stuff hanging around to wire together (the ciphers and hashes in mbedTLS are streaming, zlib does streaming compression and decompression...)</description>
+    
+    <lastBuildDate>Thu, 07 Oct 2021 20:48:08 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/rethinking-read/1741.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Rethinking READ</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>My recent mantra has been <em>"callbacks are bad, mmmkay?"</em>  They should be looked at as a low-level mechanic on par with mutexes...used internally to implement other abstractions.  A modern script language should provide infrastructure to allow people to code their algorithms in what <em>looks</em> like a mostly-synchronous style.  Languages like Go do this by design (though they do have mutexes for special low-level features), and languages like JavaScript began to shun callbacks for being able to write code synchronously via async/await.</p>
+<p>This means I've come to the same conclusion as the author of <a href="https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/">"what color is your function"</a>...that Go's methodology is the closest-to-right one.  <em>(And here is a <a href="https://kristoff.it/blog/zig-colorblind-async-await/">talk from the creator of Zig</a> who feels that Go left out an easy way to get the result from a gofunction; it's not hard to make a closure and send it to a channel, but he has a point that Go lacks typechecking to tell you about the unused result.  And not being as easy as it should be is a valid critique too.)</em></p>
+<p>Anyway: all READ operations should <em>look</em> synchronous.  It's just that when they are holding up the code ("blocking"), other code will be able to run.  Long term this would be by means of stackless "green threads"...but I don't have that many qualms about using regular old threads until that time.  <em>(libuv offers a thread abstraction layer that participates with the event loop, we could use that...but stackless isn't really all <em>that</em> far off, I've been bending things toward it for a year now.)</em></p>
+<p>I've mentioned the <a href="https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733/2">catharsis of getting rid of what was there before</a>.  But chopping out a lot of awkward and brittle stuff has still left behind a semantic soup.</p>
+<h2>READ's Historical Properties</h2>
+<p>Let's start with how it has worked:</p>
+<ol>
+<li>
+<p>If you passed READ a URL! or FILE!, it did an OPEN... then what Go would call a <a href="https://pkg.go.dev/io#ReadAll">"ReadAll()"</a> to get everything until the end of input.  Then it CLOSEd the port.  It gives back the data that was read.  This has always been synchronous.</p>
+</li>
+<li>
+<p>If you passed READ an opened (non-filesystem) PORT!, it would immediately return that PORT! right back.  You could keep running other code...but at some point you would call WAIT.  With that WAIT on the stack, the port's AWAKE handler would be called with an EVENT! labeled "read"...and find some (fairly arbitrary) amount of data in the <code>port.data</code> field.  If your handler felt the amount of data in <code>port.data</code> wasn't enough, then it could issue another READ request and return false ("not awake yet").  The next callback would have additional data at the tail of <code>port.data</code>.</p>
+<ul>
+<li>A filesystem port which had READ called on it would return everything to the end.  This is because there was no such thing as asynchonous file I/O.  <em>(Though libuv has that: the idea is that it might take time for a file request to be fulfilled--disk access is by no means instantaneous relative to CPU cycles.  And if the file is on a network file system it could be as long as any other network request, with all the potential for failures that go with it.)</em>
+</li>
+</ul>
+</li>
+<li>
+<p>If you passed READ a /PART this would give back <em>at most</em> that amount of data.  This was only offered on synchronous sources... so it would work on file ports, and on literal FILE! (which opened a file port).  But it wasn't supported by the network ports...so there was no asynchronous semantic.</p>
+<ul>
+<li>If you wanted to know if you hit the end of file before your request was filled, you'd have to check the length of what you got back and ask if it was the same as the /PART request you made.  If it was less, then you hit the end.</li>
+</ul>
+</li>
+</ol>
+<h2>I'm Clearly Saying That (2) Is Out...</h2>
+<p>What about the rest?</p>
+<p>It's weird to have a 1-arg call to READ sometimes mean <em>"read all"</em> and sometimes mean <em>"read as much as the underlying data source feels like giving us at this moment"</em>.  Since people (including myself) are attached to <code>read url</code> giving back all the data...then I think that means plain READ needs to always mean read all.</p>
+<p>READ/PART (3) on the surface looks like Go's basic Read()...in the sense that you're passing in a maximum amount to read and you might get less than that.  But on file ports (the only place this worked) it was historically guaranteed to read either that amount or be truncated at EOF.  So you would feel confident that if you asked for a READ/PART of 100 and got only 50 back that you must have reached the end of the file.  That's not the semantics of a stream Read() in Go.... you can ask for 100 and get 50 back, but there may be more coming later.</p>
+<p>I think that the /PART operations giving you truncation without any signal saying so is something that is systemically bad.  It's bad on READ/PART, it's bad on COPY/PART, and there should be some way through requesting another return result to say that truncation is okay.</p>
+<p>There's nothing in these operations for <em>"read at least n bytes"</em>, like Go's <a href="https://pkg.go.dev/io#ReadAtLeast">ReadAtLeast()</a>.</p>
+<h2>Who Wants "Give Me As Much As You've Got, Right Now"?</h2>
+<p>I explained in the comparison with Go that the "give me as much as you've got right now, up to some limit" was tailored to the convenience for those <em>implementing new data sources</em>.</p>
+<p>End users of streams don't want that.  If you get more than you want for a particular call, you have to worry about what to do with the excess.  If you get less than you want, you have to call it again.</p>
+<p><strong>But piped sources want to move in chunks, and they may not know intrinsically how big a chunk to go by.</strong></p>
+<p>Let's say you are the HTTP protocol.  Assume you've read a TCP connection enough to get to the Content-Length in the header of a transfer.  It says the ensuing transfer will be two gigabytes in size.</p>
+<p>As the person writing the HTTP protocol, you now know how much to ask for.  But do you want to say READ/PART of 2GB from the TCP connection?  That might seem okay if you were going to return the 2GB to the client if they asked for <strong>read url</strong> all at once.  But if you're running that through another pipe like something that compresses or encrypts then you want to be able to get started on that sooner.</p>
+<p>You might say it's the job of that client to ask for a /PART that's a good chunk size for them.  But what if they don't particularly care, and want to be as efficient as possible?  Making up an arbitrary /PART number that forces the creation of a binary of exactly that size could be inefficient...when compared to just letting the http layer pass through a blob that's as big as it got.</p>
+<p>So this motivates why one would have a /PART that means "as much as you feel like giving me"... where that implies "as much as your buffering chunk size considers to be efficient".  The expectation is that a networking layer would not treat "as much as I feel like" as implying 2 GB would be acceptable...but it seems there's no way to avoid that besides picking an arbitrary number.</p>
+<p>I'll keep thinking about it.  The good news is that we have a lot of streaming-capable stuff hanging around to wire together (the ciphers and hashes in mbedTLS are streaming, zlib does streaming compression and decompression...)</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-read/1741/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-read/1741/1</link>
+        <pubDate>Thu, 07 Oct 2021 20:48:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1741-1</guid>
+        <source url="https://forum.rebol.info/t/rethinking-read/1741.rss">Rethinking READ</source>
+      </item>
+  </channel>
+</rss>

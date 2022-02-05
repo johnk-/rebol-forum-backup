@@ -1,0 +1,648 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+    <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439</link>
+    <description>Being case-insensitive for binding and equality comparisons makes Rebol/Red pretty unusual.  It is certainly more costly in the implementation and harder to write.  And it opens a huge can of worms to try and define what case insensitivity means at a system level...especially with UTF-8.
+
+When I think about it, *I&#39;ve almost never used it (on purpose), and all it does is get in the way*.  (Admittedly I did for a time try typing **`FAIL [...]`** in all caps to draw attention to it even though it was defined as **`fail`**...however I found this ugly, and stopped doing it.)
+
+Pretty much all of the reasons I cite in [&quot;Making the Case for Caselessness&quot;](http://blog.hostilefork.com/making-the-case-for-caselessness/) could be covered just by a best practices document saying &quot;don&#39;t use mixed-case names in your code, even though that seems to open up more unique space for identifiers&quot;.  And you&#39;re done.
+
+## A Current Example of Caselessness &quot;Getting In the Way&quot;
+
+I was trying to do some cleverness based on the idea of not redundantly storing the string in bound WORD!s...but just letting the name come out of the object it was bound to.  This could reclaim one pointer per cell in bound words and would be *extremely useful* for something I am doing.  (It&#39;s actually more than useful, it&#39;s probably critical to get that slot.)
+
+But it had this Bad Effect (tm):
+
+     &gt;&gt; obj: make object! [Some-Name: 10]
+
+     &gt;&gt; block: [some-name, some-other-name]
+
+     &gt;&gt; bind block obj
+     &gt;&gt; block
+     == [Some-Name, some-other-name]  ; ack, where&#39;d my case go?!
+
+That&#39;s obviously an unacceptable consequence.  But when you think about it, you&#39;re not really far from having a similar &quot;lossiness&quot; just about anywhere in the system.  It&#39;s super easy to look things up in tables and go &quot;oh, it&#39;s there&quot; and then fetch it back with it actually being different than what you put in.
+
+## A Losing Battle?
+
+It&#39;s tempting to just punt on the whole thing and change the rules of the system to strip out *all* of the case-insensitivity.  *(I recall on a wiki about map case sensitivity, DocKimbel had said that if it weren&#39;t for historical compatibility with Rebol2 practices, he&#39;d have probably wanted to make Red case-sensitive.)*
+
+So I wonder:
+
+1. Is the case-insensitivity battle the right battle to be choosing, when it&#39;s different from basically all other current languages?
+
+2. Is it even a winnable battle, if chosen?
+
+## It Doesn&#39;t Technically Have To Be All-Or-Nothing
+
+The system today follows a fair number of hybridized rules.  We could just bend it a bit and say that the BIND operations are based on `==` (`is`) equality, and that `=` still is case-insensitive.
+
+However: this would lead to a world where **`o: make object! [A: 10, a: 20]`** is an object with two distinct fields.  So you&#39;d presumably want **`o/A`** and **`o/a`** to get those different fields.  Hence some of these decisions seem tied together.  Although we could say that **`/`** is case-insensitive for historical Rebol compatibility, while the `.` operator is case-sensitive, which might be a nice compromise...?
+
+*(It&#39;s worth noting that JavaScript+JSON are case-sensitive to both field names and data, so being able to have unique cased fields is a compatibility aspect with JavaScript objects.  Though they can have spaces in key names too, so there&#39;s multiple issues to fret over.)*
+
+That doesn&#39;t change the fact that in such a world--as always--you want a case sensitive and case-insensitive comparison.  It&#39;s just a question of **(&#39;A is &#39;a)** vs. **(&#39;A = &#39;a)**.  And you&#39;re saying that pathing and binding lookup uses whichever version of that is case-sensitive. 
+
+## Does Anyone Object to Case-Sensitive for Just Binding?
+
+It&#39;s independent of what **=** thinks about case, that can be decided separately.
+
+Best-practices could still recommend avoiding the use of mixed case or all-caps in object keys...saving it only for situations where one is trying to achieve compatibility with some external demand.  So most people wouldn&#39;t notice a difference.
+
+We *might* try making **.** accesses case sensitive and leaving **/** access case-insensitive (if that&#39;s seen as necessary?  Is it?  No reason to do it if no one actually thinks this is important...and they can focus on more interesting distinctions.)</description>
+    
+    <lastBuildDate>Thu, 14 Jan 2021 02:28:26 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="Mark-hi" data-post="14" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/mark-hi/40/212_2.png" class="avatar"> Mark-hi:</div>
+<blockquote>
+<p>If you look carefully, you will even see a position on the case preservation of keys explained and defended, specifically, that if an object has key/value 'FooBar:7' then searching for key 'foobar' should match it and show the matching key/value pair as 'foobar:7'. I understand that this may be difficult to implement.</p>
+</blockquote>
+</aside>
+<p>Canonizing the keys to is the only strategy that seems sane to me, if multiple cases are not considered an error.  Lowercase seems the only option people would accept.</p>
+<pre><code> &gt;&gt; obj1: make object! [FooBar: 10]
+ == make object! [foobar: 10]
+
+ &gt;&gt; obj2: make obj1 [FOOBAR: 20]
+ == make object! [foobar: 20]
+</code></pre>
+<p>But is this a property of WORD! and OBJECT! only, for binding?  If you make a MAP! do the keys act differently?  Differently for words, or for strings?</p>
+<p>If we give strings bindings, we might say you could round-trip WORD! =&gt; TEXT! =&gt; WORD! without losing the binding.  Then if MAP! threw away case for words, you might get around it with string case sensitivity.</p>
+<p>The question of string case sensitivity is a different one from words, and needs separate consieration.</p>
+<p>I think this is a bigger fight to pick than most people realize, and the energy it takes to do it right is non-trivial.  <em>Ren-C is a framework for implementing anything that can be articulated coherently.</em>..there's just a lot of questions about that coherence.</p>
+<p>I can do a trick parallel to the quoting to make it possible to store up to 3 spelling variants at word reference sites before needing to do an allocation to make the word reference sites bigger.  We can presume this would be rare.  But I still think getting the experience here is important.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/20</link>
+        <pubDate>Thu, 14 Jan 2021 02:28:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-20</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It's important to distinguish the question of if people are given tools to make case-insensitive dialects easier to make, vs. is the whole underlying language itself case-insensitive.</p>
+<p>When you make the language itself case-insensitive, you are saying that those who wish to use identifiers case-sensitively--to expand the space of names--cannot do so in the main language.  I'd dismissed this as "not important" but the more I've thought about the harsh limit of words, the more it seems someone might need that space.</p>
+<p>Anyway, I don't know that the cited Interweb posts make any arguments that really move the needle, and if anything seem more convincing that the language should be case-sensitive.  I still think my writeup is far more compelling, if there is an argument for case-insensitivity as a best-choice to be made.</p>
+<p>It seems that if anything, when you are using similarly-cased identifiers...you should be given an error, to standardize you on a canon form.</p>
+<p>As a sidenote <a class="mention" href="/u/gchiu">@gchiu</a> had used uppercase to say REPLPAD-WRITE/HTML based on the argument that the HTML acronym is uppercased.  <em>(Why this spread to the REPLPAD-WRITE instead of <strong>replpad-write/HTML</strong> I don't know).</em>  But that is an instance where the desire for case-insensitivity seems plausible.  But maybe it should be /HTML and force everyone to use the same canon all-uppercase spelling, instead of having everyone writing it differently.  :shrug:</p>
+<p><em>(But of course, as those who edit things like Apache configs would know, there's plenty of places where <code>html</code> and <code>HTML</code> are different in the computer world.  So I think rather than a knee-jerk "A ha!  See it's plausible!  In a case" makes for a slam-dunk winning argument where all other angles must be dismissed.)</em></p>
+<p>There are implementation tricks which would cost some performance and complexity to bring the case insensitivity back.  But I want us to continue taking a good hard look at it, and so living in a case-sensitive Rebol-flavored world is a good way to find things, such as Graham's example, to include in a big picture explanation of why we pay that cost and what exact rules we need for it.</p>
+<p><a class="mention" href="/u/rgchris">@rgchris</a>'s suggestion about only heeding the 26 ASCII characters in case is also something that we need to understand, e.g. if we don't use such an optimization, why we don't.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/19</link>
+        <pubDate>Wed, 13 Jan 2021 15:11:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-19</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>... aNd when useD as a noUn it has TO BE writTEn with a capItAl m is all i'M saYIng.</p>
+<aside class="quote no-group" data-username="Mark-hi" data-post="16" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/mark-hi/40/212_2.png" class="avatar"> Mark-hi:</div>
+<blockquote>
+<p>As for why you would want to change case but still mean the same thing, why would anyone ever NOT want to do that? <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+</blockquote>
+</aside>
+<p>BeCause IT doesn't maKe sEnsE.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/18</link>
+        <pubDate>Sat, 09 Jan 2021 00:25:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-18</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I feel that if a programming language is case-insensitive, it becomes rather  important to have a decent code editor to warn you of potential clashes.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/17</link>
+        <pubDate>Fri, 08 Jan 2021 17:52:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-17</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p><a class="mention" href="/u/ingohohmann">@IngoHohmann</a>,</p>
+<p>The reason you could find only one example is because it's not really an example, and in fact what you are trying to say is going on does not happen in any language, for obvious reasons when you think about it.</p>
+<p>"Morgen" and "morgen" are the exact same word with the exact same (set of) meaning(s). When used as a noun it means "morning", and when used as an adverb it means "in the morning". Just like the Spanish "mañana", or the Afrikaans "môre", or in fact the English word "morrow", though it is an archaic usage now.</p>
+<p>Ref: <a href="https://german.stackexchange.com/questions/40673/why-are-tomorrow-and-morning-the-same-in-german" class="inline-onebox">dictionary - Why are "tomorrow" and "morning" the same in German? - German Language Stack Exchange</a></p>
+<p>As for why you would want to change case but still mean the same thing, why would anyone ever NOT want to do that? <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/16</link>
+        <pubDate>Fri, 08 Jan 2021 14:16:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-16</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I've always liked case sensitivity in file systems (disclosure: I'm a long time Linux user).</p>
+<p>Maybe I can attribute this to German being my native language, where all nouns have to be written with a capital letter, and morgen and Morgen are actually 2 different words.</p>
+<p>Morgen = morning<br>
+morgen = tomorrow<br>
+(Though this is the only example I have).</p>
+<p>I guess this makes case sensitivity normal for me.</p>
+<p>And why should I write the same thing in differing casing? I wouldn't exchange letters as well.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/15</link>
+        <pubDate>Thu, 07 Jan 2021 22:28:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-15</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p>Of course, one-line rebuttals are not worthy. I always intended to expand upon it.</p>
+<p>Here are two significant points to start with:<br>
+(1) There are powerful, well-used, and significant computer languages that in fact are case-insensitive. Firstly, Pascal. Then, in no particular order, Fortran, Ada, Basic (most of them), and SQL. Some SQLs even go so far as to treat the data itself in a case-insensitive manner!!<br>
+(2) Case-insensitivity is NOT a language design issue. It is a human utility issue. Languages (and file systems!) that are case sensitive are plagued with hard-to-debug errors cause not by the language, but by how hard humans actually find it is to work within case-sensitivity constraints. In fact, I would venture to say that anybody who is comfortable working in a case-sensitive computing environment has spent YEARS bending their brain into that shape, so much so that they no longer even see it as a problem, and can construct (non-human) arguments as to how it is in fact better. In case you are wondering, I am such a person, though I am now trying to at least partially undo that error from my past.</p>
+<p>Finally, here are two links that go into some detail (some of it not so relevant, sorry) as to why case-preserving case-insensitivity is important, including replies and rebuttals and demolishing strawman arguments. Please at least peruse them:<br>
+(1) <a href="http://www.somethinkodd.com/oddthinking/2005/10/27/the-case-for-case-preserving-case-insensitivity/" class="inline-onebox">OddThinking » The Case for Case-Preserving, Case-Insensitivity</a><br>
+(2) <a href="http://quaddmg.blogspot.com/2005/10/terrible-lie-of-intuition.html" class="inline-onebox">The USS Quad Damage</a> (which is in response to the above link)<br>
+If you look carefully, you will even see a position on the case preservation of keys explained and defended, specifically, that if an object has key/value 'FooBar:7' then searching for key 'foobar' should match it and show the matching key/value pair as 'foobar:7'. I understand that this may be difficult to implement.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/14</link>
+        <pubDate>Thu, 07 Jan 2021 17:04:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-14</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="Mark-hi" data-post="12" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/mark-hi/40/212_2.png" class="avatar"> Mark-hi:</div>
+<blockquote>
+<p>I don't buy any of these arguments.</p>
+</blockquote>
+</aside>
+<p>One line is not a rebuttal worthy of heeding.</p>
+<p>The most comprehensive analysis of why case insensitivity might make sense for a language (despite not being a practice in pretty much ANY language that people use today) is written by <em>me</em>.  In that analysis I did not address the tenuous relationship between case-preservation and case-insensitivity.  In this thread I do.</p>
+<p>Getting enough bits available in a word cell to do virtual binding at any level of efficiency--without increasing the cell size--is important.  There are complex mechanics which might make it possible other ways than not storing a spelling variation pointer...they'll all have some cost, but the biggest cost is just complexity.</p>
+<p>If case-insensitivity...something no other language gets itself involved in at identifier-level, especially in the unicode era--is so mind-bendingly important, it needs a strong and completely thought-out defense.  Extraordinary claims require extraordinary evidence.  Not "I have some idea stuck in my head from 20 years ago that seems it might be good in the abstract, but about 2 minutes to devote to defining it now".</p>
+<aside class="quote no-group" data-username="Mark-hi" data-post="12" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/mark-hi/40/212_2.png" class="avatar"> Mark-hi:</div>
+<blockquote>
+<p>Also, case-sensitivity ruins HELP.</p>
+</blockquote>
+</aside>
+<p>Not any more or less than anything else.  I'd argue the impact can be much less, as there is also at hand a list of alternate spellings of the same WORD! (formerly called "synonyms")--which could be acted on to say "did you mean..."</p>
+<p>Anything is possible, but the points need to be <em>committed to and analyzed</em>.  <strong>That means explaining and defending a position on the case preservation of keys which I've explicitly called out twice here.</strong></p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/13</link>
+        <pubDate>Thu, 07 Jan 2021 14:24:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-13</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p>I don't buy any of these arguments.<br>
+Also, case-sensitivity ruins HELP.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/12</link>
+        <pubDate>Thu, 07 Jan 2021 14:16:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-12</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="10" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>I use initial caps for headers (including <code>Rebol []</code>) as it has a formality to it but would balk at having to use said caps in accessing that information anywhere in the script <code>system/script/header/title</code>.</p>
+</blockquote>
+</aside>
+<p>It's best if you phrase your preferences in terms of a list of tests with desired output (or definitely not-desired output).</p>
+<p>I pointed out the problem of case preservation...where if you make an object which already had an opinion of case on its fields, then if your derived object uses different cases you <em>seem</em> to have these options:</p>
+<ol>
+<li>
+<p>Consider the cases equivalent, and collapse the definition to use one of the cases</p>
+</li>
+<li>
+<p>Consider the cases not equivalent, and end up with keys for both.</p>
+</li>
+<li>
+<p>Raise an error that you're trying to mix cases of the same word...forcing the deriver to canonize their names to whatever the base used</p>
+</li>
+</ol>
+<p>But the way things are set up, <span class="hashtag">#1</span> can really only easily collapse the definition to what the parent used.  So if you go with this option, you lose what the derived case said.</p>
+<p>Also, the idea of making mixed cases in an object illegal won't work with case-insensitive binding, because (for instance) the user context needs to allow you to have <code>Foo</code> and <code>foo</code> word instances bound into it.  Which means <span class="hashtag">#3</span> would have to be limited to only some class forming tools...as opposed to a rule for contexts in general.</p>
+<p>This is why right now, we have <span class="hashtag">#2</span>... and hence multiple cases of keys.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/11</link>
+        <pubDate>Sun, 03 Jan 2021 19:28:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-11</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>he'd have probably wanted to make Red case-sensitive</p>
+</blockquote>
+</aside>
+<p>I notice that Red is only case insensitive for the 26:26 unaccented characters.</p>
+<pre><code class="lang-nohighlight">&gt;&gt; make object! [café: "Coffee" cafÉ: "Scones" Café: "Tea"]
+== make object! [
+    café: "Tea"
+    cafÉ: "Scones"
+]
+</code></pre>
+<p>As is Rebol 2 but not Rebol 3 (or Ren-C)</p>
+<hr>
+<p>In terms of my own case insensitivity, I use initial caps for headers (including <code>Rebol []</code>) as it has a formality to it but would balk at having to use said caps in accessing that information anywhere in the script <code>system/script/header/title</code>. The other place I use it in a mixed way is representing HTTP headers: <code>header-proto: make object! [Content-Type: "text/html"]</code>—there are benefits when it comes to forming headers in such a way, but again, would feel icky to access them that way in paths: <code>header-proto/content-type</code></p>
+<p>This may be a parochial opinion, but I'd be fine with the 26:26 compromise.</p>
+<hr>
+<p>As a side note, was just futzing with some JS code that capitalized its camel-cased class names and did not for it's derivatives.</p>
+<pre><code class="lang-javascript">class GreenThing {...}
+greenThing = new GreenThing(...)
+</code></pre>
+<p>Whatever funkiness currently exists with associating binding with cased represention, it is not as bad as this.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/10</link>
+        <pubDate>Sun, 03 Jan 2021 18:51:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-10</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-username="hostilefork" data-post="1" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Being case-insensitive for binding and equality comparisons makes Rebol/Red pretty unusual. (...)</p>
+<p>When I think about it, <em>I've almost never used it (on purpose), and all it does is get in the way</em>.</p>
+</blockquote>
+</aside>
+<p>Two more exceptions.  :-/</p>
+<p><strong>Rebmu</strong></p>
+<p>I thought Rebmu would be unaffected, since the decoding of the mixed-case input just produces entirely lowercase tokens.  There's no binding of anything uppercase involved..</p>
+<p><em>but</em> once case-sensitive identifiers exist, you'd have a hard time referring to them.  Because they'd be broken up (<strong>MixedCase</strong> =&gt; <strong>m: ixed c ase</strong>)</p>
+<p>Just prohibiting mixed-case identifier usage isn't any particular problem for this domain, though there could be some exception syntax (e.g. leading backslash, like <strong>\MixedCase</strong> meaning honor the case of the next word).  It's not really a big deal either way.</p>
+<p><strong>CSCAPE</strong></p>
+<p>The templating language in CSCAPE uses a weird rule to decide if the result of a code insertion should be uppercased, lowercased, or left alone.</p>
+<pre><code>&gt;&gt; items: ["lowercase" "MixedCase" "UPPERCASE"]
+
+&gt;&gt; cscape "Lowercasing $&lt;second items&gt;"
+== "Lowercasing mixedcase"
+
+&gt;&gt; cscape "Uppercasing $&lt;SECOND ITEMS&gt;"
+== "Uppercasing MIXEDCASE"
+
+&gt;&gt; cscape "Leaving $&lt;Second Items&gt; alone"
+== "Leaving MixedCase alone"
+</code></pre>
+<p>While it's pretty weird, I think it's kind of clever, and it works with the domain.  There could be of course alternate shorthands like <strong>$L&lt;...&gt;</strong> for lowercase and <strong>$U&lt;...&gt;</strong> for uppercase with the default leaving it alone.  But it doesn't visually cue you quite as well when you're looking at what's being put together (frequently these are fragments of <code>#define</code> declarations in C or things like that, and it reads much better when the case of the splice cues you to what the result will look like).</p>
+<p>Since it's starting from a string, you might say "well, then just do the detection of which it is...then convert the string to lowercase...and load it."  However, that means you would also lowercase any embedded strings in the code.</p>
+<p>The only thing this broke looked like:</p>
+<pre><code>cast(CFUNC*, ${"T_" Hookname T 'Class}),  /* generic */
+</code></pre>
+<p>Strangely enough, <code>Hookname</code> is an enfix function which pulls in the left hand side to build an unspaced full identifier name.  You might think I could have just written:</p>
+<pre><code>cast(CFUNC*, T_${Hookname T 'Class}),  /* generic */
+</code></pre>
+<p>But as it turns out, if the class is NULL it wants the whole hookname to be <code>nullptr</code> (not T_Nullptr).  Which is why I did it in this weird way.</p>
+<p>That's the only case, and I fixed it by re-uppercasing the prefix.  :-/  You're not really supposed to write an essay inside the CSCAPE escapes in the first place.  It's being nice by letting you put a bit of code vs. just variables in the first place.</p>
+<p>It's a strange application, and just converting the input to lowercase works.  But I'm trying to inventory every place that I hit where case insensitivity was being leveraged somehow.</p>
+<h2>CR and LF</h2>
+<p>The character constants CR and LF were defined as uppercase.  This is typical with their notations in ascii tables.</p>
+<p>With case-sensitive binding, they either need to be referred to as CR and LF ... redefined to be lowercase cr and lf ... or have synonyms.</p>
+<p>Not sure how I feel about this one.  I'm so used to seeing it capitalized that I feel you lose communication ability if you force it to lowercase.  Having synonyms feels a bit wrong.  I kind of would go with wanting these to just be uppercase.  Anyone else have opinions?</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/9</link>
+        <pubDate>Tue, 29 Dec 2020 12:43:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-9</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[johnk]]></dc:creator>
+        <description><![CDATA[
+            <p>Thanks. The Unicode normalisation thread is a good read. What a mess! The é example with different behaviours in apps and filesystems is quite an eye opener.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/8</link>
+        <pubDate>Tue, 29 Dec 2020 03:20:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-8</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="johnk" data-post="6" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/johnk/40/229_2.png" class="avatar"> johnk:</div>
+<blockquote>
+<p>The use of UTF-8 seems a good reason alone for introducing more case sensitive behaviour.</p>
+</blockquote>
+</aside>
+<p>...for some definition of "behavior".</p>
+<p>As with the <a href="https://forum.rebol.info/t/newlina-non-grata/1207">"CR LF" =&gt; "LF" policy</a>...my pitch is to take "strong bets" on trends that are going to be guaranteed to still be relevant, and put the costs of edge cases on those few who demand them.</p>
+<p>Be sure to read over this thread regarding unicode normalization:</p>
+<aside class="quote quote-modified" data-post="1" data-topic="1322">
+  <div class="title">
+    <div class="quote-controls"></div>
+    <img alt="" width="20" height="20" src="/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar">
+    <a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322">O noes, Unicode Normalization</a> <a class="badge-wrapper  bullet" href="/c/development/internals/9"><span class="badge-category-parent-bg" style="background-color: #25AAE2;"></span><span class="badge-category-bg" style="background-color: #25AAE2;"></span><span style="" data-drop-close="true" class="badge-category clear-badge" title="Internals of the Rebol language">Internals</span></a>
+  </div>
+  <blockquote>
+    UTF8-Everywhere has been running along relatively well...even without any optimization on ASCII strings. 
+But there's a next level of bugaboo to worry about, and that's unicode normalization.  This is where certain codepoint sequences are considered to make the same "glyph"...e.g. there can be a single accented form of a character with an accent, or a two-codepoint sequence that is the unaccented character and the codepoint for an accent. 
+Since there's more than one form for the codepoints, one…
+  </blockquote>
+</aside>
+
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/7</link>
+        <pubDate>Sat, 26 Dec 2020 09:59:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-7</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[johnk]]></dc:creator>
+        <description><![CDATA[
+            <p>The use of UTF-8 seems a good reason alone for introducing more case sensitive behaviour. The rules around case insensitive comparison appear quite complicated and could cause more problems in the long run.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/6</link>
+        <pubDate>Fri, 25 Dec 2020 23:33:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-6</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>To reiterate an earlier point: <strong>There's something inconsistent about saying case-preservation is important, but then systemically not heeding case.</strong>  When an optimization caused a historical case-preservation to lose it, I called this bad:</p>
+<pre><code>&gt;&gt; obj: make object! [Some-Name: 10]
+
+&gt;&gt; block: [some-name, some-other-name]
+
+&gt;&gt; bind block obj
+&gt;&gt; block
+== [Some-Name, some-other-name]  ; ack, where'd my case go?!
+</code></pre>
+<p>I think it would be also bad if everything got lowercased automatically by the system:</p>
+<pre><code>&gt;&gt; block: [Some-Name, Some-Other-Name]
+== [some-name, some-other-name]
+</code></pre>
+<p>SO...if we can agree both of those situations are bad...then why wouldn't we agree that this r3-alpha behavior is bad?</p>
+<pre><code>r3-alpha&gt;&gt; load/header "Rebol [Title: {My Title}]"
+== [make object! [
+        title: "My Title"  ; Hey, I said `Title:` !
+        name: none
+        type: none
+        ; ...
+    ]]
+</code></pre>
+<p>As is Rebol2's habit of going the other way:</p>
+<pre><code>rebol2&gt;&gt; print mold load/header {Rebol [title: {my title}]}
+    make object! [
+        Title: "my title"  ; This time I said `title:` !
+        Date: none
+        Name: none
+        ; ...
+    ]
+</code></pre>
+<p><strong>It just goes to show you can't have it both ways.  Case-Preservation and Case-Insensitivity are fundamentally at odds.</strong></p>
+<p>But this is unfortunate:</p>
+<pre><code>&gt;&gt; [code header]: load "Rebol [title: {my title}]"
+&gt;&gt; header
+== make object! [
+     Title: "Untitled"  ; ... huh?
+     Date: _
+     Name: _
+     ; ...
+     title: "my title"  ; ... grrr.
+ ]
+</code></pre>
+<p>If we tuned OBJECT! to use the same trick that MAP! does at the moment, it could error when you do a case-insensitive access:</p>
+<pre><code>&gt;&gt; select header 'title
+** Object has different key cases for `title`, use SELECT/CASE
+
+&gt;&gt; select/case header 'title
+== "my title"
+
+&gt;&gt; select/case header 'Title
+== "Untitled"
+</code></pre>
+<p>Doing that test efficiently would require keeping track of if object keys have synonyms; so each object expansion would need to re-check that and update some bits.</p>
+<aside class="quote no-group" data-username="IngoHohmann" data-post="4" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>I myself always use the same case for all words meaning the same thing, and would only use a different case if I meant something different.</p>
+</blockquote>
+</aside>
+<p>FAIL was the only example I had of deliberately using case to "stand out".  I found no others, and apparently I've always stuck to the capitalization in file headers.</p>
+<p><strong>The best way to maintain sanity might be to couple my "error if multiple cases exist by default" above with "force case to match by default."</strong>  It could give intelligible errors:</p>
+<pre><code>&gt;&gt; header/date
+** Object does not have `date` field, but has `Date`
+</code></pre>
+<p>But we can't let multiple cases break binding in a case-sensitive world, because then if you have multiple cases of the same word anywhere in the user context it would conflict.</p>
+<pre><code>&gt;&gt; o: make object! [Title: {Thing}]
+
+; `Title` is now in the user context, because all words are bound into the
+; user context *before* the code runs (and makes it a field in the object).
+; If you are unclear on this point, re-read:
+;
+; https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764
+
+&gt;&gt; title: "hello!"
+&gt;&gt; title
+** If this errors there's already `Title` then that's bad
+</code></pre>
+<p>So binding would have to be one of the <code>/CASE</code> tolerant operations, which makes sense in this concept.</p>
+<p>We have some interesting options for saying "I mean it", like doubling up slashes in the path:</p>
+<pre><code>&gt;&gt; header/title
+** Object has different key cases for `title`, use SELECT/CASE
+    ; ^-- more than likely, this generates an "uh oh" and people would then
+    ; look and say "why is there more than one case"
+
+&gt;&gt; header//title
+== "my title"
+   ; ^-- could be a nice syntax for getting things case-sensitively out of
+   ; MAP! as well
+</code></pre>
+<p>And I've already mentioned there might be nuances between <code>.</code> and <code>/</code>, though I don't want any nuances that make me less likely to use <code>.</code> because I think it is going to be my preferred field selector.  So above I'd probably want <strong>header.title</strong> to error on the ambiguity, because that's the safer behavior, and say <strong>header..title</strong> if I meant there's a <strong><code>Title:</code></strong> too and I'm aware of that fact.</p>
+<p>Altogether, I'm just about convinced about case-sensitive binding.  There are some epicycles to deal with, but it's rather telling that I got a working system so quickly.  <strong>We know <em>somewhere</em> that case-insensitive comparisons have to be offered, but I think you don't want it anywhere that comes into conflict with the ability to do case-preservation, which means object keys have to preserve case...hence binding itself has to be case-sensitive.</strong></p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/5</link>
+        <pubDate>Thu, 24 Dec 2020 05:48:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-5</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm not sure how deeply ingrained case insensitivity really is, but I myself always use the same case for all words meaning the same thing, and would only use a different case if I meant something different.<br>
+And, though Rebol should never look like Javascript, interoperability with JSON seems really important.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/4</link>
+        <pubDate>Thu, 24 Dec 2020 00:02:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-4</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>One of the first examples that I hit in trying out the change <em>(besides residuals from my FAIL experiment)</em> is that modules have been named with capital letters, e.g. <strong><code>system/modules/Event</code></strong></p>
+<p>I should point out that while we might tend to dislike mixed casing, if we allowed such things to be distinct it does open up pretty important space...and module names for top level scope are actually a pretty good example.</p>
+<pre><code>Event: import %some-event-module.reb
+
+; you can refer to things like `Event.xxx` and still have local variables
+; named `event`.
+</code></pre>
+<p>This may be an important direction, along with my suggestion that we might be able to couple ACTION! and OBJECT! in a way such that something like <strong>math [...]</strong> or <strong><code>math/ref1/ref2 [...]</code></strong> could invoke a function with refinements...while <strong><code>math.some-constant</code></strong> could be a field and <strong><code>math.some-other-function/ref1/ref2 arg1 arg2</code></strong> could invoke another function.</p>
+<p>Capitalizing datatypes is another concept that is popular in some languages, which might read better to some people's tastes:</p>
+<pre><code>make Object [x: 10, y: 20]  ; you have to hit SHIFT to get the "O"
+
+make object! [x: 10, y: 20]  ; ...but you have to hit SHIFT to get the !
+</code></pre>
+<p>Anyway...having an open mind about casing may be necessary to be competitive in the limited space of words.  There are only so many.  :-/</p>
+<hr>
+<p>Note: I'll also point out that if I really just wanted all-caps FAIL to act like fail, I could just say that specific thing...</p>
+<pre><code>FAIL: :fail
+</code></pre>
+<p>Important to remember that's available.</p>
+<hr>
+<p><strong>UPDATE:</strong> In a little less than 4 hours I was able to make the change and get a booting system, implementing the rule that PATH! access and SELECT+FIND still default to caseless by default when looking for keys.  This means that if there are multiple cases of the same word, they just return the first.</p>
+<p>The biggest cause for trouble on this to get the boot was in the headers, because it's typical to write <strong>Rebol [Title: {My Module}]</strong> and not <strong>Rebol [title: {My Module}]</strong>.  The problem was that the default header object was defined with lowercase keys.  So when you <strong><code>make default-header block</code></strong> it had things like the default <code>title: {Untitled}</code> and then the <code>Title: {My Module}</code> came later...meaning it was the untitled key that was found.</p>
+<p>I changed the default object to use capitalized terms, but it shows the kind of issue that would come up.  Sometimes case-sensitivity sucks, sometimes case-insensitivity sucks...but for binding (and hence object keys), case-sensitivity provides more flexibility.  And there's a value to getting everyone on the same page for what case to use in their headers.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/3</link>
+        <pubDate>Wed, 23 Dec 2020 12:44:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-3</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1439">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>However: this would lead to a world where <strong><code>o: make object! [A: 10, a: 20]</code></strong> is an object with two distinct fields.</p>
+</blockquote>
+</aside>
+<p>If however the word however is not at the start of your sentence, it is not written with a capital letter 'H' at the beginning, however it is the same word however as the other however that is however spelled with all lower case letters.</p>
+<p>I consider the example A: 10 a: 20 to be a "case" of bad practice programming, using the same word (by coincidence this time a word only of length one).</p>
+<p>One of the charms of Rebol is its case insensitivity where even PeopleThatWantToKeepCamels are welcome and treated the same as peoplethatwanttokeepcamels (who don't like hitting shift keys the whole time).</p>
+<p>Sure this is the base behaviour, case sensitiveness is needed in some places, the language must be able to handle such cases.</p>
+<p>So on case basis Rebolers can be very reasonable, but if Rebol starts to look like Java or ... then the cause of the rebellion is lost forever :-/</p>
+<p>Lets hear some more opinions.</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/2</link>
+        <pubDate>Wed, 23 Dec 2020 11:04:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-2</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+      <item>
+        <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Being case-insensitive for binding and equality comparisons makes Rebol/Red pretty unusual.  It is certainly more costly in the implementation and harder to write.  And it opens a huge can of worms to try and define what case insensitivity means at a system level...especially with UTF-8.</p>
+<p>When I think about it, <em>I've almost never used it (on purpose), and all it does is get in the way</em>.  (Admittedly I did for a time try typing <strong><code>FAIL [...]</code></strong> in all caps to draw attention to it even though it was defined as <strong><code>fail</code></strong>...however I found this ugly, and stopped doing it.)</p>
+<p>Pretty much all of the reasons I cite in <a href="http://blog.hostilefork.com/making-the-case-for-caselessness/">"Making the Case for Caselessness"</a> could be covered just by a best practices document saying "don't use mixed-case names in your code, even though that seems to open up more unique space for identifiers".  And you're done.</p>
+<h2>A Current Example of Caselessness "Getting In the Way"</h2>
+<p>I was trying to do some cleverness based on the idea of not redundantly storing the string in bound WORD!s...but just letting the name come out of the object it was bound to.  This could reclaim one pointer per cell in bound words and would be <em>extremely useful</em> for something I am doing.  (It's actually more than useful, it's probably critical to get that slot.)</p>
+<p>But it had this Bad Effect (tm):</p>
+<pre><code> &gt;&gt; obj: make object! [Some-Name: 10]
+
+ &gt;&gt; block: [some-name, some-other-name]
+
+ &gt;&gt; bind block obj
+ &gt;&gt; block
+ == [Some-Name, some-other-name]  ; ack, where'd my case go?!
+</code></pre>
+<p>That's obviously an unacceptable consequence.  But when you think about it, you're not really far from having a similar "lossiness" just about anywhere in the system.  It's super easy to look things up in tables and go "oh, it's there" and then fetch it back with it actually being different than what you put in.</p>
+<h2>A Losing Battle?</h2>
+<p>It's tempting to just punt on the whole thing and change the rules of the system to strip out <em>all</em> of the case-insensitivity.  <em>(I recall on a wiki about map case sensitivity, DocKimbel had said that if it weren't for historical compatibility with Rebol2 practices, he'd have probably wanted to make Red case-sensitive.)</em></p>
+<p>So I wonder:</p>
+<ol>
+<li>
+<p>Is the case-insensitivity battle the right battle to be choosing, when it's different from basically all other current languages?</p>
+</li>
+<li>
+<p>Is it even a winnable battle, if chosen?</p>
+</li>
+</ol>
+<h2>It Doesn't Technically Have To Be All-Or-Nothing</h2>
+<p>The system today follows a fair number of hybridized rules.  We could just bend it a bit and say that the BIND operations are based on <code>==</code> (<code>is</code>) equality, and that <code>=</code> still is case-insensitive.</p>
+<p>However: this would lead to a world where <strong><code>o: make object! [A: 10, a: 20]</code></strong> is an object with two distinct fields.  So you'd presumably want <strong><code>o/A</code></strong> and <strong><code>o/a</code></strong> to get those different fields.  Hence some of these decisions seem tied together.  Although we could say that <strong><code>/</code></strong> is case-insensitive for historical Rebol compatibility, while the <code>.</code> operator is case-sensitive, which might be a nice compromise...?</p>
+<p><em>(It's worth noting that JavaScript+JSON are case-sensitive to both field names and data, so being able to have unique cased fields is a compatibility aspect with JavaScript objects.  Though they can have spaces in key names too, so there's multiple issues to fret over.)</em></p>
+<p>That doesn't change the fact that in such a world--as always--you want a case sensitive and case-insensitive comparison.  It's just a question of <strong>('A is 'a)</strong> vs. <strong>('A = 'a)</strong>.  And you're saying that pathing and binding lookup uses whichever version of that is case-sensitive.</p>
+<h2>Does Anyone Object to Case-Sensitive for Just Binding?</h2>
+<p>It's independent of what <strong>=</strong> thinks about case, that can be decided separately.</p>
+<p>Best-practices could still recommend avoiding the use of mixed case or all-caps in object keys...saving it only for situations where one is trying to achieve compatibility with some external demand.  So most people wouldn't notice a difference.</p>
+<p>We <em>might</em> try making <strong>.</strong> accesses case sensitive and leaving <strong>/</strong> access case-insensitive (if that's seen as necessary?  Is it?  No reason to do it if no one actually thinks this is important...and they can focus on more interesting distinctions.)</p>
+          <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/1</link>
+        <pubDate>Wed, 23 Dec 2020 09:25:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1439-1</guid>
+        <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Source Mutability--CONST and MUTABLE - Internals - AltRebol</title>
+    <meta name="description" content="One of the immediate incompatible changes people notice in Ren-C is the locking of source.  They go to type append [a b] &amp;#39;c and it gives back an error that the series is &amp;quot;source or permanently locked&amp;quot;. 
+It was motivated &amp;hellip;">
+    <meta name="generator" content="Discourse 2.7.0.beta4 - https://github.com/discourse/discourse version 3fc72543de22c329cf2156f28b781821adc496ae">
+<link rel="icon" type="image/png" href="../../uploads/default/optimized/1X/cbd70027b53fa165575e5b665f00eb3b8ae7ea31_2_32x32.ico">
+<link rel="apple-touch-icon" type="image/png" href="../../uploads/default/optimized/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d_2_180x180.png">
+<meta name="theme-color" content="#ffffff">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, user-scalable=yes, viewport-fit=cover">
+<link rel="canonical" href="976.html" />
+<script type="application/ld+json">{"@context":"http://schema.org","@type":"WebSite","url":"https://forum.rebol.info","potentialAction":{"@type":"SearchAction","target":"https://forum.rebol.info/search?q={search_term_string}","query-input":"required name=search_term_string"}}</script>
+<link rel="search" type="application/opensearchdescription+xml" href="../../opensearch.xml" title="AltRebol Search">
+
+      <link href="https://forum.rebol.info/stylesheets/desktop_e71c7b3a0694e7f6434c54a663bfb42821f8bd81.css?__ws=forum.rebol.info" media="all" rel="stylesheet" data-target="desktop" />
+    
+    
+        <link rel="alternate" type="application/rss+xml" title="RSS feed of &#39;Source Mutability--CONST and MUTABLE&#39;" href="976.rss" />
+    <meta property="og:site_name" content="AltRebol" />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:image" content="https://forum.rebol.info/uploads/default/original/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d.png" />
+<meta property="og:image" content="https://forum.rebol.info/uploads/default/original/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d.png" />
+<meta property="og:url" content="https://forum.rebol.info/t/source-mutability-const-and-mutable/976" />
+<meta name="twitter:url" content="https://forum.rebol.info/t/source-mutability-const-and-mutable/976" />
+<meta property="og:title" content="Source Mutability--CONST and MUTABLE" />
+<meta name="twitter:title" content="Source Mutability--CONST and MUTABLE" />
+<meta property="og:description" content="One of the immediate incompatible changes people notice in Ren-C is the locking of source.  They go to type append [a b] &#39;c and it gives back an error that the series is &quot;source or permanently locked&quot;.  It was motivated by a VERY good reason.  To refresh your memory, here is an example of &quot;objectively bad default behavior&quot; the change was attempting to address:  symbol-name: function [symbol [word!]] [      switch symbol [          &#39;+ [&quot;plus&quot;]          &#39;? [&quot;question-mark&quot;]          ...      ] ] ...." />
+<meta name="twitter:description" content="One of the immediate incompatible changes people notice in Ren-C is the locking of source.  They go to type append [a b] &#39;c and it gives back an error that the series is &quot;source or permanently locked&quot;.  It was motivated by a VERY good reason.  To refresh your memory, here is an example of &quot;objectively bad default behavior&quot; the change was attempting to address:  symbol-name: function [symbol [word!]] [      switch symbol [          &#39;+ [&quot;plus&quot;]          &#39;? [&quot;question-mark&quot;]          ...      ] ] ...." />
+<meta name="twitter:label1" value="Reading time" />
+<meta name="twitter:data1" value="4 mins 🕑" />
+<meta name="twitter:label2" value="Likes" />
+<meta name="twitter:data2" value="5 ❤" />
+<meta property="article:published_time" content="2018-12-25T20:07:35+00:00" />
+<meta property="og:ignore_canonical" content="true" />
+
+
+
+    
+  </head>
+  <body class="crawler">
+    
+    <header>
+      <a href="https://forum.rebol.info/">
+          <img src="../../uploads/default/original/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d.png" alt="AltRebol" id="site-logo" style="max-width: 150px;">
+      </a>
+    </header>
+    <div id="main-outlet" class="wrap">
+        <div id="topic-title">
+    <h1>
+      <a href="976.html">Source Mutability--CONST and MUTABLE</a>
+    </h1>
+
+      <div class="topic-category" itemscope itemtype="http://schema.org/BreadcrumbList">
+          <span itemprop="itemListElement" itemscope itemtype="http://schema.org/ListItem">
+            <a href="https://forum.rebol.info/c/development/8" class="badge-wrapper bullet" itemprop="item">
+              <span class='badge-category-bg' style='background-color: #25AAE2'></span>
+              <span class='badge-category clear-badge'>
+                <span class='category-name' itemprop='name'>Development</span>
+              </span>
+            </a>
+            <meta itemprop="position" content="1" />
+          </span>
+          <span itemprop="itemListElement" itemscope itemtype="http://schema.org/ListItem">
+            <a href="../../c/development/internals.html" class="badge-wrapper bullet" itemprop="item">
+              <span class='badge-category-bg' style='background-color: #25AAE2'></span>
+              <span class='badge-category clear-badge'>
+                <span class='category-name' itemprop='name'>Internals</span>
+              </span>
+            </a>
+            <meta itemprop="position" content="2" />
+          </span>
+      </div>
+
+  </div>
+
+  
+
+
+      <div itemscope itemtype='http://schema.org/DiscussionForumPosting' class='topic-body crawler-post'>
+        <div class='crawler-post-meta'>
+          <div itemprop='publisher' itemscope itemtype="http://schema.org/Organization">
+            <meta itemprop='name' content='AltRebol'>
+              <div itemprop='logo' itemscope itemtype="http://schema.org/ImageObject">
+                <meta itemprop='url' content='https://forum.rebol.info/uploads/default/original/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d.png'>
+              </div>
+          </div>
+          <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+            <a itemprop="url" href='https://forum.rebol.info/u/hostilefork'><span itemprop='name'>hostilefork</span></a>
+            
+          </span>
+
+          <link itemprop="mainEntityOfPage" href="976.html">
+
+
+          <span class="crawler-post-infos">
+              <meta itemprop='datePublished' content='2018-12-25T20:07:35Z'>
+              <time itemprop='dateModified' datetime='2020-07-12T02:40:44Z' class='post-time'>
+                July 12, 2020,  2:40am
+              </time>
+          <span itemprop='position'>#1</span>
+          </span>
+        </div>
+        <div class='post' itemprop='articleBody'>
+          <p>One of the immediate incompatible changes people notice in Ren-C is the locking of source.  They go to type <code>append [a b] 'c</code> and it gives back an error that the series is "source or permanently locked".</p>
+<p><strong>It was motivated by a VERY good reason.</strong>  To refresh your memory, here is an example of <em>"objectively bad default behavior"</em> the change was attempting to address:</p>
+<pre><code>symbol-name: function [symbol [word!]] [
+     switch symbol [
+         '+ ["plus"]
+         '? ["question-mark"]
+         ...
+     ]
+]
+...
+filename: append (symbol-name '+) ".dat"
+</code></pre>
+<p>This innocent-looking piece of code has a terrible bug.  <em>The string you return lives in the SWITCH, so it's actually mutating the string inside the SWITCH.</em>  Every subsequent call to SYMBOL-NAME will be affected.</p>
+<p>I feel like it shouldn't be controversial to say <strong>it should not be this easy to write self-modifying code on accident.</strong>  Something exactly like this caused a problem in the build system that took me hours to find.</p>
+<p>If Rebol is supposed to be more than a toy, it needs answers for usage problems like this--where it is very notably more brittle than other languages.</p>
+<h2>I knew locking source permanently was heavy-handed...</h2>
+<p>...but I want the example above to cause an error, vs. silently modify the string in the body of the function.  Locking source was the only option we had at the time, and I figured we'd be on a better path to figuring out an answer if we biased it to be an error.  It also meant we got more testing of the places in the code which make modifications to check the existing flags.  (PROTECT in R3-Alpha was quite half-baked...but no one noticed how buggy it was because it wasn't used much.)</p>
+<p>I've suggested that <strong>we need a lighter form of lock</strong>...something that doesn't make <em>all</em> views of a series have to be unchanging for all time, but that different views of a series be read or write.</p>
+<h2>Meet CONST and MUTABLE</h2>
+<p>Just in time for Christmas, we have a pioneering new feature of <em>values</em> being able to be read only or not.  You can flip the bit yourself with the CONST and MUTABLE functions:</p>
+<pre><code>&gt;&gt; data: mutable [a b c]
+== [a b c]
+
+&gt;&gt; data-readonly: const data
+== [a b c]
+
+&gt;&gt; append data-readonly 'd
+** Access Error: value is CONST (see MUTABLE): [a b c]
+
+&gt;&gt; append data 'd
+== [a b c d]
+
+&gt;&gt; data-readonly
+== [a b c d]
+</code></pre>
+<p>So it really is different from locking a series.  For instance: you can keep write access for yourself, while giving out const access to subroutines you don't want to be doing casual modifications.</p>
+<p>But the real win here is that the execution of code defaults to putting a wave of constness on any slots the evaluator fills from "literals"...be those blocks or strings.  You see it catching the bug I introduced at the beginning of the post, of the string being changed inside the switch:</p>
+<pre><code>&gt;&gt; filename: append (symbol-name '+) ".dat"
+** Access Error: value is CONST (see MUTABLE): "plus"
+</code></pre>
+<h2>What's the difference between this and before?</h2>
+<p>Previously source was locked by LOADing and phases prior to a DO.  Now, nothing gets <code>const</code>-ed unless it runs.  It is the "wave of evaluation" that brings along the constness, and any literals seen are affected.</p>
+<p>This means some things won't work that did before.  For instance, while this will work:</p>
+<pre><code> block: copy []
+ append block &lt;works&gt;
+</code></pre>
+<p>You no longer get a pass on a block that's been put elsewhere (e.g. by a compose) if it <em>looks</em> literal by the time the evaluator sees it, e.g.</p>
+<pre><code> block: copy []
+ do compose [append (block) &lt;fails&gt;]
+</code></pre>
+<p>After the compose, all the evaluator sees  is <code>append [] &lt;fails&gt;</code>.  It doesn't care where that block came from--copied or not, it looks like you're trying to append to a literal.  If you produce situations like this deliberately, you'll need to change them to:</p>
+<pre><code> block: copy []
+ do compose [append (mutable block) &lt;fails&gt;]
+</code></pre>
+<p>Or...</p>
+<pre><code> block: copy []
+ do compose [append mutable (block) &lt;fails&gt;]
+</code></pre>
+<p>Or...</p>
+<pre><code> block: mutable copy []
+ do compose [append (block) &lt;fails&gt;]
+</code></pre>
+<p>Any of which you could omit the copy from, if you didn't want a copy.</p>
+<h2>With DO MUTABLE...emulate Rebol2/R3-Alpha/Red!</h2>
+<p>There's a secret weapon for compatibility, which is that the way the constness propagates is based on a combination of bits on the values, and on inheritance through the call stack.</p>
+<p>A simple use of DO MUTABLE shows you can get away with old-style behaivor:</p>
+<pre><code>&gt;&gt; do [append [1 2 3] 4]
+** Access Error: value is CONST (see MUTABLE): [1 2 3]
+
+&gt;&gt; do mutable [append [1 2 3] 4]
+== [1 2 3 4]
+</code></pre>
+<p>But when execution happens under a mutable "evaluation wave", interpreted functions remember that fact.</p>
+<pre><code>&gt;&gt; do [newstyle: function [] [b: [1 2 3] append b 4]]
+
+&gt;&gt; do mutable [oldstyle: function [] [b: [1 2 3] append b 4]]
+
+&gt;&gt; newstyle
+** Access Error: value is CONST (see MUTABLE): [1 2 3]
+
+&gt;&gt; oldstyle
+== [1 2 3 4]
+</code></pre>
+<p>So you can call a module written to Rebol2 conventions from Ren-C conventions.  Moreover, even though the Rebol2-style module will have its series mutable by default, series you pass it from Ren-C code still get the protections:</p>
+<pre><code>&gt;&gt; do mutable [oldstyle: function [b] [clear b]]
+
+&gt;&gt; oldstyle [1 2 3]  ; oldstyle called from newstyle context
+** Access Error: value is CONST (see MUTABLE): [1 2 3]
+</code></pre>
+<p>This concept of explicit mutability can be applied anywhere, at the branch-level if you like.</p>
+<pre><code>&gt;&gt; condition: true
+
+&gt;&gt; either condition (mutable [append [] &lt;success&gt;]) [append [] &lt;fail&gt;]
+
+&gt;&gt; condition: false
+
+&gt;&gt; either condition (mutable [append [] &lt;success&gt;]) [append [] &lt;fail&gt;]
+ ** Access Error: value is CONST (see MUTABLE): []
+</code></pre>
+<h2>What should be the default?</h2>
+<p>The SWITCH case I opened with shows why I absolutely think that constness-on-evaluation is the right choice.  That's in addition to addressing the speedbump every new user has when they write <strong>loop 10 [block: [] ...]</strong> and expect block to be reinitialized each time through the loop.</p>
+<p>I don't think saying MUTABLE [...] is much of a burden to get deep mutable access to a series when you mean that.</p>
+<p>I feel it's better to teach good habits early on.  But who knows.  Certainly in the console mutability has been the status quo.  If modules enforced it by default but the console didn't, would that be a good tradeoff...or just confusing?</p>
+        </div>
+
+        <meta itemprop='headline' content='Source Mutability--CONST and MUTABLE'>
+          <meta itemprop='keywords' content=''>
+
+        <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+           <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+           <meta itemprop="userInteractionCount" content="2" />
+           <span class='post-likes'>2 Likes</span>
+         </div>
+
+         <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+            <meta itemprop="interactionType" content="http://schema.org/CommentAction"/>
+            <meta itemprop="userInteractionCount" content="2" />
+          </div>
+
+            <div class='crawler-linkback-list' itemscope itemtype='http://schema.org/ItemList'>
+                  <div itemprop='itemListElement' itemscope itemtype='http://schema.org/ListItem'>
+                    <a href="../2018-retrospective-elevating-the-art/992.html" itemscope itemtype='http://schema.org/DiscussionForumPosting' itemprop='item'>
+                      <meta itemprop='url' content='https://forum.rebol.info/t/2018-retrospective-elevating-the-art/992'>
+                      <span itemprop='name'>2018 Retrospective: Elevating the Art</span>
+                    </a>
+                    <meta itemprop='position' content='1'>
+                  </div>
+                  <div itemprop='itemListElement' itemscope itemtype='http://schema.org/ListItem'>
+                    <a href="../why-we-dont-use-copy-on-write/1162.html" itemscope itemtype='http://schema.org/DiscussionForumPosting' itemprop='item'>
+                      <meta itemprop='url' content='https://forum.rebol.info/t/why-we-dont-use-copy-on-write/1162'>
+                      <span itemprop='name'>Why We Don&#39;t Use Copy-on-Write</span>
+                    </a>
+                    <meta itemprop='position' content='2'>
+                  </div>
+            </div>
+      </div>
+      <div itemscope itemtype='http://schema.org/DiscussionForumPosting' class='topic-body crawler-post'>
+        <div class='crawler-post-meta'>
+          <div itemprop='publisher' itemscope itemtype="http://schema.org/Organization">
+            <meta itemprop='name' content='AltRebol'>
+              <div itemprop='logo' itemscope itemtype="http://schema.org/ImageObject">
+                <meta itemprop='url' content='https://forum.rebol.info/uploads/default/original/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d.png'>
+              </div>
+          </div>
+          <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+            <a itemprop="url" href='../../u/IngoHohmann.html'><span itemprop='name'>IngoHohmann</span></a>
+            
+          </span>
+
+          <link itemprop="mainEntityOfPage" href="976.html">
+
+
+          <span class="crawler-post-infos">
+              <time itemprop='datePublished' datetime='2018-12-25T23:42:41Z' class='post-time'>
+                December 25, 2018, 11:42pm
+              </time>
+              <meta itemprop='dateModified' content='2018-12-25T23:42:41Z'>
+          <span itemprop='position'>#2</span>
+          </span>
+        </div>
+        <div class='post' itemprop='articleBody'>
+          <aside class="quote no-group quote-modified" data-post="1" data-topic="976">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If modules enforced it by default but the console didn’t, would that be a good tradeoff</p>
+</blockquote>
+</aside>
+<p>Yes, I think it would be.</p>
+<p>One question, if a function hands out const access to a value, is the the receiver able to change it to a mutable value? Should this be possible?</p>
+        </div>
+
+        <meta itemprop='headline' content='Source Mutability--CONST and MUTABLE'>
+
+        <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+           <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+           <meta itemprop="userInteractionCount" content="0" />
+           <span class='post-likes'></span>
+         </div>
+
+         <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+            <meta itemprop="interactionType" content="http://schema.org/CommentAction"/>
+            <meta itemprop="userInteractionCount" content="1" />
+          </div>
+
+      </div>
+      <div itemscope itemtype='http://schema.org/DiscussionForumPosting' class='topic-body crawler-post'>
+        <div class='crawler-post-meta'>
+          <div itemprop='publisher' itemscope itemtype="http://schema.org/Organization">
+            <meta itemprop='name' content='AltRebol'>
+              <div itemprop='logo' itemscope itemtype="http://schema.org/ImageObject">
+                <meta itemprop='url' content='https://forum.rebol.info/uploads/default/original/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d.png'>
+              </div>
+          </div>
+          <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+            <a itemprop="url" href='https://forum.rebol.info/u/hostilefork'><span itemprop='name'>hostilefork</span></a>
+            
+          </span>
+
+          <link itemprop="mainEntityOfPage" href="976.html">
+
+
+          <span class="crawler-post-infos">
+              <meta itemprop='datePublished' content='2018-12-25T23:59:23Z'>
+              <time itemprop='dateModified' datetime='2018-12-26T00:10:59Z' class='post-time'>
+                December 26, 2018, 12:10am
+              </time>
+          <span itemprop='position'>#3</span>
+          </span>
+        </div>
+        <div class='post' itemprop='articleBody'>
+          <aside class="quote no-group quote-modified" data-post="2" data-topic="976">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>"If modules enforced it by default but the console didn’t, would that be a good tradeoff" =&gt; Yes, I think it would be.</p>
+</blockquote>
+</aside>
+<p>There may be more options than just binary ones here, so it's likely best to get some experience.  It could be that what's really wanted is a kind of "first wave" of evaluative mutability (top level of module that only runs once, top level of console when you're just entering data) and all people want is <strong>x: [a b c] append x 'd</strong>, but when it gets to <strong>loop 5 [data: [] ... append data ...]</strong> situations...or a function definition...they would be happy to have constness.</p>
+<p>I really believe that not being consistent between the console and scripts running should be heavily weighed.  The console is kind of the place where you try out things and use as a sanity check when debugging.  I feel the variation doesn't buy that much--when casual mistakes are so easy to make.</p>
+<aside class="quote no-group" data-post="2" data-topic="976">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>if a function hands out const access to a value, is the the receiver able to change it to a mutable value</p>
+</blockquote>
+</aside>
+<p>Perhaps there could be a difference between explicit const (irrevocable on that value once applied) and an implicit one, the evaluator just put on itself from a frame.  That mechanic may not be too difficult.</p>
+<p>But in their current incarnation, const and mutable are "suggestions" and there's no level of privilege escalation.  If you want to lock something so no one can get write access on it, you have to LOCK it.</p>
+<p>Locking is still necessary for things like using blocks for keys in MAP!, and something more lock-like is probably the only way to imagine safe multithreading.</p>
+        </div>
+
+        <meta itemprop='headline' content='Source Mutability--CONST and MUTABLE'>
+
+        <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+           <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+           <meta itemprop="userInteractionCount" content="1" />
+           <span class='post-likes'>1 Like</span>
+         </div>
+
+         <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+            <meta itemprop="interactionType" content="http://schema.org/CommentAction"/>
+            <meta itemprop="userInteractionCount" content="0" />
+          </div>
+
+      </div>
+      <div itemscope itemtype='http://schema.org/DiscussionForumPosting' class='topic-body crawler-post'>
+        <div class='crawler-post-meta'>
+          <div itemprop='publisher' itemscope itemtype="http://schema.org/Organization">
+            <meta itemprop='name' content='AltRebol'>
+              <div itemprop='logo' itemscope itemtype="http://schema.org/ImageObject">
+                <meta itemprop='url' content='https://forum.rebol.info/uploads/default/original/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d.png'>
+              </div>
+          </div>
+          <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+            <a itemprop="url" href='../../u/BlackATTR.html'><span itemprop='name'>BlackATTR</span></a>
+            
+          </span>
+
+          <link itemprop="mainEntityOfPage" href="976.html">
+
+
+          <span class="crawler-post-infos">
+              <time itemprop='datePublished' datetime='2018-12-26T17:16:46Z' class='post-time'>
+                December 26, 2018,  5:16pm
+              </time>
+              <meta itemprop='dateModified' content='2018-12-26T17:16:46Z'>
+          <span itemprop='position'>#4</span>
+          </span>
+        </div>
+        <div class='post' itemprop='articleBody'>
+          <p>I think this gets to the question of robustness of the language. If this helps Rebol get beyond the perception of being unserious for real development work, then I'm in favor as it seems like a worthy tradeoff. It would need to be documented/taught but I think the additional rigor would lead to better programming practices.</p>
+        </div>
+
+        <meta itemprop='headline' content='Source Mutability--CONST and MUTABLE'>
+
+        <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+           <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+           <meta itemprop="userInteractionCount" content="0" />
+           <span class='post-likes'></span>
+         </div>
+
+         <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+            <meta itemprop="interactionType" content="http://schema.org/CommentAction"/>
+            <meta itemprop="userInteractionCount" content="0" />
+          </div>
+
+      </div>
+      <div itemscope itemtype='http://schema.org/DiscussionForumPosting' class='topic-body crawler-post'>
+        <div class='crawler-post-meta'>
+          <div itemprop='publisher' itemscope itemtype="http://schema.org/Organization">
+            <meta itemprop='name' content='AltRebol'>
+              <div itemprop='logo' itemscope itemtype="http://schema.org/ImageObject">
+                <meta itemprop='url' content='https://forum.rebol.info/uploads/default/original/1X/ae4ccad1a2789bb1e85cf5a0f52f2f1de10da26d.png'>
+              </div>
+          </div>
+          <span class="creator" itemprop="author" itemscope itemtype="http://schema.org/Person">
+            <a itemprop="url" href='https://forum.rebol.info/u/hostilefork'><span itemprop='name'>hostilefork</span></a>
+            
+          </span>
+
+          <link itemprop="mainEntityOfPage" href="976.html">
+
+
+          <span class="crawler-post-infos">
+              <meta itemprop='datePublished' content='2020-09-15T03:28:33Z'>
+              <time itemprop='dateModified' datetime='2020-10-24T00:52:54Z' class='post-time'>
+                October 24, 2020, 12:52am
+              </time>
+          <span itemprop='position'>#5</span>
+          </span>
+        </div>
+        <div class='post' itemprop='articleBody'>
+          <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="976">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I feel like it shouldn't be controversial to say <strong>it should not be this easy to write self-modifying code on accident.</strong></p>
+</blockquote>
+</aside>
+<p>CONST and MUTABLE have been around for a while now, and I think the chosen balance has worked out rather well.</p>
+<p>One historical problem point with these mutability features is that there was no compile-time checks to make sure code wasn't violating it.  <em>There were tons of cases of PROTECT bits not being honored, simply because there wasn't a check for mutability in some routine.</em>  The person hacking on the C code to REVERSE or SORT a series would have to explicitly remember to think that was a mutating operation and check the bit.</p>
+<p>The obvious-sounding way to stop these problems from creeping in would be to leverage the <code>const</code> annotation in C and C++.  All the routines that modified series would require the caller to have a non-const pointer in their hand...while routines that could be done on read-only series could take either a const or non-const pointer.</p>
+<p>So consider the simple example of getting an element at a position in an array:</p>
+<pre><code> REBVAL *ARR_AT(REBARR *array, REBLEN n)
+     { ...lots of code... }
+</code></pre>
+<p>Historically this would take in a mutable REBARR array (the only kind there was) and give back a mutable REBVAL value.  But what we want is for mutable arrays to give back mutable values, and const arrays to give const values.  So we could simply create a wrapper that calls into the mutable implementation but reskins the result as const for const input:</p>
+<pre><code> REBVAL *ARR_AT(REBARR *array, REBLEN n)
+     { ...lots of code... }
+
+ inline const REBVAL *ARR_AT(const REBARR *array, REBLEN n)
+     { return ARR_AT(m_cast(REBARR*, array), n); }
+</code></pre>
+<p>There's just one problem... <strong>C doesn't support overloading.</strong>  You can't have two functions with the same name and different signatures and have the compiler pick between them.  There'd have to be two different names:</p>
+<pre><code> REBVAL *MUT_ARR_AT(REBARR *array, REBLEN n)
+   { ...lots of code... }
+
+ inline const REBVAL *ARR_AT(const REBARR *array, REBLEN n)
+   { return MUT_ARR_AT(m_cast(REBARR*, array), n); }
+</code></pre>
+<p>This might not seem like that big a deal, <em>but</em> the combinatorics add up.  Because now you can't write a generic macro that speaks about array positions...you have to have macros with different names that call the differently named accessors.  And consider there are <em>lots</em> of these routines (ARR_HEAD, ARR_TAIL, ARR_LAST... BIN_HEAD, BIN_TAIL... SER_DATA, etc. etc. etc.)  It's pretty horrific when you start having this explode with MUT variations and MUT variations of everything that calls them.</p>
+<p><strong>I came up with a trick to get around it.</strong>  Basically, the trick is to sacrifice some amount of const checking in C.  First, define a macro for something that resolves to <code>const</code> in C but vaporizes in C++:</p>
+<pre><code>#ifdef __cplusplus
+    #define const_if_c
+#else
+    #define const_if_c const
+#endif
+</code></pre>
+<p>Then, define the functions like this:</p>
+<pre><code>REBVAL *ARR_AT(const_if_c REBARR *array, REBLEN n)
+  { ...lots of code... }
+
+#ifdef __cplusplus
+    inline const REBVAL *ARR_AT(const REBARR *array, REBLEN n)
+         { return ARR_AT(m_cast(REBARR*, array), n); }
+#endif
+</code></pre>
+<p>So the C build will give you back a mutable array no matter whether your input array was const or not.  But the C++ build only gives back const arrays for const input.</p>
+<p><strong>This makes systemic enforcement of mutability checking practical.</strong>  If you're inside the implementation with a <code>const</code> array, string, or binary... you won't be able to make a call to a C routine that will mutate it.  The only way you can get mutable arrays is through specific entry points that extract the array with a runtime check to make sure it's mutable.</p>
+<p>It's all in the implementation guts...so it only affects those using the core API, not libRebol.  The only thing you need to do is make sure you at some point build the code with a C++ compiler, and it will tell you where any problems are.</p>
+        </div>
+
+        <meta itemprop='headline' content='Source Mutability--CONST and MUTABLE'>
+
+        <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+           <meta itemprop="interactionType" content="http://schema.org/LikeAction"/>
+           <meta itemprop="userInteractionCount" content="2" />
+           <span class='post-likes'>2 Likes</span>
+         </div>
+
+         <div itemprop="interactionStatistic" itemscope itemtype="http://schema.org/InteractionCounter">
+            <meta itemprop="interactionType" content="http://schema.org/CommentAction"/>
+            <meta itemprop="userInteractionCount" content="0" />
+          </div>
+
+      </div>
+
+
+
+
+
+
+    </div>
+    <footer class="container wrap">
+      <nav class='crawler-nav'>
+        <ul>
+        <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+          <span itemprop='name'>
+            <a href='https://forum.rebol.info/' itemprop="url">Home </a>
+          </span>
+        </li>
+        <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+          <span itemprop='name'>
+            <a href='https://forum.rebol.info/categories' itemprop="url">Categories </a>
+          </span>
+        </li>
+        <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+          <span itemprop='name'>
+            <a href='https://forum.rebol.info/guidelines' itemprop="url">FAQ/Guidelines </a>
+          </span>
+        </li>
+        <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+          <span itemprop='name'>
+            <a href='https://forum.rebol.info/tos' itemprop="url">Terms of Service </a>
+          </span>
+        </li>
+        <li itemscope itemtype='http://schema.org/SiteNavigationElement'>
+          <span itemprop='name'>
+            <a href='https://forum.rebol.info/privacy' itemprop="url">Privacy Policy </a>
+          </span>
+        </li>
+        </ul>
+      </nav>
+      <p class='powered-by-link'>Powered by <a href="https://www.discourse.org">Discourse</a>, best viewed with JavaScript enabled</p>
+    </footer>
+    
+    
+  </body>
+  
+</html>

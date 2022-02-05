@@ -1,0 +1,367 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Permissive Group Invisibility</title>
+    <link>https://forum.rebol.info/t/permissive-group-invisibility/1153</link>
+    <description>One of my favorite design points has turned out to be [&quot;Invisibles&quot;](https://forum.rebol.info/t/issues-with-invisibles-a-truly-disappearing-comment/405).  Initially conceived for achieving a &quot;true&quot; COMMENT, they have turned out to have *far wider applicability* than that.
+
+They throw a wrench in some aspects of evaluation.  If you think of the evaluator of moving in steps that always must produce a value, then they need to sneak into the surrounding evaluations...either before or after themselves.  Most sneak in with the thing after themselves:
+
+    &gt;&gt; evaluate [print &quot;One&quot; elide print &quot;Two&quot; print &quot;Three&quot;]
+    One
+    == [elide print &quot;Two&quot; print &quot;Three&quot;]
+
+    &gt;&gt; evaluate [elide print &quot;Two&quot; print &quot;Three&quot;]
+    Two
+    Three
+    == []
+
+In this way they are something like enfix functions, where `1 + 2 * 3` is just one &quot;step&quot;.
+
+It&#39;s a complexity tax to be paid in the design and creates some tough mechanics.  It meant that [DO/NEXT had to basically be redesigned as EVALUATE](https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767).  But that&#39;s actually a good thing, and *well worth it* for all the cool things they enable.
+
+## But how should GROUP! interact with invisibles?
+
+While messing around with some experimental debugger code, I made BREAKPOINT an invisible that doesn&#39;t take any parameters.  This means you can write **foo + breakpoint bar**.  It would break after foo evaluates as the first argument to +, before bar evaluates as the second arg to +.
+
+But should you be able to say  **foo + (breakpoint) bar** ?
+
+The idea that a GROUP! could simply vaporize away if its contents are empty or invisible *seems* a bit unsettling.  So these cases were errors:
+
+    &gt;&gt; 1 + () 2
+    ** Error: + is missing its value2 argument
+
+    &gt;&gt; 1 + (comment &quot;Hi&quot;) 2
+    ** Error: + is missing its value2 argument
+
+But how unsettling would it *really* be if those worked?
+
+    &gt;&gt; 1 + () 2
+    == 3
+
+    &gt;&gt; 1 + (comment &quot;Hi&quot;) 2
+    == 3
+
+I had said this was too weird to be justified &quot;just for some comments&quot;.  But when you think about a interesting multi-parameter breakpoint, wouldn&#39;t it be nice to put it where you want it and group it as well?
+
+    foo + (my-complex-breakpoint #arg1 #arg2) bar
+
+You wouldn&#39;t be able to do this if grouping forced the production of a VOID! out of that emptiness.  The same would be true for using DUMP today:
+
+    foo + (-- x y z) bar 
+
+As invisibles become more an integral part of the system, it no longer seems like being weird for the sake of being weird.
+
+## Permissive Invisible Groups
+
+An argument for groups not vaporizing is if you think of **`(...)`** as being a synonym for **`do [...]`**.  If your code is coming from an unknown source, and it&#39;s a GROUP!...you may not know if it&#39;s going to vaporize or not.  But...
+
+* **...is that the actual scenario for GROUP!s?**  How often are unknown code bits being passed around as GROUP!, and then executed by being spliced into evaluation?  Aren&#39;t blocks the currency for that?
+
+* **why not just use DO on your groups if you&#39;re worried?**  If you do not know what kind of code is in a GROUP!, it must be coming by way of a variable.  So the way you are getting the evaluator to run it is either DO (where this isn&#39;t an issue, because empty groups return void) or you&#39;ve made an effort to splice it into a block so it evaluates inline.  If you&#39;re forced to splice, why not splice **compose [... do &#39;(my-group) ...]** if you don&#39;t want the ability to vaporize?  It&#39;s a short word, and it liberates GROUP! to a distinct novel usage and behavior.
+
+Of course, it&#39;s a thing you&#39;d have to learn about GROUP!... that they aren&#39;t a synonym for DO of a BLOCK!.  But it&#39;s a nuance... *groups just group things, they don&#39;t synthesize any VOID!s or artificial values of their own*.
+
+The nuance is pleasing, and simple.  I found that I had a preference for:
+
+     case [
+         something [...]
+         (elide print &quot;Got this far&quot;)
+         something-else [...]
+     ]
+
+...as opposed to:
+
+     case [
+         something [...]
+         elide (print &quot;Got this far&quot;)
+         something-else [...]
+     ]
+
+*(Though technically you don&#39;t really need a GROUP! at all in that case, but the use of groups is often a subjective thing.)*
+
+And if there isn&#39;t permissive group invisibility you won&#39;t get it any other way.  I feel like there&#39;s multiple points in favor of this... expressivity, and a coherent story: &quot;groups only function is to group things, they are ghostly, `() 1 + () (comment &quot;hi&quot;) 2 ()` is 3&quot;
+
+*(Note: Because the GROUP!s are not enfix functions themselves, they are not *entirely* ghostly...they are &quot;only as invisible as non-enfix invisibles are&quot;.  This is to say that `1 () + 2` can&#39;t be the same as `1 + 2`, because, the 1 doesn&#39;t see the + through the group!.  It can&#39;t start evaluating it either to find out if it&#39;s empty and then have to back out of that...so this is an error.)*
+
+*(Also worth pointing out: if you COMPOSE a GROUP! which has null or splice an empty block via group...not even -invisible-, you get it vaporizing: **`compose [1 + (if false [&lt;not-spliced&gt;]) 2]`** =&gt; [1 + 2])*</description>
+    
+    <lastBuildDate>Thu, 10 Dec 2020 18:53:56 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/permissive-group-invisibility/1153.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Permissive Group Invisibility</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I mentioned this possibility for group behavior...just to make sure no stone was unturned:</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="4" data-topic="1153">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<pre><code>&gt;&gt; select [a 10 b 20] 'c
+; null
+
+&gt;&gt; (select [a 10 b 20] 'c)
+; void
+
+&gt;&gt; :(select [a 10 b 20] 'c)
+; null
+</code></pre>
+</blockquote>
+</aside>
+<p><strong>...but I don't like it.</strong> <img src="https://forum.rebol.info/images/emoji/twitter/-1.png?v=9" title=":-1:" class="emoji" alt=":-1:">   It's too nice to be able to put something you're going to ELIDE in a plain GROUP!.</p>
+<p>Also, the feeling I'm having is that it won't be GET-BLOCK! and GET-GROUP! for bypassing voidification, but rather SYM-BLOCK! and SYM-GROUP!.</p>
+<p><strong>Cementing GROUP!s permissive invisibility may point to an interesting difference between DO of a BLOCK! and DO of a GROUP!.</strong>  Previously, value-returning primitives like DO or REEVAL did not have any choice to be invisible...they had to always return values or never:</p>
+<pre><code>&gt;&gt; reeval :add 1 2
+== 3
+
+&gt;&gt; reeval second [x: y:] 20
+&gt;&gt; y
+== 20
+
+&gt;&gt; &lt;before&gt; comment "we know what this does"
+== &lt;before&gt;
+
+&gt;&gt; &lt;before&gt; reeval :comment "But what should this do?"
+; !!! could not be &lt;before&gt;...had to be an error or void
+</code></pre>
+<p>BUT with the new proposed feature of <a href="https://forum.rebol.info/t/opportunistic-invisibility/1362">Opportunistic Invisibility</a>, invisibility can be propagated-or-not.  And that means DO of a GROUP! could decide to be invisible if the contents of the group dissolved, while DO of a BLOCK! would be void.</p>
+<pre><code>&gt;&gt; &lt;before&gt; do [comment "Void result"]
+; void
+
+&gt;&gt; &lt;before&gt; do '(comment "vaporize")
+== &lt;before&gt;
+</code></pre>
+<p>There's something satisfying about that.</p>
+<p><strong>UPDATE:</strong> Having tried this with DO, I kind of feel it's a little too easy to have happen on accident.<br>
+It's probably a feature best left for REEVALUATE:</p>
+<pre><code>&gt;&gt; group: '(comment {reeval is "act exactly as what the evaluator does here"})
+
+&gt;&gt; 1 + 2 reeval group
+== 3</code></pre>
+          <p><a href="https://forum.rebol.info/t/permissive-group-invisibility/1153/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/permissive-group-invisibility/1153/5</link>
+        <pubDate>Sat, 24 Oct 2020 05:52:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1153-5</guid>
+        <source url="https://forum.rebol.info/t/permissive-group-invisibility/1153.rss">Permissive Group Invisibility</source>
+      </item>
+      <item>
+        <title>Permissive Group Invisibility</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1153">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>The idea that a GROUP! could simply vaporize away if its contents are empty or invisible <em>seems</em> a bit unsettling. So these cases were errors:</p>
+<pre><code>&gt;&gt; 1 + () 2
+** Error: + is missing its value2 argument
+
+&gt;&gt; 1 + (comment "Hi") 2
+** Error: + is missing its value2 argument
+</code></pre>
+<p>But how unsettling would it <em>really</em> be if those worked?</p>
+</blockquote>
+</aside>
+<p>So... it comes to my attention that there may be another option for this, which is to leverage the GET-GROUP! and GROUP! distinction.</p>
+<p>This might seem like a bit of a waste for GET-GROUP!, to be used to mean "if this is invisible, don't void it".  But I'm actually considering that GET-GROUP! will be used as the "anti-voidifer" for branches.</p>
+<pre><code>&gt;&gt; code: [
+        print "BRANCH running..."
+        select [a 10 b 20] 'c   ; produces NULL when run
+   ]
+
+&gt;&gt; if true (code) else [print "ELSE running..."]
+BRANCH running...
+
+&gt;&gt; if true :(code) else [print "ELSE running..."]
+BRANCH running...
+ELSE running...
+</code></pre>
+<p>This purpose for GET-GROUP! would accompany GET-BLOCK! for meaning the same thing (but for a normal block branch).  It would mean that you are willing to consider the branch "not returning anything" (in this case a NULL) to be acceptable as a result.  <em>(You'd very rarely be combining such branches with ELSE or THEN clauses, but you could if you wanted to...)</em></p>
+<p>Turning this around in my head I've been looking for some kind of universality of it... e.g. that if a variable contains NULL you will get VOID! by accessing it unless you use a GET-WORD! or GET-PATH!.  But pushing it to extremes winds up suggesting that if you put a plain GROUP! around an expression that becomes NULL you'd get a VOID! out of it.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<pre><code>&gt;&gt; select [a 10 b 20] 'c
+; null
+
+&gt;&gt; (select [a 10 b 20] 'c)
+; void
+
+&gt;&gt; :(select [a 10 b 20] 'c)
+; null
+</code></pre>
+<p>That would be one of those "cure is worse than the disease" situations.  But saying that GET-GROUP! in the evaluator is used one way, and then another way in branches, is kind of in the spirit of <em>"dialects use the parts for what they need"</em>.</p>
+<p>I've not yet flipped the switch on GET-BLOCK! and GET-GROUP! subverting branch voidification... and I'm not sure how it will effect GET-WORD! or GET-PATH! branches (it would seem very inconsistent if they voidified, so if they were allowed they'd have to not).  But I really can't think of a better way to deal with the issue.  So if GET-GROUP! is going to have that shade of meaning, maybe using it for the invisibles makes sense...and voidifying plain GROUP!s otherwise?</p>
+          <p><a href="https://forum.rebol.info/t/permissive-group-invisibility/1153/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/permissive-group-invisibility/1153/4</link>
+        <pubDate>Wed, 07 Oct 2020 06:17:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1153-4</guid>
+        <source url="https://forum.rebol.info/t/permissive-group-invisibility/1153.rss">Permissive Group Invisibility</source>
+      </item>
+      <item>
+        <title>Permissive Group Invisibility</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1153">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But should you be able to say <strong>foo + (breakpoint) bar</strong> ?</p>
+</blockquote>
+</aside>
+<p>It occurs to me that there is another option which has perhaps not been thought about, which is if GET-GROUP! was invisible, but plain group wasn't:</p>
+<pre><code>&gt;&gt; 1 + 2 (comment "invisible")
+; == #[void]
+
+&gt;&gt; 1 + 2 :(comment "invisible")
+== 3
+</code></pre>
+<p>This ties in a bit with the idea of using GET-BLOCK! as a way of subverting voidification of nulls:</p>
+<pre><code>&gt;&gt; if true [null]
+; == #[void]
+
+&gt;&gt; if true :[null]
+; null
+</code></pre>
+<p>But it's a bit of a technical stretch to imagine the GET-BLOCK! form of branch retroactively making something like an IF invisible after-the-fact:</p>
+<pre><code>&gt;&gt; 1 + 2 if true :[comment "could this be net invisible?"]
+== 3  ; hrrrm...
+</code></pre>
+<p>In any case, there are some technical annoyances that completely vaporizing groups introduce which might be improved if the full-on vanishing was limited to GET-GROUP!.  But there's something fairly nice about the "GROUP!s don't fabricate any values (not even voids), they only group things".</p>
+<p>Just mentioning the possibility.</p>
+          <p><a href="https://forum.rebol.info/t/permissive-group-invisibility/1153/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/permissive-group-invisibility/1153/3</link>
+        <pubDate>Wed, 12 Aug 2020 11:06:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1153-3</guid>
+        <source url="https://forum.rebol.info/t/permissive-group-invisibility/1153.rss">Permissive Group Invisibility</source>
+      </item>
+      <item>
+        <title>Permissive Group Invisibility</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I had an insight for why in Ren-C's world this is a particularly important design decision.</p>
+<h2>First the setup...</h2>
+<p>Historical R3-Alpha/Rebol2/Red had problems with code of the form:</p>
+<pre><code>r3-alpha&gt;&gt; parse "abcde" rule: ["a" "b" (clear rule) "c" "d" "e"]
+== true
+</code></pre>
+<p>This may be dismissed as an edge case and "why would you do that" and "if you do that you get what you deserve".  But the only reason it hasn't crashed is you are using stale past-end-marker data in a series that hasn't been GC'd.  And such a situation can be much worse than crashing...<em>not</em> crashing can be silent and go haywire causing arbitrary damage to your data, when those out-of-bounds accesses somehow represent new instructions to the system's internal implementation.</p>
+<p>Ren-C locks series against mutability while they are being enumerated--including PARSE rules as they run:</p>
+<pre><code>ren-c&gt;&gt; parse "abcde" rule: ["a" "b" (clear rule) "c" "d" "e"]
+** Access Error: series has temporary read-only hold for iteration
+** Where: clear subparse parse main
+** Near: [clear rule ~~]
+** Line: 1
+</code></pre>
+<p>This may sound harsh, but in PARSE's case you have other options.  You can add material to a rule while it's running.  Use a subrule that is not currently itself executing</p>
+<pre><code>ren-c&gt;&gt; did parse "abcde" rule: ["a" "b" (append last rule ["c" "d" "e"]) []]
+== #[true]
+</code></pre>
+<p>And you can remove material by a similar token, if you put it in a sub-block to start with:</p>
+<pre><code>ren-c&gt;&gt; did parse "ab" rule: ["a" "b" (clear last rule) ["c" "d" "e"]]
+== #[true]
+</code></pre>
+<h2>Now the punchline...</h2>
+<p>Permissive group invisibility gives DO the same power to defeat the mutability lock (where adding is concerned).  Because now you have a way to preserve the result if you <em>don't</em> add anything to the nested group:</p>
+<pre><code>ren-c&gt;&gt; do code: [1 + 2 append last code "hi" 3 + 4 ()]
+== "hi"
+
+ren-c&gt;&gt; do code: [1 + 2 3 + 4 ()]
+== 7
+</code></pre>
+<p>That's just a simple example, but I'll re-summarize by saying that R3-Alpha had problems with generic mutability <em>(bad invariants at best, potentially arbitrary hacker-level bugs corrupting the evaluator at worst...though in DO's case it used to check the tail index so that <em>particular</em> enumeration was bad-invariants-only)</em>.  And solutions like this--if you thought to use them--would not preserve the last result:</p>
+<pre><code>r3-alpha&gt;&gt; do code: [1 + 2 3 + 4 ()]
+; prints nothing (e.g. UNSET!), as opposed to 7
+</code></pre>
+<p>Just interesting to see another argument for why the invisible GROUP! being invisible has leverage, making <code>()</code> as "UNSET! generator" is inferior.</p>
+<p><strong>This cannot be changed in Redbol (unless some kind of deeper evaluator hook is introduced).</strong></p>
+          <p><a href="https://forum.rebol.info/t/permissive-group-invisibility/1153/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/permissive-group-invisibility/1153/2</link>
+        <pubDate>Fri, 17 Jan 2020 13:46:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1153-2</guid>
+        <source url="https://forum.rebol.info/t/permissive-group-invisibility/1153.rss">Permissive Group Invisibility</source>
+      </item>
+      <item>
+        <title>Permissive Group Invisibility</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>One of my favorite design points has turned out to be <a href="https://forum.rebol.info/t/issues-with-invisibles-a-truly-disappearing-comment/405">"Invisibles"</a>.  Initially conceived for achieving a "true" COMMENT, they have turned out to have <em>far wider applicability</em> than that.</p>
+<p>They throw a wrench in some aspects of evaluation.  If you think of the evaluator of moving in steps that always must produce a value, then they need to sneak into the surrounding evaluations...either before or after themselves.  Most sneak in with the thing after themselves:</p>
+<pre><code>&gt;&gt; evaluate [print "One" elide print "Two" print "Three"]
+One
+== [elide print "Two" print "Three"]
+
+&gt;&gt; evaluate [elide print "Two" print "Three"]
+Two
+Three
+== []
+</code></pre>
+<p>In this way they are something like enfix functions, where <code>1 + 2 * 3</code> is just one "step".</p>
+<p>It's a complexity tax to be paid in the design and creates some tough mechanics.  It meant that <a href="https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767">DO/NEXT had to basically be redesigned as EVALUATE</a>.  But that's actually a good thing, and <em>well worth it</em> for all the cool things they enable.</p>
+<h2>But how should GROUP! interact with invisibles?</h2>
+<p>While messing around with some experimental debugger code, I made BREAKPOINT an invisible that doesn't take any parameters.  This means you can write <strong>foo + breakpoint bar</strong>.  It would break after foo evaluates as the first argument to +, before bar evaluates as the second arg to +.</p>
+<p>But should you be able to say  <strong>foo + (breakpoint) bar</strong> ?</p>
+<p>The idea that a GROUP! could simply vaporize away if its contents are empty or invisible <em>seems</em> a bit unsettling.  So these cases were errors:</p>
+<pre><code>&gt;&gt; 1 + () 2
+** Error: + is missing its value2 argument
+
+&gt;&gt; 1 + (comment "Hi") 2
+** Error: + is missing its value2 argument
+</code></pre>
+<p>But how unsettling would it <em>really</em> be if those worked?</p>
+<pre><code>&gt;&gt; 1 + () 2
+== 3
+
+&gt;&gt; 1 + (comment "Hi") 2
+== 3
+</code></pre>
+<p>I had said this was too weird to be justified "just for some comments".  But when you think about a interesting multi-parameter breakpoint, wouldn't it be nice to put it where you want it and group it as well?</p>
+<pre><code>foo + (my-complex-breakpoint #arg1 #arg2) bar
+</code></pre>
+<p>You wouldn't be able to do this if grouping forced the production of a VOID! out of that emptiness.  The same would be true for using DUMP today:</p>
+<pre><code>foo + (-- x y z) bar 
+</code></pre>
+<p>As invisibles become more an integral part of the system, it no longer seems like being weird for the sake of being weird.</p>
+<h2>Permissive Invisible Groups</h2>
+<p>An argument for groups not vaporizing is if you think of <strong><code>(...)</code></strong> as being a synonym for <strong><code>do [...]</code></strong>.  If your code is coming from an unknown source, and it's a GROUP!...you may not know if it's going to vaporize or not.  But...</p>
+<ul>
+<li>
+<p><strong>...is that the actual scenario for GROUP!s?</strong>  How often are unknown code bits being passed around as GROUP!, and then executed by being spliced into evaluation?  Aren't blocks the currency for that?</p>
+</li>
+<li>
+<p><strong>why not just use DO on your groups if you're worried?</strong>  If you do not know what kind of code is in a GROUP!, it must be coming by way of a variable.  So the way you are getting the evaluator to run it is either DO (where this isn't an issue, because empty groups return void) or you've made an effort to splice it into a block so it evaluates inline.  If you're forced to splice, why not splice <strong>compose [... do '(my-group) ...]</strong> if you don't want the ability to vaporize?  It's a short word, and it liberates GROUP! to a distinct novel usage and behavior.</p>
+</li>
+</ul>
+<p>Of course, it's a thing you'd have to learn about GROUP!... that they aren't a synonym for DO of a BLOCK!.  But it's a nuance... <em>groups just group things, they don't synthesize any VOID!s or artificial values of their own</em>.</p>
+<p>The nuance is pleasing, and simple.  I found that I had a preference for:</p>
+<pre><code> case [
+     something [...]
+     (elide print "Got this far")
+     something-else [...]
+ ]
+</code></pre>
+<p>...as opposed to:</p>
+<pre><code> case [
+     something [...]
+     elide (print "Got this far")
+     something-else [...]
+ ]
+</code></pre>
+<p><em>(Though technically you don't really need a GROUP! at all in that case, but the use of groups is often a subjective thing.)</em></p>
+<p>And if there isn't permissive group invisibility you won't get it any other way.  I feel like there's multiple points in favor of this... expressivity, and a coherent story: "groups only function is to group things, they are ghostly, <code>() 1 + () (comment "hi") 2 ()</code> is 3"</p>
+<p><em>(Note: Because the GROUP!s are not enfix functions themselves, they are not <em>entirely</em> ghostly...they are "only as invisible as non-enfix invisibles are".  This is to say that <code>1 () + 2</code> can't be the same as <code>1 + 2</code>, because, the 1 doesn't see the + through the group!.  It can't start evaluating it either to find out if it's empty and then have to back out of that...so this is an error.)</em></p>
+<p><em>(Also worth pointing out: if you COMPOSE a GROUP! which has null or splice an empty block via group...not even -invisible-, you get it vaporizing: <strong><code>compose [1 + (if false [&lt;not-spliced&gt;]) 2]</code></strong> =&gt; [1 + 2])</em></p>
+          <p><a href="https://forum.rebol.info/t/permissive-group-invisibility/1153/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/permissive-group-invisibility/1153/1</link>
+        <pubDate>Tue, 30 Apr 2019 20:14:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1153-1</guid>
+        <source url="https://forum.rebol.info/t/permissive-group-invisibility/1153.rss">Permissive Group Invisibility</source>
+      </item>
+  </channel>
+</rss>

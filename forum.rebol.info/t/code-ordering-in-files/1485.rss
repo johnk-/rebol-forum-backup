@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Code Ordering in Files</title>
+    <link>https://forum.rebol.info/t/code-ordering-in-files/1485</link>
+    <description>While thinking about how to [update the decade-old Whitespace interpreter project](https://forum.rebol.info/t/whitespace-interpreter-revisited/1482/5?u=hostilefork), the reorganization fused the spec for operation definitions along with code that was dispatched by the &quot;virtual machine&quot;.
+
+This reorganization had the nice property of keeping the code together with the rule.  So it became easier to maintain, and a better showcase of the claimed premise of Rebol-like languages.
+
+## Dialect Improvement...at the cost of &quot;First Impressions&quot;
+
+An unfortunate side effect of switching away from inert blocks to using dialecting functions is that *those functions must be defined before using them*.
+
+* Look at how the [original implementation started off](https://github.com/hostilefork/rebol-whitespacers/blob/5e91fa1ebfbe093b17ea8f49858e79354c33baec/historical/whitespace-old.reb#L170), going straight into the command specifications.
+ 
+* Then look at the [first declarations in the reboot, for CATEGORY and INSTRUCTION](https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L46).  Intimidating!
+
+Even though the specification as a whole got much tighter, *the voodoo to get them working is the first thing people see*.  Those definitions are more bewildering right now than they&#39;ll need to be after whipping things into shape (we hope).  But no matter what, they&#39;re going to be harder to look at than if we could start with the nice command definitions.
+
+## Breaking Things Into Their Own Files Is Possible... but...
+
+The blunt tool we have at the moment for dealing with this &quot;first impressions problem&quot; is to move stuff into multiple files.  So `%ws-dialect.reb` for defining things like CATEGORY and OPERATION.  Then include that into `%ws-commands.reb` for the command list.  Probably even splitting out `%ws-interpreter.reb` for the actual engine.
+
+But something about this feels disheartening.  The reason it would get broken up isn&#39;t really because of any problem with the length per se...the end goal is an amount of code that would be reasonable as one file.  **It sucks if you have to break it into more files due to a language limitation that doesn&#39;t let you organize things within the file the way that you want.**
+
+## The Nature Of Rebol Is Rigid Ordering
+
+Languages have been moving toward a model where within a file, it doesn&#39;t matter what order you put things in.  Compilers like Rust don&#39;t have to &quot;forward declare&quot; functions, you can use them at the top of a file and declare them later.
+
+But a language need not be compiled to let you use things out of order.  Python is interpreted and you can use a function at the top of a file and declare it at the end.
+
+So what&#39;s Rebol&#39;s excuse?
+
+**Rebol is in a different boat fundamentally: it can&#39;t &quot;scan ahead&quot; to catalog things, because it can&#39;t know what the words defining that thing would mean at the moment it would naturally encounter it.**.  
+
+The problem is that fundamentals like &quot;what declares a function&quot; can change on a whim.  The interpreter can&#39;t go scouting for the FUNC word and create a note like &quot;oh, a function will be declared in the future!&quot; so that information is available ahead of time.  The meaning of FUNC itself could be slated for change, so it could get a false positive.  Or it could get a false negative: skipping something that&#39;s an abstraction for declaring functions it hasn&#39;t heard about.
+
+## What If You Could Specify An Out-Of-Order Ordering?
+
+Something that crossed my mind for dealing with the particular situation in Whitespace file was if there was some kind of syntax for &quot;sections&quot;, as well as being able to say what order those sections run in.
+
+A first thought might be of something like this:
+
+    Rebol [
+       Type: &#39;Module
+       Section-Run-Order: [Dialect Interpreter Commands]
+    ]
+
+    Commands: Section [
+        Stack-Manipulation: category [...]
+        Arithmetic: category [...]
+        ...
+    ]
+
+    Dialect: Section [
+        category: func [...] [...]
+        operation: func [...] [...]
+    ]
+
+    Interpreter: Section [...]
+
+But that&#39;s awkward, and it also is invasive to the module&#39;s operation (pushing top-level declarations into blocks throws a wrench into everything).
+
+More reasonable would be if you could put multiple module definitions in a file.  Then they could automatically sort out their dependencies and find a non-conflicting order:
+
+    Rebol [
+       Type: &#39;Module
+       Name: &#39;Whitespace-Commands
+       Needs: [Whitespace-Dialect Whitespace-Interpreter]
+    ]
+
+    Stack-Manipulation: category [...]
+    Arithmetic: category [...]
+
+    Rebol [  ; imagine still in same file...
+        Type: &#39;Module
+        Name: &#39;Whitespace-Dialect
+    ]
+
+    category: func [...] [...]
+    operation: func [...] [...]
+
+    Rebol [
+        Type: &#39;Module
+        Name: &#39;Whitespace-Interpreter
+    ]
+
+    ...
+
+**Having something like this where the order is figured out by the system seems appealing, and this lets you make the &quot;new file&quot; decision on its own merits rather than be forced into it.**
+
+I&#39;ll point out to @rgchris that being able to put multiple &quot;units&quot; into a single file is another good argument for my [&quot;out of band signal&quot; of module-ness](https://forum.rebol.info/t/plugging-the-script-header-hole/1430).  You wouldn&#39;t accidentally wind up taking these modules as an argument to a function--they&#39;d clearly escape out of legal syntax and set up a boundary for where units began and ended.
+
+Right now the whitespace interpreter even has a demo file embedded in it... that&#39;s kind of cool, and it would be nice if whatever header-isms you&#39;d put in a standalone file could be put on a unit that tagged along inside of another file.
+
+**You&#39;d still need some way of saying the file was an aggregate, and explain why everything is glued together in the same file.**  Not having that would make it confusing if you were looking for those parts and couldn&#39;t find them.  Still, it could be optional...as the whole file has to be scanned before running anyway, so it would see all the modules in it.
+
+    Aggregator&gt; [
+        Contents: [
+            Whitespace-Commands
+            Whitespace-Dialect
+            Whitespace-Interpreter
+            Demo
+        ]
+        Description: {
+            This file packages together Whitespace components as one file, for easier
+            transmission and maintenance.
+        }
+    ]
+
+    Module&gt; [
+        Name: &#39;Whitespace-Commands
+        ...
+    ]
+
+It might be interesting if some properties could be inherited by the contained modules from the aggregator if they weren&#39;t overridden (date? license?)
+
+This is all pretty far out, but, unless there&#39;s something like this the only way you&#39;re going to shuffle the order is breaking things into files.
+
+## Tech Note: Execution Does Scan Ahead, But Only for Binding
+
+If you follow through [&quot;The Real Story about User and Lib Contexts&quot;](https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764) you can see how Rebol winds up in the situation where you can have a variable declared after a function and it can still be *bound* in functions prior to its SET-WORD!.
+
+    &gt;&gt; foo: bar: x: &#39;~unset~
+    &gt;&gt; do [
+        bar: func [] [foo]
+        foo: func [] [print [&quot;X is&quot; x]]
+        x: 1020
+        bar
+    ]
+
+    X is 1020
+
+So some &quot;looking ahead&quot; is definitely going on.
+
+But this only means the *binding* is available &quot;a priori&quot;.  The *value* doesn&#39;t get put into the variable until the SET-WORD! actually reaches the evaluation.
+
+    &gt;&gt; foo: bar: x: &#39;~unset~
+    &gt;&gt; do [
+        bar: func [] [foo]
+        bar  ; too early
+        foo: func [] [print [&quot;X is&quot; x]]
+        x: 1020
+    ]
+    ** Script Error: foo is ~unset~
+
+You can try and think up imaginative (crazy) ways to deal with this.  For instance: going through a prepass and turning everything into a function stub that couples up SET-WORD!s with code after them, and then caches them on-demand when they&#39;re called.  That might be fun for special cases, but the generic stub functions would be variadic...and not everything is a function so you&#39;d get false answers for **get &#39;word** saying things were ACTION! when they weren&#39;t... etc. etc.
+
+So I think it&#39;s unwise to fight this.  It&#39;s better to think about more interesting ways to express the ordering, than to defy the nature of the language to lie and make it seem order-agnostic.  It isn&#39;t.</description>
+    
+    <lastBuildDate>Fri, 10 Sep 2021 20:10:51 +0000</lastBuildDate>
+    <category>Modules</category>
+    <atom:link href="https://forum.rebol.info/t/code-ordering-in-files/1485.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Code Ordering in Files</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>While thinking about how to <a href="https://forum.rebol.info/t/whitespace-interpreter-revisited/1482/5">update the decade-old Whitespace interpreter project</a>, the reorganization fused the spec for operation definitions along with code that was dispatched by the "virtual machine".</p>
+<p>This reorganization had the nice property of keeping the code together with the rule.  So it became easier to maintain, and a better showcase of the claimed premise of Rebol-like languages.</p>
+<h2>Dialect Improvement...at the cost of "First Impressions"</h2>
+<p>An unfortunate side effect of switching away from inert blocks to using dialecting functions is that <em>those functions must be defined before using them</em>.</p>
+<ul>
+<li>
+<p>Look at how the <a href="https://github.com/hostilefork/rebol-whitespacers/blob/5e91fa1ebfbe093b17ea8f49858e79354c33baec/historical/whitespace-old.reb#L170">original implementation started off</a>, going straight into the command specifications.</p>
+</li>
+<li>
+<p>Then look at the <a href="https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L46">first declarations in the reboot, for CATEGORY and INSTRUCTION</a>.  Intimidating!</p>
+</li>
+</ul>
+<p>Even though the specification as a whole got much tighter, <em>the voodoo to get them working is the first thing people see</em>.  Those definitions are more bewildering right now than they'll need to be after whipping things into shape (we hope).  But no matter what, they're going to be harder to look at than if we could start with the nice command definitions.</p>
+<h2>Breaking Things Into Their Own Files Is Possible... but...</h2>
+<p>The blunt tool we have at the moment for dealing with this "first impressions problem" is to move stuff into multiple files.  So <code>%ws-dialect.reb</code> for defining things like CATEGORY and OPERATION.  Then include that into <code>%ws-commands.reb</code> for the command list.  Probably even splitting out <code>%ws-interpreter.reb</code> for the actual engine.</p>
+<p>But something about this feels disheartening.  The reason it would get broken up isn't really because of any problem with the length per se...the end goal is an amount of code that would be reasonable as one file.  <strong>It sucks if you have to break it into more files due to a language limitation that doesn't let you organize things within the file the way that you want.</strong></p>
+<h2>The Nature Of Rebol Is Rigid Ordering</h2>
+<p>Languages have been moving toward a model where within a file, it doesn't matter what order you put things in.  Compilers like Rust don't have to "forward declare" functions, you can use them at the top of a file and declare them later.</p>
+<p>But a language need not be compiled to let you use things out of order.  Python is interpreted and you can use a function at the top of a file and declare it at the end.</p>
+<p>So what's Rebol's excuse?</p>
+<p><strong>Rebol is in a different boat fundamentally: it can't "scan ahead" to catalog things, because it can't know what the words defining that thing would mean at the moment it would naturally encounter it.</strong>.</p>
+<p>The problem is that fundamentals like "what declares a function" can change on a whim.  The interpreter can't go scouting for the FUNC word and create a note like "oh, a function will be declared in the future!" so that information is available ahead of time.  The meaning of FUNC itself could be slated for change, so it could get a false positive.  Or it could get a false negative: skipping something that's an abstraction for declaring functions it hasn't heard about.</p>
+<h2>What If You Could Specify An Out-Of-Order Ordering?</h2>
+<p>Something that crossed my mind for dealing with the particular situation in Whitespace file was if there was some kind of syntax for "sections", as well as being able to say what order those sections run in.</p>
+<p>A first thought might be of something like this:</p>
+<pre><code>Rebol [
+   Type: 'Module
+   Section-Run-Order: [Dialect Interpreter Commands]
+]
+
+Commands: Section [
+    Stack-Manipulation: category [...]
+    Arithmetic: category [...]
+    ...
+]
+
+Dialect: Section [
+    category: func [...] [...]
+    operation: func [...] [...]
+]
+
+Interpreter: Section [...]
+</code></pre>
+<p>But that's awkward, and it also is invasive to the module's operation (pushing top-level declarations into blocks throws a wrench into everything).</p>
+<p>More reasonable would be if you could put multiple module definitions in a file.  Then they could automatically sort out their dependencies and find a non-conflicting order:</p>
+<pre><code>Rebol [
+   Type: 'Module
+   Name: 'Whitespace-Commands
+   Needs: [Whitespace-Dialect Whitespace-Interpreter]
+]
+
+Stack-Manipulation: category [...]
+Arithmetic: category [...]
+
+Rebol [  ; imagine still in same file...
+    Type: 'Module
+    Name: 'Whitespace-Dialect
+]
+
+category: func [...] [...]
+operation: func [...] [...]
+
+Rebol [
+    Type: 'Module
+    Name: 'Whitespace-Interpreter
+]
+
+...
+</code></pre>
+<p><strong>Having something like this where the order is figured out by the system seems appealing, and this lets you make the "new file" decision on its own merits rather than be forced into it.</strong></p>
+<p>I'll point out to <a class="mention" href="/u/rgchris">@rgchris</a> that being able to put multiple "units" into a single file is another good argument for my <a href="https://forum.rebol.info/t/plugging-the-script-header-hole/1430">"out of band signal" of module-ness</a>.  You wouldn't accidentally wind up taking these modules as an argument to a function--they'd clearly escape out of legal syntax and set up a boundary for where units began and ended.</p>
+<p>Right now the whitespace interpreter even has a demo file embedded in it... that's kind of cool, and it would be nice if whatever header-isms you'd put in a standalone file could be put on a unit that tagged along inside of another file.</p>
+<p><strong>You'd still need some way of saying the file was an aggregate, and explain why everything is glued together in the same file.</strong>  Not having that would make it confusing if you were looking for those parts and couldn't find them.  Still, it could be optional...as the whole file has to be scanned before running anyway, so it would see all the modules in it.</p>
+<pre><code>Aggregator&gt; [
+    Contents: [
+        Whitespace-Commands
+        Whitespace-Dialect
+        Whitespace-Interpreter
+        Demo
+    ]
+    Description: {
+        This file packages together Whitespace components as one file, for easier
+        transmission and maintenance.
+    }
+]
+
+Module&gt; [
+    Name: 'Whitespace-Commands
+    ...
+]
+</code></pre>
+<p>It might be interesting if some properties could be inherited by the contained modules from the aggregator if they weren't overridden (date? license?)</p>
+<p>This is all pretty far out, but, unless there's something like this the only way you're going to shuffle the order is breaking things into files.</p>
+<h2>Tech Note: Execution Does Scan Ahead, But Only for Binding</h2>
+<p>If you follow through <a href="https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764">"The Real Story about User and Lib Contexts"</a> you can see how Rebol winds up in the situation where you can have a variable declared after a function and it can still be <em>bound</em> in functions prior to its SET-WORD!.</p>
+<pre><code>&gt;&gt; foo: bar: x: '~unset~
+&gt;&gt; do [
+    bar: func [] [foo]
+    foo: func [] [print ["X is" x]]
+    x: 1020
+    bar
+]
+
+X is 1020
+</code></pre>
+<p>So some "looking ahead" is definitely going on.</p>
+<p>But this only means the <em>binding</em> is available "a priori".  The <em>value</em> doesn't get put into the variable until the SET-WORD! actually reaches the evaluation.</p>
+<pre><code>&gt;&gt; foo: bar: x: '~unset~
+&gt;&gt; do [
+    bar: func [] [foo]
+    bar  ; too early
+    foo: func [] [print ["X is" x]]
+    x: 1020
+]
+** Script Error: foo is ~unset~
+</code></pre>
+<p>You can try and think up imaginative (crazy) ways to deal with this.  For instance: going through a prepass and turning everything into a function stub that couples up SET-WORD!s with code after them, and then caches them on-demand when they're called.  That might be fun for special cases, but the generic stub functions would be variadic...and not everything is a function so you'd get false answers for <strong>get 'word</strong> saying things were ACTION! when they weren't... etc. etc.</p>
+<p>So I think it's unwise to fight this.  It's better to think about more interesting ways to express the ordering, than to defy the nature of the language to lie and make it seem order-agnostic.  It isn't.</p>
+          <p><a href="https://forum.rebol.info/t/code-ordering-in-files/1485/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/code-ordering-in-files/1485/1</link>
+        <pubDate>Mon, 01 Feb 2021 09:43:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1485-1</guid>
+        <source url="https://forum.rebol.info/t/code-ordering-in-files/1485.rss">Code Ordering in Files</source>
+      </item>
+  </channel>
+</rss>

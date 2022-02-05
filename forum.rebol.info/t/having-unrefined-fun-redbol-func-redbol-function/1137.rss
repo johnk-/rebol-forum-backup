@@ -1,0 +1,349 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Having unrefined fun: REDBOL-FUNC &amp; REDBOL-FUNCTION</title>
+    <link>https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137</link>
+    <description>I have implemented [Pure and Refined: Simplifying Refinements to One or Zero Args](https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120).  It&#39;s so much better in so many ways...usermode and internal...that it&#39;s essentially a bug that Rebol ever did it any other way.
+
+Despite being a significant change, it&#39;s pretty easy to update client code to.  The majority of refinements don&#39;t actually take arguments in the first place--so there&#39;s nothing you need to do for those.  If a refinement took an argument but didn&#39;t give a datatype for it, you now have to...it&#39;s the type block&#39;s presence that indicates it needs an argument at all.  But maybe rather than just slapping **[any-value!]** on, it would be a good time to actually annotate with what the expected types are.
+
+Because there&#39;s a goal to be able to emulate Rebol2/Red style in usermode, I decided that before committing the change I would update the Redbol emulation.  This would process a function defined in the historical way to a new spec and body for the new rules.  *(Though note that Redbol will be an extension, and fundamental transformations like this would be rewritten as natives--in whole or in part.)*
+
+Nothing too fancy...it transforms the ANY-WORD! refinement arguments into SET-WORD!s, and then when the body runs it moves the value from the refinement into the local and sets the refinement&#39;s variable to true or false.  A more complex one that allowed multiple refinement arguments would have to be variadic...I&#39;m interested in the workings of that but it&#39;s low priority considering everything else.
+
+Technique-wise, what I really like is how smooth it&#39;s getting to add set-ness/get-ness/lit-ness with COMPOSE:
+
+    insert body compose/deep [
+        (argument): :(refinement)
+        if not blank? :(refinement) [(refinement): true]
+    ]
+
+REFINEMENT is a PATH! in this case (as /foo is a path).  While such paths with blanks at the head are inert, their GET-PATH! and SET-PATH! forms are active, so **/foo:** acts just like **foo:** and **:/foo** acts just like **:foo**.  Scenarios like this one motivate that.
+
+Another thing that I&#39;m getting comfortable with is the no-op status of NULL when used with things like the value to APPEND or the value to KEEP.  Historically I had some mixed feelings about it, but as NULL has become the true &quot;non-thing&quot; parallel to what NONE! was trying to signal, it would be a real waste to not be able to use its non-thing-ness.  And when you&#39;re doing operations like a REPLACE in a block and want to actually replace with nothing, a BLANK! won&#39;t do.  When you take that to its logical conclusion you realize that something like **if keep match text! value [...]** is a good thing.  VOID! is there to fill in the gaps if you want to have an &quot;ornery&quot; error-triggering value.
+
+Anyway, this is just an example of how the state of everyday coding is evolving for the better.  It&#39;s a non-trivial function to write, but can be written without feeling in the dark about edge cases.
+
+This includes the other parts of the transformation, like dealing with `/extern` on function, or making it so you can mutate the body by tweaking the `&lt;const&gt;` marker out of the spec for the `body` parameter.  It&#39;s actually working in practice, and I just ran the Rebol2-ish script to build `hostilefork.com` with it!
+
+    rewrite-spec-and-body: function [
+        spec &quot;(modified)&quot; [block!]
+        body &quot;(modified)&quot; [block!]
+    ][
+        ; R3-Alpha didn&#39;t implement the Rebol2 `func [[throw catch] x y][...]`
+        ; but it didn&#39;t error on the block in the first position.  It just
+        ; ignored it.  For now, do the same in the emulation.
+        ;
+        if block? first spec [take spec]  ; skip Rebol2&#39;s [throw]
+
+        spool-descriptions-and-locals: does [
+            while [match [text! set-word!] first spec] [
+                spec: my next
+            ]
+        ]
+
+        while [not tail? spec] [
+            refinement: try match path! spec/1
+
+            ; Refinements with multiple arguments are no longer allowed, and
+            ; there weren&#39;t many of those so it&#39;s not a big deal.  But there
+            ; are *many* instances of the non-refinement usage of /LOCAL.
+            ; These translate in Ren-C to the &lt;local&gt; tag.
+            ;
+            if refinement = lit /local [
+                change spec &lt;local&gt;
+                refinement: _
+            ]
+
+            spec: my next
+            if not refinement [continue]
+
+            if tail? spec [break]
+            spool-descriptions-and-locals
+            if tail? spec [break]
+
+            if not argument: match [word! lit-word! get-word!] spec/1 [
+                continue  ; refinement didn&#39;t take args, so leave it alone
+            ]
+            take spec ; don&#39;t want argument between refinement + type block
+
+            if not tail? spec [spool-descriptions-and-locals]
+
+            ; may be at tail, if so need the [any-value!] injection
+
+            if types: match block! first spec [  ; explicit arg types
+                spec: my next
+            ]
+            else [
+                insert/only spec [any-value!]  ; old refinement-arg default
+            ]
+
+            append spec as set-word! argument  ; SET-WORD! in specs are locals
+
+            ; Take the value of the refinement and assign it to the argument
+            ; name that was in the spec.  Then set refinement to true/blank.
+            ;
+            ; (Rebol2 missing refinements are #[none], or #[true] if present
+            ; Red missing refinements are #[false], or #[true] if present
+            ; Rebol2 and Red arguments to unused refinements are #[none]
+            ; Since there&#39;s no agreement, Redbol goes with the Rebol2 way,
+            ; since NONE! is closer to Ren-C&#39;s BLANK! for unused refinements.)
+
+            insert body compose/deep [
+                (argument): :(refinement)
+                if not blank? :(refinement) [(refinement): true]
+            ]
+
+            if tail? spec [break]
+            spool-descriptions-and-locals
+            if tail? spec [break]
+
+            if extra: match any-word! first spec [
+                fail [
+                    {Refinement} refinement {can&#39;t take more than one}
+                    {argument in the Redbol emulation, so} extra {must be}
+                    {done some other way.  (We should be *able* to do}
+                    {it via variadics, but woul be much more involved.)}
+                ]
+            ]
+        ]
+
+        spec: head spec  ; At tail, so seek head for any debugging!
+
+        ; We don&#39;t go to an effort to provide a non-definitional return.  But
+        ; add support for an EXIT that&#39;s a synonym for returning void.
+        ;
+        insert body [
+            exit: specialize &#39;return [set/any (lit value:) void]
+        ]
+        append spec [&lt;local&gt; exit]  ; FUNC needs it (function doesn&#39;t...)
+    ]
+
+    ; If a Ren-C function suspects it is running code that may happen more than
+    ; once (e.g. a loop or function body) it marks that parameter `&lt;const&gt;`.
+    ; That prevents casual mutations.
+    ;
+     ; !!! See notes in RESKINNED for why an ADAPT must be used (for now)
+
+    func-nonconst: reskinned [
+         body [block!]  ; no &lt;const&gt; tag
+    ] adapt :func []
+
+    function-nonconst: reskinned [
+        body [block!]  ; no &lt;const&gt; tag
+    ] adapt :function []
+
+
+    redbol-func: function [
+        return: [action!]
+        spec [block!]
+        body [block!]
+    ][
+        spec: copy spec
+        body: copy body
+        rewrite-spec-and-body spec body
+
+        return func-nonconst spec body
+    ]
+
+    redbol-function: function [
+        return: [action!]
+        spec [block!]
+        body [block!]
+        /with [object! block! map!]  ; from R3-Alpha, not adopted by Red
+        /extern [block!]  ; from R3-Alpha, adopted by Red
+    ][
+        if block? with [with: make object! with]
+
+        spec: copy spec
+        body: copy body
+        rewrite-spec-and-body spec body
+
+        ; The shift in Ren-C is to remove the refinements from FUNCTION, and
+        ; put everything into the spec dialect...marked with &lt;tags&gt;
+        ;
+        if with [
+            append spec compose [&lt;in&gt; (with)]  ; &lt;in&gt; replaces /WITH
+        ]
+        if extern [
+            append spec compose [&lt;with&gt; ((extern))]  ; &lt;with&gt; replaces /EXTERN
+        ]
+
+        return function-nonconst spec body
+    ]</description>
+    
+    <lastBuildDate>Tue, 28 Jul 2020 08:48:56 +0000</lastBuildDate>
+    <category>Redbol</category>
+    <atom:link href="https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Having unrefined fun: REDBOL-FUNC &amp; REDBOL-FUNCTION</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I have implemented <a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120">Pure and Refined: Simplifying Refinements to One or Zero Args</a>.  It's so much better in so many ways...usermode and internal...that it's essentially a bug that Rebol ever did it any other way.</p>
+<p>Despite being a significant change, it's pretty easy to update client code to.  The majority of refinements don't actually take arguments in the first place--so there's nothing you need to do for those.  If a refinement took an argument but didn't give a datatype for it, you now have to...it's the type block's presence that indicates it needs an argument at all.  But maybe rather than just slapping <strong>[any-value!]</strong> on, it would be a good time to actually annotate with what the expected types are.</p>
+<p>Because there's a goal to be able to emulate Rebol2/Red style in usermode, I decided that before committing the change I would update the Redbol emulation.  This would process a function defined in the historical way to a new spec and body for the new rules.  <em>(Though note that Redbol will be an extension, and fundamental transformations like this would be rewritten as natives--in whole or in part.)</em></p>
+<p>Nothing too fancy...it transforms the ANY-WORD! refinement arguments into SET-WORD!s, and then when the body runs it moves the value from the refinement into the local and sets the refinement's variable to true or false.  A more complex one that allowed multiple refinement arguments would have to be variadic...I'm interested in the workings of that but it's low priority considering everything else.</p>
+<p>Technique-wise, what I really like is how smooth it's getting to add set-ness/get-ness/lit-ness with COMPOSE:</p>
+<pre><code>insert body compose/deep [
+    (argument): :(refinement)
+    if not blank? :(refinement) [(refinement): true]
+]
+</code></pre>
+<p>REFINEMENT is a PATH! in this case (as /foo is a path).  While such paths with blanks at the head are inert, their GET-PATH! and SET-PATH! forms are active, so <strong>/foo:</strong> acts just like <strong>foo:</strong> and <strong>:/foo</strong> acts just like <strong>:foo</strong>.  Scenarios like this one motivate that.</p>
+<p>Another thing that I'm getting comfortable with is the no-op status of NULL when used with things like the value to APPEND or the value to KEEP.  Historically I had some mixed feelings about it, but as NULL has become the true "non-thing" parallel to what NONE! was trying to signal, it would be a real waste to not be able to use its non-thing-ness.  And when you're doing operations like a REPLACE in a block and want to actually replace with nothing, a BLANK! won't do.  When you take that to its logical conclusion you realize that something like <strong>if keep match text! value [...]</strong> is a good thing.  VOID! is there to fill in the gaps if you want to have an "ornery" error-triggering value.</p>
+<p>Anyway, this is just an example of how the state of everyday coding is evolving for the better.  It's a non-trivial function to write, but can be written without feeling in the dark about edge cases.</p>
+<p>This includes the other parts of the transformation, like dealing with <code>/extern</code> on function, or making it so you can mutate the body by tweaking the <code>&lt;const&gt;</code> marker out of the spec for the <code>body</code> parameter.  It's actually working in practice, and I just ran the Rebol2-ish script to build <code>hostilefork.com</code> with it!</p>
+<pre><code>rewrite-spec-and-body: function [
+    spec "(modified)" [block!]
+    body "(modified)" [block!]
+][
+    ; R3-Alpha didn't implement the Rebol2 `func [[throw catch] x y][...]`
+    ; but it didn't error on the block in the first position.  It just
+    ; ignored it.  For now, do the same in the emulation.
+    ;
+    if block? first spec [take spec]  ; skip Rebol2's [throw]
+
+    spool-descriptions-and-locals: does [
+        while [match [text! set-word!] first spec] [
+            spec: my next
+        ]
+    ]
+
+    while [not tail? spec] [
+        refinement: try match path! spec/1
+
+        ; Refinements with multiple arguments are no longer allowed, and
+        ; there weren't many of those so it's not a big deal.  But there
+        ; are *many* instances of the non-refinement usage of /LOCAL.
+        ; These translate in Ren-C to the &lt;local&gt; tag.
+        ;
+        if refinement = lit /local [
+            change spec &lt;local&gt;
+            refinement: _
+        ]
+
+        spec: my next
+        if not refinement [continue]
+
+        if tail? spec [break]
+        spool-descriptions-and-locals
+        if tail? spec [break]
+
+        if not argument: match [word! lit-word! get-word!] spec/1 [
+            continue  ; refinement didn't take args, so leave it alone
+        ]
+        take spec ; don't want argument between refinement + type block
+
+        if not tail? spec [spool-descriptions-and-locals]
+
+        ; may be at tail, if so need the [any-value!] injection
+
+        if types: match block! first spec [  ; explicit arg types
+            spec: my next
+        ]
+        else [
+            insert/only spec [any-value!]  ; old refinement-arg default
+        ]
+
+        append spec as set-word! argument  ; SET-WORD! in specs are locals
+
+        ; Take the value of the refinement and assign it to the argument
+        ; name that was in the spec.  Then set refinement to true/blank.
+        ;
+        ; (Rebol2 missing refinements are #[none], or #[true] if present
+        ; Red missing refinements are #[false], or #[true] if present
+        ; Rebol2 and Red arguments to unused refinements are #[none]
+        ; Since there's no agreement, Redbol goes with the Rebol2 way,
+        ; since NONE! is closer to Ren-C's BLANK! for unused refinements.)
+
+        insert body compose/deep [
+            (argument): :(refinement)
+            if not blank? :(refinement) [(refinement): true]
+        ]
+
+        if tail? spec [break]
+        spool-descriptions-and-locals
+        if tail? spec [break]
+
+        if extra: match any-word! first spec [
+            fail [
+                {Refinement} refinement {can't take more than one}
+                {argument in the Redbol emulation, so} extra {must be}
+                {done some other way.  (We should be *able* to do}
+                {it via variadics, but woul be much more involved.)}
+            ]
+        ]
+    ]
+
+    spec: head spec  ; At tail, so seek head for any debugging!
+
+    ; We don't go to an effort to provide a non-definitional return.  But
+    ; add support for an EXIT that's a synonym for returning void.
+    ;
+    insert body [
+        exit: specialize 'return [set/any (lit value:) void]
+    ]
+    append spec [&lt;local&gt; exit]  ; FUNC needs it (function doesn't...)
+]
+
+; If a Ren-C function suspects it is running code that may happen more than
+; once (e.g. a loop or function body) it marks that parameter `&lt;const&gt;`.
+; That prevents casual mutations.
+;
+ ; !!! See notes in RESKINNED for why an ADAPT must be used (for now)
+
+func-nonconst: reskinned [
+     body [block!]  ; no &lt;const&gt; tag
+] adapt :func []
+
+function-nonconst: reskinned [
+    body [block!]  ; no &lt;const&gt; tag
+] adapt :function []
+
+
+redbol-func: function [
+    return: [action!]
+    spec [block!]
+    body [block!]
+][
+    spec: copy spec
+    body: copy body
+    rewrite-spec-and-body spec body
+
+    return func-nonconst spec body
+]
+
+redbol-function: function [
+    return: [action!]
+    spec [block!]
+    body [block!]
+    /with [object! block! map!]  ; from R3-Alpha, not adopted by Red
+    /extern [block!]  ; from R3-Alpha, adopted by Red
+][
+    if block? with [with: make object! with]
+
+    spec: copy spec
+    body: copy body
+    rewrite-spec-and-body spec body
+
+    ; The shift in Ren-C is to remove the refinements from FUNCTION, and
+    ; put everything into the spec dialect...marked with &lt;tags&gt;
+    ;
+    if with [
+        append spec compose [&lt;in&gt; (with)]  ; &lt;in&gt; replaces /WITH
+    ]
+    if extern [
+        append spec compose [&lt;with&gt; ((extern))]  ; &lt;with&gt; replaces /EXTERN
+    ]
+
+    return function-nonconst spec body
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137/1</link>
+        <pubDate>Thu, 04 Apr 2019 21:26:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1137-1</guid>
+        <source url="https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137.rss">Having unrefined fun: REDBOL-FUNC &amp; REDBOL-FUNCTION</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Generic Quoting Makes Headway on MAKE OBJECT!</title>
+    <link>https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997</link>
+    <description>Rebol2/R3-Alpha/Red have a notation for molding out objects:
+
+    Red&gt;&gt; obj: make object! [a: 10]
+    == make object! [
+        a: 10
+    ]
+
+Let&#39;s ignore for the moment the fact that it&#39;s giving a sequence of what looks to be two words and a block to denote a single OBJECT!.  What it&#39;s trying to do is give you a syntax that looks like what it would take to create the object if typed from source.   (Perhaps it would more appropriately be SOURCE OBJ vs. MOLD OBJ)
+
+But there are some pretty big problems.  What if you said:
+
+    Red&gt;&gt; obj: make object! [g: quote (1 + 2) n: 0 unset &#39;n w: quote &#39;word]
+    == make object! [
+        g: (1 + 2)
+        n: unset
+        w: &#39;word
+    ]
+
+The resulting MOLDing MAKE OBJECT! doesn&#39;t get close to what it&#39;s trying to capture.
+
+* In the original object G is a &quot;PAREN!&quot; with (1 + 2).  Running that MAKE OBJECT! would give you G of INTEGER 3.
+* We&#39;ll assume it meant #[unset] instead of the word UNSET (which here, would unset `word`).  If it had said what it meant, the make object! would have failed, as it&#39;s not legal to assign unsets via set-word.
+* W would come out as a WORD! here, instead of the LIT-WORD! in the original object.
+
+## Generalized escaping to the rescue
+
+Ren-C doesn&#39;t have a full solution to the problem of round-trip representations as text.  But now, when it comes to this, it&#39;s at least a powerful step closer:
+
+    &gt;&gt; obj: make object! [g: lit (1 + 2) n: 0 unset &#39;n w: lit &#39;word]
+    == make object! [
+        g: &#39;(1 + 2)
+        n: &#39;
+        w: &#39;&#39;word
+    ]
+
+Here we see these loopholes getting closed.  The make is actually able to produce a structurally identical object *(like I said, let&#39;s avoid talking about binding, that&#39;s its own conversation)*.  Note the unusual-but-very-important aspect that a single apostrophe evaluates to null.
+
+It&#39;s not necessary to put the apostrophe on all items, only those that evaluate...so the system should probably only add them if needed:
+
+    &gt;&gt; obj: make object! [i: 10 t: &quot;hello&quot; p: &#39;&#39;a/b/c]
+    == make object! [
+        i: 10
+        t: &quot;hello&quot;
+        p: &#39;&#39;a/b/c
+    ]
+
+INTEGER! and TEXT! can be left as-is, so perhaps worth it to do so.  Here we see a LIT-PATH!, escaped in the original representation for its assignment, escaped again for its re-representation.
+
+**This generalized-escaping-based mechanism replaces a previous attempt to deal with the issue, and gives strong evidence that the effort was time well spent.**  :face_with_monocle:
+
+---
+
+*(P.S. It had been a topic of debate for a while, as to whether you should have to escape `Rebol [Type: &#39;module]` or if that was just noise.  For overall consistency with the round-tripping of these kinds of structures, I think the apostrophe needs to be mandatory on evaluative types...it seems like there&#39;s now a coherent story on this.)*</description>
+    
+    <lastBuildDate>Sat, 19 Jun 2021 02:27:41 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Generic Quoting Makes Headway on MAKE OBJECT!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="997">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Let's ignore for the moment the fact that it's giving a sequence of what looks to be two words and a block to denote a single OBJECT!. What it's trying to do is give you a syntax that looks like what it would take to create the object if typed from source. (Perhaps it would more appropriately be SOURCE OBJ vs. MOLD OBJ)</p>
+<p>But there are some pretty big problems.</p>
+</blockquote>
+</aside>
+<p>It's amusing to see 2 years later that Red is <a href="https://gitter.im/red/help?at=60c9d3eab317311354322d87">only beginning to discuss the question</a>.</p>
+<p>Oldes says:</p>
+<blockquote>
+<p>"To be honest, I'm not sure if it's correct in Red. I think Red's behavior is inconsistent.<br>
+I believe that these 3 results should not be same:"</p>
+<pre><code>red&gt;&gt; body-of make object! [a: 1 + 1 c: to lit-word! 'a]
+== [
+   a: 2 
+   c: 'a
+]
+
+red&gt;&gt; body-of make object! [a: 1 + 1 c: 'a]
+== [
+    a: 2 
+    c: 'a
+]
+
+red&gt;&gt; body-of make object! [a: 1 + 1 c: to word! 'a]
+== [
+    a: 2 
+    c: 'a
+]
+</code></pre>
+</blockquote>
+<p>They then try to discuss it, but of course they've rejected the techniques that can resolve it... generic quoting, an unset assignment form, BAD-WORD! notations...</p>
+<p>I'll again point out that there are still fundamental issues with representing bound structures via a text-based round trip that should not be ignored.  But, for the basic considerations here are fairly well considered.  Even things like the difference between an isotope BAD-WORD! and a non-isotope:</p>
+<pre><code>ren-c&gt;&gt; obj: make object! [a: '~unset~, b: ~unset~]
+== make object! [
+    a: '~unset~
+    b: ~unset~
+]
+
+ren-c&gt;&gt; obj.a
+== ~unset~
+
+ren-c&gt;&gt; obj.b
+** Script Error: obj.b is ~unset~ isotope (see ^(...) and GET/ANY)
+</code></pre>
+<p>Since we're working on reminders of what META-XXX types do...they will allow you to get the value with a quoting level added, but it will bump the isotope to plain status:</p>
+<pre><code>ren-c&gt;&gt; ^obj.a
+== '~unset~
+
+ren-c&gt;&gt; ^obj.b
+== ~unset~
+</code></pre>
+<p>There's simply a lot of solutions here bearing fruit, while their understanding has not moved an inch since Rebol2.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+          <p><a href="https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997/2</link>
+        <pubDate>Sat, 19 Jun 2021 02:27:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-997-2</guid>
+        <source url="https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997.rss">Generic Quoting Makes Headway on MAKE OBJECT!</source>
+      </item>
+      <item>
+        <title>Generic Quoting Makes Headway on MAKE OBJECT!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebol2/R3-Alpha/Red have a notation for molding out objects:</p>
+<pre><code>Red&gt;&gt; obj: make object! [a: 10]
+== make object! [
+    a: 10
+]
+</code></pre>
+<p>Let's ignore for the moment the fact that it's giving a sequence of what looks to be two words and a block to denote a single OBJECT!.  What it's trying to do is give you a syntax that looks like what it would take to create the object if typed from source.   (Perhaps it would more appropriately be SOURCE OBJ vs. MOLD OBJ)</p>
+<p>But there are some pretty big problems.  What if you said:</p>
+<pre><code>Red&gt;&gt; obj: make object! [g: quote (1 + 2) n: 0 unset 'n w: quote 'word]
+== make object! [
+    g: (1 + 2)
+    n: unset
+    w: 'word
+]
+</code></pre>
+<p>The resulting MOLDing MAKE OBJECT! doesn't get close to what it's trying to capture.</p>
+<ul>
+<li>In the original object G is a "PAREN!" with (1 + 2).  Running that MAKE OBJECT! would give you G of INTEGER 3.</li>
+<li>We'll assume it meant #[unset] instead of the word UNSET (which here, would unset <code>word</code>).  If it had said what it meant, the make object! would have failed, as it's not legal to assign unsets via set-word.</li>
+<li>W would come out as a WORD! here, instead of the LIT-WORD! in the original object.</li>
+</ul>
+<h2>Generalized escaping to the rescue</h2>
+<p>Ren-C doesn't have a full solution to the problem of round-trip representations as text.  But now, when it comes to this, it's at least a powerful step closer:</p>
+<pre><code>&gt;&gt; obj: make object! [g: lit (1 + 2) n: 0 unset 'n w: lit 'word]
+== make object! [
+    g: '(1 + 2)
+    n: '
+    w: ''word
+]
+</code></pre>
+<p>Here we see these loopholes getting closed.  The make is actually able to produce a structurally identical object <em>(like I said, let's avoid talking about binding, that's its own conversation)</em>.  Note the unusual-but-very-important aspect that a single apostrophe evaluates to null.</p>
+<p>It's not necessary to put the apostrophe on all items, only those that evaluate...so the system should probably only add them if needed:</p>
+<pre><code>&gt;&gt; obj: make object! [i: 10 t: "hello" p: ''a/b/c]
+== make object! [
+    i: 10
+    t: "hello"
+    p: ''a/b/c
+]
+</code></pre>
+<p>INTEGER! and TEXT! can be left as-is, so perhaps worth it to do so.  Here we see a LIT-PATH!, escaped in the original representation for its assignment, escaped again for its re-representation.</p>
+<p><strong>This generalized-escaping-based mechanism replaces a previous attempt to deal with the issue, and gives strong evidence that the effort was time well spent.</strong>  <img src="//forum.rebol.info/images/emoji/twitter/face_with_monocle.png?v=7" title=":face_with_monocle:" class="emoji" alt=":face_with_monocle:"></p>
+<hr>
+<p><em>(P.S. It had been a topic of debate for a while, as to whether you should have to escape <code>Rebol [Type: 'module]</code> or if that was just noise.  For overall consistency with the round-tripping of these kinds of structures, I think the apostrophe needs to be mandatory on evaluative types...it seems like there's now a coherent story on this.)</em></p>
+          <p><a href="https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997/1</link>
+        <pubDate>Sat, 05 Jan 2019 08:39:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-997-1</guid>
+        <source url="https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997.rss">Generic Quoting Makes Headway on MAKE OBJECT!</source>
+      </item>
+  </channel>
+</rss>

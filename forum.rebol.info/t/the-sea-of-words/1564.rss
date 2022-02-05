@@ -1,0 +1,400 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Sea Of Words</title>
+    <link>https://forum.rebol.info/t/the-sea-of-words/1564</link>
+    <description>     === I HAVE SORT OF A PLAN-OF-ATTACK ===
+
+     echo [For how to deal with the explosion of WORD!s
+         that would result if you start sanctioning people
+         doing things like this...]
+
+**TO RECAP:** the user context proactively creates **variables** *for every word that you even so much as mention*.  The idea is that it doesn&#39;t know if that word will come into existence later, and it wants to be able to facilitate things like:
+
+    foo: func [] [bar]  ; doesn&#39;t leave unbound, in case definition comes later
+    bar: func [] [print &quot;Hello&quot;]  ; hooks up to previously existing bar variable
+    foo  ; prints hello
+ 
+We&#39;ve seen that there are several downsides to this strategy:
+
+* Even without pathological cases like sentences-of-word-using **===** and **echo**, the user context swells to a very large size.  You get definitions for function arguments that were never intended to have a global variable for them, every LET variable gets a user context binding it doesn&#39;t use, etc.
+
+* You have no way of knowing when a variable *isn&#39;t* valid or intended.  Any stray assignment or misspelling writes into the global space:
+
+       foo: func [argument] [
+           argment: default [10]
+           print [&quot;You just defaulted the wrong&quot; argument]
+       ]
+
+* The aggressive creation of variables that are local copies of *everything* from the lib context means that you won&#39;t see changes if the lib definition changes.
+
+       &gt;&gt; foo: func [] [newfangled &quot;Hello&quot;]
+       &gt;&gt; append lib compose [newfangled (:print)]
+       &gt;&gt; foo
+       ** Script Error: newfangled is ~unset~
+
+## Proposal: &quot;Attachment&quot; =&gt; Binding *Without Creating a Variable*
+
+What if there were a way to say that WORD!s could be attached to a context, *but not actually have memory for a variable behind that reference?*
+
+If a new variable came into existence, those references would see it.  But those references themselves would not create the variables...at least not without some extra effort.
+
+    &gt;&gt; foo: func [] [y: 10]
+
+    &gt;&gt; foo
+    ** Error: y is attached to a context, but no definition exists for it
+
+Going with the current way for making variables appear in contexts:
+
+    &gt;&gt; foo: func [] [y: 10]
+
+    &gt;&gt; append system/contexts/user [y: _]
+
+    &gt;&gt; foo
+    == 10
+
+    &gt;&gt; y
+    == 10
+
+But we could imagine there being some new LET-like construct which would enforce the existence of the variable.  It would peek ahead at the word, and then force a variable if there wasn&#39;t one already, then vanish.  Let&#39;s call it EMERGE for now.
+
+This addresses the issue of references that exist &quot;back in time&quot;:
+
+    &gt;&gt; bar: func [] [y: 20]  ; Y scanned and bound before the emerge
+    ; (so calling bar right now would error)
+
+    &gt;&gt; foo: func [] [emerge y: 10]
+
+    &gt;&gt; foo
+    == 10
+
+    &gt;&gt; y
+    == 10
+
+    &gt;&gt; bar  ; was allowed to assign and overwrite
+    == 20
+
+**I&#39;ve started a small hacked-together proof-of-concept**.  It seems to have potential, but there are a lot of questions...
+
+## When Are SET-WORD!s Implicitly Gathered?
+
+Right now, modules use the tactic of only considering top-level SET-WORD!s to be gathered.
+
+But what if something isn&#39;t a module?  What if it&#39;s a string of code, like:
+
+    &gt;&gt; do &quot;x: 10, print [x]&quot;
+
+Had you written that as a BLOCK!, it wouldn&#39;t work...
+
+    &gt;&gt; do [x: 10, print [x]]
+
+...because in that case, the actual loading process the console ran was for the string &quot;do [x: 10, print [x]]&quot;, and that doesn&#39;t have a top-level SET-WORD!.
+
+**My feeling is that top-level SET-WORD!s being &quot;emerge&#39;d&quot; implicitly is that should be a choice for a module, but not a basic behavior of DO or TRANSCODE**.
+
+## How Do Top-Level SET-WORD!s mix With SET-BLOCK!, anyway?
+
+Not all contents of SET-BLOCK!s are words being assigned, e.g.
+
+    [x (first word-list)]: some-func ...
+
+So we don&#39;t want declarations for FIRST and WORD-LIST, since they&#39;re only finding the name of the word to be evaluated...and if they were  bound as new variables by a &quot;scan for SET-XXX&quot; process they would not work for their intended purpose, since they&#39;d lose their binding to the FIRST function and the WORD-LIST variable in the process.
+
+Additionally, not all SET-BLOCK!s at the top level necessarily mean assignment.  They can be used for dialected purposes.  That&#39;s true of SET-WORD!s too...even at the top level.
+
+## How Do You Mix EMERGE with LET?
+
+There was a problem with LET wanting to do multi-returns, e.g. where one variable needs a new definition but another one already exists.  That is being resolved with quoting, you add a tick to say you want to pass-thru the definition of a variable:
+
+    let [new-variable &#39;reused-variable]: some-func ..
+
+(This same concept of quote use is being applied to say not to create a new loop variable for things like FOR-EACH, e.g. `for-each &#39;reuse [1 2 3] [...]`)
+
+But now we have the same problem with EMERGE.  I guess you could put it in a GROUP! and then say to reuse the emerged product, like:
+
+    let [new-variable &#39;(emerge global-variable)]: ...
+
+## What Does BIND Mean When You Bind to Everything?
+
+It&#39;s generally the case that BIND BLOCK LIB or BIND BLOCK USER is something only done at the beginning of constructing code from raw material.  Most people expect LOAD to do this for them.
+
+If these kinds of contexts consider themselves candidates for all words, they&#39;d never not-bind.
+
+It may be that this category of context (synonymous with MODULE! ?) is something you have to subset into a collection of words before using in binding operations...and if you bind without that subsetting then you just reset everything in the material you&#39;re working with.
+
+## Despite The Questions, This Is Probably What&#39;s Needed
+
+The small demo I have working makes me reasonably optimistic that this is the right direction.  I&#39;ll keep looking at it.</description>
+    
+    <lastBuildDate>Mon, 16 Aug 2021 03:43:36 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/the-sea-of-words/1564.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Sea Of Words</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've been away from working on Sea of Words for a while...because I started attacking really far out features like string interpolation and getting rid of <code>rebArg()</code> by having JS-NATIVE and natives be able to mention locals directly in the text code they scan.  There were several cans of worms opened by all of that.</p>
+<p>This held up the promising work on Sea of Words, which includes a lot of simplifications to LOAD and MODULE mechanics while I was hacking on it.</p>
+<p>So I've rebased up to present, and factored out the "working sea of words stuff" from the speculative stuff.  They're two branches now, and I want to get the good stuff in.</p>
+<h2>Cleaning Up The User Context</h2>
+<p>If you start up R3-Alpha, you can ask it "what's in the user context?"</p>
+<pre><code>r3-alpha&gt;&gt; words-of system/contexts/user
+== [system words-of contexts user]
+</code></pre>
+<p>Errr... well it <em>was</em> empty at startup.  But the mere act of asking populated it with things.  This will go on indefinitely:</p>
+<pre><code>r3-alpha&gt;&gt; data: [apple banana orange]
+== [apple banana orange]
+
+r3-alpha&gt;&gt; words-of system/contexts/user 
+== [system words-of contexts user data apple banana orange]
+</code></pre>
+<p>You might think you've declared one variable.  But you've declared 8.  <em>(I explain why this is in the original post here, as well as other places.)</em></p>
+<p>Can Sea of Words do better?  You bet your Sea of Fishies it can:</p>
+<pre><code>&gt;&gt; words of system.contexts.user
+== [intern export import]
+</code></pre>
+<p>That needs a bit of explanation, because the user context is now a "user module".  (Modules are what have the sea of words behavior.)  Each module gets its own version of the import and export functions, because it has to know where to <em>import to</em> or where to <em>export from</em>.</p>
+<p>But <strong>words</strong> and <strong>of</strong> and <strong>system</strong> and <strong>contexts</strong> and <strong>user</strong> are notably absent.  Yet the code still ran!</p>
+<p>Let's keep going:</p>
+<pre><code>&gt;&gt; data: [apple banana orange]
+
+&gt;&gt; words of system.contexts.user
+== [intern export import data]
+</code></pre>
+<p>Well that seems like a <em>much</em> more sane result.  Assign one variable, get one variable.  But can it still handle the idea of "declarations that show up after their references?"</p>
+<pre><code>&gt;&gt; foo: func [] [bar]
+
+&gt;&gt; words of system.contexts.user
+== [foo intern export import data]  ; no bar mentioned, hmmm...
+
+&gt;&gt; bar: func [] [print "Hello"]
+== [foo intern export bar import data]  ; now there's a bar, is it too late?
+
+&gt;&gt; foo
+Hello  ; not too late!!! bar in `func [] [bar]` was pre-emptively "attached"
+</code></pre>
+<p>Well that sure looks like great news, doesn't it?<br>
+<img src="https://forum.rebol.info/images/emoji/twitter/ocean.png?v=9" title=":ocean:" class="emoji" alt=":ocean:">  <img src="https://forum.rebol.info/images/emoji/twitter/fish.png?v=9" title=":fish:" class="emoji" alt=":fish:"> <img src="https://forum.rebol.info/images/emoji/twitter/blowfish.png?v=9" title=":blowfish:" class="emoji" alt=":blowfish:"> <img src="https://forum.rebol.info/images/emoji/twitter/tropical_fish.png?v=9" title=":tropical_fish:" class="emoji" alt=":tropical_fish:"> : <img src="https://forum.rebol.info/images/emoji/twitter/ocean.png?v=9" title=":ocean:" class="emoji" alt=":ocean:"></p>
+<h2>Blocking Issue: What Does BINDING OF Mean Anymore?</h2>
+<p>Let's look at the darker side of the mechanic behind that behavior:</p>
+<blockquote>
+<p><strong>Proposal: "Attachment" =&gt; Binding <em>Without Creating a Variable</em></strong><br>
+What if there were a way to say that WORD!s could be attached to a context, <em>but not actually have memory for a variable behind that reference?</em></p>
+</blockquote>
+<p>Starting again from a fresh interpreter:</p>
+<pre><code>&gt;&gt; words of system.contexts.user
+== [intern export import]
+</code></pre>
+<p>Let's pursue a different line of questioning:</p>
+<pre><code>&gt;&gt; type of :append
+== #[datatype! action!]
+
+&gt;&gt; words of binding of 'append
+== [intern export import]
+</code></pre>
+<p><strong>BINDING OF gave us the answer of the context that <code>append</code> word was <em>ATTACHED</em> to, not the context where its actual variable lives.</strong></p>
+<p>Assigning APPEND will overwrite the variable with a definition in the User context so it will no longer see the definition in the Lib context.</p>
+<pre><code>&gt;&gt; append: does [print "Overwritten."]
+
+&gt;&gt; words of binding of 'append
+== [append intern export import]
+</code></pre>
+<p><strong>Well, BINDING OF gave us the same answer as before...but now it's got an APPEND definition in it vs. just inheriting the one from Lib</strong></p>
+<ul>
+<li>
+<p>How do we reconcile this notion with what people are trying to get at when they ask the question BINDING OF?</p>
+</li>
+<li>
+<p>Do we need a menagerie of more questions, like ATTACH OF?  INHERITED-WORDS OF to get the full list?</p>
+</li>
+</ul>
+<h2>These Are Big Questions and I Don't Know The Answers</h2>
+<p>I feel like the direction is solid.  But so long as Sea of Words is off on some side branch, I'm not facing the implications day to day to try it out.</p>
+<p>Maybe we go with BINDING OF giving back an answer that's not NULL, but not the context when something is attached.  This is a nice application of BAD-WORD!s actually... How about <strong>~attached~</strong> ?  That's informational and not misleading, and can also be acted on.  Then have ATTACH OF to answer the more general question.</p>
+<p>In any case, I'm going to try to pin something down so we can start using the darn thing.</p>
+          <p><a href="https://forum.rebol.info/t/the-sea-of-words/1564/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-sea-of-words/1564/5</link>
+        <pubDate>Mon, 16 Aug 2021 03:43:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1564-5</guid>
+        <source url="https://forum.rebol.info/t/the-sea-of-words/1564.rss">The Sea Of Words</source>
+      </item>
+      <item>
+        <title>The Sea Of Words</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>Looks promising.  Modules have never been solved before.</p>
+          <p><a href="https://forum.rebol.info/t/the-sea-of-words/1564/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-sea-of-words/1564/4</link>
+        <pubDate>Fri, 19 Mar 2021 07:27:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1564-4</guid>
+        <source url="https://forum.rebol.info/t/the-sea-of-words/1564.rss">The Sea Of Words</source>
+      </item>
+      <item>
+        <title>The Sea Of Words</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm still trying to process this. I think rebol bindology is a hindrance for adoption, at least for someone at my (low-ish) level of sophistication.<br>
+I keep thinking some of the recent forum topics will generate some fervent reactions. We'll see about this one. I think it's wild.</p>
+          <p><a href="https://forum.rebol.info/t/the-sea-of-words/1564/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-sea-of-words/1564/3</link>
+        <pubDate>Thu, 18 Mar 2021 21:49:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1564-3</guid>
+        <source url="https://forum.rebol.info/t/the-sea-of-words/1564.rss">The Sea Of Words</source>
+      </item>
+      <item>
+        <title>The Sea Of Words</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>As a show of promisingness...</p>
+<pre><code>m1: module [] [
+    talk: does [print "M1 talking"]
+    show: does [newfangled]
+]
+
+m2: module [] [
+    print: func [x] [write-stdout "?!?#@"]
+    talk: does [print "M2 talking"]
+]
+</code></pre>
+<p>The idea is that module isolation will be cheap-as-free.  So there won't even be an [Isolate] option, every module is isolated from what others might choose to do to their own versions of things in LIB:</p>
+<pre><code>&gt;&gt; m1/talk
+M1 talking
+
+&gt;&gt; m2/talk
+?!?#@
+</code></pre>
+<p>But this isolation doesn't mean they are frozen and unable to see new things that appear.  Previously, isolation would have meant that the NEWFANGLED reference in M1 would be unbound, and could never become bound.</p>
+<p>Yet in this new model, M1's NEWFANGLED is actually bound to M1 <em>with no variable</em>.  And since M1 inherits from LIB, this non-variable is able to receive an inherited word at the time it shows up!</p>
+<pre><code>&gt;&gt; m1/show
+** Script Error: newfangled word is bound but not declared
+
+&gt;&gt; append lib compose [newfangled (does [print "Picked up!"])]
+
+&gt;&gt; m1/show
+Picked up!
+</code></pre>
+<p>This is already quite a significant improvement over history!  There are an intense number of headaches caused by things not working this way, and once they can do this, <em>it cleans up a lot</em>.</p>
+<p>Lots of questions will need to be answered before this can be usable, but fingers crossed...</p>
+          <p><a href="https://forum.rebol.info/t/the-sea-of-words/1564/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-sea-of-words/1564/2</link>
+        <pubDate>Thu, 18 Mar 2021 21:14:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1564-2</guid>
+        <source url="https://forum.rebol.info/t/the-sea-of-words/1564.rss">The Sea Of Words</source>
+      </item>
+      <item>
+        <title>The Sea Of Words</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <pre><code> === I HAVE SORT OF A PLAN-OF-ATTACK ===
+
+ echo [For how to deal with the explosion of WORD!s
+     that would result if you start sanctioning people
+     doing things like this...]
+</code></pre>
+<p><strong>TO RECAP:</strong> the user context proactively creates <strong>variables</strong> <em>for every word that you even so much as mention</em>.  The idea is that it doesn't know if that word will come into existence later, and it wants to be able to facilitate things like:</p>
+<pre><code>foo: func [] [bar]  ; doesn't leave unbound, in case definition comes later
+bar: func [] [print "Hello"]  ; hooks up to previously existing bar variable
+foo  ; prints hello
+</code></pre>
+<p>We've seen that there are several downsides to this strategy:</p>
+<ul>
+<li>
+<p>Even without pathological cases like sentences-of-word-using <strong>===</strong> and <strong>echo</strong>, the user context swells to a very large size.  You get definitions for function arguments that were never intended to have a global variable for them, every LET variable gets a user context binding it doesn't use, etc.</p>
+</li>
+<li>
+<p>You have no way of knowing when a variable <em>isn't</em> valid or intended.  Any stray assignment or misspelling writes into the global space:</p>
+<pre><code> foo: func [argument] [
+     argment: default [10]
+     print ["You just defaulted the wrong" argument]
+ ]
+</code></pre>
+</li>
+<li>
+<p>The aggressive creation of variables that are local copies of <em>everything</em> from the lib context means that you won't see changes if the lib definition changes.</p>
+<pre><code> &gt;&gt; foo: func [] [newfangled "Hello"]
+ &gt;&gt; append lib compose [newfangled (:print)]
+ &gt;&gt; foo
+ ** Script Error: newfangled is ~unset~
+</code></pre>
+</li>
+</ul>
+<h2>Proposal: "Attachment" =&gt; Binding <em>Without Creating a Variable</em>
+</h2>
+<p>What if there were a way to say that WORD!s could be attached to a context, <em>but not actually have memory for a variable behind that reference?</em></p>
+<p>If a new variable came into existence, those references would see it.  But those references themselves would not create the variables...at least not without some extra effort.</p>
+<pre><code>&gt;&gt; foo: func [] [y: 10]
+
+&gt;&gt; foo
+** Error: y is attached to a context, but no definition exists for it
+</code></pre>
+<p>Going with the current way for making variables appear in contexts:</p>
+<pre><code>&gt;&gt; foo: func [] [y: 10]
+
+&gt;&gt; append system/contexts/user [y: _]
+
+&gt;&gt; foo
+== 10
+
+&gt;&gt; y
+== 10
+</code></pre>
+<p>But we could imagine there being some new LET-like construct which would enforce the existence of the variable.  It would peek ahead at the word, and then force a variable if there wasn't one already, then vanish.  Let's call it EMERGE for now.</p>
+<p>This addresses the issue of references that exist "back in time":</p>
+<pre><code>&gt;&gt; bar: func [] [y: 20]  ; Y scanned and bound before the emerge
+; (so calling bar right now would error)
+
+&gt;&gt; foo: func [] [emerge y: 10]
+
+&gt;&gt; foo
+== 10
+
+&gt;&gt; y
+== 10
+
+&gt;&gt; bar  ; was allowed to assign and overwrite
+== 20
+</code></pre>
+<p><strong>I've started a small hacked-together proof-of-concept</strong>.  It seems to have potential, but there are a lot of questions...</p>
+<h2>When Are SET-WORD!s Implicitly Gathered?</h2>
+<p>Right now, modules use the tactic of only considering top-level SET-WORD!s to be gathered.</p>
+<p>But what if something isn't a module?  What if it's a string of code, like:</p>
+<pre><code>&gt;&gt; do "x: 10, print [x]"
+</code></pre>
+<p>Had you written that as a BLOCK!, it wouldn't work...</p>
+<pre><code>&gt;&gt; do [x: 10, print [x]]
+</code></pre>
+<p>...because in that case, the actual loading process the console ran was for the string "do [x: 10, print [x]]", and that doesn't have a top-level SET-WORD!.</p>
+<p><strong>My feeling is that top-level SET-WORD!s being "emerge'd" implicitly is that should be a choice for a module, but not a basic behavior of DO or TRANSCODE</strong>.</p>
+<h2>How Do Top-Level SET-WORD!s mix With SET-BLOCK!, anyway?</h2>
+<p>Not all contents of SET-BLOCK!s are words being assigned, e.g.</p>
+<pre><code>[x (first word-list)]: some-func ...
+</code></pre>
+<p>So we don't want declarations for FIRST and WORD-LIST, since they're only finding the name of the word to be evaluated...and if they were  bound as new variables by a "scan for SET-XXX" process they would not work for their intended purpose, since they'd lose their binding to the FIRST function and the WORD-LIST variable in the process.</p>
+<p>Additionally, not all SET-BLOCK!s at the top level necessarily mean assignment.  They can be used for dialected purposes.  That's true of SET-WORD!s too...even at the top level.</p>
+<h2>How Do You Mix EMERGE with LET?</h2>
+<p>There was a problem with LET wanting to do multi-returns, e.g. where one variable needs a new definition but another one already exists.  That is being resolved with quoting, you add a tick to say you want to pass-thru the definition of a variable:</p>
+<pre><code>let [new-variable 'reused-variable]: some-func ..
+</code></pre>
+<p>(This same concept of quote use is being applied to say not to create a new loop variable for things like FOR-EACH, e.g. <code>for-each 'reuse [1 2 3] [...]</code>)</p>
+<p>But now we have the same problem with EMERGE.  I guess you could put it in a GROUP! and then say to reuse the emerged product, like:</p>
+<pre><code>let [new-variable '(emerge global-variable)]: ...
+</code></pre>
+<h2>What Does BIND Mean When You Bind to Everything?</h2>
+<p>It's generally the case that BIND BLOCK LIB or BIND BLOCK USER is something only done at the beginning of constructing code from raw material.  Most people expect LOAD to do this for them.</p>
+<p>If these kinds of contexts consider themselves candidates for all words, they'd never not-bind.</p>
+<p>It may be that this category of context (synonymous with MODULE! ?) is something you have to subset into a collection of words before using in binding operations...and if you bind without that subsetting then you just reset everything in the material you're working with.</p>
+<h2>Despite The Questions, This Is Probably What's Needed</h2>
+<p>The small demo I have working makes me reasonably optimistic that this is the right direction.  I'll keep looking at it.</p>
+          <p><a href="https://forum.rebol.info/t/the-sea-of-words/1564/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-sea-of-words/1564/1</link>
+        <pubDate>Thu, 18 Mar 2021 17:19:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1564-1</guid>
+        <source url="https://forum.rebol.info/t/the-sea-of-words/1564.rss">The Sea Of Words</source>
+      </item>
+  </channel>
+</rss>

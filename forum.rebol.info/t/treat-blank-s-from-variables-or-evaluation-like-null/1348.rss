@@ -1,0 +1,290 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Treat BLANK!s from Variables or Evaluation Like NULL</title>
+    <link>https://forum.rebol.info/t/treat-blank-s-from-variables-or-evaluation-like-null/1348</link>
+    <description>BLANK! has a very tempting nature to make you want to use it to *mean something*.  For instance, I&#39;ve consistently wanted it to mean `space` in DELIMIT&#39;s &quot;dialect&quot; :
+
+    write port unspaced [
+        &quot;HTTP/1.0&quot; _ code _ code-map/:code CR LF
+        &quot;Content-type:&quot; _ type CR LF
+        &quot;Content-length:&quot; _ (length of body) CR LF
+        CR LF
+    ]
+
+**That is awesome.**  It lets you see what&#39;s going on very clearly.  I&#39;m always annoyed when people include spacing in the edges of the things being spaced, like `&quot;HTTP/1.0 &quot;` ... because it makes it harder to factor.  It also makes it hard to see what&#39;s a string and what&#39;s not:
+
+     print [&quot; At a &quot; glance &quot; how &quot; do &quot; you tell &quot; whats &quot; a string &quot;]
+
+**But as awesome as BLANK!-spacing is, it has a downside.**  It sucks if a variable holds BLANK! with the intent to mean *nothing* if that *nothing* becomes a space character.
+
+As a simple example to demonstrate, let&#39;s say you&#39;ve got a situation like this where the second item is supposed to be &quot;not there&quot;:
+
+    values: [&quot;one&quot; _ &lt;three&gt;]
+
+    print &quot;And here the values are!&quot;
+    for-each item values [
+        print [item]
+    ]
+
+Clever mechanics in PRINT and SPACED won&#39;t print lines that fully vaporize.  So if that values/2 were an actual NULL, you&#39;d get just the two lines printing...with no newline between them.
+
+But BLANK! acts as a space.  So instead, you get something that&#39;s actually worse than it looks:
+
+    And here the values are!
+    one
+
+    &lt;three&gt;
+
+I say it&#39;s worse because that empty line isn&#39;t actually empty.  *It actually wrote a space and a newline.*  
+
+You physically cannot put NULLs in BLOCK!s.  And branches have become more involved with turning NULLs into voids to signal when a branch ran (some creative tools to deal with that coming soon).  So it becomes a juggling act to switch back and forth between null and blank when you might consider it easier for your purposes to stick with blank for some things.
+
+## Why Not Try Differentiating Evaluated BLANK! vs. Literal?
+
+    &gt;&gt; print [&quot;a&quot; _ &quot;b&quot;]
+    a b
+
+    &gt;&gt; var: _
+    &gt;&gt; print [&quot;a&quot; var &quot;b&quot;]
+    ab
+
+Well... *OF COURSE that was tried.*  Multiple forms of PRINT and DELIMIT over time have experimented with subtly different rules to try and find a sweet spot.
+
+But you should be careful in dialects where replacing a literal with a variable gives a different effect.  In particular, this was noticed with BLOCK!s...where the behavior felt very unpredictable when an in-place block did something different from one accessed through a variable:
+
+    &gt;&gt; print [[&quot;doesn&#39;t&quot; &quot;space&quot;] &quot;does&quot; &quot;space&quot;]
+    doesn&#39;tspace does space
+
+    &gt;&gt; block: [&quot;doesn&#39;t&quot; &quot;space&quot;]
+    &gt;&gt; print [block &quot;does&quot; &quot;space&quot;]
+    doesn&#39;t space does space
+
+Some historical examples in this vein were tried and discarded.  It seemed to run against the idea of being able to abstract what you were writing.
+
+You can think of other examples like this.  What if PARSE decided that an in-place integer meant a count, but one through a word! matched the number?
+
+    &gt;&gt; did parse &quot;aa&quot; [2 &quot;a&quot;]
+    == #[true]
+
+    &gt;&gt; count: 2
+    &gt;&gt; did parse &quot;aa&quot; [count &quot;a&quot;]
+    == #[false]
+
+    &gt;&gt; did parse [2] [count]
+    == #[true]
+
+It doesn&#39;t do &quot;double execution&quot; of WORD!s that contain WORD!s.  But static data is substituted as-is, including BLOCK!.  So what is BLANK! more like...?
+
+## I Think BLANK! is Special, and We Have QUOTED! Tools Now
+
+The subject of this post sums up how I think the competing demands on BLANK! should be resolved:
+
+**You should treat BLANK! the same way you would treat a NULL if you fetch it from a variable or an evaluation.  But if it&#39;s at &quot;source-level&quot; you can give it another meaning, to take advantage of its unique visual properties.  If it has no meaning at source level, a literal BLANK! should raise an error.**
+
+*(Here I&#39;m going so far as to say that you nearly *shouldn&#39;t* let a source-level blank mean the same thing as a fetched null in your dialect.   Maybe that&#39;s not necessarily a good rule...but there&#39;s something giving me an inkling that it might be.)*
+
+You might point out that the definition of &quot;source-level&quot; is slippery, as people can be COMPOSE-ing code together.  But when you compose, you&#39;ll have issues with WORD! as well:
+
+    &gt;&gt; foo: void
+    &gt;&gt; var: &#39;foo
+    &gt;&gt; print [&quot;a&quot; var &quot;b]
+    a foo b
+
+    &gt;&gt; print compose [&quot;a&quot; (var) &quot;b&quot;]
+    ** Script Error: foo is VOID! (Note: use GET/ANY to GET voids)
+
+But the same quoting tool that can help with this can help with BLANK!, because quoted blanks are evaluated (all the evaluation does is drop the quote, but it&#39;s still evaluation)
+
+    &gt;&gt; foo: void
+    &gt;&gt; var: &#39;foo
+    &gt;&gt; print compose [&quot;a&quot; &#39;(var) &quot;b&quot;]
+    a foo b
+
+    &gt;&gt; print [&quot;a&quot; _ &quot;b&quot;]
+    a b
+
+    &gt;&gt; print [&quot;a&quot; &#39;_ &quot;b&quot;]
+    ab
+
+    &gt;&gt; var: _
+    &gt;&gt; print [&quot;a&quot; &#39;(var) &quot;b&quot;]
+    ab
+
+## This Feels Like Solid Guidance
+
+I think this is pretty much as good as it gets.  Like I say, it pays to be cautious when making substitutions of values behave differently than if they appeared literally...but this seems to work.
+
+It does have some kind of strange implications for PARSE and BLANK!.  We know that QUOTED! means match directly:
+
+    &gt;&gt; did parse [1 _ &#39;x] [&#39;1 &#39;_ &#39;&#39;x]
+    == #[true]
+
+And if you fetch out of a variable you&#39;re supposed to treat it as if it&#39;s not there:
+
+    &gt;&gt; rule: _
+    &gt;&gt; did parse &quot;abcd&quot; [&quot;ab&quot; rule &quot;cd&quot;]
+    == #[true]
+
+So would it be acceptable to let the literal form mean &quot;skip&quot;?
+
+    &gt;&gt; did parse [1 &lt;foo&gt; &quot;hi&quot;] [integer! _ text!]
+    == #[true]
+
+I think that&#39;s within the rules, and can be a design choice.  The key is just that when it comes from a variable, it has to act the same as null.  What you do in your dialect with quoted forms that are literal is as much up to you as what you do with the plain forms.
+
+Hopefully this resolves a couple of years-old questions:
+
+    &gt;&gt; rule: _
+    == _
+
+    &gt;&gt; parse [a b _ _ _] [&#39;a &#39;b 3 rule]
+    == [_ _ _]  ; residual
+
+    &gt;&gt; rule: quote _
+    == &#39;_
+
+    &gt;&gt; parse [a b _ _ _] [&#39;a &#39;b 3 rule]
+    == []  ; all parsed
+
+What&#39;s nice is that QUOTE gives you a generic way to turn a value you want to match into a value you know will work in the parse.  Without generic quoting you wouldn&#39;t have it!  It&#39;s a little bit easier to look at than:
+
+    &gt;&gt; rule: &#39;&#39;_
+    == &#39;_</description>
+    
+    <lastBuildDate>Sun, 27 Sep 2020 05:47:05 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/treat-blank-s-from-variables-or-evaluation-like-null/1348.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Treat BLANK!s from Variables or Evaluation Like NULL</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>BLANK! has a very tempting nature to make you want to use it to <em>mean something</em>.  For instance, I've consistently wanted it to mean <code>space</code> in DELIMIT's "dialect" :</p>
+<pre><code>write port unspaced [
+    "HTTP/1.0" _ code _ code-map/:code CR LF
+    "Content-type:" _ type CR LF
+    "Content-length:" _ (length of body) CR LF
+    CR LF
+]
+</code></pre>
+<p><strong>That is awesome.</strong>  It lets you see what's going on very clearly.  I'm always annoyed when people include spacing in the edges of the things being spaced, like <code>"HTTP/1.0 "</code> ... because it makes it harder to factor.  It also makes it hard to see what's a string and what's not:</p>
+<pre><code> print [" At a " glance " how " do " you tell " whats " a string "]
+</code></pre>
+<p><strong>But as awesome as BLANK!-spacing is, it has a downside.</strong>  It sucks if a variable holds BLANK! with the intent to mean <em>nothing</em> if that <em>nothing</em> becomes a space character.</p>
+<p>As a simple example to demonstrate, let's say you've got a situation like this where the second item is supposed to be "not there":</p>
+<pre><code>values: ["one" _ &lt;three&gt;]
+
+print "And here the values are!"
+for-each item values [
+    print [item]
+]
+</code></pre>
+<p>Clever mechanics in PRINT and SPACED won't print lines that fully vaporize.  So if that values/2 were an actual NULL, you'd get just the two lines printing...with no newline between them.</p>
+<p>But BLANK! acts as a space.  So instead, you get something that's actually worse than it looks:</p>
+<pre><code>And here the values are!
+one
+
+&lt;three&gt;
+</code></pre>
+<p>I say it's worse because that empty line isn't actually empty.  <em>It actually wrote a space and a newline.</em></p>
+<p>You physically cannot put NULLs in BLOCK!s.  And branches have become more involved with turning NULLs into voids to signal when a branch ran (some creative tools to deal with that coming soon).  So it becomes a juggling act to switch back and forth between null and blank when you might consider it easier for your purposes to stick with blank for some things.</p>
+<h2>Why Not Try Differentiating Evaluated BLANK! vs. Literal?</h2>
+<pre><code>&gt;&gt; print ["a" _ "b"]
+a b
+
+&gt;&gt; var: _
+&gt;&gt; print ["a" var "b"]
+ab
+</code></pre>
+<p>Well... <em>OF COURSE that was tried.</em>  Multiple forms of PRINT and DELIMIT over time have experimented with subtly different rules to try and find a sweet spot.</p>
+<p>But you should be careful in dialects where replacing a literal with a variable gives a different effect.  In particular, this was noticed with BLOCK!s...where the behavior felt very unpredictable when an in-place block did something different from one accessed through a variable:</p>
+<pre><code>&gt;&gt; print [["doesn't" "space"] "does" "space"]
+doesn'tspace does space
+
+&gt;&gt; block: ["doesn't" "space"]
+&gt;&gt; print [block "does" "space"]
+doesn't space does space
+</code></pre>
+<p>Some historical examples in this vein were tried and discarded.  It seemed to run against the idea of being able to abstract what you were writing.</p>
+<p>You can think of other examples like this.  What if PARSE decided that an in-place integer meant a count, but one through a word! matched the number?</p>
+<pre><code>&gt;&gt; did parse "aa" [2 "a"]
+== #[true]
+
+&gt;&gt; count: 2
+&gt;&gt; did parse "aa" [count "a"]
+== #[false]
+
+&gt;&gt; did parse [2] [count]
+== #[true]
+</code></pre>
+<p>It doesn't do "double execution" of WORD!s that contain WORD!s.  But static data is substituted as-is, including BLOCK!.  So what is BLANK! more like...?</p>
+<h2>I Think BLANK! is Special, and We Have QUOTED! Tools Now</h2>
+<p>The subject of this post sums up how I think the competing demands on BLANK! should be resolved:</p>
+<p><strong>You should treat BLANK! the same way you would treat a NULL if you fetch it from a variable or an evaluation.  But if it's at "source-level" you can give it another meaning, to take advantage of its unique visual properties.  If it has no meaning at source level, a literal BLANK! should raise an error.</strong></p>
+<p><em>(Here I'm going so far as to say that you nearly <em>shouldn't</em> let a source-level blank mean the same thing as a fetched null in your dialect.   Maybe that's not necessarily a good rule...but there's something giving me an inkling that it might be.)</em></p>
+<p>You might point out that the definition of "source-level" is slippery, as people can be COMPOSE-ing code together.  But when you compose, you'll have issues with WORD! as well:</p>
+<pre><code>&gt;&gt; foo: void
+&gt;&gt; var: 'foo
+&gt;&gt; print ["a" var "b]
+a foo b
+
+&gt;&gt; print compose ["a" (var) "b"]
+** Script Error: foo is VOID! (Note: use GET/ANY to GET voids)
+</code></pre>
+<p>But the same quoting tool that can help with this can help with BLANK!, because quoted blanks are evaluated (all the evaluation does is drop the quote, but it's still evaluation)</p>
+<pre><code>&gt;&gt; foo: void
+&gt;&gt; var: 'foo
+&gt;&gt; print compose ["a" '(var) "b"]
+a foo b
+
+&gt;&gt; print ["a" _ "b"]
+a b
+
+&gt;&gt; print ["a" '_ "b"]
+ab
+
+&gt;&gt; var: _
+&gt;&gt; print ["a" '(var) "b"]
+ab
+</code></pre>
+<h2>This Feels Like Solid Guidance</h2>
+<p>I think this is pretty much as good as it gets.  Like I say, it pays to be cautious when making substitutions of values behave differently than if they appeared literally...but this seems to work.</p>
+<p>It does have some kind of strange implications for PARSE and BLANK!.  We know that QUOTED! means match directly:</p>
+<pre><code>&gt;&gt; did parse [1 _ 'x] ['1 '_ ''x]
+== #[true]
+</code></pre>
+<p>And if you fetch out of a variable you're supposed to treat it as if it's not there:</p>
+<pre><code>&gt;&gt; rule: _
+&gt;&gt; did parse "abcd" ["ab" rule "cd"]
+== #[true]
+</code></pre>
+<p>So would it be acceptable to let the literal form mean "skip"?</p>
+<pre><code>&gt;&gt; did parse [1 &lt;foo&gt; "hi"] [integer! _ text!]
+== #[true]
+</code></pre>
+<p>I think that's within the rules, and can be a design choice.  The key is just that when it comes from a variable, it has to act the same as null.  What you do in your dialect with quoted forms that are literal is as much up to you as what you do with the plain forms.</p>
+<p>Hopefully this resolves a couple of years-old questions:</p>
+<pre><code>&gt;&gt; rule: _
+== _
+
+&gt;&gt; parse [a b _ _ _] ['a 'b 3 rule]
+== [_ _ _]  ; residual
+
+&gt;&gt; rule: quote _
+== '_
+
+&gt;&gt; parse [a b _ _ _] ['a 'b 3 rule]
+== []  ; all parsed
+</code></pre>
+<p>What's nice is that QUOTE gives you a generic way to turn a value you want to match into a value you know will work in the parse.  Without generic quoting you wouldn't have it!  It's a little bit easier to look at than:</p>
+<pre><code>&gt;&gt; rule: ''_
+== '_</code></pre>
+          <p><a href="https://forum.rebol.info/t/treat-blank-s-from-variables-or-evaluation-like-null/1348/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/treat-blank-s-from-variables-or-evaluation-like-null/1348/1</link>
+        <pubDate>Sun, 27 Sep 2020 05:47:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1348-1</guid>
+        <source url="https://forum.rebol.info/t/treat-blank-s-from-variables-or-evaluation-like-null/1348.rss">Treat BLANK!s from Variables or Evaluation Like NULL</source>
+      </item>
+  </channel>
+</rss>

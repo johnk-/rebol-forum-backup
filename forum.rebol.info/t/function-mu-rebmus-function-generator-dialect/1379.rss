@@ -1,0 +1,333 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</title>
+    <link>https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379</link>
+    <description>Rebmu is a laboratory for cool dialecting tricks... *one of those tricks I imagined was to see just how much mileage we could get for defining functions with a single character primitive that has no holds barred...*
+
+## F
+
+The idea is to make F use tricks with quoting and variadics in order to eliminate the need for certain boilerplates.  For example, it can quote its first argument, allowing a WORD! without a block around it to use as a spec for an arity-1 function:
+
+    f x [...]  ;  Would act the same as f [x] [...]
+
+&gt; Bear in mind that in when &quot;mushed&quot; in Rebmu, that would be **`fX[...]`** acting as **f x [...]** because the case transition signals when a new token begins.
+&gt;
+&gt; And a quick reminder of the game for anyone who has forgotten: if a run of transitions starts with a capital letter instead of a lowercase one, the first acts as a SET-WORD!.   So **`Fx[...]`** would act as **f: x [...]**
+
+Being able to avoid the brackets of a spec block and quoting a WORD! is trick number one.  But that&#39;s old hat, and even lambda uses that.  **`x -&gt; [...]`**
+
+So let&#39;s get crazier.  :crazy_face: 
+
+## Automatic Naming Of Multiple Arguments
+
+The first generation of Rebmu introduced things like B-FUNCTIONS or C-FUNCTIONS.  The concept was that if you asked for such a function, you&#39;d actually get arguments for a series of letters.
+
+     fc [...]  ; acts like `f [a b c] [...]`
+     fd [...]  ; acts like `f [a b c d] [...]
+
+This idea for taking letters at the start of the alphabet was complemented by functions that counted letters *backwards*.  This way when you were declaring functions inside functions, the names would be less likely to collide:
+
+     fx [...]  ; acts like `f [z y x] [...]`
+     fw [...]  ; acts like `f [z y x w] [...]`
+
+Sacrificing two letter names starting with F for this is probably too much, so you might imagine this coming from ISSUE! usage:
+
+     f #c [...]  ; giving `f [a b c] [...]`
+
+But at best that would mush as **`f#c[...]`**, at which point you&#39;re using up two characters.  So if the word-named feature were variadic you&#39;d break even on two characters:
+
+     f a b [...]  ; if this meant `f [a b] [...]` you could write as `fAb[...]`
+     f m x [...]  ; and you could pick any characters you wanted, `fMx[...]`
+
+So the idea would only make sense if there was another meaning for things like `fMx`, which leads us to...
+
+## Removing The Need For Blocks In The Body
+
+If we look aside from the spec for a moment, we can ask how quoting might be used in the body.  For instance, what if instead of writing:
+
+     f [args] [case [...]]
+
+You could just write:
+
+     f [args] case [...]
+
+That points to an alternate potential meaning for something like **fMx[...]** as **f [m] [x [...]]** instead of **f [m x] [...]**, and is probably a more potent idea.
+
+This behavior when the body isn&#39;t a block would essentially flip F into a mode of being a spin on [POINTFREE](https://forum.rebol.info/t/looking-into-a-usermode-pointfree/1236)...which would try to consume &quot;one whole expression&#39;s worth&quot; of body code based on what it could figure out from the material it variadically quoted.
+
+*Such a feature assumes that generated bodies are the unusual case you would use GROUP!s to escape.*  So while in plain Ren-C it would run the reverse once on function creation and make a function that prints:
+
+     func [] reverse [&quot;Hello&quot; print]  ; e.g. `func [] [print &quot;Hello&quot;]`
+
+We&#39;d see a different effect, making a function that returned a BLOCK!, calling reverse each time:
+
+     f [] reverse [&quot;Hello&quot; print]  ; e.g. `func [] [reverse [&quot;Hello&quot; print]]`
+
+You&#39;d thus need some kind of escaping mechanism like a GROUP! to get the &quot;use code to generate a body&quot; behavior:
+
+     f [] (reverse [&quot;Hello&quot; print])
+
+**I think it probably makes sense to have the generator that gets the single letter *NOT* be tailored to generating body blocks from code.**  The F would not be an alias for FUNCTION (obviously) but for FUNCTION-MU.  So FN would be just one letter away for anyone who wanted the more conventional version.
+
+## The LET and Auto-Gathering Distinction for Locals
+
+When you make an assignment to a SET-WORD! inside the body of a function to something that isn&#39;t a parameter, how is this interpreted?  How do you designate a local variable vs. reaching outside into the enclosing binding environment?
+
+[We still don&#39;t have answers to this in the language proper.](https://forum.rebol.info/t/in-the-interest-of-shipping-something-rebol2-style-local-s-only/1309)  Which is frustrating.  :-(
+
+But if there&#39;s anywhere that auto-gathering of SET-WORD!s as locals is useful as a feature, it&#39;s in Rebmu.  So:
+
+* Is it the default behavior for **F**?
+* How do you turn it on or off?
+
+&gt; I&#39;ll point out here that how characters are counted in code golf varies...but if all of unicode is allowed where unicode characters &quot;cost&quot; the same as ASCII, there are choices like dotted-F (**ḟ**) on the table.  Some golfing languages go crazy with this.  But as a general baseline, I think ASCII should be used and then have Unicode definitions as an extension.)
+
+For now, I think the default should be to assume arguments are not local.  It may be that defining locals is done with a separator like BAR!:
+
+     f[aB|cDe][...]  ; acts as `f [a b &lt;local&gt; c d e] [...]`
+
+## [Your Brainstorm Here]
+
+Feel free to throw out ideas for any combination.
+
+For instance, what if the body of a function is a text:
+
+     foo: f [] &quot;Some String&quot;
+
+It doesn&#39;t make a lot of sense for that to mean &quot;evaluate to the string&quot;, because you could have just assigned the string to the variable directly:
+
+     foo: &quot;Some String&quot;  ; shorter for same effect
+
+This would suggest that maybe the body being a string means it should print that string.  But if that&#39;s all it does, then why would it need a spec?  So if F gets a string in the spec position it could consider that the end of the variadic definition, and make a function that prints that string.
+
+     &gt;&gt; h: f &quot;Hello World&quot;
+ 
+     &gt;&gt; h
+     Hello World
+
+ISSUE! can print strings without spaces with one less delimiter, so there&#39;s that.  But I kind of liked my idea above about auto-generating multiple parameter names.  Then again, there&#39;s FILE! for an alternative: **f %c [...]**
+
+So what if the spec is a TUPLE!, or a PATH!, or if the body is a SET-GROUP!??  What kinds of practical shortcuts can these take to get the maximum leverage out of **F**?  Maybe if an INTEGER! is in the body position it assumes that means to loop that many times.
+
+     &gt;&gt; x: f y 3 [p y]   ; let&#39;s say P is PRINT
+     &gt;&gt; x &quot;test&quot;
+     test
+     test
+     test
+
+The concept of &quot;pulling out the block&quot; mentioned above could even cascade there, letting you write **x: f y 3 p y** which can mush as **XfY 3 pY**
+
+There&#39;s a lot to explore here, and @razetime please let me know if this is making any sense or not....I&#39;ve started on bringing Rebmu back to life and hopefully will have it in usable shape this week.</description>
+    
+    <lastBuildDate>Sat, 07 Nov 2020 20:19:09 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>This is the Rebol universe. Used to late replies. Soon (tm) has its tm for a reason! Anyway some college stuff has prio over this at any time. But remember college is prio now, Rebol is forever.</p>
+          <p><a href="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/5</link>
+        <pubDate>Sat, 07 Nov 2020 20:19:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1379-5</guid>
+        <source url="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379.rss">FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</source>
+      </item>
+      <item>
+        <title>FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="razetime" data-post="3" data-topic="1379">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/razetime/40/260_2.png" class="avatar"> razetime:</div>
+<blockquote>
+<p>I've been a bit busy with a lot of college work lately,</p>
+</blockquote>
+</aside>
+<p>Do take your time! <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:">  I've wound up sidetracked (very predictably) hacking on things that are prerequiste to defining Rebmu features concisely.</p>
+<p>So much hinges on the design of FRAME!.  Frames give you usermode control of function calls just as if they were objects, and there's a duality between turning a function into a frame and a frame into a function.  It even works for RETURN.</p>
+<pre><code> foo: func [f [frame!]] [
+     print "Entering foo"
+     do f
+     print "Exiting foo"
+ ]
+
+ bar: func [] [
+     print "Entering bar"
+     f5: make frame! :return
+     f5/value: 5
+     foo f5
+     print "Exiting bar"
+ ]
+</code></pre>
+<p>So if you run this, you get:</p>
+<pre><code>&gt;&gt; bar
+Entering bar
+Entering foo
+== 5
+</code></pre>
+<p>The DO of that FRAME! managed to dispatch the bound return... specialized with 5.  It knew which function to return from (BAR) because each FUNC makes its own RETURN action that it holds in a  local variable named "RETURN".</p>
+<p>But it's a duality.  Once you have the frame, you can make a function out of it.  So <strong>r5: make action! f5</strong> would give you a function you could call without the DO.  If your frame didn't have all the values, it would be partially specialized.</p>
+<p>Anyway...this is all stuff you won't find in Rebol2 or Red.  But among the many design revolutions that make Ren-C more powerful for anything, including Rebmu.</p>
+          <p><a href="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/4</link>
+        <pubDate>Sat, 07 Nov 2020 17:32:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1379-4</guid>
+        <source url="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379.rss">FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</source>
+      </item>
+      <item>
+        <title>FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</title>
+        <dc:creator><![CDATA[razetime]]></dc:creator>
+        <description><![CDATA[
+            <p>I've been a bit busy with a lot of college work lately, and brushed up with some tutorials today. Some of this makes sense to me, and most of it does not. I'll be replying to this thread with a lot more questions when I start to figure  things out(and solve simple challenges in RebMU). Sorry for the late reply, and thanks for writing all this up.</p>
+          <p><a href="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/3</link>
+        <pubDate>Sat, 07 Nov 2020 17:21:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1379-3</guid>
+        <source url="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379.rss">FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</source>
+      </item>
+      <item>
+        <title>FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I was just reminded of a concept that needs to be integrated to <strong>F</strong> somewhere... a variadic function that TAKEs variadic arguments each time a variable is referenced.</p>
+<pre><code>vfunc: func [
+    return: [action!]  ; generates a function from the passed in body
+    body [block!]
+][
+    ; generated function has variadic argument `arg`
+    ; also has local `v`, set to a function that will take the next
+    ; variadic argument.
+    ;
+    return func [arg [&lt;variadic&gt; &lt;opt&gt; any-value!] &lt;local&gt; v] compose [
+        v: does [take arg]
+        ((body))  ; compose contents of body block into generated function
+    ]   
+]
+</code></pre>
+<p>So just mentioning the variable will get a new value variadically from the callsite each time:</p>
+<pre><code>test: vfunc [
+    loop 3 [print [v]]
+]
+
+&gt;&gt; test "a" "b" "c" "d" "e"
+a
+b
+c
+== "e"   ; d and e were skipped, overall evaluation was to "e"
+</code></pre>
+<p>If you have a case where you only use each parameter you take one time, then this not only saves on the character space for naming the variables...but also avoids overwriting names that might be used for other purposes.</p>
+<p>This might make an interesting behavior for something like <strong>f %v [...]</strong>, which can mush as <strong>f%v[...]</strong>  It would also be <em>possible</em> to use the name of a quoted word variable to cue the behavior, e.g. say that if you do <strong>f v [...]</strong> it might trigger a behavior that you wouldn't get with <strong>f a [...]</strong>.  While I don't want to rule out such lines of thinking completely, I'd like to be careful about doing that kind of thing if it's not absolutely needed.</p>
+<blockquote>
+<p><em>I'm pretty sure I had a more clever nuance to add to this trick, which involved the variadic modifying itself somehow to become the value instead of being the function.  But I can't remember quite how it worked.  Something in the spirit of saying the function was arity 3, so that when it reached the third time it was referenced it would replace itself with the value and subsequently always give that value instead of doing another variadic take.  It was similar to that, but not that.  Maybe I'll remember it.</em></p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/2</link>
+        <pubDate>Sun, 01 Nov 2020 14:30:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1379-2</guid>
+        <source url="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379.rss">FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</source>
+      </item>
+      <item>
+        <title>FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebmu is a laboratory for cool dialecting tricks... <em>one of those tricks I imagined was to see just how much mileage we could get for defining functions with a single character primitive that has no holds barred...</em></p>
+<h2>F</h2>
+<p>The idea is to make F use tricks with quoting and variadics in order to eliminate the need for certain boilerplates.  For example, it can quote its first argument, allowing a WORD! without a block around it to use as a spec for an arity-1 function:</p>
+<pre><code>f x [...]  ;  Would act the same as f [x] [...]
+</code></pre>
+<blockquote>
+<p>Bear in mind that in when "mushed" in Rebmu, that would be <strong><code>fX[...]</code></strong> acting as <strong>f x [...]</strong> because the case transition signals when a new token begins.</p>
+<p>And a quick reminder of the game for anyone who has forgotten: if a run of transitions starts with a capital letter instead of a lowercase one, the first acts as a SET-WORD!.   So <strong><code>Fx[...]</code></strong> would act as <strong>f: x [...]</strong></p>
+</blockquote>
+<p>Being able to avoid the brackets of a spec block and quoting a WORD! is trick number one.  But that's old hat, and even lambda uses that.  <strong><code>x -&gt; [...]</code></strong></p>
+<p>So let's get crazier.  <img src="https://forum.rebol.info/images/emoji/twitter/crazy_face.png?v=9" title=":crazy_face:" class="emoji" alt=":crazy_face:"></p>
+<h2>Automatic Naming Of Multiple Arguments</h2>
+<p>The first generation of Rebmu introduced things like B-FUNCTIONS or C-FUNCTIONS.  The concept was that if you asked for such a function, you'd actually get arguments for a series of letters.</p>
+<pre><code> fc [...]  ; acts like `f [a b c] [...]`
+ fd [...]  ; acts like `f [a b c d] [...]
+</code></pre>
+<p>This idea for taking letters at the start of the alphabet was complemented by functions that counted letters <em>backwards</em>.  This way when you were declaring functions inside functions, the names would be less likely to collide:</p>
+<pre><code> fx [...]  ; acts like `f [z y x] [...]`
+ fw [...]  ; acts like `f [z y x w] [...]`
+</code></pre>
+<p>Sacrificing two letter names starting with F for this is probably too much, so you might imagine this coming from ISSUE! usage:</p>
+<pre><code> f #c [...]  ; giving `f [a b c] [...]`
+</code></pre>
+<p>But at best that would mush as <strong><code>f#c[...]</code></strong>, at which point you're using up two characters.  So if the word-named feature were variadic you'd break even on two characters:</p>
+<pre><code> f a b [...]  ; if this meant `f [a b] [...]` you could write as `fAb[...]`
+ f m x [...]  ; and you could pick any characters you wanted, `fMx[...]`
+</code></pre>
+<p>So the idea would only make sense if there was another meaning for things like <code>fMx</code>, which leads us to...</p>
+<h2>Removing The Need For Blocks In The Body</h2>
+<p>If we look aside from the spec for a moment, we can ask how quoting might be used in the body.  For instance, what if instead of writing:</p>
+<pre><code> f [args] [case [...]]
+</code></pre>
+<p>You could just write:</p>
+<pre><code> f [args] case [...]
+</code></pre>
+<p>That points to an alternate potential meaning for something like <strong>fMx[...]</strong> as <strong>f [m] [x [...]]</strong> instead of <strong>f [m x] [...]</strong>, and is probably a more potent idea.</p>
+<p>This behavior when the body isn't a block would essentially flip F into a mode of being a spin on <a href="https://forum.rebol.info/t/looking-into-a-usermode-pointfree/1236">POINTFREE</a>...which would try to consume "one whole expression's worth" of body code based on what it could figure out from the material it variadically quoted.</p>
+<p><em>Such a feature assumes that generated bodies are the unusual case you would use GROUP!s to escape.</em>  So while in plain Ren-C it would run the reverse once on function creation and make a function that prints:</p>
+<pre><code> func [] reverse ["Hello" print]  ; e.g. `func [] [print "Hello"]`
+</code></pre>
+<p>We'd see a different effect, making a function that returned a BLOCK!, calling reverse each time:</p>
+<pre><code> f [] reverse ["Hello" print]  ; e.g. `func [] [reverse ["Hello" print]]`
+</code></pre>
+<p>You'd thus need some kind of escaping mechanism like a GROUP! to get the "use code to generate a body" behavior:</p>
+<pre><code> f [] (reverse ["Hello" print])
+</code></pre>
+<p><strong>I think it probably makes sense to have the generator that gets the single letter <em>NOT</em> be tailored to generating body blocks from code.</strong>  The F would not be an alias for FUNCTION (obviously) but for FUNCTION-MU.  So FN would be just one letter away for anyone who wanted the more conventional version.</p>
+<h2>The LET and Auto-Gathering Distinction for Locals</h2>
+<p>When you make an assignment to a SET-WORD! inside the body of a function to something that isn't a parameter, how is this interpreted?  How do you designate a local variable vs. reaching outside into the enclosing binding environment?</p>
+<p><a href="https://forum.rebol.info/t/in-the-interest-of-shipping-something-rebol2-style-local-s-only/1309">We still don't have answers to this in the language proper.</a>  Which is frustrating.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>But if there's anywhere that auto-gathering of SET-WORD!s as locals is useful as a feature, it's in Rebmu.  So:</p>
+<ul>
+<li>Is it the default behavior for <strong>F</strong>?</li>
+<li>How do you turn it on or off?</li>
+</ul>
+<blockquote>
+<p>I'll point out here that how characters are counted in code golf varies...but if all of unicode is allowed where unicode characters "cost" the same as ASCII, there are choices like dotted-F (<strong>ḟ</strong>) on the table.  Some golfing languages go crazy with this.  But as a general baseline, I think ASCII should be used and then have Unicode definitions as an extension.)</p>
+</blockquote>
+<p>For now, I think the default should be to assume arguments are not local.  It may be that defining locals is done with a separator like BAR!:</p>
+<pre><code> f[aB|cDe][...]  ; acts as `f [a b &lt;local&gt; c d e] [...]`
+</code></pre>
+<h2>[Your Brainstorm Here]</h2>
+<p>Feel free to throw out ideas for any combination.</p>
+<p>For instance, what if the body of a function is a text:</p>
+<pre><code> foo: f [] "Some String"
+</code></pre>
+<p>It doesn't make a lot of sense for that to mean "evaluate to the string", because you could have just assigned the string to the variable directly:</p>
+<pre><code> foo: "Some String"  ; shorter for same effect
+</code></pre>
+<p>This would suggest that maybe the body being a string means it should print that string.  But if that's all it does, then why would it need a spec?  So if F gets a string in the spec position it could consider that the end of the variadic definition, and make a function that prints that string.</p>
+<pre><code> &gt;&gt; h: f "Hello World"
+
+ &gt;&gt; h
+ Hello World
+</code></pre>
+<p>ISSUE! can print strings without spaces with one less delimiter, so there's that.  But I kind of liked my idea above about auto-generating multiple parameter names.  Then again, there's FILE! for an alternative: <strong>f %c [...]</strong></p>
+<p>So what if the spec is a TUPLE!, or a PATH!, or if the body is a SET-GROUP!??  What kinds of practical shortcuts can these take to get the maximum leverage out of <strong>F</strong>?  Maybe if an INTEGER! is in the body position it assumes that means to loop that many times.</p>
+<pre><code> &gt;&gt; x: f y 3 [p y]   ; let's say P is PRINT
+ &gt;&gt; x "test"
+ test
+ test
+ test
+</code></pre>
+<p>The concept of "pulling out the block" mentioned above could even cascade there, letting you write <strong>x: f y 3 p y</strong> which can mush as <strong>XfY 3 pY</strong></p>
+<p>There's a lot to explore here, and <a class="mention" href="/u/razetime">@razetime</a> please let me know if this is making any sense or not....I've started on bringing Rebmu back to life and hopefully will have it in usable shape this week.</p>
+          <p><a href="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379/1</link>
+        <pubDate>Sun, 01 Nov 2020 13:56:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1379-1</guid>
+        <source url="https://forum.rebol.info/t/function-mu-rebmus-function-generator-dialect/1379.rss">FUNCTION-MU: Rebmu&#39;s Function Generator Dialect</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,553 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>PACK! Sequence Type</title>
+    <link>https://forum.rebol.info/t/pack-sequence-type/1503</link>
+    <description>@BlackATTR feels that being able to write code as **`operation(arg)`** with no space is critical to the SQL dialect.  While we haven&#39;t expressly prohibited that yet, it is lossy:
+
+    &gt;&gt; [operation(arg)]
+    == [operation (arg)]
+
+I just noticed another case of tight syntax with a [%rebol-dom.r](http://www.rebol.org/view-script.r?script=rebol-dom.r) script where @Danny is trying to write expressions like:
+
+    app[.width] = &quot;curly quew&quot;
+
+Also still legal at the moment, but also still broken apart...and being two separate elements means it couldn&#39;t be quoted as a unit on the left (e.g. by an assignment-oriented equal):
+
+    &gt;&gt; app[.width] = &quot;curly quew&quot;
+    == [app [.width] = &quot;curly quew&quot;]
+
+One of the reasons we&#39;d discussed making these kinds of constructs illegal would be to free them for new  meanings.  Given that people want more density, might we think of this as a new datatype... like a PATH! or a TUPLE!, that simply has no delimiter?
+
+## Let&#39;s Imagine we call it a PACK!
+
+*(Though it would be nicer if it weren&#39;t 4-letters and start with P, as that&#39;s very similar to PATH!.  So if anything else comes to mind...think &quot;path&quot;, &quot;tuple&quot; and...?)*
+
+    &gt;&gt; p: &#39;operation(arg)
+    == operation(arg)
+
+    &gt;&gt; type of p
+    == #[datatype! pack!]  ; or whatever, this syntax has tons of thinking needed
+
+    &gt;&gt; first p
+    == operation  ; a WORD!
+
+    &gt;&gt; second p
+    == (arg)  ; a GROUP! with one element
+
+Not every type would be able to participate in a pack.  As with PATH! and TUPLE!, only the pack as a whole could have a decoration (SET-PACK!, GET-PACK!, SYM-PACK!).
+
+Also, while # is a legal &quot;empty issue&quot;, it&#39;s also a modifier.  So the #[a] probably shouldn&#39;t be a PACK!.  Unless there&#39;s some way that would fit into a broader master plan, by virtue of what that pack would mean... e.g. if **# = first pack** would mean something was typically a datatype... :thinking: 
+
+Let&#39;s think about other things first.
+
+## Plan -4 Issues
+
+There&#39;s a bit of a problem in that we&#39;ve been saying you could write (a)(b) and [a][b] and have it mean the same thing as (a) (b) and [a] [b].  I use this frequently, because I do not like the spacing gap you get when braces follow each other.
+
+    f: func [
+        some-arg [integer!]
+    ] [
+        the gap there bothers me
+    ]
+
+    f: func [
+        some-arg [integer!]
+    ][
+        without the gap looks better
+    ]
+
+That would suggest the rules for packing would disallow adjacent GROUP!s and BLOCK!s, which would rule out interesting packs that might represent multidimensional array access:
+
+    &gt;&gt; [foo[x][y]]
+    == [foo[x] [y]]  ; would have to be a pack and a block?
+
+Ladislav was always rather adamant that spaces should be everywhere because spaces had signifiance.  So he wasn&#39;t in favor of the aesthetic gap-closing.  If PACK! turned out to be truly useful, then it might vindicate his belief.  I dunno.
+
+## What Would The Evaluator Behavior Be?
+
+So this would give a whole range of things that today have no meaning in the evaluator.  If we were to accept choosing out of arrays by index with **array[n]**, how bad would that be...when BLOCK!s have other meanings?  It would still be a BLOCK... just one that happens to be in a PACK!, like **array/[n]** is inside a PATH! or **array.[n]** is inside a TUPLE!.
+
+Having **foo(bar)** be a function call might appeal to certain users, if that was a stylistic choice they could make.  Maybe it could even use COMMA! to delimit arguments.  :man_shrugging: 
+
+## How Would It Reconcile Priority With TUPLE! and PATH!  ?
+
+The rule for TUPLE! is that the dots bind more tightly than the slashes.  So **a.b/c.d** is a 2-element PATH! with a 2-element TUPLE!s on the left and right... not a 3-element tuple with a path in the middle.
+
+What would you get with **a.b/c.d[e f]** ?  How about **a.b[c d]e/f** ?
+
+My general instinct would be that the PACK! would be the outermost.
+
+    a.b/c.d[e f] =&gt; to pack! [a.b/c.d [e f]]  ; 2-element pack
+    a.b[c d]e/f =&gt; to pack! [a.b [c d] e/f]  ; 3-element pack
+
+But that&#39;s not based on any particular evidence of utility.  I&#39;m just saying that there has to be a rule...and that&#39;s the one that seemed the most natural to me on first glance.
+
+## There&#39;d Be Some Issues With Numbers
+
+If numbers are allowed, you are going to run into trouble with things like how `1e...` leads into exponential notation, and the fact that you get problematic reversals with **1a** and **a1**.  The first seems like a candidate for being a PACK!, while the second is what we&#39;d see as a normal WORD!
+
+## BLANK!s terminating Paths or Tuples Would Be Impossible
+
+You couldn&#39;t merge **a/** and **[b]** to get a PACK!, because **a/[b]** is a PATH!.  This may be a feature and not a flaw...no clue.
+ 
+Anyway, a lot to think about.  But if people are dug in and insistent that they have to have these notations, then we should give consideration to the idea.</description>
+    
+    <lastBuildDate>Sun, 24 Oct 2021 06:32:21 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/pack-sequence-type/1503.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>This PACK! question is a big uncertainty, with many cross-cutting implications.  It's paralyzing to have such huge uncertainties.  They add up and make progress impossible.</p>
+<h2>So I Think We Should Probably Axe The Idea</h2>
+<p>One might say another option would be to try and leave the door open, by forcing people to space out their blocks, instead of letting them be tight as in Plan -4:</p>
+<pre><code>foo: func [
+    return: [integer!]
+    arg [integer!]
+][  ; &lt;-- this would be illegal
+    return arg + 1
+]
+</code></pre>
+<p>That would mean someday there could be things like a SET-PACK! to denote matrix access and look like other languages:</p>
+<pre><code>matrix[row + 1][column + 1]: 10
+</code></pre>
+<p>However...</p>
+<h2>Differentiating <code>[...][...]</code> and <code>[...] [...]</code> Sucks</h2>
+<p>These gaps make things ugly to me that were previously pretty.  Barring what new things may be enabled, if I don't like the way the old code has to change... that's a loss.</p>
+<h2>Generic TUPLE! and Comma Offer Decent Expressivity</h2>
+<p>Maybe you can't write:</p>
+<pre><code>matrix[row + 1][column + 1]: 10
+</code></pre>
+<p>But you can write:</p>
+<pre><code>matrix.(row + 1).(column + 1): 10
+
+matrix.[row + 1, column + 1]: 10
+</code></pre>
+<p>With units, <strong>14.px</strong> is available.  Doesn't cover fractional units but it's there, and if you want fractional I guess you could use paths.  <strong>14.5/px</strong></p>
+<p>So there are a non-zero number of options for these things, and really the focus should be on spaced out readable English-like dialects.</p>
+<p>If anything we should be trying to find ways to make it easier to interpret <strong>size: 14 px</strong> despite the fact that the thing on the right is an INTEGER! and a WORD! instead of being forced to squish it together.  It looks better that way than as <strong>size: 14px</strong></p>
+<h2>String Interpolation May Help Some Cases</h2>
+<p>It's still under development, but we may be able to have something like <strong>{matrix[row][col]}</strong> be able to know what matrix, row, and col should be applied to... at least as well as it would had you passed the block <strong>[matrix row col]</strong> instead.</p>
+<p>So if you were up against a wall representationally for a mini-dialect, you might be able to use strings to achieve your goal.  We'll see.</p>
+<h2>And As I Say, Too Many Unknowns</h2>
+<p>There's just too many unknowns in this.  There'll be no project if things aren't cut back.  The focus needs to be on clear wins like UPARSE.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/20</link>
+        <pubDate>Sun, 24 Oct 2021 02:13:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-20</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[Danny]]></dc:creator>
+        <description><![CDATA[
+            <p>Old post, but new-old thoughts.</p>
+<p>Pack is a very good name but I've decided in relationship to a Dialect Object Model it should simply be an element-node of type Sequence.</p>
+<p>Used as a variable set-word, the array-obj!() uses the sequence as a set-builder notation.</p>
+<p>Its base form is serialized data thats  represented in Rebol as molded data.</p>
+<p>Its grouping order is {[()]}, but not necessarily followed in dialects. And in Rebol there is no difference in using "{}" or "[]", unless your sending, receiving, or loading data. It must be serialized.</p>
+<p>I chose the "{}" because it allows you to manipulate dialect data in block form while not allowed to be of type! block.</p>
+<p>This i believe is some of the differences between a Rebol Series and a Sequence.</p>
+<p>Rebol sequence type is its molded data form. But it should have been a native type from the beginning.</p>
+<p>The %Rebol-Dom.r set-builder notation, the Var., like Uparse allows me to set, search, parse, save, serialize, and share data maybe slower than BLOCKS, but as it was intended to be used. Any way i like. I wish i had your know how Hostilefork to do this right but i just don't have the time. Oh well, Rebol-Dom. Sorry, bout that, i meant Rebol On.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/19</link>
+        <pubDate>Wed, 06 Oct 2021 18:12:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-19</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[Danny]]></dc:creator>
+        <description><![CDATA[
+            <p>(I just read the last 3 posts after i tried mailing this to Hostilefork<br>
+didn't see the <a href="mailto:noreply@r3gui.com">noreply@r3gui.com</a>, so i'll post it here if thats ok)</p>
+<p>Hey Hostilefork, i been giving more thought to the DOM  format in Rebol  and i think it needs to present a clear, concise demonstration of how it would be used as an object model for DSL's. While improving on or extending choices of formatting DSL data can be easy, feeding it a subset of a complete DSL may not. It takes a lot of thought in creating the DSL's and a subset of say HTML some would rightfully say isn't Good enough. The html standard is huge.  Even so i believe it really can be done all in Rebol. instead of html only you would have a dsl choice, say make doc, markdown, or defualt DOM code. So Rebol-DOM.r is very simple. But to make it better i would need others coding experience. You mentioned tests. Wich types of testing would be  best for now.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/18</link>
+        <pubDate>Wed, 17 Feb 2021 23:13:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-18</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="Brett" data-post="11" data-topic="1503">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/brett/40/177_2.png" class="avatar"> Brett:</div>
+<blockquote>
+<p>just random musings from someone who is perhaps out-of-date, and certainly not requests for functionality since these days I'm playing with photos rather than code.</p>
+</blockquote>
+</aside>
+<p>Hey Brett, good to hear you're out there having fun somewhere.  You're probably making a good choice avoiding code!</p>
+<p>The fact that people are commenting on this proposal--and even beaming messages from retirement--is indicative of...something.  Probably that Rebol notation simply leaves a lot to be desired.  <img src="https://forum.rebol.info/images/emoji/twitter/roll_eyes.png?v=9" title=":roll_eyes:" class="emoji" alt=":roll_eyes:"></p>
+<p>Rebol's PARSE isn't the only game in town for people looking for alternatives to RegEx, and I've talked about how <a href="https://forum.rebol.info/t/parse-vs-haskells-x-parsec/1321">parser combinators in languages like Haskell</a> offer a quite a lot...with tons of infrastructure to assist in real world tasks.</p>
+<p>So before trying to extend the syntax of Rebol's medium, I'd side with the idea of shoring up PARSE when you're <em>not</em> trying to use it to mix full-on representations from different languages in the same source file.  Until that really demonstrates "bringing the magic" reliably, then getting entangled in syntax extensions for LOAD just adds other layers of complication.</p>
+<p><a class="mention" href="/u/blackattr">@BlackATTR</a> brings up the <a href="https://forum.rebol.info/t/whitespace-interpreter-revisited/1482/5">Whitespace Dialect</a> and I think that really hitting home-runs on problems like that is a prerequisite to getting too much further out in ambition.</p>
+<p>I think PACK! might be able to be a relatively low-cost way to get a little more satisfaction for people.  Little things like that <a href="https://forum.rebol.info/t/the-language-worlds-weirdest-comma-mechanic/1387">and COMMA!</a> may help get closer to a sweet spot where it feels "flexible enough".</p>
+<aside class="quote no-group" data-username="Brett" data-post="11" data-topic="1503">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/brett/40/177_2.png" class="avatar"> Brett:</div>
+<blockquote>
+<p>as way of making dialects a bit more first class rather than fringe interest and perhaps leverage more of the lego box parts of evaluation in custom dialect evaluation.</p>
+</blockquote>
+</aside>
+<p>The question of how to make the evaluator "hookable" is definitely on my mind.  One big step of this has been trying to make FRAME! a very reusable part...and to unify services across PARSE and plain DO for things like single stepping and debug stacks.</p>
+<p>And yes, all of this is hard...as my notes show.  It's especially hard when it's all on the backdrop of a weird dependency game where you're writing it all yourself in C89.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/17</link>
+        <pubDate>Sun, 14 Feb 2021 04:44:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-17</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Thanks. I think concrete examples are helpful. Maybe a custom evaluators conversation can continue with <a class="mention" href="/u/hostilefork">@hostilefork</a> in his Whitespace Interpreter forum topic.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/16</link>
+        <pubDate>Sun, 14 Feb 2021 01:35:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-16</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <p>We have custom evaluators today in the form of functions we write.  To process a dialect we must use Parse or specially craft our "dialect" to accommodate Ren-c's evaluation process.  Parse is good at recognition, terrible at building structures, it's aimed at step by step evaluation, which is fine but leaves the heavy lifting to the dialect writer to build context as required from scratch for every new dialect.</p>
+<p>It would be good if evaluators by user's feel more first class.  Operations like DO and REDUCE on a block is so nice. I'd like that niceness to extend to dialects, my intuition is that perhaps by raising a usermode evaluator to plug in to the system operations such as DO and REDUCE can apply to a dialect and produce useful outcomes and sane errors. Maybe there would be an opportunity to "compile" them upon load for performance.</p>
+<p>Writing an evaluator is hard as Hostilefork has so nicely documented, and he is striving to create orthogonal parts that can be stuck together by users for powerful expression. I'm wondering how that work can be leveraged even further for dialects.</p>
+<p>Coming back to foreign syntax and your datatype question, if one has broken text into tokens with parse or whatever, I see a need to be able to distinguish/annotate them. Objects might be ok if they were performant and were not saddled with the terrible baggage of "make object" they have when saved out, but I suspect a more lightweight system would be better - more equivalent to rebol words - something with spellings and bindings. I guess I'm suggesting supporting multiple syntaxes that map onto ren-c datatypes and user datatypes where the default sytnax is ren-c.</p>
+<p>I think back to the C-lexicals of the build process. I feel these other elements could make that process so much better. We don't need to evaluate C as C, but being able to edit it or interpret it as symbols in a linear or tree structures would be very useful.</p>
+<p>All very intuitive and light on answers I know...But being able to talk pidgin with other languages might be a really useful trick.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/15</link>
+        <pubDate>Sun, 14 Feb 2021 01:11:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-15</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I have a related datatype! question.</p>
+<p>If it were possible to transcode <code>{whatever}</code> and <code>"whatever"</code> such that they could be identified as different symbols (not asking for different <em>properties</em>, just the ability to distinguish between them as different <em>symbols</em>), that would open up another lane of lexical space for some dialects.</p>
+<p>In other words, if you could transcode <code>{whatever}</code> and be able to identify it as a (making up this name) LONG-TEXT!, which is a form in the family of TEXT! with the same property as a SERIES.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/14</link>
+        <pubDate>Sat, 13 Feb 2021 16:53:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-14</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I agree -- this is an interesting area of discussion. My view of Ren-C is that on one (basic) level <img src="https://forum.rebol.info/images/emoji/twitter/white_check_mark.png?v=9" title=":white_check_mark:" class="emoji" alt=":white_check_mark:">, it's a convenient personal language for writing shell-scripts. And while I value Ren-C for that purpose, the shell-scripting field is picked fairly clean of computing ideas-- it's not exactly fertile ground for interesting/grassroots language upstarts.<img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<p>For similar reasons languages like Ren-C don't elicit strong prospects for general-purpose programming. Anywhere you could plug-in a Ren-C or Red, you could insert Python, Ruby, Javascript, Go, Java, etc. and inherit the benefits of those ecosystems. You'd need pretty clear-headed justification to choose a Rebol, probably one where "I find coding in this paradigm to be satisfying" is an outsized factor in the decision.</p>
+<p><em>"A fox knows many things, but a hedgehog knows one big thing."</em></p>
+<p>Ren-C or Red are a bit like the family of soft-body invertebrates in the language kingdom. Their special traits don't necessarily shine in common computing domains, but... On a second level <img src="https://forum.rebol.info/images/emoji/twitter/white_check_mark.png?v=9" title=":white_check_mark:" class="emoji" alt=":white_check_mark:">, I think Domain Specific Languages remains an open frontier largely uncracked by the hidebound languages who originally mapped the territory.</p>
+<p>(Sidenote: Let's acknowledge that DSLs, dialects, mini-languages, etc. appear to come with detestable drawbacks, e.g., as described in this great XKCD panel, or like the self-limiting <a href="https://en.wikipedia.org/wiki/Angle_of_repose">"angle of repose"</a> of sand piles.)</p>
+<p><img src="https://forum.rebol.info/uploads/default/original/1X/b24b2ad94aa1ef66d530c918df2b60f8f3418d80.png" alt="XKCD-standards" data-base62-sha1="prg2aWsahjEIT1WncRaJzX0oyAw" width="576" height="327"></p>
+<p>If you've been following along, <a class="mention" href="/u/hostilefork">@hostilefork</a> has been pursuing a design philosophy to preserve (reform and fix) Ren-C's friendly rebol traits while boosting its flex as a <em>fun</em> language toolkit-- "the minecraft of programming". If the retooled Ren-C parse + language toolkit gel, then custom evaluators might add yet another attractive feature. But first: <img src="https://forum.rebol.info/images/emoji/twitter/question.png?v=9" title=":question:" class="emoji" alt=":question:"> Can you explain a bit more or provide an example of what you mean by "custom evaluators"? Are these written in Ren-C usermode, in C libs, external calls?</p>
+<p>Anyhoo, I think Ren-C due to its strengths could stake a sizeable claim in the open-range of <img src="https://forum.rebol.info/images/emoji/twitter/cactus.png?v=9" title=":cactus:" class="emoji" alt=":cactus:"> DSL territory <img src="https://forum.rebol.info/images/emoji/twitter/cactus.png?v=9" title=":cactus:" class="emoji" alt=":cactus:">. I.e., where more depends on lone developer creativity (also: luck/serendipity) and language flexibility than, say, speed or efficiency. I think the history for Ren-C (e.g., in a WASM environment) may be written by developers who <img src="https://forum.rebol.info/images/emoji/twitter/bulb.png?v=9" title=":bulb:" class="emoji" alt=":bulb:"> and make a connection between human-friendly expression and the fun, experimental, accessible, yet sophisticated box of parts/language-tools that is Ren-C.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/13</link>
+        <pubDate>Sat, 13 Feb 2021 16:35:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-13</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>SIXPACK!<br>
+FUST!<br>
+BARREL!<br>
+BUCKET!<br>
+DRUM!<br>
+ACCUMULATION!</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/12</link>
+        <pubDate>Sat, 13 Feb 2021 13:32:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-12</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <p>Excuse my random comment here. But I've often wondered whether support (beyond parse) for user defined foreign syntaxes would be feasible, useful and not horribly painful. The idea coming from the number of syntaxes I've attempted to deconstruct using parse, manipulate, evaluate and sometimes re-form over my time with rebol. It's using rebol as the rosetta stone of playing with data/code stored in foreign syntax - not necessarily always validly (as in a parse tree), but perhaps usefully.</p>
+<p>Perhaps I misunderstood and that's what you're saying with pack!.</p>
+<p>The follow on from that being whether custom evaluators are a possibility, for the standard rebol types in a dialect, say as an attribute of a function (frame or block?) as way of making dialects a bit more first class rather than fringe interest and perhaps leverage more of the lego box parts of evaluation in custom dialect evaluation.</p>
+<p>Not thought through, just random musings from someone who is perhaps out-of-date, and certainly not requests for functionality since these days I'm playing with photos rather than code.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/11</link>
+        <pubDate>Sat, 13 Feb 2021 07:52:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-11</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm not much in favour of this proposal, but you got me with 10px or 11USD or 5.05EUR .<br>
+This could be really nice in a lot of dialects.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/10</link>
+        <pubDate>Thu, 11 Feb 2021 22:53:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-10</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="8" data-topic="1503">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I do not see any particular reason why <strong>thing(...)</strong> would be more or less legitimate to want than <strong>thing[...]</strong></p>
+</blockquote>
+</aside>
+<p>I'd say primarily based on its history in functional notation.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/9</link>
+        <pubDate>Thu, 11 Feb 2021 18:34:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-9</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="2" data-topic="1503">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>I'd be more inclined to recognizing <code>thing( ... )</code> as a distinct container type recognizing the pattern across other data formats/languages.</p>
+</blockquote>
+</aside>
+<p>I do not see any particular reason why <strong>thing(...)</strong> would be more or less legitimate to want than <strong>thing[...]</strong></p>
+<p>And I think that if people had syntax open to <strong>thing(...)(...)</strong> and <strong>thing[...][...]</strong> they would find uses for those too.</p>
+<p>I can't think of a good API for dealing with this besides essentially the same thing as PATH! and TUPLE!: where since you have constraints on what you can form this way, and they "change types" when things are removed, they are immutable while in the packed form.  Because if you could mutate them you'd have:</p>
+<pre><code>&gt;&gt; p: 'a(b)
+== a(b)
+
+&gt;&gt; take p
+== (b)  ; looks like a GROUP!
+
+&gt;&gt; take p
+==  ; back to those same flaky vanishing issues
+</code></pre>
+<p>It seems to me in line with Rebolism to say these are all different:</p>
+<pre><code>(a)(b c)(c)
+(a) (b c) (d)
+
+a+bc+d
+a + bc + d
+
+a(b c)d
+a (b c) d
+
+a[b c](d)
+a [b c] (d)
+</code></pre>
+<p>I know there's a certain comfort zone about "the way things are", but I don't like <strong>a/(n)</strong> very much for picking the Nth thing out of <strong>a</strong> when compared with <strong>a[n]</strong>.   When you think "hm, but it actually is a WORD! and a BLOCK!, still, just inside an invisible aggregator" then you can see it through the lens of not being "un-Rebol-like" but more of the same pattern that has been building all along.</p>
+<p>Being able to write <strong>100px</strong> and then say <strong>parse pack [set value integer! 'px]</strong> seems like a gateway to some fairly powerful things expression-wise, and I think this leads pretty quickly to wanting to do things like <strong>compose '(num)px</strong> (you wouldn't need the quote if it were evaluatively inert, which maybe you're right and these things should be).  But the point is that if we can lean on a general mechanic--especially one that's mostly already written--this might be a breakthrough worth a bit of shakeup... like having to put spaces between your blocks ordinarily.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/8</link>
+        <pubDate>Thu, 11 Feb 2021 15:02:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-8</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I think the Hypertalk (from Hypercard) family of languages, e.g., Applescript also use this function form.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/7</link>
+        <pubDate>Thu, 11 Feb 2021 01:14:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-7</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>My CSS brain does appreciate the possibilities here—it could be a way to express small dialected values:</p>
+<pre><code class="lang-nohighlight">red: rgb(255 0 0)
+move: translate(-1x1)
+</code></pre>
+<p>Or indeed SQL, or Javascript, or other things.</p>
+<p>My Rebol brain says, this is un-Rebol-like! I certainly don't think it should become an operative Rebol language construct.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/6</link>
+        <pubDate>Thu, 11 Feb 2021 00:33:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-6</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Ah, sorry, I misinterpreted then.<br>
+I was thinking the limitations might preclude one from doing that.</p>
+<p>I have a low-key need to be able to express pack!-like structures as though they're blocks:<br>
+foo(bar(baz)))<br>
+foo(bar, baz("bip"))<br>
+foo(bar, baz("bim", "bap"))</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/5</link>
+        <pubDate>Thu, 11 Feb 2021 00:24:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-5</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="BlackATTR" data-post="3" data-topic="1503">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>If a PACK! cannot be nested, then it might not be worth the complexity of adding as a datatype.</p>
+</blockquote>
+</aside>
+<p>Not sure what you mean.  You mean would it be legal to say <strong>x(y(z))</strong> ?  The presumption here would be that it would be... just as you can say <strong>x/(y/(z))</strong> today.</p>
+<p>The key issue is that Ren-C has made PATH! match TUPLE! in being immutable.  This means if you want to do surgery on such a structure, you'd have to turn in into blocks or groups...and then transform it back into the sequence structure.  There's lots to still figure out about that.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/4</link>
+        <pubDate>Thu, 11 Feb 2021 00:21:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-4</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I appreciate the consideration here. I also have no idea if a pack! might be useful outside of a specific kind of dialect. Which I suppose isn't a very strong vote in favor.</p>
+<p>It would be a slight boost to supporting an SQL syntax (or spreadsheet macro). My main challenge is not parsing the pattern (be it PACK! or just word! + group!), but recursively unraveling the nested construct to  translate into ren-c text! manipulating expressions. If a PACK! cannot be nested, then it might not be worth the complexity of adding as a datatype.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/3</link>
+        <pubDate>Thu, 11 Feb 2021 00:13:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-3</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>I'd be more inclined to recognizing <code>thing( ... )</code> as a distinct container type recognizing the pattern across other data formats/languages. It could be inert in and of itself thus really only useful in dialects. Forgoing Plan -4 by packing certain combinations of types may tie hands with new forms in the future.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/2</link>
+        <pubDate>Wed, 10 Feb 2021 23:56:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-2</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+      <item>
+        <title>PACK! Sequence Type</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><a class="mention" href="/u/blackattr">@BlackATTR</a> feels that being able to write code as <strong><code>operation(arg)</code></strong> with no space is critical to the SQL dialect.  While we haven't expressly prohibited that yet, it is lossy:</p>
+<pre><code>&gt;&gt; [operation(arg)]
+== [operation (arg)]
+</code></pre>
+<p>I just noticed another case of tight syntax with a <a href="http://www.rebol.org/view-script.r?script=rebol-dom.r">%rebol-dom.r</a> script where <a class="mention" href="/u/danny">@Danny</a> is trying to write expressions like:</p>
+<pre><code>app[.width] = "curly quew"
+</code></pre>
+<p>Also still legal at the moment, but also still broken apart...and being two separate elements means it couldn't be quoted as a unit on the left (e.g. by an assignment-oriented equal):</p>
+<pre><code>&gt;&gt; app[.width] = "curly quew"
+== [app [.width] = "curly quew"]
+</code></pre>
+<p>One of the reasons we'd discussed making these kinds of constructs illegal would be to free them for new  meanings.  Given that people want more density, might we think of this as a new datatype... like a PATH! or a TUPLE!, that simply has no delimiter?</p>
+<h2>Let's Imagine we call it a PACK!</h2>
+<p><em>(Though it would be nicer if it weren't 4-letters and start with P, as that's very similar to PATH!.  So if anything else comes to mind...think "path", "tuple" and...?)</em></p>
+<pre><code>&gt;&gt; p: 'operation(arg)
+== operation(arg)
+
+&gt;&gt; type of p
+== #[datatype! pack!]  ; or whatever, this syntax has tons of thinking needed
+
+&gt;&gt; first p
+== operation  ; a WORD!
+
+&gt;&gt; second p
+== (arg)  ; a GROUP! with one element
+</code></pre>
+<p>Not every type would be able to participate in a pack.  As with PATH! and TUPLE!, only the pack as a whole could have a decoration (SET-PACK!, GET-PACK!, SYM-PACK!).</p>
+<p>Also, while # is a legal "empty issue", it's also a modifier.  So the #[a] probably shouldn't be a PACK!.  Unless there's some way that would fit into a broader master plan, by virtue of what that pack would mean... e.g. if <strong># = first pack</strong> would mean something was typically a datatype... <img src="https://forum.rebol.info/images/emoji/twitter/thinking.png?v=9" title=":thinking:" class="emoji" alt=":thinking:"></p>
+<p>Let's think about other things first.</p>
+<h2>Plan -4 Issues</h2>
+<p>There's a bit of a problem in that we've been saying you could write (a)(b) and [a][b] and have it mean the same thing as (a) (b) and [a] [b].  I use this frequently, because I do not like the spacing gap you get when braces follow each other.</p>
+<pre><code>f: func [
+    some-arg [integer!]
+] [
+    the gap there bothers me
+]
+
+f: func [
+    some-arg [integer!]
+][
+    without the gap looks better
+]
+</code></pre>
+<p>That would suggest the rules for packing would disallow adjacent GROUP!s and BLOCK!s, which would rule out interesting packs that might represent multidimensional array access:</p>
+<pre><code>&gt;&gt; [foo[x][y]]
+== [foo[x] [y]]  ; would have to be a pack and a block?
+</code></pre>
+<p>Ladislav was always rather adamant that spaces should be everywhere because spaces had signifiance.  So he wasn't in favor of the aesthetic gap-closing.  If PACK! turned out to be truly useful, then it might vindicate his belief.  I dunno.</p>
+<h2>What Would The Evaluator Behavior Be?</h2>
+<p>So this would give a whole range of things that today have no meaning in the evaluator.  If we were to accept choosing out of arrays by index with <strong>array[n]</strong>, how bad would that be...when BLOCK!s have other meanings?  It would still be a BLOCK... just one that happens to be in a PACK!, like <strong>array/[n]</strong> is inside a PATH! or <strong>array.[n]</strong> is inside a TUPLE!.</p>
+<p>Having <strong>foo(bar)</strong> be a function call might appeal to certain users, if that was a stylistic choice they could make.  Maybe it could even use COMMA! to delimit arguments.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<h2>How Would It Reconcile Priority With TUPLE! and PATH!  ?</h2>
+<p>The rule for TUPLE! is that the dots bind more tightly than the slashes.  So <strong>a.b/c.d</strong> is a 2-element PATH! with a 2-element TUPLE!s on the left and right... not a 3-element tuple with a path in the middle.</p>
+<p>What would you get with <strong>a.b/c.d[e f]</strong> ?  How about <strong>a.b[c d]e/f</strong> ?</p>
+<p>My general instinct would be that the PACK! would be the outermost.</p>
+<pre><code>a.b/c.d[e f] =&gt; to pack! [a.b/c.d [e f]]  ; 2-element pack
+a.b[c d]e/f =&gt; to pack! [a.b [c d] e/f]  ; 3-element pack
+</code></pre>
+<p>But that's not based on any particular evidence of utility.  I'm just saying that there has to be a rule...and that's the one that seemed the most natural to me on first glance.</p>
+<h2>There'd Be Some Issues With Numbers</h2>
+<p>If numbers are allowed, you are going to run into trouble with things like how <code>1e...</code> leads into exponential notation, and the fact that you get problematic reversals with <strong>1a</strong> and <strong>a1</strong>.  The first seems like a candidate for being a PACK!, while the second is what we'd see as a normal WORD!</p>
+<h2>BLANK!s terminating Paths or Tuples Would Be Impossible</h2>
+<p>You couldn't merge <strong>a/</strong> and <strong>[b]</strong> to get a PACK!, because <strong>a/[b]</strong> is a PATH!.  This may be a feature and not a flaw...no clue.</p>
+<p>Anyway, a lot to think about.  But if people are dug in and insistent that they have to have these notations, then we should give consideration to the idea.</p>
+          <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/pack-sequence-type/1503/1</link>
+        <pubDate>Wed, 10 Feb 2021 23:33:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1503-1</guid>
+        <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+      </item>
+  </channel>
+</rss>

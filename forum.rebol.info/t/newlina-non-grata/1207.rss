@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Newlina Non Grata</title>
+    <link>https://forum.rebol.info/t/newlina-non-grata/1207</link>
+    <description>There was an old bug raised by @Respectech on Atronix&#39;s repo, which I will digest as:
+
+&gt; On Windows:
+&gt;
+&gt;     &gt;&gt; write %test.txt &quot;a^/b^/c&quot;
+&gt;
+&gt; When opening %test.txt in Notepad, for instance, you&#39;ll see:
+&gt; 
+&gt;     abc
+&gt;
+&gt; But then...
+&gt;
+&gt;     &gt;&gt; read %test.txt
+&gt;     == #{610A620A63}
+&gt;
+&gt; Either I expect &#39;write itself to convert &quot;^/&quot; to &quot;^M^J&quot;, or I expect there to be a refinement like &#39;write/string that does that conversion. If it doesn&#39;t, it breaks Carl&#39;s [original goal of having Rebol handle the details of cross-platform compatibility](http://rebol.net/r3blogs/0294.html).
+
+That&#39;s *his* opinion, but I have a different point of view on the resolution, here.
+
+## I don&#39;t believe in CR LF as a relevant textual exchange format
+
+**CR LF is roadkill on the information superhighway.  Just like UCS2, worrying about UTF-16BE (Big Endian) and UTF-16LE (Little Endian), the [Byte Order Mark for UTF8](https://github.com/rebol/rebol-issues/issues/2280), and many other concepts whose time have passed.**
+
+I wrote an article that digests my opinion here: [&quot;Death to Carraige Return&quot;](http://blog.hostilefork.com/death-to-carriage-return/).
+
+This means that in the strong stances I think Rebol needs to take against software complexity, only one line feed format should be supported by default.  No &quot;magic&quot; that is just actually adding hidden variables to the process.  If you&#39;re one of those unfortunate souls who can&#39;t work with a single character newline--the one the world has come to standardize on--then you need to either work at the BINARY! level *or* you need to use a special codec.
+
+**I am strongly against any magic that migrates CR LF to LF in a non-explicit fashion, and I think reading TEXT! out of a file that has CR LF should error by default.**
+
+Here is my response, migrated from where it won&#39;t be seen on @szeng&#39;s repo to here...where we might discuss it:
+
+## My Original Response (8-Oct-2015)
+
+&gt; I actually ran into this the other day trying a basic rewriting task on a Windows machine.  TO-STRING of a BINARY! and TO-BINARY of a STRING! are not symmetric... the former will take out carriage returns while the latter does not.  Input file:
+&gt;
+&gt;     One
+&gt;     Two
+&gt;
+&gt; Code:
+&gt; 
+&gt;     &gt;&gt; bin: read %test.txt
+&gt;     == #{4F6E650D0A54776F}  ; note the 0D 0A
+&gt;
+&gt;     &gt;&gt; str: to-string bin
+&gt;     == &quot;One^/Two&quot;
+&gt;
+&gt;     &gt;&gt; to-binary str
+&gt;     == #{4F6E650A54776F}  ; note just 0A
+&gt;
+&gt; So basically--if you use strings, Rebol3 is currently normalizing them to unix format, regardless of platform.
+&gt;
+&gt; Part of this appeals to me because I think CR LF is irritating.  If there&#39;s going to be a risk of making an error, I&#39;d rather see the CRs being eliminated from disk files that had them vs. adding into files that don&#39;t.  :-/  A comment here on [&quot;The Great Newline Schism&quot;](http://blog.codinghorror.com/the-great-newline-schism/) sort of points to my feeling that everywhere in Windows but Notepad can deal these days:
+&gt;
+&gt; &gt; Wow I just noticed that this is a non-issue with windows 7. Just use unix-newlines. The only application (of the few tested) I have found which does not understand unix-newlines as newlines is the useless notepad. For instance it seems the following applications understand unix-newlines just fine in windows 7:
+&gt; &gt; - cmd scripts
+&gt; &gt; - powershell scripts
+&gt; &gt; - word 2013 (I can open a txt file with unix-newlines, though I never use that, I can also paste text with unix-newlines and get correct/desired line breaking)
+&gt; &gt;   OneNote 2013 (pasting text)
+&gt; &gt;   wordpad (not that I use it)
+&gt; &gt;   Sublime Text 3 (naturally, just on the list because it the best! smile
+&gt; &gt;   Eclipse
+&gt; &gt; 
+&gt; &gt; That cmd-scripts work with unix-newlines was the most surprising and crucial feature for me.
+&gt;
+&gt; There are bound to be gotchas that may be discovered over the years, but so far so good. I think Microsoft is trying to help here...
+&gt; 
+&gt; So we should help too.  But I think the big mistake here is trying to take a real/actual/concrete problem and make it &quot;invisible&quot;...thus losing data without warning.
+&gt;
+&gt; **You can&#39;t wish away complexity, but you can _ask_ it to go away.  I&#39;d suggest that Rebol favor the universe that Unix/Posix/Linux (then OS/X, and now Windows seem to be going for) with just LF.  Look at the move to line-feeds-only as a vote for the future... like using UTF-8 as an exchange medium.**
+&gt;
+&gt; So consider files or binaries with carriage returns in them to be a foreign format.  Don&#39;t read them or write them without a special codec, the same way you&#39;d need for UCS-2 or anything else.
+&gt; 
+&gt;     &gt;&gt; to-string #{4F6E650D0A54776F} 
+&gt;     ** Error: Deprecated 0x0D (CR) byte in UTF8 (try decode-utf8-legacy)
+&gt;
+&gt; Then have the decoder have options to preserve CR bytes, discard them, give errors if they are found standalone vs. paired with an LF, in reverse order, etc.  All the lovely issues you have from the two-character sequence.
+&gt;
+&gt; It might seem tempting to just say that if you manage to get a string into the system with CR in it that you should write it out.  But I&#39;d say the UTF8 default encoder used and standardized by the system should be picky too.  Given how much of Rebol&#39;s common assumption (and the assumption we&#39;d like to be able to make systemically) is that newline is all you need, if you didn&#39;t filter your newlines out you will be getting a mixture most of the time.
+&gt;
+&gt; So...
+&gt;
+&gt; - Make a strong decision about the default: LF is favored by everyone these days but Notepad, and it&#39;s better to help facilitate living in that world.
+&gt; - Standardize that when Rebol files are exchanged over the network they will not have CRLF in them.  Don&#39;t load source unless a special command line switch or mode is set...default is OFF.  (I feel the same way about tabs.)  No matter what tolerance is given by these modes do not let string literals have the &quot;bad&quot; characters in them.
+&gt; - If someone is working in a hybrid environment where their data files do have CR in them, be noisy.  Don&#39;t read as strings or write back out with CR unless they really know what they are doing and demand it.  Make it as easy as feasible to demand and give guidance...but make it clear that the native tongue is no-CR.</description>
+    
+    <lastBuildDate>Sun, 15 Sep 2019 03:33:52 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/newlina-non-grata/1207.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Newlina Non Grata</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>This goes along with what I've said about removing NUL ('\0') from TEXT!.  You see this <a href="https://stackoverflow.com/a/20542126/211160" rel="nofollow noopener">on the rise in specs</a>, as people are realizing the security implications.</strong></p>
+<p>If we are effective about the distinction between BINARY! and TEXT!, and make it as easy as possible to parse and process a BINARY! with TEXT! fragments as we can... <em>then perhaps TEXT! would prohibit control codes entirely, except for newline and space</em>.</p>
+<p>Making BINARY! a fluid "unclean" type that can do nearly everything a string can do, and quarantining the non-printables to it, might be the most forward-looking concept we have at hand.  Let's just look at practical cases and how those with BINARY!-ish needs can be appeased while removing hidden variables and vulnerabilities as best we can.</p>
+          <p><a href="https://forum.rebol.info/t/newlina-non-grata/1207/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newlina-non-grata/1207/2</link>
+        <pubDate>Sun, 15 Sep 2019 03:33:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1207-2</guid>
+        <source url="https://forum.rebol.info/t/newlina-non-grata/1207.rss">Newlina Non Grata</source>
+      </item>
+      <item>
+        <title>Newlina Non Grata</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>There was an old bug raised by <span class="mention">@Respectech</span> on Atronix's repo, which I will digest as:</p>
+<blockquote>
+<p>On Windows:</p>
+<pre><code>&gt;&gt; write %test.txt "a^/b^/c"
+</code></pre>
+<p>When opening %test.txt in Notepad, for instance, you'll see:</p>
+<pre><code>abc
+</code></pre>
+<p>But then...</p>
+<pre><code>&gt;&gt; read %test.txt
+== #{610A620A63}
+</code></pre>
+<p>Either I expect 'write itself to convert "^/" to "^M^J", or I expect there to be a refinement like 'write/string that does that conversion. If it doesn't, it breaks Carl's <a href="http://rebol.net/r3blogs/0294.html" rel="nofollow noopener">original goal of having Rebol handle the details of cross-platform compatibility</a>.</p>
+</blockquote>
+<p>That's <em>his</em> opinion, but I have a different point of view on the resolution, here.</p>
+<h2>I don't believe in CR LF as a relevant textual exchange format</h2>
+<p><strong>CR LF is roadkill on the information superhighway.  Just like UCS2, worrying about UTF-16BE (Big Endian) and UTF-16LE (Little Endian), the <a href="https://github.com/rebol/rebol-issues/issues/2280" rel="nofollow noopener">Byte Order Mark for UTF8</a>, and many other concepts whose time have passed.</strong></p>
+<p>I wrote an article that digests my opinion here: <a href="http://blog.hostilefork.com/death-to-carriage-return/" rel="nofollow noopener">"Death to Carraige Return"</a>.</p>
+<p>This means that in the strong stances I think Rebol needs to take against software complexity, only one line feed format should be supported by default.  No "magic" that is just actually adding hidden variables to the process.  If you're one of those unfortunate souls who can't work with a single character newline--the one the world has come to standardize on--then you need to either work at the BINARY! level <em>or</em> you need to use a special codec.</p>
+<p><strong>I am strongly against any magic that migrates CR LF to LF in a non-explicit fashion, and I think reading TEXT! out of a file that has CR LF should error by default.</strong></p>
+<p>Here is my response, migrated from where it won't be seen on <a class="mention" href="/u/szeng">@szeng</a>'s repo to here...where we might discuss it:</p>
+<h2>My Original Response (8-Oct-2015)</h2>
+<blockquote>
+<p>I actually ran into this the other day trying a basic rewriting task on a Windows machine.  TO-STRING of a BINARY! and TO-BINARY of a STRING! are not symmetric... the former will take out carriage returns while the latter does not.  Input file:</p>
+<pre><code>One
+Two
+</code></pre>
+<p>Code:</p>
+<pre><code>&gt;&gt; bin: read %test.txt
+== #{4F6E650D0A54776F}  ; note the 0D 0A
+
+&gt;&gt; str: to-string bin
+== "One^/Two"
+
+&gt;&gt; to-binary str
+== #{4F6E650A54776F}  ; note just 0A
+</code></pre>
+<p>So basically--if you use strings, Rebol3 is currently normalizing them to unix format, regardless of platform.</p>
+<p>Part of this appeals to me because I think CR LF is irritating.  If there's going to be a risk of making an error, I'd rather see the CRs being eliminated from disk files that had them vs. adding into files that don't.  :-/  A comment here on <a href="http://blog.codinghorror.com/the-great-newline-schism/" rel="nofollow noopener">"The Great Newline Schism"</a> sort of points to my feeling that everywhere in Windows but Notepad can deal these days:</p>
+<blockquote>
+<p>Wow I just noticed that this is a non-issue with windows 7. Just use unix-newlines. The only application (of the few tested) I have found which does not understand unix-newlines as newlines is the useless notepad. For instance it seems the following applications understand unix-newlines just fine in windows 7:</p>
+<ul>
+<li>cmd scripts</li>
+<li>powershell scripts</li>
+<li>word 2013 (I can open a txt file with unix-newlines, though I never use that, I can also paste text with unix-newlines and get correct/desired line breaking)<br>
+OneNote 2013 (pasting text)<br>
+wordpad (not that I use it)<br>
+Sublime Text 3 (naturally, just on the list because it the best! smile<br>
+Eclipse</li>
+</ul>
+<p>That cmd-scripts work with unix-newlines was the most surprising and crucial feature for me.</p>
+</blockquote>
+<p>There are bound to be gotchas that may be discovered over the years, but so far so good. I think Microsoft is trying to help here...</p>
+<p>So we should help too.  But I think the big mistake here is trying to take a real/actual/concrete problem and make it "invisible"...thus losing data without warning.</p>
+<p><strong>You can't wish away complexity, but you can <em>ask</em> it to go away.  I'd suggest that Rebol favor the universe that Unix/Posix/Linux (then OS/X, and now Windows seem to be going for) with just LF.  Look at the move to line-feeds-only as a vote for the future... like using UTF-8 as an exchange medium.</strong></p>
+<p>So consider files or binaries with carriage returns in them to be a foreign format.  Don't read them or write them without a special codec, the same way you'd need for UCS-2 or anything else.</p>
+<pre><code>&gt;&gt; to-string #{4F6E650D0A54776F} 
+** Error: Deprecated 0x0D (CR) byte in UTF8 (try decode-utf8-legacy)
+</code></pre>
+<p>Then have the decoder have options to preserve CR bytes, discard them, give errors if they are found standalone vs. paired with an LF, in reverse order, etc.  All the lovely issues you have from the two-character sequence.</p>
+<p>It might seem tempting to just say that if you manage to get a string into the system with CR in it that you should write it out.  But I'd say the UTF8 default encoder used and standardized by the system should be picky too.  Given how much of Rebol's common assumption (and the assumption we'd like to be able to make systemically) is that newline is all you need, if you didn't filter your newlines out you will be getting a mixture most of the time.</p>
+<p>So...</p>
+<ul>
+<li>Make a strong decision about the default: LF is favored by everyone these days but Notepad, and it's better to help facilitate living in that world.</li>
+<li>Standardize that when Rebol files are exchanged over the network they will not have CRLF in them.  Don't load source unless a special command line switch or mode is set...default is OFF.  (I feel the same way about tabs.)  No matter what tolerance is given by these modes do not let string literals have the "bad" characters in them.</li>
+<li>If someone is working in a hybrid environment where their data files do have CR in them, be noisy.  Don't read as strings or write back out with CR unless they really know what they are doing and demand it.  Make it as easy as feasible to demand and give guidance...but make it clear that the native tongue is no-CR.</li>
+</ul>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/newlina-non-grata/1207/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newlina-non-grata/1207/1</link>
+        <pubDate>Sun, 15 Sep 2019 03:21:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1207-1</guid>
+        <source url="https://forum.rebol.info/t/newlina-non-grata/1207.rss">Newlina Non Grata</source>
+      </item>
+  </channel>
+</rss>

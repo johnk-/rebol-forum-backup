@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Open Your Mind: A COLLECT in PARSE Meditation</title>
+    <link>https://forum.rebol.info/t/open-your-mind-a-collect-in-parse-meditation/1100</link>
+    <description>The first time I used CALL, I griped that it was somewhat unusable (with a complaint that basically everyone else who tried it had, my complaint was far from unique).  I would have thought that if I said **call {r3 --do &quot;print {Hello}&quot;}** that it would &quot;do what I meant&quot;.  Instead, what it did was try and find an executable file whose name (including spaces and quotes) was `r3 --do &quot;print {Hello}&quot;`, and run it.
+
+As crazy as that interpretation may seem on the surface, it actually came from a desire to not get involved in the details of a technical difference between Windows and POSIX.  To make a long story short: Windows [CreateProcess()](https://docs.microsoft.com/en-us/windows/desktop/api/processthreadsapi/nf-processthreadsapi-createprocessw) has a command-line parser built in, so it notices the spaces and does the quote escaping...the call would pick apart and translate something like `r3 --do &quot;print \&quot;hi\&quot;&quot;` for you.  POSIX does not do this, and expects you to pass in an array with elements `r3`, `--do`, `print &quot;hi&quot;` that has already been processed.
+
+So there was this &quot;scary&quot; proposition of having to write a parser in POSIX to get this to work, and all the risks it entailed.  How would you know you got it right, that you&#39;d turned the `\&quot;` into regular `&quot;` and matched everything up right?  CALL was already a daunting jungle of C code, how many points of failure would you want?  [Shixin was rightfully fearful](https://github.com/rebol/rebol-issues/issues/2225) (well, skeptical I should say) of getting into that business in C.
+
+*But we have Ren-C, and we can call it from C.*
+
+## Free Your Mind
+
+Here&#39;s how we now break those parameters up, if we happen to be on POSIX and /SHELL is not used:
+
+    parse-command-to-argv*: function [
+        {Helper for when POSIX gets a TEXT! and the /SHELL refinement not used}
+        return: [block!]
+        command [text!]
+    ][
+        quoted-shell-item-rule: [  ; Note: ANY because &quot;&quot; is legal as a quoted arg
+            any [{\&quot;} | not {&quot;} skip]  ; escaped quotes and nonquotes
+        ]
+        unquoted-shell-item-rule: [some [not space skip]]
+
+        parse command [
+            collect result: [any [
+                any space [
+                    {&quot;} keep quoted-shell-item-rule {&quot;}
+                    | keep unquoted-shell-item-rule
+                ]
+            ]
+            any space end]
+        ] else [
+            fail &quot;Could not parse command line into argv[] block.&quot;
+        ]
+        for-each item result [replace/all item {\&quot;} {&quot;}]
+        return result
+    ]
+
+The C code in the module just calls this helper in the POSIX extension implementing CALL as **`rebValue(&quot;parse-command-to-argv*&quot;, command)`**.  The helper resides in the module and is only visible to it, but the C finds it because when extension natives are loaded, they remember which module they were in, and this information factors into the binding.
+
+It&#39;s a Zen moment, isn&#39;t it?
+
+It may not be perfect (improvements welcome).  And if it lets you down, you can always do what you used to...use CALL/SHELL and defer to the shell to do whatever-it-does with the text as its single argument.  You&#39;d need to anyway, if your call contained any ${ENVIRONMENT_VARIABLES} you wanted to substitute, or if you wanted to invoke &quot;dir&quot; or &quot;echo&quot; or other things that only exist in &quot;sh&quot; or &quot;cmd.exe&quot;.  (Of course if you run a program that way, you pay for the overhead of two processes invoked, vs. just one.)
+
+But I think the main thing is just taking away that fear.  Making the solution match the size of the problem--the so called &quot;essential complexity&quot;.  That&#39;s the goal of this exercise, and we are getting ever closer to it.</description>
+    
+    <lastBuildDate>Wed, 06 Mar 2019 02:11:31 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/open-your-mind-a-collect-in-parse-meditation/1100.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Open Your Mind: A COLLECT in PARSE Meditation</title>
+        <dc:creator><![CDATA[johnk]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="1" data-topic="1100">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>It’s a Zen moment, isn’t it?</p>
+</blockquote>
+</aside>
+<p>Wow. This is quite amazing.<br>
+<img src="//forum.rebol.info/images/emoji/twitter/smiley.png?v=7" title=":smiley:" class="emoji" alt=":smiley:"></p>
+          <p><a href="https://forum.rebol.info/t/open-your-mind-a-collect-in-parse-meditation/1100/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/open-your-mind-a-collect-in-parse-meditation/1100/2</link>
+        <pubDate>Wed, 06 Mar 2019 02:11:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1100-2</guid>
+        <source url="https://forum.rebol.info/t/open-your-mind-a-collect-in-parse-meditation/1100.rss">Open Your Mind: A COLLECT in PARSE Meditation</source>
+      </item>
+      <item>
+        <title>Open Your Mind: A COLLECT in PARSE Meditation</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The first time I used CALL, I griped that it was somewhat unusable (with a complaint that basically everyone else who tried it had, my complaint was far from unique).  I would have thought that if I said <strong>call {r3 --do "print {Hello}"}</strong> that it would "do what I meant".  Instead, what it did was try and find an executable file whose name (including spaces and quotes) was <code>r3 --do "print {Hello}"</code>, and run it.</p>
+<p>As crazy as that interpretation may seem on the surface, it actually came from a desire to not get involved in the details of a technical difference between Windows and POSIX.  To make a long story short: Windows <a href="https://docs.microsoft.com/en-us/windows/desktop/api/processthreadsapi/nf-processthreadsapi-createprocessw">CreateProcess()</a> has a command-line parser built in, so it notices the spaces and does the quote escaping...the call would pick apart and translate something like <code>r3 --do "print \"hi\""</code> for you.  POSIX does not do this, and expects you to pass in an array with elements <code>r3</code>, <code>--do</code>, <code>print "hi"</code> that has already been processed.</p>
+<p>So there was this "scary" proposition of having to write a parser in POSIX to get this to work, and all the risks it entailed.  How would you know you got it right, that you'd turned the <code>\"</code> into regular <code>"</code> and matched everything up right?  CALL was already a daunting jungle of C code, how many points of failure would you want?  <a href="https://github.com/rebol/rebol-issues/issues/2225">Shixin was rightfully fearful</a> (well, skeptical I should say) of getting into that business in C.</p>
+<p><em>But we have Ren-C, and we can call it from C.</em></p>
+<h2>Free Your Mind</h2>
+<p>Here's how we now break those parameters up, if we happen to be on POSIX and /SHELL is not used:</p>
+<pre><code>parse-command-to-argv*: function [
+    {Helper for when POSIX gets a TEXT! and the /SHELL refinement not used}
+    return: [block!]
+    command [text!]
+][
+    quoted-shell-item-rule: [  ; Note: ANY because "" is legal as a quoted arg
+        any [{\"} | not {"} skip]  ; escaped quotes and nonquotes
+    ]
+    unquoted-shell-item-rule: [some [not space skip]]
+
+    parse command [
+        collect result: [any [
+            any space [
+                {"} keep quoted-shell-item-rule {"}
+                | keep unquoted-shell-item-rule
+            ]
+        ]
+        any space end]
+    ] else [
+        fail "Could not parse command line into argv[] block."
+    ]
+    for-each item result [replace/all item {\"} {"}]
+    return result
+]
+</code></pre>
+<p>The C code in the module just calls this helper in the POSIX extension implementing CALL as <strong><code>rebValue("parse-command-to-argv*", command)</code></strong>.  The helper resides in the module and is only visible to it, but the C finds it because when extension natives are loaded, they remember which module they were in, and this information factors into the binding.</p>
+<p>It's a Zen moment, isn't it?</p>
+<p>It may not be perfect (improvements welcome).  And if it lets you down, you can always do what you used to...use CALL/SHELL and defer to the shell to do whatever-it-does with the text as its single argument.  You'd need to anyway, if your call contained any ${ENVIRONMENT_VARIABLES} you wanted to substitute, or if you wanted to invoke "dir" or "echo" or other things that only exist in "sh" or "cmd.exe".  (Of course if you run a program that way, you pay for the overhead of two processes invoked, vs. just one.)</p>
+<p>But I think the main thing is just taking away that fear.  Making the solution match the size of the problem--the so called "essential complexity".  That's the goal of this exercise, and we are getting ever closer to it.</p>
+          <p><a href="https://forum.rebol.info/t/open-your-mind-a-collect-in-parse-meditation/1100/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/open-your-mind-a-collect-in-parse-meditation/1100/1</link>
+        <pubDate>Tue, 05 Mar 2019 14:26:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1100-1</guid>
+        <source url="https://forum.rebol.info/t/open-your-mind-a-collect-in-parse-meditation/1100.rss">Open Your Mind: A COLLECT in PARSE Meditation</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Taming Handle Tracking with a Uniform Variadic API</title>
+    <link>https://forum.rebol.info/t/taming-handle-tracking-with-a-uniform-variadic-api/535</link>
+    <description>In the post about [lifetime of handles given back to C code](https://forum.rebol.info/t/lifetime-of-handles-given-back-to-c-code/343/3), I brought up the tough problem of *&quot;who frees a floating `REBVAL*` that the system has entrusted an API user with?&quot;*
+
+So every time you run a **`rebDo()`** you are getting back a pointer that the system has to count as a &quot;live&quot; reference... if it&#39;s a BLOCK!, there&#39;s no way to know a-priori how long the caller is going to be picking and poking values around in that block.
+
+For now, all values get cells, and their lifetimes are managed.  That includes INTEGER!.  So let&#39;s take a simple example:
+
+    int AddOneToSomething(int something) {
+        REBVAL *somethingVal = rebInteger(something);
+        REBVAL *sum = rebDo(&quot;1 +&quot;, somethingVal, END);
+        int result = rebUnboxInteger(sum);
+        rebRelease(somethingVal);
+        rebRelease(sum);
+        return result;
+    }
+
+It&#39;s a pain to have to write so many rebRelease()s.  One of the answers is to have a default moment at which such things are GC&#39;d automatically, and that&#39;s going to be possible sometimes--*but not always*, and it will mean leaving things alive longer than they would be freed up otherwise.  Another answer is to use C++, where `ren::Value` automatically knows when it&#39;s out of scope and can release things.
+
+But a wilder cross-language answer came to mind, which applies to C, JavaScript, and anything else.  What if all APIs that could take a single REBVAL* to process it, might also be variadic?  We could see `rebUnboxInteger()` as being a variant of rebDo(), instead of simply taking one argument:
+
+    int AddOneToSomething(int something) {
+        REBVAL *somethingVal = rebInteger(something);
+        int result = rebUnboxInteger(&quot;1 +&quot;, somethingVal, END);
+        rebRelease(somethingVal);
+        return result;
+    }
+
+Now the rebDo() is folded into the rebUnboxInteger() call, and we&#39;ve gotten rid of one userspace handle.  That&#39;s one handle that doesn&#39;t need to be allocated, tracked, or freed.  I&#39;ve also proposed the idea of marking certain handles as releasable by the rebDo() mechanics once it sees them in the line of processing, like a rebT() instruction for marking things as &quot;temporary&quot;:
+
+    int AddOneToSomething(int something) {
+        return rebUnboxInteger(&quot;1 +&quot;, rebT(rebInteger(something)), END);
+    }
+
+We might even go so far as to say for something common like this, that **`rebI(...)`** could be a shorthand for rebT(rebInteger(...)):
+
+    int AddOneToSomething(int something) {
+        return rebUnboxInteger(&quot;1 +&quot;, rebI(something), END);
+    }
+
+An interesting point is that this is made more palatable because things like WORD! and FUNCTION! are [not &quot;live&quot; by default](https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371).  You don&#39;t want to instead of saying **rebSpellingOf(someWord)**, rather `rebSpellingOf(rebUneval(someWord), END);` !
+
+*(I should also point out that having to have END is something that @giuliolunati has already avoided in JavaScript, and could be avoided in C++...or [even in C for C99 builds](https://stackoverflow.com/a/2124433/211160).)*
+
+But it seems to me on average, you&#39;re looking at enough savings on the total amount of code that even if you have to put END on, it&#39;s a win.  If you don&#39;t need an END, it&#39;s seemingly kind of a slam-dunk win.
+
+So basically any API that would perhaps otherwise have been seen as taking a plain REBVAL* would now take a variadic stream of string, value, and instruction components.
+
+---
+
+Examples:
+
+* instead of `rebUnboxLogic(REBVAL *logic_value)`...what about `rebDid(...)` and `rebNot(...)`?  e.g. `rebDid(&quot;all [&quot;, condition1, condition2, &quot;]&quot;, END);` or `rebNot(&quot;error?&quot;, value, END);`
+
+* instead of `rebRelease(rebDo(...))` what about `rebElide(...)`?</description>
+    
+    <lastBuildDate>Mon, 19 Feb 2018 09:30:50 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/taming-handle-tracking-with-a-uniform-variadic-api/535.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Taming Handle Tracking with a Uniform Variadic API</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>One downside of this proposal: <strong>what to do when an error happens</strong>.</p>
+<p>The initial model was that when <strong>rebDo()</strong> was the only entry point to running code: it gives the opportunity to check for NULL as an error condition and react to it.  So the real "correct" code for the above--prepared for an error condition--would be:</p>
+<pre><code>int AddOneToSomething(int something) {
+    REBVAL *somethingVal = rebInteger(something);
+    REBVAL *sum = rebDo("1 +", somethingVal, END);
+    if (sum == NULL) {
+        /* Do whatever you wanted to do on failure (?) */
+        /* e.g. if + was redefined somehow */
+    }
+    int result = rebUnboxInteger(sum);
+    rebRelease(somethingVal);
+    rebRelease(sum);
+    return result;
+}
+</code></pre>
+<p>If something like rebUnboxInteger() doesn't have an option to return NULL, there's no return value to check for error.  <img src="//forum.rebol.info/images/emoji/twitter/frowning.png?v=7" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>But checking for errors on each and every API call is pretty arduous.  A lot of the time you want to just assume things will work, handling the so-called "exceptional" cases with specialized code.  But while C++ and JavaScript have a "throw" and "catch" mechanism, C itself is notoriously lacking in exception handling.</p>
+<p>So at least in C, this suggests there needs to be some sort of <strong>rebTrapWith()</strong> where the code being trapped (and the code handling the trap) is two C functions.</p>
+<p>Unsurprisingly, Ruby <em>(which also uses setjmp/longjmp for exceptions, see <a href="https://github.com/ruby/ruby/blob/4342fd3d97f4a43e202e989231f69b5b9e1e7af3/eval.c#L616" rel="nofollow noopener">rb_exc_raise()</a>)</em> does something along these lines.  They call it <a href="http://silverhammermba.github.io/emberb/c/#rescue" rel="nofollow noopener">"rescue2"</a>...where the 2 is the aforementioned two C functions.</p>
+<p>You can also tunnel through a single parameter to each function, but it's has to be of type <a href="http://silverhammermba.github.io/emberb/c/#value" rel="nofollow noopener">VALUE</a>, their REBVAL.  <em>(This seems a bit limiting...like the qsort() function where the comparator is a callback which can only use global state; I'd think you'd want something more like qsort_r() which tunnels a <code>void*</code> so you can pass an arbitrary struct of data.)</em></p>
+<p>To kind of draft out the usage, let's say you've done some malloc's and want to be sure you've freed them in the case of failure.  Code without error handling would look like:</p>
+<pre><code>if (rebDid("some", prelude, "code", END)) {...}
+char *some_data = malloc(100);
+rebElide("more code that might fail", END);
+free(some_data)
+</code></pre>
+<p>You'd have to transform this into:</p>
+<pre><code>--- STATE STRUCTURE ---
+struct TrapState { char *some_data; };
+
+--- WORK FUNCTION ---
+void tryMe(struct TrapState *ts) {
+    if (rebDid("some", prelude, "code", END)) {...}
+    ts-&gt;some_data = malloc(100);
+    rebElide("more code that might fail", END);
+    free(ts-&gt;some_data)
+}
+
+--- RECOVERY FUNCTION ---
+void recoverMe(struct TrapState *ts) {
+    if (ts-&gt;some_data != NULL)
+        free(ts-&gt;some_data); // you can actually free NULL, though
+}
+
+--- CALLING CODE ---
+struct TrapState ts;
+ts.some_data = NULL;
+
+rebTrapWith(&amp;tryMe, &amp;ts, &amp;recoverMe, &amp;ts); 
+</code></pre>
+<p>For the exact case of allocating and freeing memory, we can probably make this easier...with a rebMalloc() that will automatically free the buffer in the case of an error.  That could get rid of the need for <code>TrapState</code> in the above example, for instance.  We could also expose the HANDLE! cleanup functionality, which is beyond the scope of this post.</p>
+<p>Regardless, the note from the embedding Ruby docs still applies:</p>
+<blockquote>
+<p>If you’re embedding the Ruby interpreter in C, you need to be extremely careful when calling API functions that could raise exceptions: an uncaught exception will segfault the VM and kill your program.</p>
+</blockquote>
+<p>...and the slightly troubling bit of this proposal is that it extends the API functions that could raise exceptions to "anything you call variadically".  But I think there are some avenues of attack...including that it might wind up being much cleaner in JavaScript and C++...if setjmp/longjmp are not exposed in the API <em>(or perhaps not even used internally, when compiled as JavaScript or C++)</em>.</p>
+          <p><a href="https://forum.rebol.info/t/taming-handle-tracking-with-a-uniform-variadic-api/535/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-handle-tracking-with-a-uniform-variadic-api/535/2</link>
+        <pubDate>Mon, 19 Feb 2018 09:30:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-535-2</guid>
+        <source url="https://forum.rebol.info/t/taming-handle-tracking-with-a-uniform-variadic-api/535.rss">Taming Handle Tracking with a Uniform Variadic API</source>
+      </item>
+      <item>
+        <title>Taming Handle Tracking with a Uniform Variadic API</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In the post about <a href="https://forum.rebol.info/t/lifetime-of-handles-given-back-to-c-code/343/3">lifetime of handles given back to C code</a>, I brought up the tough problem of <em>"who frees a floating <code>REBVAL*</code> that the system has entrusted an API user with?"</em></p>
+<p>So every time you run a <strong><code>rebDo()</code></strong> you are getting back a pointer that the system has to count as a "live" reference... if it's a BLOCK!, there's no way to know a-priori how long the caller is going to be picking and poking values around in that block.</p>
+<p>For now, all values get cells, and their lifetimes are managed.  That includes INTEGER!.  So let's take a simple example:</p>
+<pre><code>int AddOneToSomething(int something) {
+    REBVAL *somethingVal = rebInteger(something);
+    REBVAL *sum = rebDo("1 +", somethingVal, END);
+    int result = rebUnboxInteger(sum);
+    rebRelease(somethingVal);
+    rebRelease(sum);
+    return result;
+}
+</code></pre>
+<p>It's a pain to have to write so many rebRelease()s.  One of the answers is to have a default moment at which such things are GC'd automatically, and that's going to be possible sometimes--<em>but not always</em>, and it will mean leaving things alive longer than they would be freed up otherwise.  Another answer is to use C++, where <code>ren::Value</code> automatically knows when it's out of scope and can release things.</p>
+<p>But a wilder cross-language answer came to mind, which applies to C, JavaScript, and anything else.  What if all APIs that could take a single REBVAL* to process it, might also be variadic?  We could see <code>rebUnboxInteger()</code> as being a variant of rebDo(), instead of simply taking one argument:</p>
+<pre><code>int AddOneToSomething(int something) {
+    REBVAL *somethingVal = rebInteger(something);
+    int result = rebUnboxInteger("1 +", somethingVal, END);
+    rebRelease(somethingVal);
+    return result;
+}
+</code></pre>
+<p>Now the rebDo() is folded into the rebUnboxInteger() call, and we've gotten rid of one userspace handle.  That's one handle that doesn't need to be allocated, tracked, or freed.  I've also proposed the idea of marking certain handles as releasable by the rebDo() mechanics once it sees them in the line of processing, like a rebT() instruction for marking things as "temporary":</p>
+<pre><code>int AddOneToSomething(int something) {
+    return rebUnboxInteger("1 +", rebT(rebInteger(something)), END);
+}
+</code></pre>
+<p>We might even go so far as to say for something common like this, that <strong><code>rebI(...)</code></strong> could be a shorthand for rebT(rebInteger(...)):</p>
+<pre><code>int AddOneToSomething(int something) {
+    return rebUnboxInteger("1 +", rebI(something), END);
+}
+</code></pre>
+<p>An interesting point is that this is made more palatable because things like WORD! and FUNCTION! are <a href="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371">not "live" by default</a>.  You don't want to instead of saying <strong>rebSpellingOf(someWord)</strong>, rather <code>rebSpellingOf(rebUneval(someWord), END);</code> !</p>
+<p><em>(I should also point out that having to have END is something that <a class="mention" href="/u/giuliolunati">@giuliolunati</a> has already avoided in JavaScript, and could be avoided in C++...or <a href="https://stackoverflow.com/a/2124433/211160" rel="nofollow noopener">even in C for C99 builds</a>.)</em></p>
+<p>But it seems to me on average, you're looking at enough savings on the total amount of code that even if you have to put END on, it's a win.  If you don't need an END, it's seemingly kind of a slam-dunk win.</p>
+<p>So basically any API that would perhaps otherwise have been seen as taking a plain REBVAL* would now take a variadic stream of string, value, and instruction components.</p>
+<hr>
+<p>Examples:</p>
+<ul>
+<li>
+<p>instead of <code>rebUnboxLogic(REBVAL *logic_value)</code>...what about <code>rebDid(...)</code> and <code>rebNot(...)</code>?  e.g. <code>rebDid("all [", condition1, condition2, "]", END);</code> or <code>rebNot("error?", value, END);</code></p>
+</li>
+<li>
+<p>instead of <code>rebRelease(rebDo(...))</code> what about <code>rebElide(...)</code>?</p>
+</li>
+</ul>
+          <p><a href="https://forum.rebol.info/t/taming-handle-tracking-with-a-uniform-variadic-api/535/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-handle-tracking-with-a-uniform-variadic-api/535/1</link>
+        <pubDate>Mon, 19 Feb 2018 01:32:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-535-1</guid>
+        <source url="https://forum.rebol.info/t/taming-handle-tracking-with-a-uniform-variadic-api/535.rss">Taming Handle Tracking with a Uniform Variadic API</source>
+      </item>
+  </channel>
+</rss>

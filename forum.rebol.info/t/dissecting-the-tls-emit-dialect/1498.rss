@@ -1,0 +1,324 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Dissecting the TLS EMIT Dialect</title>
+    <link>https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498</link>
+    <description>As we question [what the rules are for evaluator state between steps](https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496), it&#39;s instructive to look at dialects that make use of stepwise evaluation.
+
+One such dialect that comes to mind is the EMIT dialect I designed to try and make the TLS protocol code leverage the language better.  It&#39;s used for constructing BINARY! packets by appending material together, where SET-WORD!s are made into variables holding positions in that binary packet based on where they occur:
+
+    emit ctx [
+      TLSPlaintext: ; https://tools.ietf.org/html/rfc5246#section-6.2.1
+        #{16}                       ; protocol type (22=Handshake)
+        min-ver-bytes               ; TLS version for ClientHello (min? max?)
+      fragment-length:
+        #{00 00}                    ; length of handshake data (updated after)
+    ]
+
+One thing the labels provide is documentation of what&#39;s at each position.  So even if they&#39;re not used, they are helpful.
+
+But the positions also can be used for reading and writing the data.  Here we see some information being assembled at the start of the packet, which has a two-byte &quot;fragment length&quot;.  We don&#39;t yet know what this length is, so it&#39;s filled in with zeros and patched later:
+
+    change fragment-length enbin [be + 2] (length of Handshake)
+
+## Note That This Is A Poster Child For Making EMIT &quot;LET-like&quot;
+
+The position variables are not aggregated in some kind of context or a map.  If they were, you would have to write it as:
+
+    labels: emit ctx [
+      TLSPlaintext: ; https://tools.ietf.org/html/rfc5246#section-6.2.1
+        #{16}                       ; protocol type (22=Handshake)
+        min-ver-bytes               ; TLS version for ClientHello (min? max?)
+      fragment-length:
+        #{00 00}                    ; length of handshake data (updated after)
+    ]
+    ...
+    change labels/fragment-length enbin [be + 2] (length of Handshake)
+
+**I think that not having to be explicit is somewhat critical to the point.**  So the EMIT abstraction could benefit from being &quot;like LET&quot; in that it wants to generate variable bindings you can use in the stream afterwards.
+
+But at time of writing, it depends on being inside a &quot;FUNCT&quot;-style function which will &quot;gather&quot; the SET-WORD!s.  That means you&#39;d be out of luck if you COMPOSE-d in the values, since FUNCT wouldn&#39;t see them.
+
+I&#39;ve made the case many times that having a 1:1 correspondence between SET-WORD!s and locals often gets you *too many* spurious locals.  But what about too few, if you miss other notations?  Let&#39;s say the designer wanted to call out the sections with BLOCK! instead?
+
+    emit ctx [
+      [TLSPlaintext] ; https://tools.ietf.org/html/rfc5246#section-6.2.1
+        #{16}                       ; protocol type (22=Handshake)
+        min-ver-bytes               ; TLS version for ClientHello (min? max?)
+      [fragment-length]
+        #{00 00}                    ; length of handshake data (updated after)
+    ]
+
+Or maybe SET-BLOCK! means &quot;label and create variable&quot; while plain SET-WORD! means &quot;just label&quot;?  Anyway, just raising the point that having functions like LET be able to create one or more new variables is powerful.
+
+[UPDATE: I have made EMIT create its own variables](https://forum.rebol.info/t/giving-functions-the-power-to-create-local-variables/1499), using a fledgling generic mechanism.
+
+## Dissecting the Implementation
+
+The current EMIT is very comprehensible.  It does stepwise evaluation of the block:
+
+* At the beginning of each step it looks to see if the value right in front of it is a SET-WORD!.  If it is, then it sets the value of that word to the marked position in the binary so far...and skips the SET-WORD! so it&#39;s not part of the evaluation.
+
+* For non-SET-WORD!s a single evaluation step is done, and the BINARY! result of it is added to the buffer.
+
+This is rigged in such a way that even supports comments and invisibles, such as ELIDE, ASSERT, and debug dump routines.
+
+    emit: function [
+        {Emits binary data, optionally marking positions with SET-WORD!}
+
+        return: &lt;void&gt;
+        ctx [object!]
+        code [block!]
+        &lt;local&gt; result
+    ][
+        while [code] [
+            if set-word? code/1 [
+                set code/1 tail ctx/msg  ; save position
+                code: my next
+            ]
+            else [
+                ; Keep evaluating so long as returned code pos is quoted, as
+                ; it indicates invisible eval (`emit ctx [comment &quot;X&quot; ...]`)
+                ;
+                if until .not.quoted? [[code result]: evaluate code] [
+                    append ctx/msg ensure binary! result
+                ]
+            ]
+        ]
+    ]
+
+## Observation: Only Sees SET-WORD!s At Start Of Step
+
+It only recognizes SET-WORD!s at the *start* of evaluation steps.  Any SET-WORD!s that are part of a function parameter won&#39;t count.
+
+So imagine if min-ver-bytes took a parameter, e.g. **min-ver-bytes: func [version]**
+
+    emit ctx [
+      TLSPlaintext:
+        #{16}
+        min-ver-bytes version: 1.2
+      fragment-length:
+        #{00 00}
+    ]
+
+So you wouldn&#39;t wind up with VERSION being set to a BINARY! position.  It would just be a normal assignment in the evaluator, and get 1.2
+
+Curiously, LET wouldn&#39;t have this problem...because LET is invisible when followed by a SET-WORD!.  The set-word just gets a new binding.  But using LET for this wouldn&#39;t give you a definition outside of the block, only inside it:
+
+    emit ctx [
+      let TLSPlaintext:  ; only defined to end of block
+        #{16}
+        min-ver-bytes
+      let fragment-length:  ; only defined to end of block
+        #{00 00}
+    ]
+    ...
+    change fragment-length enbin [be + 2] (length of Handshake)  ; error
+
+This is why EMIT has to take over the duty of LET, adding the new bindings to the frame itself.  *(It could choose to do so only if you say LET...thus allowing plain SET-WORD! to be just a comment...but it would not be running LET, just recognizing the word to help document that a new declaration was being created.)*
+
+## Every Step Must Produce A BINARY!...or be invisible
+
+The concept behind this is that all the steps either produce a BINARY!.  But you have the nice exception of invisible evaluations.
+
+    emit ctx [
+      let TLSPlaintext:
+        #{16}
+        elide prep-for-min-ver-bytes arg
+        min-ver-bytes
+      let fragment-length:
+        #{00 00}
+    ]
+
+Historical Rebol could have let you do what you would do with invisibles with a GROUP!, you&#39;d just have to put the things you wanted to throw away at the beginning of it:
+
+    emit ctx [
+      TLSPlaintext:
+        #{16}
+        (prep-for-min-ver-bytes arg, min-ver-bytes)  ; pretend they had comma
+      fragment-length:
+        #{00 00}
+    ]
+
+But this forces your dialect to sacrifice potential other uses for GROUP!s.
+
+I think the general case of stepwise evaluation that tries to mix in its own behavior should want to gracefully handle invisibles.
+
+## I Think TLS EMIT is a Very Good Example
+
+This is a useful thing.  While it would be ridiculous to bet your internet security on this particular TLS codebase, the methodology of this dialect shows promise for how to deal with other real problems.
+
+**We do see that this case would work under the feed-based interface protocol of a variadic.** That is to say, that if what EVALUATE did was spin up a FRAME!, and restrict you from going back in time...forcing you to look ahead one unit at a time and either consume or evaluate it, then it would still be fine.
+
+I think that will be a pattern you will notice to be true in most &quot;evaluator-compatible&quot; dialects, that do not isolate their evaluation portions into GROUP!s or BLOCK!s.  If this pattern holds up, it suggests that allowing the evaluator to accrue state that is not purely representable in terms of a block position is reasonable.</description>
+    
+    <lastBuildDate>Wed, 10 Feb 2021 13:47:14 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Dissecting the TLS EMIT Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Oldes <a href="https://github.com/Oldes/Rebol3/blob/be2463a4bd0ca9837cf1b7ce6adc7015e8350af7/src/mezz/prot-tls.reb#L13">looked at the TLS 1.2 code I wrote</a> and so he saw the EMIT dialect, and he followed some of the idea.  He seemed to get a pretty compact implementation in his rewrite, so I meant to look into it, but I hadn't.</p>
+<p>So since I'm writing a post on this dialect concept, here is his spin... "bincode".</p>
+<p><a href="https://github.com/Oldes/Rebol3/blob/be2463a4bd0ca9837cf1b7ce6adc7015e8350af7/src/core/u-bincode.c#L200">It's a native function in C, named BINARY.</a></p>
+<p>The dialect alternates size and signedness indicators with values.  He doesn't use any labels unless he's actually going to read or write them.  And he does a lot of the math with "magic numbers" vs. explaining the source of those numbers.  So most examples don't have labels, but here's one that does:</p>
+<pre><code>binary/write out [
+    UI8  22          ; protocol type (22=Handshake)
+    UI16 :version    ; protocol version
+  pos-record-len:
+    UI16 0           ; length of the (following) record data
+  pos-record:
+    UI8  16          ; protocol message type (16=ClientKeyExchange)
+  pos-message:
+    UI24 0           ; protocol message length
+  pos-key: 
+]
+</code></pre>
+<p>The dialect doesn't use the evaluator unless you put in a GROUP!.  So you couldn't say  <strong><code>UI8 20 + 2</code></strong> above in place of <strong><code>UI8 22</code></strong>.  You would have to say <strong><code>UI8 (20 + 2)</code></strong></p>
+<p>While there's benefits and drawbacks to both general approaches, his approach hinges on a lot of native code...see <a href="https://github.com/Oldes/Rebol3/blob/be2463a4bd0ca9837cf1b7ce6adc7015e8350af7/src/core/u-bincode.c#L200">%u-bincode.c</a> - that's just not going to be the solution for the average DSL author.  <em>(Note on the C code: I think I truly can say that he is carrying the torch for the style in which it was originally written.  He has my blessing as being the rightful maintainer of R3-Alpha.)</em></p>
+<p>But the key point to the discussion is that he didn't try the same thing of mixing evaluations...the code is quarantined in GROUP!s.</p>
+          <p><a href="https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498/2</link>
+        <pubDate>Wed, 10 Feb 2021 13:47:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1498-2</guid>
+        <source url="https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498.rss">Dissecting the TLS EMIT Dialect</source>
+      </item>
+      <item>
+        <title>Dissecting the TLS EMIT Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>As we question <a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496">what the rules are for evaluator state between steps</a>, it's instructive to look at dialects that make use of stepwise evaluation.</p>
+<p>One such dialect that comes to mind is the EMIT dialect I designed to try and make the TLS protocol code leverage the language better.  It's used for constructing BINARY! packets by appending material together, where SET-WORD!s are made into variables holding positions in that binary packet based on where they occur:</p>
+<pre><code>emit ctx [
+  TLSPlaintext: ; https://tools.ietf.org/html/rfc5246#section-6.2.1
+    #{16}                       ; protocol type (22=Handshake)
+    min-ver-bytes               ; TLS version for ClientHello (min? max?)
+  fragment-length:
+    #{00 00}                    ; length of handshake data (updated after)
+]
+</code></pre>
+<p>One thing the labels provide is documentation of what's at each position.  So even if they're not used, they are helpful.</p>
+<p>But the positions also can be used for reading and writing the data.  Here we see some information being assembled at the start of the packet, which has a two-byte "fragment length".  We don't yet know what this length is, so it's filled in with zeros and patched later:</p>
+<pre><code>change fragment-length enbin [be + 2] (length of Handshake)
+</code></pre>
+<h2>Note That This Is A Poster Child For Making EMIT "LET-like"</h2>
+<p>The position variables are not aggregated in some kind of context or a map.  If they were, you would have to write it as:</p>
+<pre><code>labels: emit ctx [
+  TLSPlaintext: ; https://tools.ietf.org/html/rfc5246#section-6.2.1
+    #{16}                       ; protocol type (22=Handshake)
+    min-ver-bytes               ; TLS version for ClientHello (min? max?)
+  fragment-length:
+    #{00 00}                    ; length of handshake data (updated after)
+]
+...
+change labels/fragment-length enbin [be + 2] (length of Handshake)
+</code></pre>
+<p><strong>I think that not having to be explicit is somewhat critical to the point.</strong>  So the EMIT abstraction could benefit from being "like LET" in that it wants to generate variable bindings you can use in the stream afterwards.</p>
+<p>But at time of writing, it depends on being inside a "FUNCT"-style function which will "gather" the SET-WORD!s.  That means you'd be out of luck if you COMPOSE-d in the values, since FUNCT wouldn't see them.</p>
+<p>I've made the case many times that having a 1:1 correspondence between SET-WORD!s and locals often gets you <em>too many</em> spurious locals.  But what about too few, if you miss other notations?  Let's say the designer wanted to call out the sections with BLOCK! instead?</p>
+<pre><code>emit ctx [
+  [TLSPlaintext] ; https://tools.ietf.org/html/rfc5246#section-6.2.1
+    #{16}                       ; protocol type (22=Handshake)
+    min-ver-bytes               ; TLS version for ClientHello (min? max?)
+  [fragment-length]
+    #{00 00}                    ; length of handshake data (updated after)
+]
+</code></pre>
+<p>Or maybe SET-BLOCK! means "label and create variable" while plain SET-WORD! means "just label"?  Anyway, just raising the point that having functions like LET be able to create one or more new variables is powerful.</p>
+<p><a href="https://forum.rebol.info/t/giving-functions-the-power-to-create-local-variables/1499">UPDATE: I have made EMIT create its own variables</a>, using a fledgling generic mechanism.</p>
+<h2>Dissecting the Implementation</h2>
+<p>The current EMIT is very comprehensible.  It does stepwise evaluation of the block:</p>
+<ul>
+<li>
+<p>At the beginning of each step it looks to see if the value right in front of it is a SET-WORD!.  If it is, then it sets the value of that word to the marked position in the binary so far...and skips the SET-WORD! so it's not part of the evaluation.</p>
+</li>
+<li>
+<p>For non-SET-WORD!s a single evaluation step is done, and the BINARY! result of it is added to the buffer.</p>
+</li>
+</ul>
+<p>This is rigged in such a way that even supports comments and invisibles, such as ELIDE, ASSERT, and debug dump routines.</p>
+<pre><code>emit: function [
+    {Emits binary data, optionally marking positions with SET-WORD!}
+
+    return: &lt;void&gt;
+    ctx [object!]
+    code [block!]
+    &lt;local&gt; result
+][
+    while [code] [
+        if set-word? code/1 [
+            set code/1 tail ctx/msg  ; save position
+            code: my next
+        ]
+        else [
+            ; Keep evaluating so long as returned code pos is quoted, as
+            ; it indicates invisible eval (`emit ctx [comment "X" ...]`)
+            ;
+            if until .not.quoted? [[code result]: evaluate code] [
+                append ctx/msg ensure binary! result
+            ]
+        ]
+    ]
+]
+</code></pre>
+<h2>Observation: Only Sees SET-WORD!s At Start Of Step</h2>
+<p>It only recognizes SET-WORD!s at the <em>start</em> of evaluation steps.  Any SET-WORD!s that are part of a function parameter won't count.</p>
+<p>So imagine if min-ver-bytes took a parameter, e.g. <strong>min-ver-bytes: func [version]</strong></p>
+<pre><code>emit ctx [
+  TLSPlaintext:
+    #{16}
+    min-ver-bytes version: 1.2
+  fragment-length:
+    #{00 00}
+]
+</code></pre>
+<p>So you wouldn't wind up with VERSION being set to a BINARY! position.  It would just be a normal assignment in the evaluator, and get 1.2</p>
+<p>Curiously, LET wouldn't have this problem...because LET is invisible when followed by a SET-WORD!.  The set-word just gets a new binding.  But using LET for this wouldn't give you a definition outside of the block, only inside it:</p>
+<pre><code>emit ctx [
+  let TLSPlaintext:  ; only defined to end of block
+    #{16}
+    min-ver-bytes
+  let fragment-length:  ; only defined to end of block
+    #{00 00}
+]
+...
+change fragment-length enbin [be + 2] (length of Handshake)  ; error
+</code></pre>
+<p>This is why EMIT has to take over the duty of LET, adding the new bindings to the frame itself.  <em>(It could choose to do so only if you say LET...thus allowing plain SET-WORD! to be just a comment...but it would not be running LET, just recognizing the word to help document that a new declaration was being created.)</em></p>
+<h2>Every Step Must Produce A BINARY!...or be invisible</h2>
+<p>The concept behind this is that all the steps either produce a BINARY!.  But you have the nice exception of invisible evaluations.</p>
+<pre><code>emit ctx [
+  let TLSPlaintext:
+    #{16}
+    elide prep-for-min-ver-bytes arg
+    min-ver-bytes
+  let fragment-length:
+    #{00 00}
+]
+</code></pre>
+<p>Historical Rebol could have let you do what you would do with invisibles with a GROUP!, you'd just have to put the things you wanted to throw away at the beginning of it:</p>
+<pre><code>emit ctx [
+  TLSPlaintext:
+    #{16}
+    (prep-for-min-ver-bytes arg, min-ver-bytes)  ; pretend they had comma
+  fragment-length:
+    #{00 00}
+]
+</code></pre>
+<p>But this forces your dialect to sacrifice potential other uses for GROUP!s.</p>
+<p>I think the general case of stepwise evaluation that tries to mix in its own behavior should want to gracefully handle invisibles.</p>
+<h2>I Think TLS EMIT is a Very Good Example</h2>
+<p>This is a useful thing.  While it would be ridiculous to bet your internet security on this particular TLS codebase, the methodology of this dialect shows promise for how to deal with other real problems.</p>
+<p><strong>We do see that this case would work under the feed-based interface protocol of a variadic.</strong> That is to say, that if what EVALUATE did was spin up a FRAME!, and restrict you from going back in time...forcing you to look ahead one unit at a time and either consume or evaluate it, then it would still be fine.</p>
+<p>I think that will be a pattern you will notice to be true in most "evaluator-compatible" dialects, that do not isolate their evaluation portions into GROUP!s or BLOCK!s.  If this pattern holds up, it suggests that allowing the evaluator to accrue state that is not purely representable in terms of a block position is reasonable.</p>
+          <p><a href="https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498/1</link>
+        <pubDate>Wed, 10 Feb 2021 10:56:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1498-1</guid>
+        <source url="https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498.rss">Dissecting the TLS EMIT Dialect</source>
+      </item>
+  </channel>
+</rss>

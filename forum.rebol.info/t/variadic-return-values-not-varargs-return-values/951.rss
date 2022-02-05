@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Variadic Return Values (not VARARGS! return values...)</title>
+    <link>https://forum.rebol.info/t/variadic-return-values-not-varargs-return-values/951</link>
+    <description>Imagine the following:
+
+    inline: function [
+        return: [any-value! &lt;variadic&gt;]
+        block [block!]
+    ][
+        return make varargs! block
+    ]
+
+With the desired behavior:
+
+    &gt;&gt; 1 inline [+ 2 + 3]
+    == 6
+
+This would be a very powerful macro-like mechanism.  (While not being done with any preprocessing step, and hence not a &quot;macro&quot; in the conventional sense).
+
+One of the mechanical problems with such a construct is that when the evaluator is looking right from the 1, it has to know if the function it is seeing is enfix or not.  Unfortunately, INLINE doesn&#39;t have a generic answer...its answer depends on calculations it does once it is running, after its arguments are evaluated.  It depends on what&#39;s in the block it gets.
+
+The evolving way of dealing with such situations is *left-variadic-enfix*.  This is to say that inline can defer its answer until when it runs...but by doing so it runs *before* its left hand side.
+
+Here is simplified model of how that would work:
+
+    inline: enfix function [
+        return: [any-value! &lt;variadic&gt;]
+        :look [&lt;opt&gt; any-value! &lt;variadic&gt;]
+        block [block!]
+    ][
+        if enfix? w: match [word!] first block [
+            return make varargs! compose/only [(take look) block]
+        ]
+        return make varargs! block
+    ]
+
+The moment of the TAKE (or the lack of a take) is how the evaluator gets its &quot;are you enfix or not&quot; answer from something whose left hand side is variadic.
+
+While this looks very similar [to what SHOVE does](https://trello.com/c/Kg9A45b5/231-paths-can-be-dispatched-as-infix-and-provide-refinements-to-infix-operators-using-shove), SHOVE is actually implemented as an internal trick to the evaluator that is tailored to that particular case.  It doesn&#39;t run usermode code (or even plain code inside a native) to accomplish what it does.  It can&#39;t, because the variadic take of the left would require completing a higher stack level of code before a lower stack level.
+
+It may seem variadics do this already (there&#39;s an ACTION! on the stack whose frame is running, and code is being processed from its &quot;feed&quot; to supply values to a variadic further on in the stack).  But that action is already running and has finished gathering its arguments--you&#39;re not interrupting the evaluator in mid-process, and hooking into the enfix mechanic itself.  I think it&#39;s possible though--it might need to use the same trick as ENCLOSE, which rearranges the stack in mid-run.
+
+It would still be a little odd--in the same way that SHOVE is odd.  One odd thing is that *the evaluation of the block on the right has to happen before any evaluations on the left*:
+
+    &gt;&gt; (print &quot;left&quot; 1) inline (print &quot;right&quot; [+ 2 + 3])
+    right
+    left
+    == 6
+
+That&#39;s just the physics of the situation.  The left looking rightward needs the answer to a question that can&#39;t be answered until the right is evaluated.  But it&#39;s not just SHOVE that has this property, look at SET-PATH! operation... right before left:
+
+    &gt;&gt; o: make object! [x: 10]
+    &gt;&gt; o/(print &quot;left&quot; x): (print &quot;right&quot; 20)
+    right
+    left
+    == 20
+
+The reason for why it has to do that is similar.  I&#39;ve made a [semi-convincing argument for why this is not a bug](https://github.com/rebol/rebol-issues/issues/2275#issuecomment-396708575), and if there are other constructs which have to do this then it seems less like an anomaly.
+
+Reading between-the-lines, this would provide a highly generic tool for rewriting the stream of code...you could imagine things that take a VARARGS! in, and give a VARARGS! out.
+
+### Avoiding Superfluous Stack Levels
+
+One area I&#39;d like to see this applied is when you want to avoid introducing a stack level in the debugger.  e.g. the console has to run a block of code, but you don&#39;t want to see &quot;DO BLOCK&quot; putting DO on the stack.  Instead the API could just say:
+
+    result = rebRun(&quot;inline&quot;, block);
+
+This way, when the code inside the block is running, INLINE has already finished its work...handing the feed back to the evaluator.  It will appear there&#39;s nothing at all on the stack.
+
+Because of the trickery involved, I *imagine* this would end up being slower than DO BLOCK (I&#39;d basically be certain of it), so you wouldn&#39;t want to do it unless there was a good reason.  But there may be some cases where code is getting composed or wired up today to accomplish this where it would be faster.  Since it&#39;s a hypothetical feature at this point, it&#39;s probably best to wait to speculate too much on this.</description>
+    
+    <lastBuildDate>Fri, 14 Dec 2018 12:35:02 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/variadic-return-values-not-varargs-return-values/951.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Variadic Return Values (not VARARGS! return values...)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>CHAIN got some new fun functionality recently, where functions of arity &gt; 1 can be used as chain steps...they just pick up their arguments in order normally:</p>
+<pre><code>&gt;&gt; addmul: chain [:add | :multiply]
+
+&gt;&gt; addmul 1 3 5
+== 20
+</code></pre>
+<p><a class="mention" href="/u/ingohohmann">@IngoHohmann</a>  thus asked what this would mean for functions which returned variadics.  Remembering that these do not exist yet (and will be challenging to write), this is only a thought experiment...but I imagined:</p>
+<pre><code>&gt;&gt; four-and-more: chain [specialize 'inline [block: [4]] | :multiply]
+
+&gt;&gt; four-and-more 5
+== 20
+
+&gt;&gt; two-and-more: chain [specialize 'inline [block: [+ 2]] | :multiply]
+
+&gt;&gt; 1 two-and-more 5
+== 20</code></pre>
+          <p><a href="https://forum.rebol.info/t/variadic-return-values-not-varargs-return-values/951/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/variadic-return-values-not-varargs-return-values/951/2</link>
+        <pubDate>Fri, 14 Dec 2018 12:35:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-951-2</guid>
+        <source url="https://forum.rebol.info/t/variadic-return-values-not-varargs-return-values/951.rss">Variadic Return Values (not VARARGS! return values...)</source>
+      </item>
+      <item>
+        <title>Variadic Return Values (not VARARGS! return values...)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Imagine the following:</p>
+<pre><code>inline: function [
+    return: [any-value! &lt;variadic&gt;]
+    block [block!]
+][
+    return make varargs! block
+]
+</code></pre>
+<p>With the desired behavior:</p>
+<pre><code>&gt;&gt; 1 inline [+ 2 + 3]
+== 6
+</code></pre>
+<p>This would be a very powerful macro-like mechanism.  (While not being done with any preprocessing step, and hence not a "macro" in the conventional sense).</p>
+<p>One of the mechanical problems with such a construct is that when the evaluator is looking right from the 1, it has to know if the function it is seeing is enfix or not.  Unfortunately, INLINE doesn't have a generic answer...its answer depends on calculations it does once it is running, after its arguments are evaluated.  It depends on what's in the block it gets.</p>
+<p>The evolving way of dealing with such situations is <em>left-variadic-enfix</em>.  This is to say that inline can defer its answer until when it runs...but by doing so it runs <em>before</em> its left hand side.</p>
+<p>Here is simplified model of how that would work:</p>
+<pre><code>inline: enfix function [
+    return: [any-value! &lt;variadic&gt;]
+    :look [&lt;opt&gt; any-value! &lt;variadic&gt;]
+    block [block!]
+][
+    if enfix? w: match [word!] first block [
+        return make varargs! compose/only [(take look) block]
+    ]
+    return make varargs! block
+]
+</code></pre>
+<p>The moment of the TAKE (or the lack of a take) is how the evaluator gets its "are you enfix or not" answer from something whose left hand side is variadic.</p>
+<p>While this looks very similar <a href="https://trello.com/c/Kg9A45b5/231-paths-can-be-dispatched-as-infix-and-provide-refinements-to-infix-operators-using-shove" rel="nofollow noopener">to what SHOVE does</a>, SHOVE is actually implemented as an internal trick to the evaluator that is tailored to that particular case.  It doesn't run usermode code (or even plain code inside a native) to accomplish what it does.  It can't, because the variadic take of the left would require completing a higher stack level of code before a lower stack level.</p>
+<p>It may seem variadics do this already (there's an ACTION! on the stack whose frame is running, and code is being processed from its "feed" to supply values to a variadic further on in the stack).  But that action is already running and has finished gathering its arguments--you're not interrupting the evaluator in mid-process, and hooking into the enfix mechanic itself.  I think it's possible though--it might need to use the same trick as ENCLOSE, which rearranges the stack in mid-run.</p>
+<p>It would still be a little odd--in the same way that SHOVE is odd.  One odd thing is that <em>the evaluation of the block on the right has to happen before any evaluations on the left</em>:</p>
+<pre><code>&gt;&gt; (print "left" 1) inline (print "right" [+ 2 + 3])
+right
+left
+== 6
+</code></pre>
+<p>That's just the physics of the situation.  The left looking rightward needs the answer to a question that can't be answered until the right is evaluated.  But it's not just SHOVE that has this property, look at SET-PATH! operation... right before left:</p>
+<pre><code>&gt;&gt; o: make object! [x: 10]
+&gt;&gt; o/(print "left" x): (print "right" 20)
+right
+left
+== 20
+</code></pre>
+<p>The reason for why it has to do that is similar.  I've made a <a href="https://github.com/rebol/rebol-issues/issues/2275#issuecomment-396708575" rel="nofollow noopener">semi-convincing argument for why this is not a bug</a>, and if there are other constructs which have to do this then it seems less like an anomaly.</p>
+<p>Reading between-the-lines, this would provide a highly generic tool for rewriting the stream of code...you could imagine things that take a VARARGS! in, and give a VARARGS! out.</p>
+<h3>Avoiding Superfluous Stack Levels</h3>
+<p>One area I'd like to see this applied is when you want to avoid introducing a stack level in the debugger.  e.g. the console has to run a block of code, but you don't want to see "DO BLOCK" putting DO on the stack.  Instead the API could just say:</p>
+<pre><code>result = rebRun("inline", block);
+</code></pre>
+<p>This way, when the code inside the block is running, INLINE has already finished its work...handing the feed back to the evaluator.  It will appear there's nothing at all on the stack.</p>
+<p>Because of the trickery involved, I <em>imagine</em> this would end up being slower than DO BLOCK (I'd basically be certain of it), so you wouldn't want to do it unless there was a good reason.  But there may be some cases where code is getting composed or wired up today to accomplish this where it would be faster.  Since it's a hypothetical feature at this point, it's probably best to wait to speculate too much on this.</p>
+          <p><a href="https://forum.rebol.info/t/variadic-return-values-not-varargs-return-values/951/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/variadic-return-values-not-varargs-return-values/951/1</link>
+        <pubDate>Sun, 09 Dec 2018 16:20:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-951-1</guid>
+        <source url="https://forum.rebol.info/t/variadic-return-values-not-varargs-return-values/951.rss">Variadic Return Values (not VARARGS! return values...)</source>
+      </item>
+  </channel>
+</rss>

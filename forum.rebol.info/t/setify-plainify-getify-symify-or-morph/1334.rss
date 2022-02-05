@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>SETIFY, PLAINIFY, GETIFY, SYMIFY... or MORPH ?</title>
+    <link>https://forum.rebol.info/t/setify-plainify-getify-symify-or-morph/1334</link>
+    <description>There are historical cases where you have to navigate a situation like:
+
+&gt; &quot;I have either a **foo** or a **foo/bar** and I want a **foo:** or a **foo/bar:** as appropriate.&quot;
+
+You can&#39;t exactly classify this in the type system.  There&#39;s no **to set! value** that can do the right thing generically for WORD! and ANY-WORD!
+
+This has gotten to be more of an issue, now that there are more such types.  This has led to a menagerie of morphing operations:
+
+    &gt;&gt; setify &#39;foo
+    == foo:
+
+    &gt;&gt; setify &#39;foo/bar
+    == foo/bar:
+
+    &gt;&gt; plainify @[foo bar]
+    == [foo bar]
+
+    &gt;&gt; getify &#39;(foo bar):
+    == :(foo bar)
+
+    &gt;&gt; symify &#39;foo/bar
+    == @foo/bar
+
+The names aren&#39;t so hot.  But the functionality is important.
+
+This kind of made me wonder if there might be a more clever operation, using quoting and driven by example:
+
+     &gt;&gt; value: the foo/bar
+
+     &gt;&gt; morph (value):
+     == foo/bar:
+
+     &gt;&gt; morph @(second [foo bar])
+     == @bar
+
+     &gt;&gt; value: &#39;[foo bar]:
+     &gt;&gt; morph (value)  ; let no decoration on the group mean &quot;plainify&quot;
+     == [foo bar]
+
+You could technically make it more minimal than that...by fetching the word:
+
+     &gt;&gt; value: the foo/bar
+
+     &gt;&gt; morph value:
+     == foo/bar
+
+There&#39;d still have to be an escaping mechanism anyway, and I think it kind of scans better to have the parentheses in there.
+
+Requiring a quote mark at the callsite might help hint that it&#39;s not running normal evaluation: 
+
+     &gt;&gt; value: the foo/bar
+
+     &gt;&gt; morph &#39;(value):
+     == foo/bar:
+
+But it needs to be a quoting function..we want the visual marker to be at the callsite:
+
+     &gt;&gt; value: the foo/bar
+
+     &gt;&gt; indirect: &#39;(value):
+
+     &gt;&gt; morph indirect  ; this defeats the whole point of the idea
+     == foo/bar:
+
+Given that it has to quote anyway, people who know how to use morph would probably be more annoyed by the quote tic than feel informed by it.  *(Would you like it if THE (e.g. Rebol2 QUOTE) required you to put a quote mark on its argument, just to emphasize that it wasn&#39;t evaluated...or is it better to just know what it means and have less typing and characters?)*
+
+Also it might be nice if the ticks let you set the quoting level on the output:
+
+     &gt;&gt; value: [foo bar]
+
+     &gt;&gt; morph &#39;(value):
+     == &#39;[foo bar]:
+
+So I think my suggestion is always have a GROUP! to have some container separation from the evaluation, don&#39;t have a tick mark unless you want the result quoted.  And MORPH seems like an okay-enough name.
+
+But the quoting does mean it breaks the flow of evaluation, and forces you to put things in a GROUP! when you might not want to.  Does this mean PLAINIFY and friends are still necessary?
+
+Another option to add here would be to morph the basic container type.  This is done less often.  I don&#39;t know exactly what you would call that:
+
+    &gt;&gt; value: the [a b]:
+
+    &gt;&gt; morph/class (value)
+    == (a b):
+
+    &gt;&gt; morph/class /value
+    == a/b:
+
+Fitting both isn&#39;t actually that interesting:
+
+     &gt;&gt; morph/class/sigil @.value
+     @a.b
+
+...because the whole point is preservation of some information in the original.  You could have thrown all the original information out nearly as easily with:
+
+     &gt;&gt; as sym-block! as tuple! value
+     == @a.b
+
+But, it&#39;s not useless.  Anyway, I&#39;m sure there are more creative or less creative ideas out there.  If the morphed value is always a GROUP!, there could be a skippable element in the middle:
+
+     &gt;&gt; value: the [a b]:
+
+     &gt;&gt; morph @(value)
+     == @[a b]
+
+     &gt;&gt; morph tuple! @(value)
+     == @a.b
+
+That&#39;s less puzzling than **morph/class/sigil @.value**.  So the remaining question might be how to get it to morph to a tuple while leaving the sigil alone more cleanly.  Quote marks might be used for this, meaning &quot;leave it alone, don&#39;t plainify it&quot;
+
+     &gt;&gt; value: the [a b]:
+
+     &gt;&gt; morph tuple! (value)
+     == a.b
+
+     &gt;&gt; morph tuple! &#39;(value)
+     == a.b:
+
+Seems a waste of being able to indicate how quoted you want the result.  Maybe this could be what BLOCK! does.
+
+     &gt;&gt; value: the [a b]:
+
+     &gt;&gt; morph tuple! [value]
+     == a.b:
+
+Another option would be that single group leaves it alone, and double group removes any sigil:
+
+     &gt;&gt; value: the [a b]:
+
+     &gt;&gt; morph (value)
+     == [a b]:
+
+     &gt;&gt; morph ((value))
+     == [a b]
+
+     &gt;&gt; morph tuple! (value)
+     == a.b:
+
+     &gt;&gt; morph tuple! (value)
+     == a.b
+
+That&#39;s not what COMPOSE does with `(( ))`, so it should probably be avoided.  I dunno.  *Actually*, keeping compatibility with COMPOSE and making `( )` do nothing and the BLOCK! plainify would be more consistent...
+
+     &gt;&gt; value: the [a b]:
+
+     &gt;&gt; morph tuple! [value]
+     == a.b
+
+     &gt;&gt; morph tuple! (value)
+     == a.b:
+
+It&#39;s just not an option in COMPOSE since it has only one type to work with.  Oh well.  That makes **morph (value)** a no-op... so it should probably just error and point you to the right thing to do.  Though maybe if you have some constructed code case that might have N quotes on it, then this could be a base case that you want as a no-op... hmmm.
+
+Anyway...there&#39;s a very weird function proposal that could come in handy...I&#39;ll try it out for a while and see what I think.</description>
+    
+    <lastBuildDate>Sun, 21 Nov 2021 00:01:14 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/setify-plainify-getify-symify-or-morph/1334.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>SETIFY, PLAINIFY, GETIFY, SYMIFY... or MORPH ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>There are historical cases where you have to navigate a situation like:</p>
+<blockquote>
+<p>"I have either a <strong>foo</strong> or a <strong>foo/bar</strong> and I want a <strong>foo:</strong> or a <strong>foo/bar:</strong> as appropriate."</p>
+</blockquote>
+<p>You can't exactly classify this in the type system.  There's no <strong>to set! value</strong> that can do the right thing generically for WORD! and ANY-WORD!</p>
+<p>This has gotten to be more of an issue, now that there are more such types.  This has led to a menagerie of morphing operations:</p>
+<pre><code>&gt;&gt; setify 'foo
+== foo:
+
+&gt;&gt; setify 'foo/bar
+== foo/bar:
+
+&gt;&gt; plainify @[foo bar]
+== [foo bar]
+
+&gt;&gt; getify '(foo bar):
+== :(foo bar)
+
+&gt;&gt; symify 'foo/bar
+== @foo/bar
+</code></pre>
+<p>The names aren't so hot.  But the functionality is important.</p>
+<p>This kind of made me wonder if there might be a more clever operation, using quoting and driven by example:</p>
+<pre><code> &gt;&gt; value: the foo/bar
+
+ &gt;&gt; morph (value):
+ == foo/bar:
+
+ &gt;&gt; morph @(second [foo bar])
+ == @bar
+
+ &gt;&gt; value: '[foo bar]:
+ &gt;&gt; morph (value)  ; let no decoration on the group mean "plainify"
+ == [foo bar]
+</code></pre>
+<p>You could technically make it more minimal than that...by fetching the word:</p>
+<pre><code> &gt;&gt; value: the foo/bar
+
+ &gt;&gt; morph value:
+ == foo/bar
+</code></pre>
+<p>There'd still have to be an escaping mechanism anyway, and I think it kind of scans better to have the parentheses in there.</p>
+<p>Requiring a quote mark at the callsite might help hint that it's not running normal evaluation:</p>
+<pre><code> &gt;&gt; value: the foo/bar
+
+ &gt;&gt; morph '(value):
+ == foo/bar:
+</code></pre>
+<p>But it needs to be a quoting function..we want the visual marker to be at the callsite:</p>
+<pre><code> &gt;&gt; value: the foo/bar
+
+ &gt;&gt; indirect: '(value):
+
+ &gt;&gt; morph indirect  ; this defeats the whole point of the idea
+ == foo/bar:
+</code></pre>
+<p>Given that it has to quote anyway, people who know how to use morph would probably be more annoyed by the quote tic than feel informed by it.  <em>(Would you like it if THE (e.g. Rebol2 QUOTE) required you to put a quote mark on its argument, just to emphasize that it wasn't evaluated...or is it better to just know what it means and have less typing and characters?)</em></p>
+<p>Also it might be nice if the ticks let you set the quoting level on the output:</p>
+<pre><code> &gt;&gt; value: [foo bar]
+
+ &gt;&gt; morph '(value):
+ == '[foo bar]:
+</code></pre>
+<p>So I think my suggestion is always have a GROUP! to have some container separation from the evaluation, don't have a tick mark unless you want the result quoted.  And MORPH seems like an okay-enough name.</p>
+<p>But the quoting does mean it breaks the flow of evaluation, and forces you to put things in a GROUP! when you might not want to.  Does this mean PLAINIFY and friends are still necessary?</p>
+<p>Another option to add here would be to morph the basic container type.  This is done less often.  I don't know exactly what you would call that:</p>
+<pre><code>&gt;&gt; value: the [a b]:
+
+&gt;&gt; morph/class (value)
+== (a b):
+
+&gt;&gt; morph/class /value
+== a/b:
+</code></pre>
+<p>Fitting both isn't actually that interesting:</p>
+<pre><code> &gt;&gt; morph/class/sigil @.value
+ @a.b
+</code></pre>
+<p>...because the whole point is preservation of some information in the original.  You could have thrown all the original information out nearly as easily with:</p>
+<pre><code> &gt;&gt; as sym-block! as tuple! value
+ == @a.b
+</code></pre>
+<p>But, it's not useless.  Anyway, I'm sure there are more creative or less creative ideas out there.  If the morphed value is always a GROUP!, there could be a skippable element in the middle:</p>
+<pre><code> &gt;&gt; value: the [a b]:
+
+ &gt;&gt; morph @(value)
+ == @[a b]
+
+ &gt;&gt; morph tuple! @(value)
+ == @a.b
+</code></pre>
+<p>That's less puzzling than <strong>morph/class/sigil @.value</strong>.  So the remaining question might be how to get it to morph to a tuple while leaving the sigil alone more cleanly.  Quote marks might be used for this, meaning "leave it alone, don't plainify it"</p>
+<pre><code> &gt;&gt; value: the [a b]:
+
+ &gt;&gt; morph tuple! (value)
+ == a.b
+
+ &gt;&gt; morph tuple! '(value)
+ == a.b:
+</code></pre>
+<p>Seems a waste of being able to indicate how quoted you want the result.  Maybe this could be what BLOCK! does.</p>
+<pre><code> &gt;&gt; value: the [a b]:
+
+ &gt;&gt; morph tuple! [value]
+ == a.b:
+</code></pre>
+<p>Another option would be that single group leaves it alone, and double group removes any sigil:</p>
+<pre><code> &gt;&gt; value: the [a b]:
+
+ &gt;&gt; morph (value)
+ == [a b]:
+
+ &gt;&gt; morph ((value))
+ == [a b]
+
+ &gt;&gt; morph tuple! (value)
+ == a.b:
+
+ &gt;&gt; morph tuple! (value)
+ == a.b
+</code></pre>
+<p>That's not what COMPOSE does with <code>(( ))</code>, so it should probably be avoided.  I dunno.  <em>Actually</em>, keeping compatibility with COMPOSE and making <code>( )</code> do nothing and the BLOCK! plainify would be more consistent...</p>
+<pre><code> &gt;&gt; value: the [a b]:
+
+ &gt;&gt; morph tuple! [value]
+ == a.b
+
+ &gt;&gt; morph tuple! (value)
+ == a.b:
+</code></pre>
+<p>It's just not an option in COMPOSE since it has only one type to work with.  Oh well.  That makes <strong>morph (value)</strong> a no-op... so it should probably just error and point you to the right thing to do.  Though maybe if you have some constructed code case that might have N quotes on it, then this could be a base case that you want as a no-op... hmmm.</p>
+<p>Anyway...there's a very weird function proposal that could come in handy...I'll try it out for a while and see what I think.</p>
+          <p><a href="https://forum.rebol.info/t/setify-plainify-getify-symify-or-morph/1334/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/setify-plainify-getify-symify-or-morph/1334/1</link>
+        <pubDate>Mon, 21 Sep 2020 07:54:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1334-1</guid>
+        <source url="https://forum.rebol.info/t/setify-plainify-getify-symify-or-morph/1334.rss">SETIFY, PLAINIFY, GETIFY, SYMIFY... or MORPH ?</source>
+      </item>
+  </channel>
+</rss>

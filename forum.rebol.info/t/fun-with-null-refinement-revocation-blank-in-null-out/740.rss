@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Fun with NULL: Refinement Revocation + &quot;BLANK!-in-NULL-out&quot;</title>
+    <link>https://forum.rebol.info/t/fun-with-null-refinement-revocation-blank-in-null-out/740</link>
+    <description>A feature that doesn&#39;t have a lot of uses in the wild yet is [&quot;refinement revocation&quot;](https://trello.com/c/46zJ9lZj).  While updating the %httpd.reb script, I noticed an interesting place it could be used.
+
+The code needed some updating, because it was assigning the result of a conditional (which might fail) directly through a SET-WORD!...which could be null, and thus not legal:
+
+    type: if string? headers/Content-Type [
+        copy/part type: headers/Content-Type any [
+            find type &quot;;&quot;
+            tail type
+        ]
+    ]
+
+I could have just changed that to `try if string?` (and update it to [`try if text?`](https://forum.rebol.info/t/text-vs-string/612) while I was in the area).  But I looked at it a little closer.
+
+What&#39;s going on is that `Content-Type` contains a string which [may have a semicolon in it](https://stackoverflow.com/q/35761248/211160), and if so the content is wanted only up to the semicolon but not including it.
+  
+But the ANY isn&#39;t really needed.  It&#39;s supplying the argument to COPY&#39;s /PART refinement, saying that the COPY should go to the tail if there was no semicolon.  But since FIND returns NULL if it doesn&#39;t find anything, that would signal refinement revocation...meaning that the /PART will be taken back.  You can just say:
+
+     copy/part type: headers/Content-Type find type &quot;;&quot;
+
+If `find type &quot;;&quot;` comes back as NULL that effectively becomes just `copy type: headers/Content-Type`.  This is an intrinsic feature *(and is why you can&#39;t have an `&lt;opt&gt;` refinement arg...such arguments are NULL if-and-only-if the refinement is not in use)*
+
+Should you want to document that you were aware the FIND could fail--and you&#39;re not doing the revocation on accident--you could throw in an OPT.  It won&#39;t do anything, since FIND never returns BLANK! to be turned into NULL.  But it will show that you knowingly generated NULLs there.
+
+So one way it might be written is:
+
+    type: try all [
+        text? type: headers/Content-Type
+        copy/part type (opt find type &quot;;&quot;)
+    ]
+
+But there&#39;s a lot of options here, like using PARSE.  PARSE now speaks the &quot;blank in, NULL out&quot; protocol, so you can use that to your advantage:
+
+    parse try match text! headers/Content-Type [
+        copy type: to [&quot;;&quot; | end]
+    ] else [
+        type: _
+    ]
+
+Here MATCH TEXT! will give back a null if it&#39;s not, then TRY will convert the NULL to a BLANK!, which PARSE will convert back to a NULL...triggering the ELSE.
+
+Here&#39;s something that&#39;s not necessarily *clear*, but interesting, is to use that FIND and COPY participate in the &quot;blank in, null out&quot; policy too.  So you could say:
+
+    type: try match text! headers/Content-Type
+    type: maybe copy/part type (opt find type &quot;;&quot;)
+
+If `headers/Content-Type` isn&#39;t a TEXT!, then MATCH will give NULL, and TRY will turn that into a BLANK! so it can be assigned to type.  Then on the next line, if TYPE is blank, both FIND and COPY will return NULL.  So the MAYBE will get NULL on the right hand side, and avoid overwriting the existing value in TYPE: on the left.</description>
+    
+    <lastBuildDate>Fri, 27 Jul 2018 02:36:16 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/fun-with-null-refinement-revocation-blank-in-null-out/740.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Fun with NULL: Refinement Revocation + &quot;BLANK!-in-NULL-out&quot;</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>A feature that doesn't have a lot of uses in the wild yet is <a href="https://trello.com/c/46zJ9lZj" rel="nofollow noopener">"refinement revocation"</a>.  While updating the %httpd.reb script, I noticed an interesting place it could be used.</p>
+<p>The code needed some updating, because it was assigning the result of a conditional (which might fail) directly through a SET-WORD!...which could be null, and thus not legal:</p>
+<pre><code>type: if string? headers/Content-Type [
+    copy/part type: headers/Content-Type any [
+        find type ";"
+        tail type
+    ]
+]
+</code></pre>
+<p>I could have just changed that to <code>try if string?</code> (and update it to <a href="https://forum.rebol.info/t/text-vs-string/612"><code>try if text?</code></a> while I was in the area).  But I looked at it a little closer.</p>
+<p>What's going on is that <code>Content-Type</code> contains a string which <a href="https://stackoverflow.com/q/35761248/211160" rel="nofollow noopener">may have a semicolon in it</a>, and if so the content is wanted only up to the semicolon but not including it.</p>
+<p>But the ANY isn't really needed.  It's supplying the argument to COPY's /PART refinement, saying that the COPY should go to the tail if there was no semicolon.  But since FIND returns NULL if it doesn't find anything, that would signal refinement revocation...meaning that the /PART will be taken back.  You can just say:</p>
+<pre><code> copy/part type: headers/Content-Type find type ";"
+</code></pre>
+<p>If <code>find type ";"</code> comes back as NULL that effectively becomes just <code>copy type: headers/Content-Type</code>.  This is an intrinsic feature <em>(and is why you can't have an <code>&lt;opt&gt;</code> refinement arg...such arguments are NULL if-and-only-if the refinement is not in use)</em></p>
+<p>Should you want to document that you were aware the FIND could fail--and you're not doing the revocation on accident--you could throw in an OPT.  It won't do anything, since FIND never returns BLANK! to be turned into NULL.  But it will show that you knowingly generated NULLs there.</p>
+<p>So one way it might be written is:</p>
+<pre><code>type: try all [
+    text? type: headers/Content-Type
+    copy/part type (opt find type ";")
+]
+</code></pre>
+<p>But there's a lot of options here, like using PARSE.  PARSE now speaks the "blank in, NULL out" protocol, so you can use that to your advantage:</p>
+<pre><code>parse try match text! headers/Content-Type [
+    copy type: to [";" | end]
+] else [
+    type: _
+]
+</code></pre>
+<p>Here MATCH TEXT! will give back a null if it's not, then TRY will convert the NULL to a BLANK!, which PARSE will convert back to a NULL...triggering the ELSE.</p>
+<p>Here's something that's not necessarily <em>clear</em>, but interesting, is to use that FIND and COPY participate in the "blank in, null out" policy too.  So you could say:</p>
+<pre><code>type: try match text! headers/Content-Type
+type: maybe copy/part type (opt find type ";")
+</code></pre>
+<p>If <code>headers/Content-Type</code> isn't a TEXT!, then MATCH will give NULL, and TRY will turn that into a BLANK! so it can be assigned to type.  Then on the next line, if TYPE is blank, both FIND and COPY will return NULL.  So the MAYBE will get NULL on the right hand side, and avoid overwriting the existing value in TYPE: on the left.</p>
+          <p><a href="https://forum.rebol.info/t/fun-with-null-refinement-revocation-blank-in-null-out/740/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/fun-with-null-refinement-revocation-blank-in-null-out/740/1</link>
+        <pubDate>Sun, 15 Jul 2018 17:25:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-740-1</guid>
+        <source url="https://forum.rebol.info/t/fun-with-null-refinement-revocation-blank-in-null-out/740.rss">Fun with NULL: Refinement Revocation + &quot;BLANK!-in-NULL-out&quot;</source>
+      </item>
+  </channel>
+</rss>

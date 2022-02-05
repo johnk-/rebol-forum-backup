@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Embracing Host Language Exception Model in the API</title>
+    <link>https://forum.rebol.info/t/embracing-host-language-exception-model-in-the-api/555</link>
+    <description>When first adding the variadic rebDo() *(now, `rebRun()`)*, it would return a value &quot;handle&quot; of the evaluative result.  As a first attempt of defining what it would do about errors, it returned NULL in that case.  Those who were interested in bulletproofing their code could add in check for NULL and then call a function for fetching the last error.
+
+But a handle has a NULL state as an option.  What if the result was just a boolean, like with the proposed behavior of `rebDid()`?  The idea of being able to write:
+
+    if (rebDid(&quot;all [&quot;, rebEval(fun), val, 3, &quot;empty? block]&quot;)) {
+        ...
+    }
+
+...seems far preferable to:
+
+    REBVAL *all_result = rebRun(&quot;all [&quot;, rebEval(fun), val, 3, &quot;empty? block]&quot;);
+    if (all_result != NULL) { // value handle, must be released or has GC cost
+        if (rebUnboxLogic(all_result)) {
+            ...
+        }
+        rebRelease(all_result);
+    }
+    else { ... }
+
+Yet if rebDid() was executor of code, logic unboxer, and automatic releaser of values...it had no way to return a result besides TRUE or FALSE.  So no channel to inform you about an error.
+
+This makes it seem desirable to work within the exception-handling model of the host language.  So you want to see things like:
+
+    try { 
+         var three = rebInteger(3); 
+         var block = rebRun(&quot;[1 (2&quot;, three, &quot;) 4 5]&quot;); 
+         rebElide(&quot;append/dup&quot;, block, &quot;{string literal} 2&quot;); 
+         ... 
+     } catch (e) { 
+         if (e instanceof RebolError) { 
+             console.log(e); 
+             ... 
+         } 
+     } 
+
+There are a couple of issues, though:
+
+1. While C++ and JavaScript have a standard exception-handling model (try/catch)...C doesn&#39;t have one.
+
+2. Even if a &quot;standard&quot;-seeming exception is thrown from the guts of code running on the behalf of an API call, *the API must catch it for processing* before passing it on.  This is because it has to clean up the Rebol stack levels that were crossed, because the next thing that might happen to the error once it&#39;s returned is it might be caught by the API caller and not processed further.
+
+The first point can really only be addressed with a specialized routine for C API clients.  Ruby has [something called &quot;rescue&quot;](http://silverhammermba.github.io/emberb/c/#rescue) which is basically what&#39;s needed.  If you promise that you&#39;re a C client--no one has to worry about you catching an exception before processing--because you can&#39;t.  You either set up a top-level trap or you crash (same as in Ruby).
+
+The second point could be fixed by a contract that says &quot;if you are going to catch a Rebol error yourself, instead of letting it propagate to a stack higher than yourself, you have to call rebCleanupAfterError()&quot;.  But that sounds like a bad contract.
+
+It&#39;s a little bit unfortunate to think that *every* operation needs to be guarded--down to extracting the index out of a value *(INDEX-OF $10 raises an error...)*.  However:
+
+* There could be a mode you ask to put the API in that says you will not be catching any Rebol exceptions (or exceptions like stack overflows) yourself using a catch()...or that if you did, you would call rebCleanupAfterError().  Sounds like it would be easy to screw up, but it&#39;s easier to add this kind of thing on top of an otherwise working model than to add a working model on top of something broken.
+
+* Modern C++ try/catch has what&#39;s called [zero-cost exceptions](https://stackoverflow.com/a/13836329/211160), you only pay for the try/catch if the exception occurs.
+
+* The focus of this API is on readability and usability for the crossover points into Rebol that are made, while keeping as much of the logic separated into host and Rebol as possible. The crossover points shouldn&#39;t be the bottleneck.  If it is, then probably another approach is needed (like writing your own native).
+
+So it&#39;s not insurmountable, just something that has to be kept in mind.</description>
+    
+    <lastBuildDate>Sat, 02 Oct 2021 19:59:04 +0000</lastBuildDate>
+    <category>Errors</category>
+    <atom:link href="https://forum.rebol.info/t/embracing-host-language-exception-model-in-the-api/555.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Embracing Host Language Exception Model in the API</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When first adding the variadic rebDo() <em>(now, <code>rebRun()</code>)</em>, it would return a value "handle" of the evaluative result.  As a first attempt of defining what it would do about errors, it returned NULL in that case.  Those who were interested in bulletproofing their code could add in check for NULL and then call a function for fetching the last error.</p>
+<p>But a handle has a NULL state as an option.  What if the result was just a boolean, like with the proposed behavior of <code>rebDid()</code>?  The idea of being able to write:</p>
+<pre><code>if (rebDid("all [", rebEval(fun), val, 3, "empty? block]")) {
+    ...
+}
+</code></pre>
+<p>...seems far preferable to:</p>
+<pre><code>REBVAL *all_result = rebRun("all [", rebEval(fun), val, 3, "empty? block]");
+if (all_result != NULL) { // value handle, must be released or has GC cost
+    if (rebUnboxLogic(all_result)) {
+        ...
+    }
+    rebRelease(all_result);
+}
+else { ... }
+</code></pre>
+<p>Yet if rebDid() was executor of code, logic unboxer, and automatic releaser of values...it had no way to return a result besides TRUE or FALSE.  So no channel to inform you about an error.</p>
+<p>This makes it seem desirable to work within the exception-handling model of the host language.  So you want to see things like:</p>
+<pre><code>try { 
+     var three = rebInteger(3); 
+     var block = rebRun("[1 (2", three, ") 4 5]"); 
+     rebElide("append/dup", block, "{string literal} 2"); 
+     ... 
+ } catch (e) { 
+     if (e instanceof RebolError) { 
+         console.log(e); 
+         ... 
+     } 
+ } 
+</code></pre>
+<p>There are a couple of issues, though:</p>
+<ol>
+<li>
+<p>While C++ and JavaScript have a standard exception-handling model (try/catch)...C doesn't have one.</p>
+</li>
+<li>
+<p>Even if a "standard"-seeming exception is thrown from the guts of code running on the behalf of an API call, <em>the API must catch it for processing</em> before passing it on.  This is because it has to clean up the Rebol stack levels that were crossed, because the next thing that might happen to the error once it's returned is it might be caught by the API caller and not processed further.</p>
+</li>
+</ol>
+<p>The first point can really only be addressed with a specialized routine for C API clients.  Ruby has <a href="http://silverhammermba.github.io/emberb/c/#rescue">something called "rescue"</a> which is basically what's needed.  If you promise that you're a C client--no one has to worry about you catching an exception before processing--because you can't.  You either set up a top-level trap or you crash (same as in Ruby).</p>
+<p>The second point could be fixed by a contract that says "if you are going to catch a Rebol error yourself, instead of letting it propagate to a stack higher than yourself, you have to call rebCleanupAfterError()".  But that sounds like a bad contract.</p>
+<p>It's a little bit unfortunate to think that <em>every</em> operation needs to be guarded--down to extracting the index out of a value <em>(INDEX-OF $10 raises an error...)</em>.  However:</p>
+<ul>
+<li>
+<p>There could be a mode you ask to put the API in that says you will not be catching any Rebol exceptions (or exceptions like stack overflows) yourself using a catch()...or that if you did, you would call rebCleanupAfterError().  Sounds like it would be easy to screw up, but it's easier to add this kind of thing on top of an otherwise working model than to add a working model on top of something broken.</p>
+</li>
+<li>
+<p>Modern C++ try/catch has what's called <a href="https://stackoverflow.com/a/13836329/211160">zero-cost exceptions</a>, you only pay for the try/catch if the exception occurs.</p>
+</li>
+<li>
+<p>The focus of this API is on readability and usability for the crossover points into Rebol that are made, while keeping as much of the logic separated into host and Rebol as possible. The crossover points shouldn't be the bottleneck.  If it is, then probably another approach is needed (like writing your own native).</p>
+</li>
+</ul>
+<p>So it's not insurmountable, just something that has to be kept in mind.</p>
+          <p><a href="https://forum.rebol.info/t/embracing-host-language-exception-model-in-the-api/555/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/embracing-host-language-exception-model-in-the-api/555/1</link>
+        <pubDate>Sun, 04 Mar 2018 23:21:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-555-1</guid>
+        <source url="https://forum.rebol.info/t/embracing-host-language-exception-model-in-the-api/555.rss">Embracing Host Language Exception Model in the API</source>
+      </item>
+  </channel>
+</rss>

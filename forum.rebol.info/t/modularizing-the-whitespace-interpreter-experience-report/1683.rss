@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Modularizing The Whitespace Interpreter: Experience Report</title>
+    <link>https://forum.rebol.info/t/modularizing-the-whitespace-interpreter-experience-report/1683</link>
+    <description>## The Whitespace Interpreter Project Has Now Been Modulariz&#39;d...
+
+**...and is running in the **[&quot;Sea of Words&quot;](https://forum.rebol.info/t/the-sea-of-words/1564)**.**  
+
+It is [passing the tests on Windows, Mac, and Linux](https://github.com/hostilefork/rebol-whitespacers/actions/runs/1161591653), in both debug and release builds. 
+
+While the project may seem &quot;modest&quot;, I&#39;d argue it actually is a pretty deep dive into the core premise of why the methodology of the language is interesting.
+
+And I&#39;m using it as a testbed for new ideas.  I brought up the idea of using **===** as a section divider that acts like a comment, but could be shown at higher verbosity levels.  That&#39;s exactly the way the whitespace interpreter is using it.  It&#39;s just using the lexical parts of the language freeform...not creating variables, thanks to Sea of Words!
+
+So when I write a section divider like:
+
+    === LOAD THE SOURCE INTO PROGRAM VARIABLE ===
+
+There&#39;s a bit in the command line processing that ticks over the variadic **===** into a mode where it stops being purely commentary/invisible, and prints the line in the program output:
+
+    if vm.verbose &gt; 0 [
+        ===/visibility true  ; show the `=== xxxx ===` lines
+    ]
+
+As with all things...there&#39;s some glitches to sort out.  Like that the console uses these dividers too, so if you are running from the console these get all mixed up.  It means you&#39;d have to declare a common instance of this **===** from some generic one, and make that common across your program.
+
+Either way, it let me avoid redundancy and focus on the program.  And it might seem a small detail to not have a string:
+
+    === {LOAD THE SOURCE INTO PROGRAM VARIABLE} ===
+
+But every character counts when it comes to being happy with how your program looks.  :-)  Also, that doesn&#39;t provide any way for us to escape things...whereas we can put things like @(...) in there...
+
+    === LOAD SCRIPT FILE: @(filename) ===
+
+*(Note: We may be getting these facilities via string interpolation, but the point remains that it looks better when we can just write without delimiters.)*
+
+# Problems Encountered
+
+The single biggest problem encountered in the modularization is:
+
+**If you IMPORT a variable from a module, you get a copy of that variable in your own module, and you thus do not see changes to the imported library&#39;s original version of the variable.**
+
+This is an artifact of using the IMPORT statement in the body of the module, after it has already been scanned and &quot;interned&quot;.  In other words: by the time the IMPORT has ran, the word you are importing already got connected to the module you are importing it to.  So the only way to wire it up is to add a copy of that variable into the module so the already-scanned-and-bound instances will see it.
+
+If we knew about the importation you wanted to do *before* we scanned and &quot;interned&quot; the module, then we&#39;d be able to bind the variable directly to what you were importing.  *But is that really what you want?*  Certainly it hasn&#39;t been with LIB.  You don&#39;t want to bind variables to LIB because then overwriting anything the mezzanine uses--like PRINT--would trash the system.  This is part of the justification for why importing gets a copy.
+
+One way to get the latest version of a variable is not to import the module&#39;s words into a local scope, but to capture the module in a variable and access the fields through that.  Compare:
+
+    import %some-module.r  ; imports `something` and `change-something`
+    change-something
+    print [something]  ; won&#39;t see change
+
+    m: import %some-module.r
+    m.change-something
+    print [m.something]  ; will see the field as it changes
+
+Stylistically, some languages enforce this anyway.  Like in Node.js you can only do it the second way, and if you want a local name for things you have to make it yourself as a local variable to your script.  Then of course you don&#39;t expect that to change when the module variable changes--they&#39;re disconnected.
+
+*I don&#39;t want to get into the business of being prescriptive about how much you import or export.*  That&#39;s a policy of whatever module framework you use and your personal decisions.  So I think there needs to be a workable way to bind in a way that sees changes to variables without also giving you access to accidentally overwrite them and break the module you are using for itself and other clients.
+
+## Why Doesn&#39;t &quot;Attachment&quot;/&quot;Inheritance&quot; Solve This?
+
+Right now we don&#39;t have this problem with Lib.  But that&#39;s because it&#39;s being treated specially.  When you access a variable by name--and it&#39;s not in your evaluation context (your module or the implicit module where &quot;do&quot; is running)--then it falls through to look in Lib.
+
+We&#39;d need some way to have modules be able to have this fall-through on a per-variable basis, to different libs.  They have to remember that they are attached to your module (in case you overwrite them), but they also have to know there&#39;s no instance in your module and point to where they can be found so long as they&#39;re not overwritten.
+
+Fortunately there&#39;s enough space for that.  We can make something the size of a variable, with no variable in it, that uses the variable spot to store where the module was that it was imported from.  An &quot;import stub&quot;, basically.
+
+The goal of module inheritance from modules like Lib is to avoid a situation where you have to create these stubs for everything.  I&#39;m not sure exactly how different the ideas are though, and if it should just be an implementation detail where the system decides &quot;okay, that&#39;s a big library and you&#39;re importing it all... we use search mechanism 1&quot; vs. &quot;you only imported 3 things, better to make stubs for those 3&quot;.
+
+## That Aside, Everything Seemed To Work Smoothly
+
+And even the Redbol emulation of the old R3-Alpha version of the interpreter works, using modularized Redbol!
+
+Redbol is definitely a case I want to keep central in the design, because it is executing on the pitch of what we&#39;re saying: This is a kit that you can rewrite the laws of the language on a whim.  And Redbol is a great case to look at, that has tests.
+
+But I also want to see more of how I can fuse together what&#39;s happening with LET and virtual binding, along with the sea of words, and what hope there is for string interning.  Having things like Whitespace around are good because if some change to the binding model makes it not possible to do what Whitespace does, that indicates it&#39;s not the right model.  So it&#39;s a stake in the ground.</description>
+    
+    <lastBuildDate>Tue, 24 Aug 2021 08:29:38 +0000</lastBuildDate>
+    <category>Modules</category>
+    <atom:link href="https://forum.rebol.info/t/modularizing-the-whitespace-interpreter-experience-report/1683.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Modularizing The Whitespace Interpreter: Experience Report</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>The Whitespace Interpreter Project Has Now Been Modulariz'd...</h2>
+<p><strong>...and is running in the <strong><a href="https://forum.rebol.info/t/the-sea-of-words/1564">"Sea of Words"</a></strong>.</strong></p>
+<p>It is <a href="https://github.com/hostilefork/rebol-whitespacers/actions/runs/1161591653">passing the tests on Windows, Mac, and Linux</a>, in both debug and release builds.</p>
+<p>While the project may seem "modest", I'd argue it actually is a pretty deep dive into the core premise of why the methodology of the language is interesting.</p>
+<p>And I'm using it as a testbed for new ideas.  I brought up the idea of using <strong>===</strong> as a section divider that acts like a comment, but could be shown at higher verbosity levels.  That's exactly the way the whitespace interpreter is using it.  It's just using the lexical parts of the language freeform...not creating variables, thanks to Sea of Words!</p>
+<p>So when I write a section divider like:</p>
+<pre><code>=== LOAD THE SOURCE INTO PROGRAM VARIABLE ===
+</code></pre>
+<p>There's a bit in the command line processing that ticks over the variadic <strong>===</strong> into a mode where it stops being purely commentary/invisible, and prints the line in the program output:</p>
+<pre><code>if vm.verbose &gt; 0 [
+    ===/visibility true  ; show the `=== xxxx ===` lines
+]
+</code></pre>
+<p>As with all things...there's some glitches to sort out.  Like that the console uses these dividers too, so if you are running from the console these get all mixed up.  It means you'd have to declare a common instance of this <strong>===</strong> from some generic one, and make that common across your program.</p>
+<p>Either way, it let me avoid redundancy and focus on the program.  And it might seem a small detail to not have a string:</p>
+<pre><code>=== {LOAD THE SOURCE INTO PROGRAM VARIABLE} ===
+</code></pre>
+<p>But every character counts when it comes to being happy with how your program looks.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:">  Also, that doesn't provide any way for us to escape things...whereas we can put things like @(...) in there...</p>
+<pre><code>=== LOAD SCRIPT FILE: @(filename) ===
+</code></pre>
+<p><em>(Note: We may be getting these facilities via string interpolation, but the point remains that it looks better when we can just write without delimiters.)</em></p>
+<h1>Problems Encountered</h1>
+<p>The single biggest problem encountered in the modularization is:</p>
+<p><strong>If you IMPORT a variable from a module, you get a copy of that variable in your own module, and you thus do not see changes to the imported library's original version of the variable.</strong></p>
+<p>This is an artifact of using the IMPORT statement in the body of the module, after it has already been scanned and "interned".  In other words: by the time the IMPORT has ran, the word you are importing already got connected to the module you are importing it to.  So the only way to wire it up is to add a copy of that variable into the module so the already-scanned-and-bound instances will see it.</p>
+<p>If we knew about the importation you wanted to do <em>before</em> we scanned and "interned" the module, then we'd be able to bind the variable directly to what you were importing.  <em>But is that really what you want?</em>  Certainly it hasn't been with LIB.  You don't want to bind variables to LIB because then overwriting anything the mezzanine uses--like PRINT--would trash the system.  This is part of the justification for why importing gets a copy.</p>
+<p>One way to get the latest version of a variable is not to import the module's words into a local scope, but to capture the module in a variable and access the fields through that.  Compare:</p>
+<pre><code>import %some-module.r  ; imports `something` and `change-something`
+change-something
+print [something]  ; won't see change
+
+m: import %some-module.r
+m.change-something
+print [m.something]  ; will see the field as it changes
+</code></pre>
+<p>Stylistically, some languages enforce this anyway.  Like in Node.js you can only do it the second way, and if you want a local name for things you have to make it yourself as a local variable to your script.  Then of course you don't expect that to change when the module variable changes--they're disconnected.</p>
+<p><em>I don't want to get into the business of being prescriptive about how much you import or export.</em>  That's a policy of whatever module framework you use and your personal decisions.  So I think there needs to be a workable way to bind in a way that sees changes to variables without also giving you access to accidentally overwrite them and break the module you are using for itself and other clients.</p>
+<h2>Why Doesn't "Attachment"/"Inheritance" Solve This?</h2>
+<p>Right now we don't have this problem with Lib.  But that's because it's being treated specially.  When you access a variable by name--and it's not in your evaluation context (your module or the implicit module where "do" is running)--then it falls through to look in Lib.</p>
+<p>We'd need some way to have modules be able to have this fall-through on a per-variable basis, to different libs.  They have to remember that they are attached to your module (in case you overwrite them), but they also have to know there's no instance in your module and point to where they can be found so long as they're not overwritten.</p>
+<p>Fortunately there's enough space for that.  We can make something the size of a variable, with no variable in it, that uses the variable spot to store where the module was that it was imported from.  An "import stub", basically.</p>
+<p>The goal of module inheritance from modules like Lib is to avoid a situation where you have to create these stubs for everything.  I'm not sure exactly how different the ideas are though, and if it should just be an implementation detail where the system decides "okay, that's a big library and you're importing it all... we use search mechanism 1" vs. "you only imported 3 things, better to make stubs for those 3".</p>
+<h2>That Aside, Everything Seemed To Work Smoothly</h2>
+<p>And even the Redbol emulation of the old R3-Alpha version of the interpreter works, using modularized Redbol!</p>
+<p>Redbol is definitely a case I want to keep central in the design, because it is executing on the pitch of what we're saying: This is a kit that you can rewrite the laws of the language on a whim.  And Redbol is a great case to look at, that has tests.</p>
+<p>But I also want to see more of how I can fuse together what's happening with LET and virtual binding, along with the sea of words, and what hope there is for string interning.  Having things like Whitespace around are good because if some change to the binding model makes it not possible to do what Whitespace does, that indicates it's not the right model.  So it's a stake in the ground.</p>
+          <p><a href="https://forum.rebol.info/t/modularizing-the-whitespace-interpreter-experience-report/1683/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/modularizing-the-whitespace-interpreter-experience-report/1683/1</link>
+        <pubDate>Tue, 24 Aug 2021 08:29:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1683-1</guid>
+        <source url="https://forum.rebol.info/t/modularizing-the-whitespace-interpreter-experience-report/1683.rss">Modularizing The Whitespace Interpreter: Experience Report</source>
+      </item>
+  </channel>
+</rss>

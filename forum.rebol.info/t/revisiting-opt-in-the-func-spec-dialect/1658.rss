@@ -1,0 +1,328 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Revisiting `&lt;opt&gt;` in the Func Spec Dialect</title>
+    <link>https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658</link>
+    <description>## First, Let&#39;s Look Briefly At The History Of `&lt;opt&gt;`
+
+It was many years ago when `&lt;opt&gt;` first came on the scene as a way to say that a function argument would allow &quot;NULL&quot; as a possibility.
+
+The reasoning was that there was a certain &quot;state&quot; which can be synthesized that represents a *non-value*.
+
+&gt; Note: Back then, the state was the result of excising reified UNSET! from the system--and it was called VOID--a term that means something rather different today.  **To make things clearer I&#39;m going to sanitize history here a bit and pretend like it was always called NULL.**
+
+**Meanness Level Alpha: You Can&#39;t Even ASK What Type a NULL Is**
+
+In the earliest days, not only did NULL &quot;not have a type&quot;...it was not truthy or falsey...it generated errors when you tried to access it through words.  It went through several iterations of meanness.
+
+This is basically where things started:
+
+    &gt;&gt; select [a 10 b 20] &#39;c
+    ; null
+
+    &gt;&gt; type of select [a 10 b 20] &#39;c
+    ** Error: NULL Values Do Not Have Types
+
+But that was a pain.
+
+**Meanness Level Beta: You Can Ask, But The Answer Is Still A Mean NULL**
+
+*I was steadfast that there wasn&#39;t going to be a NULL! &quot;datatype&quot;.*  But since NULL was the &quot;non-answer&quot; given back for a &quot;non-valued&quot; state...what if the TYPE OF a NULL was just... NULL?
+
+    &gt;&gt; select [a 10 b 20] &#39;c
+    ; null
+
+    &gt;&gt; type of select [a 10 b 20] &#39;c
+    ; null
+
+While it was pleasing at some level, it didn&#39;t change the fact that NULL was still mean, and not accepted a lot of places...much like an UNSET! had been in Rebol2:
+
+    rebol2&gt;&gt; switch print &quot;Rebol2&quot; [10 [print &quot;Disliked UNSET!s&quot;]]
+    Rebol2
+    ** Script Error: switch is missing its value argument
+
+So the same problem would hit you all around the system if you were trying to do something with that NULL answer you got for types:
+
+    &gt;&gt; switch type of select [a 10 b 20] &#39;c [
+         integer! [...]
+         block! [...]
+    ]
+    ** Error: SWITCH does not allow NULL as its VALUE argument
+
+**Meanness Level Gamma: NULL Becomes Friendly**
+
+Today we&#39;ve gotten to a situation where NULL is generally pretty friendly and accepted a lot of places.  WORD!s can look up to NULL without erroring, so NULL doesn&#39;t need to be a &quot;function that returns NULL&quot;.
+
+    &gt;&gt; switch type of select [a 10 b 20] &#39;c [
+         null [print &quot;Everything works just fine!&quot;]
+         integer! [...]
+         block! [...]
+    ]
+    Everything works just fine!
+
+The whole paradigm surrounding unsetness has gone through a great rethinking with BAD-WORD!s and isotopes that I&#39;m still discovering the interesting nuances of, but it&#39;s light-years ahead of old methods.
+
+## So...Back To TYPESET! Representation
+
+From the beginning I knew there was not going to be a NULL! &quot;datatype&quot;.  And using NULL itself in a type block would be a bad idea.  It was too easy to wind up with NULL values on accident...they were used to represent unset values!
+
+In those days, imagine if this had been the way to say &quot;the typeset can include NULL&quot;:
+
+    foo: func [arg [null integer! block!]] [...]
+
+All right, but what if you had just some typo and a variable was *incidentally* null?
+
+    foo: func [arg [intteger! block!]] [...]
+
+Would you want that function to now accepts nulls and blocks?  :-(
+
+Even though NULL no longer corresponds to &quot;typo&quot; states, it still is a state that values can be in for all kinds of reasons.  I think **null = type of null** is the right answer, but that doesn&#39;t mean that the way to indicate a function is willing to accept null as an argument is if any variable that happens to be NULL appears in the type spec.
+
+**And NULL couldn&#39;t be in TYPESET! because you would have no way to FIND it -- FIND won&#39;t look for &quot;NULL&quot; in *anything*...and if it ever returns NULL that means the thing wasn&#39;t found.**
+
+## So Why Exactly Have I Been So Opposed to a NULL! Datatype?
+
+*I feel like I&#39;ve always had a good reason.*  If a TYPE OF operation can make a reified thing spring into existence out of the absence of a thing, I feel like something is out of whack.
+
+There&#39;s a clear advantage if you&#39;re going to be chaining things.
+
+    x: (type of select data item) else [
+        fail &quot;A reified NULL! datatype doesn&#39;t permit this kind of handling&quot;
+    ]
+
+Though that&#39;s a more modern intuition about it; I wasn&#39;t thinking about that when `&lt;opt&gt;` was made.
+
+I think one angle is that I felt like the optionalness was somehow a &quot;big deal&quot; and needed to jump off the page for the spec more.  NULL! just blended in.
+
+    foo: func [arg [null! integer! block!]] [...]
+    bar: func [arg [integer! block! group! path! null! word!]] [...]
+
+## Modern Thought: `&lt;opt&gt;` =&gt; `[&lt;null&gt; any-value!]`
+
+With the introduction of [new rules surrounding RETURN](https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656), I&#39;ve made it more painful to get the &quot;default&quot; return behavior of being able to RETURN whatever you want.
+
+This made me think it might be nice to build on the PARSE meaning of `&lt;any&gt;` as a replacement for &quot;SKIP&quot; (e.g. match one ANY-VALUE!) to get an easy RETURN spec:
+
+    foo: func [return: &lt;any&gt; ...] [...]
+
+Then, `&lt;opt&gt;` could be shorthand for `[&lt;null&gt; any-value!]`
+
+    bar: func [return: &lt;opt&gt; ...] [...]
+
+&gt; I can also imagine `&lt;opt&gt;` being a UPARSE tag as a shorthand for **`opt &lt;any&gt;`**.
+&gt; 
+&gt;     &gt;&gt; uparse? [x: (stuff)] [sw: set-word!, g: group!, x: &lt;opt&gt;]
+&gt;     == #[true]
+&gt;
+&gt;     &gt;&gt; x
+&gt;     ; null
+&gt; 
+&gt;     &gt;&gt; uparse? [x: (stuff) &quot;extra&quot;] [sw: set-word!, g: group!, x: &lt;opt&gt;]
+&gt;     == #[true]
+&gt;
+&gt;     &gt;&gt; x
+&gt;     == &quot;extra&quot;
+
+In any case, `&lt;any&gt;` and `&lt;opt&gt;` would thus join the other &quot;top-level&quot; shorthands `&lt;none&gt;` and `&lt;void&gt;` for function typeset specs.  **Such a shorthand feels pressing given my new strict rule regarding returns, I don&#39;t like having to type `[return: [&lt;null&gt; any-value!]]` just to be able to use RETURN.  I can put up with `[return: &lt;opt&gt;]` and `[return: &lt;any&gt;]`**
+
+## Newer, Weirder Options with More Datatypes
+
+There are actually more wacky and crazy ideas possible these days.  :crazy_face:
+
+We know that refinements like /ARG are optional, they may be NULL in which case that means they were not supplied.  [I was just suggesting they might be the better branch notation for allow pure NULL to escape a branch.](https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/21?u=hostilefork)  We could also make the type blocks build on this notation:
+
+    foo: func [
+        return: /[integer!]  ; alternative to today&#39;s [&lt;opt&gt; integer!]
+        arg1 [block!]
+        arg2 /[logic!]  ; alternative to today&#39;s [&lt;opt&gt; logic!]
+    ][
+        ...
+    ]
+
+But looking at it, I don&#39;t feel it communicates as well.  The tags just seem more literate.
+
+For some reason, `&lt;null&gt;` looks oddly heavy though:
+
+    foo: func [
+        return: [&lt;null&gt; integer!]
+        arg1 [block!]
+        arg2 [&lt;null&gt; logic!]
+    ][
+        ...
+    ]
+
+I guess a lot of it is what you&#39;re used to, but null is such a &quot;vertical&quot; word, it&#39;s like it has two !! in it:
+
+    foo: func [
+        return: [&lt;opt&gt; integer!]
+        arg1 [block!]
+        arg2 [&lt;opt&gt; logic!]
+    ][
+        ...
+    ]
+
+I&#39;m probably just being silly due to what I&#39;m used to.  The `&lt;null&gt;` is clearer, and I kind of like my suggestion that `&lt;opt&gt;` be shorthand for `[&lt;null&gt; any-value!]`.
+
+## I Know This Is Long, Just Thinking Out Loud
+
+I don&#39;t want to change anything until TYPESET! and DATATYPE! have more understanding.  But as it so happens, I think that the change to RETURN to make it the locus of typechecking on functions *is* a step forward in the type system conception.
+
+Design happens one step at a time, folks.</description>
+    
+    <lastBuildDate>Fri, 20 Aug 2021 15:13:52 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Revisiting `&lt;opt&gt;` in the Func Spec Dialect</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>First I didn't like /[.. ] , but with the explanation,  that it's optional like any refinement, it makes perfect sense to me.</p>
+          <p><a href="https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658/2</link>
+        <pubDate>Fri, 20 Aug 2021 15:13:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1658-2</guid>
+        <source url="https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658.rss">Revisiting `&lt;opt&gt;` in the Func Spec Dialect</source>
+      </item>
+      <item>
+        <title>Revisiting `&lt;opt&gt;` in the Func Spec Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>First, Let's Look Briefly At The History Of <code>&lt;opt&gt;</code>
+</h2>
+<p>It was many years ago when <code>&lt;opt&gt;</code> first came on the scene as a way to say that a function argument would allow "NULL" as a possibility.</p>
+<p>The reasoning was that there was a certain "state" which can be synthesized that represents a <em>non-value</em>.</p>
+<blockquote>
+<p>Note: Back then, the state was the result of excising reified UNSET! from the system--and it was called VOID--a term that means something rather different today.  <strong>To make things clearer I'm going to sanitize history here a bit and pretend like it was always called NULL.</strong></p>
+</blockquote>
+<p><strong>Meanness Level Alpha: You Can't Even ASK What Type a NULL Is</strong></p>
+<p>In the earliest days, not only did NULL "not have a type"...it was not truthy or falsey...it generated errors when you tried to access it through words.  It went through several iterations of meanness.</p>
+<p>This is basically where things started:</p>
+<pre><code>&gt;&gt; select [a 10 b 20] 'c
+; null
+
+&gt;&gt; type of select [a 10 b 20] 'c
+** Error: NULL Values Do Not Have Types
+</code></pre>
+<p>But that was a pain.</p>
+<p><strong>Meanness Level Beta: You Can Ask, But The Answer Is Still A Mean NULL</strong></p>
+<p><em>I was steadfast that there wasn't going to be a NULL! "datatype".</em>  But since NULL was the "non-answer" given back for a "non-valued" state...what if the TYPE OF a NULL was just... NULL?</p>
+<pre><code>&gt;&gt; select [a 10 b 20] 'c
+; null
+
+&gt;&gt; type of select [a 10 b 20] 'c
+; null
+</code></pre>
+<p>While it was pleasing at some level, it didn't change the fact that NULL was still mean, and not accepted a lot of places...much like an UNSET! had been in Rebol2:</p>
+<pre><code>rebol2&gt;&gt; switch print "Rebol2" [10 [print "Disliked UNSET!s"]]
+Rebol2
+** Script Error: switch is missing its value argument
+</code></pre>
+<p>So the same problem would hit you all around the system if you were trying to do something with that NULL answer you got for types:</p>
+<pre><code>&gt;&gt; switch type of select [a 10 b 20] 'c [
+     integer! [...]
+     block! [...]
+]
+** Error: SWITCH does not allow NULL as its VALUE argument
+</code></pre>
+<p><strong>Meanness Level Gamma: NULL Becomes Friendly</strong></p>
+<p>Today we've gotten to a situation where NULL is generally pretty friendly and accepted a lot of places.  WORD!s can look up to NULL without erroring, so NULL doesn't need to be a "function that returns NULL".</p>
+<pre><code>&gt;&gt; switch type of select [a 10 b 20] 'c [
+     null [print "Everything works just fine!"]
+     integer! [...]
+     block! [...]
+]
+Everything works just fine!
+</code></pre>
+<p>The whole paradigm surrounding unsetness has gone through a great rethinking with BAD-WORD!s and isotopes that I'm still discovering the interesting nuances of, but it's light-years ahead of old methods.</p>
+<h2>So...Back To TYPESET! Representation</h2>
+<p>From the beginning I knew there was not going to be a NULL! "datatype".  And using NULL itself in a type block would be a bad idea.  It was too easy to wind up with NULL values on accident...they were used to represent unset values!</p>
+<p>In those days, imagine if this had been the way to say "the typeset can include NULL":</p>
+<pre><code>foo: func [arg [null integer! block!]] [...]
+</code></pre>
+<p>All right, but what if you had just some typo and a variable was <em>incidentally</em> null?</p>
+<pre><code>foo: func [arg [intteger! block!]] [...]
+</code></pre>
+<p>Would you want that function to now accepts nulls and blocks?  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>Even though NULL no longer corresponds to "typo" states, it still is a state that values can be in for all kinds of reasons.  I think <strong>null = type of null</strong> is the right answer, but that doesn't mean that the way to indicate a function is willing to accept null as an argument is if any variable that happens to be NULL appears in the type spec.</p>
+<p><strong>And NULL couldn't be in TYPESET! because you would have no way to FIND it -- FIND won't look for "NULL" in <em>anything</em>...and if it ever returns NULL that means the thing wasn't found.</strong></p>
+<h2>So Why Exactly Have I Been So Opposed to a NULL! Datatype?</h2>
+<p><em>I feel like I've always had a good reason.</em>  If a TYPE OF operation can make a reified thing spring into existence out of the absence of a thing, I feel like something is out of whack.</p>
+<p>There's a clear advantage if you're going to be chaining things.</p>
+<pre><code>x: (type of select data item) else [
+    fail "A reified NULL! datatype doesn't permit this kind of handling"
+]
+</code></pre>
+<p>Though that's a more modern intuition about it; I wasn't thinking about that when <code>&lt;opt&gt;</code> was made.</p>
+<p>I think one angle is that I felt like the optionalness was somehow a "big deal" and needed to jump off the page for the spec more.  NULL! just blended in.</p>
+<pre><code>foo: func [arg [null! integer! block!]] [...]
+bar: func [arg [integer! block! group! path! null! word!]] [...]
+</code></pre>
+<h2>Modern Thought: <code>&lt;opt&gt;</code> =&gt; <code>[&lt;null&gt; any-value!]</code>
+</h2>
+<p>With the introduction of <a href="https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656">new rules surrounding RETURN</a>, I've made it more painful to get the "default" return behavior of being able to RETURN whatever you want.</p>
+<p>This made me think it might be nice to build on the PARSE meaning of <code>&lt;any&gt;</code> as a replacement for "SKIP" (e.g. match one ANY-VALUE!) to get an easy RETURN spec:</p>
+<pre><code>foo: func [return: &lt;any&gt; ...] [...]
+</code></pre>
+<p>Then, <code>&lt;opt&gt;</code> could be shorthand for <code>[&lt;null&gt; any-value!]</code></p>
+<pre><code>bar: func [return: &lt;opt&gt; ...] [...]
+</code></pre>
+<blockquote>
+<p>I can also imagine <code>&lt;opt&gt;</code> being a UPARSE tag as a shorthand for <strong><code>opt &lt;any&gt;</code></strong>.</p>
+<pre><code>&gt;&gt; uparse? [x: (stuff)] [sw: set-word!, g: group!, x: &lt;opt&gt;]
+== #[true]
+
+&gt;&gt; x
+; null
+
+&gt;&gt; uparse? [x: (stuff) "extra"] [sw: set-word!, g: group!, x: &lt;opt&gt;]
+== #[true]
+
+&gt;&gt; x
+== "extra"
+</code></pre>
+</blockquote>
+<p>In any case, <code>&lt;any&gt;</code> and <code>&lt;opt&gt;</code> would thus join the other "top-level" shorthands <code>&lt;none&gt;</code> and <code>&lt;void&gt;</code> for function typeset specs.  <strong>Such a shorthand feels pressing given my new strict rule regarding returns, I don't like having to type <code>[return: [&lt;null&gt; any-value!]]</code> just to be able to use RETURN.  I can put up with <code>[return: &lt;opt&gt;]</code> and <code>[return: &lt;any&gt;]</code></strong></p>
+<h2>Newer, Weirder Options with More Datatypes</h2>
+<p>There are actually more wacky and crazy ideas possible these days.  <img src="https://forum.rebol.info/images/emoji/twitter/crazy_face.png?v=9" title=":crazy_face:" class="emoji" alt=":crazy_face:"></p>
+<p>We know that refinements like /ARG are optional, they may be NULL in which case that means they were not supplied.  <a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/21">I was just suggesting they might be the better branch notation for allow pure NULL to escape a branch.</a>  We could also make the type blocks build on this notation:</p>
+<pre><code>foo: func [
+    return: /[integer!]  ; alternative to today's [&lt;opt&gt; integer!]
+    arg1 [block!]
+    arg2 /[logic!]  ; alternative to today's [&lt;opt&gt; logic!]
+][
+    ...
+]
+</code></pre>
+<p>But looking at it, I don't feel it communicates as well.  The tags just seem more literate.</p>
+<p>For some reason, <code>&lt;null&gt;</code> looks oddly heavy though:</p>
+<pre><code>foo: func [
+    return: [&lt;null&gt; integer!]
+    arg1 [block!]
+    arg2 [&lt;null&gt; logic!]
+][
+    ...
+]
+</code></pre>
+<p>I guess a lot of it is what you're used to, but null is such a "vertical" word, it's like it has two !! in it:</p>
+<pre><code>foo: func [
+    return: [&lt;opt&gt; integer!]
+    arg1 [block!]
+    arg2 [&lt;opt&gt; logic!]
+][
+    ...
+]
+</code></pre>
+<p>I'm probably just being silly due to what I'm used to.  The <code>&lt;null&gt;</code> is clearer, and I kind of like my suggestion that <code>&lt;opt&gt;</code> be shorthand for <code>[&lt;null&gt; any-value!]</code>.</p>
+<h2>I Know This Is Long, Just Thinking Out Loud</h2>
+<p>I don't want to change anything until TYPESET! and DATATYPE! have more understanding.  But as it so happens, I think that the change to RETURN to make it the locus of typechecking on functions <em>is</em> a step forward in the type system conception.</p>
+<p>Design happens one step at a time, folks.</p>
+          <p><a href="https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658/1</link>
+        <pubDate>Fri, 13 Aug 2021 02:50:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1658-1</guid>
+        <source url="https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658.rss">Revisiting `&lt;opt&gt;` in the Func Spec Dialect</source>
+      </item>
+  </channel>
+</rss>

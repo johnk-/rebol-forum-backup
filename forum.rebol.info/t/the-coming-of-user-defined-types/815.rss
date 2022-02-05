@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Coming of User-Defined Types</title>
+    <link>https://forum.rebol.info/t/the-coming-of-user-defined-types/815</link>
+    <description>The interesting [modification of **`/`** into a 0-element PATH!](https://forum.rebol.info/t/deepening-the-lake-as-zero-length-path/798) makes paths a more solid and &quot;pleasing&quot; part, and clarifies that / is not a natural WORD! character.
+
+Central to making the trick palatable is to change path dispatch for numbers to do division.  But there&#39;s currently no way for users to extend or modify path dispatch.  This means there&#39;s no way to define `/` to do anything but field selection out of an OBJECT!.
+
+But @giuliolunati wants to use `/` for division on a matrix type.  He&#39;s done some improvised attempts to create matrix as an object, which so far has relied on overriding the previous WORD!-based `/` to recognize his matrix objects.
+
+So to keep his code working, he needs some kind of hook for defining pathing.  But really this is all part of the can-of-worms of *user-defined types*.  Very little work has been done in this area; Rebol is a mostly evaluator-driven experiment, and hasn&#39;t had a story for [multiple dispatch](https://en.wikipedia.org/wiki/Multiple_dispatch) or overloading or anything like that.
+
+So first, let&#39;s be clear...
+
+## R3-Alpha user defined types (UTYPE!) were vaporware
+
+All that existed of user-defined datatypes in R3-Alpha was [a cell payload definition](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/include/sys-value.h#L1059) (&quot;REBUDT&quot;), which was essentially two objects--the content (data/methods) and an additional object.  Then there was about a [paragraph&#39;s worth of code](https://github.com/rebol/rebol/blob/master/src/core/t-utype.c).
+
+The code doesn&#39;t appear to even be trying to work.  :-/  But the gist is that you&#39;d provide functions for each &quot;type action&quot;.  A prototype object with a NONE! for each action name was initialized in [Init_Utype_Proto()](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/b-init.c#L432), and your user defined type would run through the object creation process inheriting from that.
+
+So maybe you&#39;d say something like:
+
+    matrix: make utype! compose/deep [
+       [append: (func [matrix value] [print &quot;this gets called on append&quot;])] ;-- spec part
+       [rows: 2 columns: 2 data: [[0 0] [0 0]]] ;-- data part
+    ]
+    append matrix [10 10] ;-- perhaps should add a row to the matrix?  :-/
+
+But even if that worked, there&#39;s a boatload of unanswered questions.  There was a stub for where molding/forming/comparison would provide hooks, but those stubs were empty.  How would path dispatch work?  Is every user defined datatype just a UTYPE! or can you do some finer-grained type checking?
+
+## Red recognizes methods with certain names
+
+When it comes to being able to &quot;hook&quot; a datatype, Red has at least one example mentioned when they [added object support](https://www.red-lang.org/2014/12/050-objects-support.html).  It was set up so that if you had a method called `on-change*` it would call it when the object changed.  Here&#39;s an example from their page:
+
+    book: object [
+        title: author: year: none
+  
+        on-change*: func [word old new /local msg][
+            if all [
+                word = &#39;year
+                msg: case [
+                    new &gt;  2014 [&quot;space-time anomaly detected!&quot;]
+                    new &lt; -3000 [&quot;papyrus scrolls not allowed!&quot;]
+                 ]
+            ][
+               print [&quot;Error:&quot; msg]
+            ]
+        ]
+    ]
+
+This doesn&#39;t put the specially dispatched methods into another namespace (e.g. the &quot;second object&quot; of the UTYPE!&#39;s REBUDT cell).  This puts them in-band.  So you couldn&#39;t have an object with field called `on-change*` that was just a regular data member.
+
+I don&#39;t know how many of these they&#39;re planning on adding, but the idea of reserving names in the space where ordinary data fields live seems suspect to me.  It might seem harmless as there&#39;s no reason to have a plain data member called `on-change*` at the outset.  But whenever you introduce a meta thing like this you wind up wanting to make other objects that *mention* it, so `on-change*: true` can *become* interesting when making something that lists the meta methods something has--for example.
+
+## Ren-C added out-of-band META feature
+
+R3-Alpha&#39;s MODULE! data type was very much like an OBJECT!, but instead of just having one set of keys and values it had two.  The second set of information held things like the module&#39;s title, list of exports...basically anything that it was keeping track of that it got out of the header.  But by putting it in a separate place, it wasn&#39;t stealing any potential key names from the module&#39;s content.  (e.g. if you put it in a field called &quot;header&quot;, you couldn&#39;t have a top-level declaration in the module body called &quot;header&quot;)
+
+In Ren-C, this module-only ability was turned into something more generalized, which allowed an ANY-CONTEXT! to have an associated &quot;meta&quot; context.  So this applied not just to MODULE!, but to OBJECT!, ERROR!, PORT!, and FRAME!.  It seemed like a step in the right direction.
+
+## Could the META context store type information?
+
+The thing that the meta object has in common with UTYPE! is that it&#39;s a second context associated with an ANY-CONTEXT!, whose fields don&#39;t interfere.  Should it be the place to look for methods the system might call, such as `on-change*`...or something for path dispatch, like `on-path*`?
+
+This also raises some questions about how meta information should be handled in terms of COPY.  Does copying an object give you the same meta information, a copy of the meta information (deep? shallow?) or does the new object not have any meta information at all?  Most of those questions got punted on, but could be informed by what would be needed for the type handling.
+
+Solving user-defined types is a big area, given that there really is no precedent in Rebol&#39;s class of languages.  We don&#39;t know how to say `b: make book! [author: {...} isbn: #...]` and then say `type of b` and get BOOK! back, or make a function like `checkout: function [b [book!]] [...]`.  But neither does JavaScript (its [JavaScript typeof](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/typeof) only has 9 possibilities).  Nor does Ruby or Python.
+
+For now, we need a hack for doing path processing, so I&#39;ll just have to come up with something for that.  But I wanted to put down some notes about the state of things.</description>
+    
+    <lastBuildDate>Fri, 03 Jul 2020 16:27:09 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/the-coming-of-user-defined-types/815.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Coming of User-Defined Types</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The interesting <a href="https://forum.rebol.info/t/deepening-the-lake-as-zero-length-path/798">modification of <strong><code>/</code></strong> into a 0-element PATH!</a> makes paths a more solid and "pleasing" part, and clarifies that / is not a natural WORD! character.</p>
+<p>Central to making the trick palatable is to change path dispatch for numbers to do division.  But there's currently no way for users to extend or modify path dispatch.  This means there's no way to define <code>/</code> to do anything but field selection out of an OBJECT!.</p>
+<p>But <a class="mention" href="/u/giuliolunati">@giuliolunati</a> wants to use <code>/</code> for division on a matrix type.  He's done some improvised attempts to create matrix as an object, which so far has relied on overriding the previous WORD!-based <code>/</code> to recognize his matrix objects.</p>
+<p>So to keep his code working, he needs some kind of hook for defining pathing.  But really this is all part of the can-of-worms of <em>user-defined types</em>.  Very little work has been done in this area; Rebol is a mostly evaluator-driven experiment, and hasn't had a story for <a href="https://en.wikipedia.org/wiki/Multiple_dispatch" rel="nofollow noopener">multiple dispatch</a> or overloading or anything like that.</p>
+<p>So first, let's be clear...</p>
+<h2>R3-Alpha user defined types (UTYPE!) were vaporware</h2>
+<p>All that existed of user-defined datatypes in R3-Alpha was <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/include/sys-value.h#L1059" rel="nofollow noopener">a cell payload definition</a> ("REBUDT"), which was essentially two objects--the content (data/methods) and an additional object.  Then there was about a <a href="https://github.com/rebol/rebol/blob/master/src/core/t-utype.c" rel="nofollow noopener">paragraph's worth of code</a>.</p>
+<p>The code doesn't appear to even be trying to work.  :-/  But the gist is that you'd provide functions for each "type action".  A prototype object with a NONE! for each action name was initialized in <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/b-init.c#L432" rel="nofollow noopener">Init_Utype_Proto()</a>, and your user defined type would run through the object creation process inheriting from that.</p>
+<p>So maybe you'd say something like:</p>
+<pre><code>matrix: make utype! compose/deep [
+   [append: (func [matrix value] [print "this gets called on append"])] ;-- spec part
+   [rows: 2 columns: 2 data: [[0 0] [0 0]]] ;-- data part
+]
+append matrix [10 10] ;-- perhaps should add a row to the matrix?  :-/
+</code></pre>
+<p>But even if that worked, there's a boatload of unanswered questions.  There was a stub for where molding/forming/comparison would provide hooks, but those stubs were empty.  How would path dispatch work?  Is every user defined datatype just a UTYPE! or can you do some finer-grained type checking?</p>
+<h2>Red recognizes methods with certain names</h2>
+<p>When it comes to being able to "hook" a datatype, Red has at least one example mentioned when they <a href="https://www.red-lang.org/2014/12/050-objects-support.html" rel="nofollow noopener">added object support</a>.  It was set up so that if you had a method called <code>on-change*</code> it would call it when the object changed.  Here's an example from their page:</p>
+<pre><code>book: object [
+    title: author: year: none
+
+    on-change*: func [word old new /local msg][
+        if all [
+            word = 'year
+            msg: case [
+                new &gt;  2014 ["space-time anomaly detected!"]
+                new &lt; -3000 ["papyrus scrolls not allowed!"]
+             ]
+        ][
+           print ["Error:" msg]
+        ]
+    ]
+]
+</code></pre>
+<p>This doesn't put the specially dispatched methods into another namespace (e.g. the "second object" of the UTYPE!'s REBUDT cell).  This puts them in-band.  So you couldn't have an object with field called <code>on-change*</code> that was just a regular data member.</p>
+<p>I don't know how many of these they're planning on adding, but the idea of reserving names in the space where ordinary data fields live seems suspect to me.  It might seem harmless as there's no reason to have a plain data member called <code>on-change*</code> at the outset.  But whenever you introduce a meta thing like this you wind up wanting to make other objects that <em>mention</em> it, so <code>on-change*: true</code> can <em>become</em> interesting when making something that lists the meta methods something has--for example.</p>
+<h2>Ren-C added out-of-band META feature</h2>
+<p>R3-Alpha's MODULE! data type was very much like an OBJECT!, but instead of just having one set of keys and values it had two.  The second set of information held things like the module's title, list of exports...basically anything that it was keeping track of that it got out of the header.  But by putting it in a separate place, it wasn't stealing any potential key names from the module's content.  (e.g. if you put it in a field called "header", you couldn't have a top-level declaration in the module body called "header")</p>
+<p>In Ren-C, this module-only ability was turned into something more generalized, which allowed an ANY-CONTEXT! to have an associated "meta" context.  So this applied not just to MODULE!, but to OBJECT!, ERROR!, PORT!, and FRAME!.  It seemed like a step in the right direction.</p>
+<h2>Could the META context store type information?</h2>
+<p>The thing that the meta object has in common with UTYPE! is that it's a second context associated with an ANY-CONTEXT!, whose fields don't interfere.  Should it be the place to look for methods the system might call, such as <code>on-change*</code>...or something for path dispatch, like <code>on-path*</code>?</p>
+<p>This also raises some questions about how meta information should be handled in terms of COPY.  Does copying an object give you the same meta information, a copy of the meta information (deep? shallow?) or does the new object not have any meta information at all?  Most of those questions got punted on, but could be informed by what would be needed for the type handling.</p>
+<p>Solving user-defined types is a big area, given that there really is no precedent in Rebol's class of languages.  We don't know how to say <code>b: make book! [author: {...} isbn: #...]</code> and then say <code>type of b</code> and get BOOK! back, or make a function like <code>checkout: function [b [book!]] [...]</code>.  But neither does JavaScript (its <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/typeof" rel="nofollow noopener">JavaScript typeof</a> only has 9 possibilities).  Nor does Ruby or Python.</p>
+<p>For now, we need a hack for doing path processing, so I'll just have to come up with something for that.  But I wanted to put down some notes about the state of things.</p>
+          <p><a href="https://forum.rebol.info/t/the-coming-of-user-defined-types/815/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-coming-of-user-defined-types/815/1</link>
+        <pubDate>Sat, 15 Sep 2018 01:11:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-815-1</guid>
+        <source url="https://forum.rebol.info/t/the-coming-of-user-defined-types/815.rss">The Coming of User-Defined Types</source>
+      </item>
+  </channel>
+</rss>

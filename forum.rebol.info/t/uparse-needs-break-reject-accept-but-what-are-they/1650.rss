@@ -1,0 +1,296 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>UPARSE needs BREAK, REJECT, ACCEPT... But What Are They?</title>
+    <link>https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650</link>
+    <description>When something doesn&#39;t sit right in my head, I notice.  Like how I could never remember in the beginning what GET-WORD! or SET-WORD! in PARSE did.  *(e.g. is a GET-WORD! GET-ing the parse position to SET a variable, or GET-ting a variable&#39;s value to use to SET the parse position?)*
+
+And I never really understood ACCEPT, REJECT, BREAK, and FAIL.
+
+## I Currently Consider the FAIL Confusion &quot;Solved&quot;
+
+Things have settled nicely, in that LOGIC! is used to get a pure &quot;keep going&quot; or &quot;stop&quot;.  So FAIL is replaced simply by FALSE.  It means **if (expression-returning-logic)** is replaced in UPARSE as **:(expression-returning-logic)**, and we can keep FAIL on the meaning of &quot;raise error&quot;.
+
+This generalization has the pleasing property that we don&#39;t need to go introducing &quot;parse switch&quot; or &quot;parse case&quot; or any such things.  Since NULL means the same thing as #[true] for a GET-GROUP! splice, you have every option at your disposal.
+
+## BREAK and REJECT Seem Too Similar
+
+The problem I have is that BREAK sounds a lot like &quot;this didn&#39;t work&quot;.  In fact, I&#39;ve enforced that loops return NULL if-and-only-if you BREAK them:
+
+    &gt;&gt; repeat 3 [break]
+    ; null
+
+    &gt;&gt; repeat 3 [null]
+    == ~null~  ; isotope
+
+A NULL is used as a signal of &quot;soft failure&quot;, e.g. it causes ELSE to run.
+
+     &gt;&gt; repeat 3 [break] else [print &quot;soft failure&quot;]
+     soft failure
+
+     &gt;&gt; repeat 3 [null] else [print &quot;soft failure&quot;]
+     == ~null~  ; isotope
+
+So the distinction between BREAK and REJECT seems a thin one.  I feel like I&#39;d rather that BREAK meant you decided the iterated rule isn&#39;t working out...and some other signal indicated that you want to accept it and go on.
+
+But ACCEPT doesn&#39;t really hint at ceasing iteration.  Perhaps STOP?  As a word, it hints more at the ceasing of an iteration...and that&#39;s used in CYCLE.
+
+    &gt;&gt; cycle [stop]
+    == ~void~  ; isotope
+
+Unlike BREAK (which always returns NULL) it is able to return a non-NULL...and a NULL will be isotopified so it won&#39;t be seen as a &quot;soft failure&quot; by ELSE:
+
+    &gt;&gt; cycle [stop 10]
+    == 10
+
+    &gt;&gt; cycle [stop null]
+    == ~null~  ; isotope
+
+Similarly, if you&#39;re going to be saying an iterative construct in PARSE is to keep going, then you should have an opportunity to say what the value synthesized from that rule will be.  This requires &quot;endable&quot; rules (because we want a plain stop to work).  I think that&#39;s doable.
+
+So I guess I&#39;m saying prefer BREAK to mean rule failed... return NULL.  And STOP to mean rule succeeded.  Default to returning a void isotope if no argument given, but allow an argument.  The argument would be a rule, so you could actually make the STOP a rule.
+
+    &gt;&gt; uparse &quot;aaab&quot; [while [&quot;a&quot; (print &quot;A&quot;) | stop [&quot;b&quot; (1020)]]]
+    A
+    A
+    A
+    == 1020
+
+## What About CONTINUE ?
+
+If your loop is only one deep in alternates, then all an alternate needs to do continue is succeed:
+
+    &gt;&gt; uparse &quot;aaab&quot; [while [&quot;a&quot; comment &quot;continue&quot; | &quot;b&quot; comment &quot;continue&quot;]]
+
+But if you&#39;re deeper than that, it is trickier.  And I don&#39;t see any particular reason why you shouldn&#39;t be able to ask a rule to CONTINUE a loop.
+
+    &gt;&gt; uparse &quot;abbbaccc&quot; [while [
+        &quot;a&quot; [some &quot;bbb&quot; (print &quot;BBB&quot;), continue | some &quot;ccc&quot; (print &quot;CCC&quot;)]
+        (print &quot;like this!&quot;)
+    ]
+    BBB
+    CCC
+    like this!
+
+And CONTINUE could also take an argument, which would matter only if it was the final iteration:
+
+    &gt;&gt; uparse &quot;bba&quot; [repeat (3) [&quot;a&quot; continue (&lt;like this&gt;) | &quot;b&quot;]]
+    == &lt;like this&gt;
+
+## Would That Be an Improvement?
+
+I think CONTINUE is pretty obviously useful.
+
+One thing that&#39;s a bit weird about what I suggest is that when a BREAK happens in a *non-parse* loop, the code after it runs.
+
+But the idea that &quot;failure&quot; stops progression is a cross-cutting design aspect in PARSE.  It seems consistent to me.
+
+Yet another issue is that STOP is not currently offered by plain WHILE or REPEAT or FOR-EACH or other loops.  The reason is that if you are to try and write your own iterator in terms of other iterators, you cannot tell from the outside if a &quot;cease iterating&quot; intention happened.
+
+Consider this:
+
+    &gt;&gt; opaque-code: [print &quot;looping&quot;, 1000 + 20]
+
+    &gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+    looping
+    looping
+    looping
+    looping
+    == 1020
+
+That&#39;s nice because if the opaque-code has a break, the whole thing will break:
+
+    &gt;&gt; opaque-code: [print &quot;entering&quot;, break]
+
+    &gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+    entering
+    ; null
+
+But if you permit STOP to return a value, the stopping intent is lost:
+
+    &gt;&gt; opaque-code: [print &quot;entering&quot;, stop 1020]
+
+    &gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+    entering
+    entering
+    == 1020
+
+When you&#39;re trying to write compound looping expressions that are built up of smaller loops, this really matters.  CYCLE is an oddball because you know the only way it *ever* terminates with a value is if there was a stopping intent...which is why it allows STOP.
+
+## Maybe ACCEPT and REJECT Should Be Used and No BREAK?
+
+...but this kind of runs into the same problem that non-PARSE WHILE doesn&#39;t have ACCEPT or REJECT.  So why get worked up about it having STOP when non-PARSE WHILE doesn&#39;t have STOP, if it makes everything line up?
+
+Or maybe non-PARSE while *can* have STOP...you just understand that STOP has limits when it comes to loop abstraction.  Not everything works all the time.  So STOP can have a warning on it that you can&#39;t tell the stopping intent happened from outside a loop that isn&#39;t CYCLE...
+
+## What Do You Think?
+
+Are the needs of PARSE different, or the same?  Should BREAK make the overall expression evaluate to NULL *but* keep going?  Are ACCEPT and REJECT the right answer?
+
+It&#39;s hard to say.  I have to work out the mechanism by which such things could work in usermode combinators whatever you call them...so there&#39;s time to think about it.</description>
+    
+    <lastBuildDate>Wed, 11 Aug 2021 22:47:38 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>UPARSE needs BREAK, REJECT, ACCEPT... But What Are They?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I'd like some weighing in here if possible from <a class="mention" href="/u/brett">@Brett</a>, <a class="mention" href="/u/ingohohmann">@IngoHohmann</a>, <a class="mention" href="/u/giuliolunati">@giuliolunati</a>, <a class="mention" href="/u/rgchris">@rgchris</a>, and whoever else might have specific interest in PARSE...</p>
+<p>My proposal above is like this:</p>
+<pre><code>&gt;&gt; uparse? "aaa" [some ["a" stop] "aa"]  ; the SOME succeeds here
+== #[true]
+
+&gt;&gt; uparse? "aaa" [opt some ["a" break] "aaa"]  ; the SOME fails here
+== #[true]
+</code></pre>
+<p>This is different from history, and Red:</p>
+<pre><code>red&gt;&gt; parse "aaa" [some ["a" break] "aa"]
+== true
+</code></pre>
+<p>As further proof that I still don't understand REJECT:</p>
+<pre><code>red&gt;&gt; parse "aaa" [opt some ["a" reject] "aaa"]
+== false
+
+red&gt;&gt; parse "aaa" [some ["a" reject] | "aaa"]
+== true
+</code></pre>
+<p>So REJECT seems to be disconnected from iteration, but instead means "don't just fail this rule, but fail all rules in the current alternative".  Red's <a href="https://www.red-lang.org/2013/11/041-introducing-parse.html">parse introduction</a> claims:</p>
+<ul>
+<li>
+<strong>break</strong> : break out of a matching loop, returning success.</li>
+<li>
+<strong>reject</strong> : break out of a matching loop, returning failure.</li>
+</ul>
+<p>But they have tests like:</p>
+<pre><code>red&gt;&gt; parse [] [break]
+== true
+</code></pre>
+<p>Where's the "loop" this is breaking?  I don't get it.  That should be an error in my book.</p>
+<p>If ACCEPT and REJECT communicate with the BLOCK! combinator and act on the alternate-level, that needs to be defined better.  Where does it stop?  Once it hits the first alternate?</p>
+<p>Again: I literally never understood these.</p>
+<p>(UPDATE: I found a Red issue where they debate this, it doesn't seem resolved and as far as I can tell they don't know either: <a href="https://github.com/red/red/issues/3478">Red Issue #3478</a>)</p>
+<h2>How about REPEAT and the INTEGER! cominator?</h2>
+<p>It seems clear that SOME and WHILE are loops, but is REPEAT a loop?  Is an integer?  Like this:</p>
+<pre><code> &gt;&gt; uparse? "aaa" [repeat (3) ["a" stop] "aa"]
+ == #[true]
+
+ &gt;&gt; uparse? "aaa" [3 ["a" stop] "aa"]
+ == #[true]
+</code></pre>
+<p>We could say that INTEGER! is not a loop but REPEAT is, which would give you something of a choice.</p>
+<p>Anyway, I feel like BREAK's "return null" meaning make the loop-fail-the-parse seems pretty solid.  I could really use some additional thoughts here.</p>
+          <p><a href="https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650/2</link>
+        <pubDate>Sun, 08 Aug 2021 04:09:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1650-2</guid>
+        <source url="https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650.rss">UPARSE needs BREAK, REJECT, ACCEPT... But What Are They?</source>
+      </item>
+      <item>
+        <title>UPARSE needs BREAK, REJECT, ACCEPT... But What Are They?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When something doesn't sit right in my head, I notice.  Like how I could never remember in the beginning what GET-WORD! or SET-WORD! in PARSE did.  <em>(e.g. is a GET-WORD! GET-ing the parse position to SET a variable, or GET-ting a variable's value to use to SET the parse position?)</em></p>
+<p>And I never really understood ACCEPT, REJECT, BREAK, and FAIL.</p>
+<h2>I Currently Consider the FAIL Confusion "Solved"</h2>
+<p>Things have settled nicely, in that LOGIC! is used to get a pure "keep going" or "stop".  So FAIL is replaced simply by FALSE.  It means <strong>if (expression-returning-logic)</strong> is replaced in UPARSE as <strong>:(expression-returning-logic)</strong>, and we can keep FAIL on the meaning of "raise error".</p>
+<p>This generalization has the pleasing property that we don't need to go introducing "parse switch" or "parse case" or any such things.  Since NULL means the same thing as #[true] for a GET-GROUP! splice, you have every option at your disposal.</p>
+<h2>BREAK and REJECT Seem Too Similar</h2>
+<p>The problem I have is that BREAK sounds a lot like "this didn't work".  In fact, I've enforced that loops return NULL if-and-only-if you BREAK them:</p>
+<pre><code>&gt;&gt; repeat 3 [break]
+; null
+
+&gt;&gt; repeat 3 [null]
+== ~null~  ; isotope
+</code></pre>
+<p>A NULL is used as a signal of "soft failure", e.g. it causes ELSE to run.</p>
+<pre><code> &gt;&gt; repeat 3 [break] else [print "soft failure"]
+ soft failure
+
+ &gt;&gt; repeat 3 [null] else [print "soft failure"]
+ == ~null~  ; isotope
+</code></pre>
+<p>So the distinction between BREAK and REJECT seems a thin one.  I feel like I'd rather that BREAK meant you decided the iterated rule isn't working out...and some other signal indicated that you want to accept it and go on.</p>
+<p>But ACCEPT doesn't really hint at ceasing iteration.  Perhaps STOP?  As a word, it hints more at the ceasing of an iteration...and that's used in CYCLE.</p>
+<pre><code>&gt;&gt; cycle [stop]
+== ~void~  ; isotope
+</code></pre>
+<p>Unlike BREAK (which always returns NULL) it is able to return a non-NULL...and a NULL will be isotopified so it won't be seen as a "soft failure" by ELSE:</p>
+<pre><code>&gt;&gt; cycle [stop 10]
+== 10
+
+&gt;&gt; cycle [stop null]
+== ~null~  ; isotope
+</code></pre>
+<p>Similarly, if you're going to be saying an iterative construct in PARSE is to keep going, then you should have an opportunity to say what the value synthesized from that rule will be.  This requires "endable" rules (because we want a plain stop to work).  I think that's doable.</p>
+<p>So I guess I'm saying prefer BREAK to mean rule failed... return NULL.  And STOP to mean rule succeeded.  Default to returning a void isotope if no argument given, but allow an argument.  The argument would be a rule, so you could actually make the STOP a rule.</p>
+<pre><code>&gt;&gt; uparse "aaab" [while ["a" (print "A") | stop ["b" (1020)]]]
+A
+A
+A
+== 1020
+</code></pre>
+<h2>What About CONTINUE ?</h2>
+<p>If your loop is only one deep in alternates, then all an alternate needs to do continue is succeed:</p>
+<pre><code>&gt;&gt; uparse "aaab" [while ["a" comment "continue" | "b" comment "continue"]]
+</code></pre>
+<p>But if you're deeper than that, it is trickier.  And I don't see any particular reason why you shouldn't be able to ask a rule to CONTINUE a loop.</p>
+<pre><code>&gt;&gt; uparse "abbbaccc" [while [
+    "a" [some "bbb" (print "BBB"), continue | some "ccc" (print "CCC")]
+    (print "like this!")
+]
+BBB
+CCC
+like this!
+</code></pre>
+<p>And CONTINUE could also take an argument, which would matter only if it was the final iteration:</p>
+<pre><code>&gt;&gt; uparse "bba" [repeat (3) ["a" continue (&lt;like this&gt;) | "b"]]
+== &lt;like this&gt;
+</code></pre>
+<h2>Would That Be an Improvement?</h2>
+<p>I think CONTINUE is pretty obviously useful.</p>
+<p>One thing that's a bit weird about what I suggest is that when a BREAK happens in a <em>non-parse</em> loop, the code after it runs.</p>
+<p>But the idea that "failure" stops progression is a cross-cutting design aspect in PARSE.  It seems consistent to me.</p>
+<p>Yet another issue is that STOP is not currently offered by plain WHILE or REPEAT or FOR-EACH or other loops.  The reason is that if you are to try and write your own iterator in terms of other iterators, you cannot tell from the outside if a "cease iterating" intention happened.</p>
+<p>Consider this:</p>
+<pre><code>&gt;&gt; opaque-code: [print "looping", 1000 + 20]
+
+&gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+looping
+looping
+looping
+looping
+== 1020
+</code></pre>
+<p>That's nice because if the opaque-code has a break, the whole thing will break:</p>
+<pre><code>&gt;&gt; opaque-code: [print "entering", break]
+
+&gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+entering
+; null
+</code></pre>
+<p>But if you permit STOP to return a value, the stopping intent is lost:</p>
+<pre><code>&gt;&gt; opaque-code: [print "entering", stop 1020]
+
+&gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+entering
+entering
+== 1020
+</code></pre>
+<p>When you're trying to write compound looping expressions that are built up of smaller loops, this really matters.  CYCLE is an oddball because you know the only way it <em>ever</em> terminates with a value is if there was a stopping intent...which is why it allows STOP.</p>
+<h2>Maybe ACCEPT and REJECT Should Be Used and No BREAK?</h2>
+<p>...but this kind of runs into the same problem that non-PARSE WHILE doesn't have ACCEPT or REJECT.  So why get worked up about it having STOP when non-PARSE WHILE doesn't have STOP, if it makes everything line up?</p>
+<p>Or maybe non-PARSE while <em>can</em> have STOP...you just understand that STOP has limits when it comes to loop abstraction.  Not everything works all the time.  So STOP can have a warning on it that you can't tell the stopping intent happened from outside a loop that isn't CYCLE...</p>
+<h2>What Do You Think?</h2>
+<p>Are the needs of PARSE different, or the same?  Should BREAK make the overall expression evaluate to NULL <em>but</em> keep going?  Are ACCEPT and REJECT the right answer?</p>
+<p>It's hard to say.  I have to work out the mechanism by which such things could work in usermode combinators whatever you call them...so there's time to think about it.</p>
+          <p><a href="https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650/1</link>
+        <pubDate>Sat, 07 Aug 2021 11:51:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1650-1</guid>
+        <source url="https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650.rss">UPARSE needs BREAK, REJECT, ACCEPT... But What Are They?</source>
+      </item>
+  </channel>
+</rss>

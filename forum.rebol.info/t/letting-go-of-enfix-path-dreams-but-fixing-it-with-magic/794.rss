@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Letting Go of Enfix Path Dreams (but fixing it with &quot;Magic&quot;)</title>
+    <link>https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794</link>
+    <description>When first looking at Rebol&#39;s source code I thought it strange there weren&#39;t &quot;infix PATH!s&quot;.  A WORD! would run either a prefix function or an infix function.  But not a PATH!.  There was a place where it would be, and it was just an error.
+
+One might argue whether enfix functions &quot;actually need&quot; refinements.  But consider instead....*picking operators out of contexts* seems an uncontroversial need.  Here&#39;s a survey of responses to that case: Rebol2 gives a cryptic error, R3-Alpha gives a slightly less cryptic error, and Red brings its own, uh...&quot;personality&quot;:
+
+    rebol2&gt;&gt; o: make object! [plus: :+]
+
+    rebol2&gt;&gt; 1 o/plus 2
+    ** Script Error: plus expected value2 argument of type: number pair...
+---
+
+    r3-alpha&gt;&gt; o: make object! [plus: :+]
+    == make object! [
+        plus: op!
+    ]
+
+    r3-alpha&gt;&gt; 1 o/plus 2
+    ** Script error: op! type is not allowed here
+
+---
+
+    red&gt;&gt; o: make object! [plus: :+]
+    == make object! [
+        plus: make op! [[
+            &quot;Returns the sum of ...
+
+    red&gt;&gt; 1 o/plus 2
+    == 2
+
+----
+
+But it&#39;s legitimate to want this.  For instance: in the `%httpd.reb` code, there was a variable holding the [&quot;HTTP Method&quot;](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods), which collided with the new enfix [METHOD](https://forum.rebol.info/t/method-and-the-argument-against-procedure/710).  But since METHOD quotes the left hand side to know where to bind into, you can&#39;t just say `my-meth: lib/method [...] [...]` and have it work.
+
+### ...but I have an alternative idea...
+
+I&#39;ll explain why I don&#39;t think undecorated paths should dispatch enfix in a moment.  But first, my alternative solution, which is basically 99% as good...yet actually (I think) feasible:
+
+**Give the user an operator that can sense the evaluative semantics needed of the left hand side, guided by the right, to explicitly declare an enfix dispatch**, e.g.
+
+     my-meth: -&gt; lib/method [...] [...]
+
+I&#39;m suggesting using the right pointing arrow for &quot;pushing&quot; the left hand side into the right.  It kind of goes along with the current use of a left-pointing arrow for packing up the right side and pushing it to the left...which is also enfix-related.
+
+This operator would rely on some weird magic that doesn&#39;t exist yet.  It would have to decide its left hand side parameter convention *after it was already running* and looking at its right hand side.  Really it is like a function with a left-hand variadic side, where during invocation *it can actually cause a varying amount of code on the left to execute* based on partial evaluations of the right, which it then runs more of after.  If such mechanics were used carelessly they could really confuse left-to-right ordering...though FYI, [you can see Rebol is already not purely left to right.](https://github.com/rebol/rebol-issues/issues/2275)
+
+You might want to use this operator even with non-enfix functions, to effectively enfix them off-the-cuff:
+
+    &gt;&gt; 5 + 5 -&gt; subtract 7
+    == 3
+
+### So why is this better than just implementing enfix pathing?
+
+You can probably understand by looking at a very simple case from the tests:
+
+    e: trap [do make block! &quot;:a&quot;]
+    e/id = &#39;not-bound
+
+But don&#39;t read it on two lines.  Read it on one.
+
+    e: trap [do make block! &quot;:a&quot;] e/id = &#39;not-bound
+
+Now imagine that you are the evaluator.  You&#39;ve got a SET-WORD! for E: pending on the stack, but haven&#39;t assigned it yet.  You&#39;ve also got a WORD! for invoking the trap action on the pending on the stack, but you haven&#39;t invoked that yet either.  Instead you&#39;re gathering TRAP&#39;s argument to run.
+
+You&#39;ve just seen the BLOCK!.  Now you notice a PATH! of `e/id` pending.  What you want to know is if that&#39;s some kind of enfix operation that has an interest in influencing the operation.  It might want to quote the block, or it might want to force some kind of completion of the left hand side.
+
+But E could be anything, here.  `e` could be a DATE!, a STRUCT!, an IMAGE! or other user defined type.  Yet somehow we expect the path dispatch process to give back a meaningful answer about its interest in code to its left.
+
+* In this case, whatever we learn in this path dispatch we&#39;re going to have to throw away.  E is going to change.
+* While word lookup is done through a system mechanism with limited sources of errors, the path dispatch code is arbitrary and can generate errors for pretty much any reason.  Trapping those errors is not cheap in C-like systems: each setjmp() to wrap them costs something.  All for a path evaluation you&#39;re going to have to run again (though you wouldn&#39;t need an error trap, since you&#39;d be willing to have it actually fail).
+* Imagining that you even *could* cache the results of a first path evaluation to reuse again (how would you know?), the dispatch is imperative code.  Asking it to *guarantee* it returns the same result every time could be error prone even if it was a desirable goal.
+* Plus on top of *that* absence of guarantee, you can be *sure* that if any user GROUP!s were used it wouldn&#39;t promise to return the same thing a second time.
+
+One might propose some sort of limited, light PATH! evaluation which &quot;only works for some types&quot;.  So it could recognize picking an ANY-CONTEXT!.  But that sounds...bad.  Fewer flaky workarounds are needed, not more.
+
+### What does the operator buy us?
+
+It gives explicit advance notice that you think the thing on the right is an ACTION! (and can error if it isn&#39;t).
+
+It gives permission to do the path evaluation *once-and-only-once* on the right hand side, prior to making decisions about parameter conventions on the left.  (Arguably it could be giving permission to evaluate the right before any remaining argument gathering on the left.)
+
+The right could also be a WORD!, or maybe a GROUP!
+
+    1 + 2 -&gt; (either x [:subtract] [:add]) 7
+
+An operator of this type is inspired by developments on [ME and MY](https://trello.com/c/8Bmwvwya), as well as the advancements in [MATCH](https://trello.com/c/LR9PzUS3).  It&#39;s trickier than those...which are still somewhat experimental themselves.  But I think it is doable, and it seems like time to set the course for this and forget about undecorated enfix dispatch.
+
+If a path is executed and looks up to an enfix function without the operator, it should error as it does today.  But it should tell you about the operator so you can use it!</description>
+    
+    <lastBuildDate>Thu, 30 Aug 2018 17:55:53 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Letting Go of Enfix Path Dreams (but fixing it with &quot;Magic&quot;)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>This operator now has a first-cut implementation!  <a href="https://trello.com/c/Kg9A45b5">I've named it "SHOVE"</a></p>
+<p><em>I'm really quite pleased with this direction.</em>  While this wasn't on any near-term roadmap, not knowing what to do about enfix paths was a rather dark cloud hanging around...ever since I first saw R3-Alpha's source.</p>
+<p><strong>Something additional that I thought of</strong> is that not having paths automatically dispatch enfix can be argued for more effectively in Ren-C, because there is no such thing as an enfix function.  It's a property of words and bindings.  And as it happens, when you use a PATH! to do lookup, you aren't using a word binding...the binding is ignored, and only the value of the word is used.</p>
+<hr>
+<p>It's going to take a while for it to shake out and all the quote prioritization issues to settle.  Also, the current implementation doesn't use a generic mechanism...e.g. you couldn't write SHOVE yourself in usermode...<em>yet</em>.  But I think that it should be possible--and that this mechanism is <strong>variadic left enfix</strong>.  Which means that although some evaluation has been performed on the left, the item immediately to the left hasn't (like a hard quote)...and the variadic gets the opportunity to pick the parameter convention to use when asking for the left argument.</p>
+<p>I should note that the shove operator (and left enfix variadics, generally) produce something that is not a pure left-to-right experience.  <em>But historical Rebol already was not purely left to right</em>, e.g. SET-PATH!s don't evaluate their own target location until after the right hand side:</p>
+<aside class="onebox githubissue">
+  <header class="source">
+      <a href="https://github.com/metaeducation/rebol-issues/issues/2275" target="_blank" rel="noopener">github.com/metaeducation/rebol-issues</a>
+  </header>
+  <article class="onebox-body">
+    <div class="github-row">
+  <div class="github-icon-container" title="Issue">
+	  <svg width="60" height="60" class="github-icon" viewBox="0 0 14 16" aria-hidden="true"><path d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg>
+  </div>
+
+  <div class="github-info-container">
+    <h4>
+      <a href="https://github.com/metaeducation/rebol-issues/issues/2275" target="_blank" rel="noopener">Parenthesized expressions on left for SET-PATH! evaluate after right hand expressions</a>
+    </h4>
+
+    <div class="github-info">
+      <div class="date">
+        opened <span class="discourse-local-date" data-format="ll" data-date="2017-10-23" data-time="04:07:20" data-timezone="UTC">04:07AM - 23 Oct 17 UTC</span>
+      </div>
+
+
+      <div class="user">
+        <a href="https://github.com/hostilefork" target="_blank" rel="noopener">
+          <img alt="hostilefork" src="https://avatars1.githubusercontent.com/u/20440?v=4" class="onebox-avatar-inline" width="20" height="20">
+          hostilefork
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="github-row">
+  <p class="github-content">&gt;&gt; obj: make object! [x: 10 y: 20]
+&gt;&gt; some-func: does [var: 'y]
+&gt;&gt; var: 'x
+&gt;&gt; obj/(print "left" var): (print "right" some-func 30)
+right
+left
+==...</p>
+</div>
+
+<div class="labels">
+    <span style="display:inline-block;margin-top:2px;background-color: #B8B8B8;padding: 2px;border-radius: 4px;color: #fff;margin-left: 3px;">Red.has.this.too</span>
+</div>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+          <p><a href="https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794/2</link>
+        <pubDate>Thu, 30 Aug 2018 12:08:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-794-2</guid>
+        <source url="https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794.rss">Letting Go of Enfix Path Dreams (but fixing it with &quot;Magic&quot;)</source>
+      </item>
+      <item>
+        <title>Letting Go of Enfix Path Dreams (but fixing it with &quot;Magic&quot;)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When first looking at Rebol's source code I thought it strange there weren't "infix PATH!s".  A WORD! would run either a prefix function or an infix function.  But not a PATH!.  There was a place where it would be, and it was just an error.</p>
+<p>One might argue whether enfix functions "actually need" refinements.  But consider instead....<em>picking operators out of contexts</em> seems an uncontroversial need.  Here's a survey of responses to that case: Rebol2 gives a cryptic error, R3-Alpha gives a slightly less cryptic error, and Red brings its own, uh..."personality":</p>
+<pre><code>rebol2&gt;&gt; o: make object! [plus: :+]
+
+rebol2&gt;&gt; 1 o/plus 2
+** Script Error: plus expected value2 argument of type: number pair...
+</code></pre>
+<hr>
+<pre><code>r3-alpha&gt;&gt; o: make object! [plus: :+]
+== make object! [
+    plus: op!
+]
+
+r3-alpha&gt;&gt; 1 o/plus 2
+** Script error: op! type is not allowed here
+</code></pre>
+<hr>
+<pre><code>red&gt;&gt; o: make object! [plus: :+]
+== make object! [
+    plus: make op! [[
+        "Returns the sum of ...
+
+red&gt;&gt; 1 o/plus 2
+== 2
+</code></pre>
+<hr>
+<p>But it's legitimate to want this.  For instance: in the <code>%httpd.reb</code> code, there was a variable holding the <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods" rel="nofollow noopener">"HTTP Method"</a>, which collided with the new enfix <a href="https://forum.rebol.info/t/method-and-the-argument-against-procedure/710">METHOD</a>.  But since METHOD quotes the left hand side to know where to bind into, you can't just say <code>my-meth: lib/method [...] [...]</code> and have it work.</p>
+<h3>...but I have an alternative idea...</h3>
+<p>I'll explain why I don't think undecorated paths should dispatch enfix in a moment.  But first, my alternative solution, which is basically 99% as good...yet actually (I think) feasible:</p>
+<p><strong>Give the user an operator that can sense the evaluative semantics needed of the left hand side, guided by the right, to explicitly declare an enfix dispatch</strong>, e.g.</p>
+<pre><code> my-meth: -&gt; lib/method [...] [...]
+</code></pre>
+<p>I'm suggesting using the right pointing arrow for "pushing" the left hand side into the right.  It kind of goes along with the current use of a left-pointing arrow for packing up the right side and pushing it to the left...which is also enfix-related.</p>
+<p>This operator would rely on some weird magic that doesn't exist yet.  It would have to decide its left hand side parameter convention <em>after it was already running</em> and looking at its right hand side.  Really it is like a function with a left-hand variadic side, where during invocation <em>it can actually cause a varying amount of code on the left to execute</em> based on partial evaluations of the right, which it then runs more of after.  If such mechanics were used carelessly they could really confuse left-to-right ordering...though FYI, <a href="https://github.com/rebol/rebol-issues/issues/2275" rel="nofollow noopener">you can see Rebol is already not purely left to right.</a></p>
+<p>You might want to use this operator even with non-enfix functions, to effectively enfix them off-the-cuff:</p>
+<pre><code>&gt;&gt; 5 + 5 -&gt; subtract 7
+== 3
+</code></pre>
+<h3>So why is this better than just implementing enfix pathing?</h3>
+<p>You can probably understand by looking at a very simple case from the tests:</p>
+<pre><code>e: trap [do make block! ":a"]
+e/id = 'not-bound
+</code></pre>
+<p>But don't read it on two lines.  Read it on one.</p>
+<pre><code>e: trap [do make block! ":a"] e/id = 'not-bound
+</code></pre>
+<p>Now imagine that you are the evaluator.  You've got a SET-WORD! for E: pending on the stack, but haven't assigned it yet.  You've also got a WORD! for invoking the trap action on the pending on the stack, but you haven't invoked that yet either.  Instead you're gathering TRAP's argument to run.</p>
+<p>You've just seen the BLOCK!.  Now you notice a PATH! of <code>e/id</code> pending.  What you want to know is if that's some kind of enfix operation that has an interest in influencing the operation.  It might want to quote the block, or it might want to force some kind of completion of the left hand side.</p>
+<p>But E could be anything, here.  <code>e</code> could be a DATE!, a STRUCT!, an IMAGE! or other user defined type.  Yet somehow we expect the path dispatch process to give back a meaningful answer about its interest in code to its left.</p>
+<ul>
+<li>In this case, whatever we learn in this path dispatch we're going to have to throw away.  E is going to change.</li>
+<li>While word lookup is done through a system mechanism with limited sources of errors, the path dispatch code is arbitrary and can generate errors for pretty much any reason.  Trapping those errors is not cheap in C-like systems: each setjmp() to wrap them costs something.  All for a path evaluation you're going to have to run again (though you wouldn't need an error trap, since you'd be willing to have it actually fail).</li>
+<li>Imagining that you even <em>could</em> cache the results of a first path evaluation to reuse again (how would you know?), the dispatch is imperative code.  Asking it to <em>guarantee</em> it returns the same result every time could be error prone even if it was a desirable goal.</li>
+<li>Plus on top of <em>that</em> absence of guarantee, you can be <em>sure</em> that if any user GROUP!s were used it wouldn't promise to return the same thing a second time.</li>
+</ul>
+<p>One might propose some sort of limited, light PATH! evaluation which "only works for some types".  So it could recognize picking an ANY-CONTEXT!.  But that sounds...bad.  Fewer flaky workarounds are needed, not more.</p>
+<h3>What does the operator buy us?</h3>
+<p>It gives explicit advance notice that you think the thing on the right is an ACTION! (and can error if it isn't).</p>
+<p>It gives permission to do the path evaluation <em>once-and-only-once</em> on the right hand side, prior to making decisions about parameter conventions on the left.  (Arguably it could be giving permission to evaluate the right before any remaining argument gathering on the left.)</p>
+<p>The right could also be a WORD!, or maybe a GROUP!</p>
+<pre><code>1 + 2 -&gt; (either x [:subtract] [:add]) 7
+</code></pre>
+<p>An operator of this type is inspired by developments on <a href="https://trello.com/c/8Bmwvwya" rel="nofollow noopener">ME and MY</a>, as well as the advancements in <a href="https://trello.com/c/LR9PzUS3" rel="nofollow noopener">MATCH</a>.  It's trickier than those...which are still somewhat experimental themselves.  But I think it is doable, and it seems like time to set the course for this and forget about undecorated enfix dispatch.</p>
+<p>If a path is executed and looks up to an enfix function without the operator, it should error as it does today.  But it should tell you about the operator so you can use it!</p>
+          <p><a href="https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794/1</link>
+        <pubDate>Fri, 24 Aug 2018 02:07:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-794-1</guid>
+        <source url="https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794.rss">Letting Go of Enfix Path Dreams (but fixing it with &quot;Magic&quot;)</source>
+      </item>
+  </channel>
+</rss>

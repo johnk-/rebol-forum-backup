@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Hedging on UNLESS for Beta/One</title>
+    <link>https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881</link>
+    <description>Not everyone has historically been a fan of the idea that UNLESS is a synonym for IF-NOT.  It&#39;s the same number of characters, and it&#39;s been a source of controversy.  When people go around changing if-not to unless, some people change it back because they think it made matters less clear.
+
+I&#39;d come up with what I thought was a more interesting usage of UNLESS, as an infix operator.  It would evaluate both the left and the right.  If the right evaluated to nothing (NULL) then it would use the value of the left, otherwise the value of the right would override.
+
+    &gt;&gt; 1 + 2 unless null
+    == 3
+
+    &gt;&gt; 1 + 2 unless &lt;a thing&gt;
+    == &lt;a thing&gt;
+
+I envisioned it being a way of reordering the order you&#39;d read code, where you could put a default first...perhaps wanting it first to emphasize the most common case:
+
+    error-id: 0 unless case [
+        not block? foo [13]
+        closed? connection [29]
+        ...
+    ] // don&#39;t need an ELSE here, the 0 is up-front
+
+But using it as a defaulting mechanism has the problem that the left-hand side is not in a BLOCK!, so you are always running the default case&#39;s code.  Trying to fix this by requiring the left side to be a block would look ugly, and seem a bit of a nasty &quot;surprise&quot;:
+
+    thing: [ // looks like a block literal
+       foo baz bar
+       ...
+       x + 100
+    ] unless [ // oh, wait, that was *code*? :-/
+       switch z [...]
+    ]
+
+So it seems whatever an infix UNLESS does, it probably always has to run the left-hand side.  That means it&#39;s a black sheep if you try to group it in with things like ELSE and DEFAULT.
+
+## But what if it was a logical operator, more like OR/XOR?
+
+Imagine if UNLESS was like a version of OR that favored its right hand side, instead of its left.  To do this, it would stylize to always have a GROUP! on its right and disallow BLOCK!, because there&#39;s no way it can make a decision without evaluating both sides.  (In that way, it would be like XOR...which can&#39;t have a BLOCK! clause on the right)
+
+    &gt;&gt; (print &quot;a&quot; &lt;left&gt;) or (print &quot;b&quot; null)
+    a
+    b
+    == &lt;left&gt;
+
+    &gt;&gt; (print &quot;a&quot; null) or (print &quot;b&quot; &lt;right&gt;)
+    a
+    b
+    == &lt;right&gt;
+
+    &gt;&gt; (print &quot;a&quot; &lt;left&gt;) or (print &quot;b&quot; &lt;right&gt;)
+    a
+    b
+    == &lt;left&gt;
+
+So UNLESS would just be a tiny bit different:
+
+     &gt;&gt; (print &quot;a&quot; &lt;left&gt;) unless (print &quot;b&quot; null)
+     a
+     b
+     == &lt;left&gt; // same as OR
+
+     &gt;&gt; (print &quot;a&quot; null) unless (print &quot;b&quot; &lt;right&gt;)
+     a
+     b
+     == &lt;right&gt; // same as OR
+
+     &gt;&gt; (print &quot;a&quot; &lt;left&gt;) unless (print &quot;b&quot; &lt;right&gt;)
+     a
+     b
+     == &lt;right&gt; // DIFFERENT! right result wins out
+
+Psychologically I think the &quot;unless&quot; suggests a test for truthiness of the right.  So this is better I think...it had felt forced, to say `foo bar unless if condition [blah blah]`.
+
+So instead of comparing it with branching constructs like IF/ELSE (where it fell down by evaluating both sides), it&#39;s a logic operator similar to XOR and OR.  And still more novel than being a synonym for IF-NOT.
+
+## Not picking a definition yet might be the best idea?
+
+Since I just came up with this alternate idea, I can&#39;t tell you how many uses I&#39;d find for it.  I&#39;ll have to try looking around consciously looking for use cases.  Maybe it doesn&#39;t come up often enough, and people will miss the old UNLESS enough to be worth bringing it back.
+
+I&#39;ll commit the new idea, and we can try it for a while.  But the work has already been done to excise UNLESS, and to safely detect old usages and give warnings.  There&#39;s a native IF-NOT synonym, and it&#39;s easy enough for people who want the old definition to say `unless: :if-not` if they like.
+
+So instead of feeling pressure to decide one way or another, just leaving it undefined in Beta/One and revisiting it a later time might be best.
+
+In any case, I think I can give a definite thumbs down to the idea of putting the left hand side in a BLOCK! to make it more friendly for &quot;defaulting&quot;.  So that&#39;s out.</description>
+    
+    <lastBuildDate>Sat, 03 Nov 2018 13:17:49 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Hedging on UNLESS for Beta/One</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So far, I'm liking this new definition.  It still works for the original defaulting idea, too.</p>
+<p>You can even use it for defaulting to a logic false, since your left value overrides any falsey right hand side, such as a NULL coming from a not-taken branching construct:</p>
+<pre><code> &gt;&gt; thing: false unless (case [1 = 2 [&lt;nope&gt;] 3 = 4 [&lt;nope&gt;]])
+ == #[false]
+</code></pre>
+<p>Here's a case from some debugger code.  /LIMIT is a refinement, and FRAMES is an argument to that refinement:</p>
+<pre><code>max-rows: 20 unless (limit and [
+    if blank? frames [
+        99999 // as many frames as possible
+    ] else [
+        if frames &lt; 0 [
+            fail ["Invalid limit of frames" frames]
+        ]
+        frames + 1 // add one for ellipsis
+    ]
+])
+</code></pre>
+<p>Cognitively it's a lot more clear to have the right hand side be an expression which is producing a truthy/falsey value.</p>
+<p>You can contrast this with "classical Rebol style":</p>
+<pre><code>max-rows: any [
+     all [
+         limit
+         either blank? frames [
+             99999 ; as many frames as possible
+         ][
+             if frames &lt; 0 [
+                 fail ["Invalid limit of frames" frames]
+             ]
+             frames + 1 ; add one for ellipsis
+         ]
+    ]
+    20
+]
+</code></pre>
+<p>And you can still write it in such a way if you wanted to.  But I think using UNLESS with AND organizes it in a way that makes more sense here.</p>
+<hr>
+<p>In any case, with this adjustment, it's working out well enough that I think it's going to be a keeper...and the IF-NOT synonym is a waste of the word in comparison.</p>
+          <p><a href="https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881/3</link>
+        <pubDate>Sat, 03 Nov 2018 09:34:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-881-3</guid>
+        <source url="https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881.rss">Hedging on UNLESS for Beta/One</source>
+      </item>
+      <item>
+        <title>Hedging on UNLESS for Beta/One</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>That looks much cleaner.  I'm in that camp that <em>unless</em> is not a good <em>if-not</em></p>
+          <p><a href="https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881/2</link>
+        <pubDate>Mon, 29 Oct 2018 05:20:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-881-2</guid>
+        <source url="https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881.rss">Hedging on UNLESS for Beta/One</source>
+      </item>
+      <item>
+        <title>Hedging on UNLESS for Beta/One</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Not everyone has historically been a fan of the idea that UNLESS is a synonym for IF-NOT.  It's the same number of characters, and it's been a source of controversy.  When people go around changing if-not to unless, some people change it back because they think it made matters less clear.</p>
+<p>I'd come up with what I thought was a more interesting usage of UNLESS, as an infix operator.  It would evaluate both the left and the right.  If the right evaluated to nothing (NULL) then it would use the value of the left, otherwise the value of the right would override.</p>
+<pre><code>&gt;&gt; 1 + 2 unless null
+== 3
+
+&gt;&gt; 1 + 2 unless &lt;a thing&gt;
+== &lt;a thing&gt;
+</code></pre>
+<p>I envisioned it being a way of reordering the order you'd read code, where you could put a default first...perhaps wanting it first to emphasize the most common case:</p>
+<pre><code>error-id: 0 unless case [
+    not block? foo [13]
+    closed? connection [29]
+    ...
+] // don't need an ELSE here, the 0 is up-front
+</code></pre>
+<p>But using it as a defaulting mechanism has the problem that the left-hand side is not in a BLOCK!, so you are always running the default case's code.  Trying to fix this by requiring the left side to be a block would look ugly, and seem a bit of a nasty "surprise":</p>
+<pre><code>thing: [ // looks like a block literal
+   foo baz bar
+   ...
+   x + 100
+] unless [ // oh, wait, that was *code*? :-/
+   switch z [...]
+]
+</code></pre>
+<p>So it seems whatever an infix UNLESS does, it probably always has to run the left-hand side.  That means it's a black sheep if you try to group it in with things like ELSE and DEFAULT.</p>
+<h2>But what if it was a logical operator, more like OR/XOR?</h2>
+<p>Imagine if UNLESS was like a version of OR that favored its right hand side, instead of its left.  To do this, it would stylize to always have a GROUP! on its right and disallow BLOCK!, because there's no way it can make a decision without evaluating both sides.  (In that way, it would be like XOR...which can't have a BLOCK! clause on the right)</p>
+<pre><code>&gt;&gt; (print "a" &lt;left&gt;) or (print "b" null)
+a
+b
+== &lt;left&gt;
+
+&gt;&gt; (print "a" null) or (print "b" &lt;right&gt;)
+a
+b
+== &lt;right&gt;
+
+&gt;&gt; (print "a" &lt;left&gt;) or (print "b" &lt;right&gt;)
+a
+b
+== &lt;left&gt;
+</code></pre>
+<p>So UNLESS would just be a tiny bit different:</p>
+<pre><code> &gt;&gt; (print "a" &lt;left&gt;) unless (print "b" null)
+ a
+ b
+ == &lt;left&gt; // same as OR
+
+ &gt;&gt; (print "a" null) unless (print "b" &lt;right&gt;)
+ a
+ b
+ == &lt;right&gt; // same as OR
+
+ &gt;&gt; (print "a" &lt;left&gt;) unless (print "b" &lt;right&gt;)
+ a
+ b
+ == &lt;right&gt; // DIFFERENT! right result wins out
+</code></pre>
+<p>Psychologically I think the "unless" suggests a test for truthiness of the right.  So this is better I think...it had felt forced, to say <code>foo bar unless if condition [blah blah]</code>.</p>
+<p>So instead of comparing it with branching constructs like IF/ELSE (where it fell down by evaluating both sides), it's a logic operator similar to XOR and OR.  And still more novel than being a synonym for IF-NOT.</p>
+<h2>Not picking a definition yet might be the best idea?</h2>
+<p>Since I just came up with this alternate idea, I can't tell you how many uses I'd find for it.  I'll have to try looking around consciously looking for use cases.  Maybe it doesn't come up often enough, and people will miss the old UNLESS enough to be worth bringing it back.</p>
+<p>I'll commit the new idea, and we can try it for a while.  But the work has already been done to excise UNLESS, and to safely detect old usages and give warnings.  There's a native IF-NOT synonym, and it's easy enough for people who want the old definition to say <code>unless: :if-not</code> if they like.</p>
+<p>So instead of feeling pressure to decide one way or another, just leaving it undefined in Beta/One and revisiting it a later time might be best.</p>
+<p>In any case, I think I can give a definite thumbs down to the idea of putting the left hand side in a BLOCK! to make it more friendly for "defaulting".  So that's out.</p>
+          <p><a href="https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881/1</link>
+        <pubDate>Sun, 28 Oct 2018 23:42:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-881-1</guid>
+        <source url="https://forum.rebol.info/t/hedging-on-unless-for-beta-one/881.rss">Hedging on UNLESS for Beta/One</source>
+      </item>
+  </channel>
+</rss>

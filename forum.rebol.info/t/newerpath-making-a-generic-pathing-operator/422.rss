@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+    <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422</link>
+    <description>At one point I wrote up a thought experiment about something called [NewPath](http://blog.hostilefork.com/new-path-debate-rebol-red/).  Executive summary: I thought it might be more flexible if things like **%foo/bar** were actually a PATH! with a FILE! in its first slot and a WORD! in its second slot.  Then when it was evaluated, it would produce the singular FILE! value `%&quot;foo/bar&quot;`.
+
+This made it seem like you could do interesting path compositions, with GROUP!s and such, and have it look like a file.  @rgchris (rightly) complained that this took away some of the simplicity for those dealing in regular FILE!s or URLs.
+
+NewerPath is built on a long-running pet idea of mine to change **`/`** from simply meaning &quot;divide&quot; to being expanded to a generic pathing operator.  Just as a proof of concept...check this demo out *(to actually try it, you have to say `set/enfix quote / func ...` because /: is not a legal SET-WORD! at the moment)*
+
+    &gt;&gt; /: enfix func [#left #right] [
+        as file! unspaced [left &quot;/&quot; right]
+    ]
+
+    &gt;&gt; subdir: func [x] [
+        as file! unspaced [&quot;subdir-&quot; x * 10]
+    ]
+
+    &gt;&gt; (subdir 10) / %foo / (subdir 20) / %myfile.txt
+    == %subdir-100/foo/subdir-200/myfile.txt
+
+The result is pretty cool.  If it&#39;s a tight infix operator following the same rules as old dividing **/**, then you need the parenthesization, else it would be greedy and try &quot;10 / %foo&quot; and such.  Though that was part of the Old NewPath proposal too, since you had to parenthesize to get code executed in paths.
+
+But...if we were willing to take a little bit of a hit on pure compatibility with DIVIDE, it could be a *left normal, right tight* op.  
+
+    &gt;&gt; /: enfix func [left #right] [
+        as file! unspaced [left &quot;/&quot; right]
+    ]
+
+    &gt;&gt; subdir 10 / %foo / subdir 20 / %myfile.txt
+    == %subdir-100/foo/subdir-200/myfile.txt
+
+The left normality means you can avoid some amount of parenthesization (as long as it&#39;s one complete expression).  The right tightness stops greedy infixing if it winds up with an opportunity for that while one of its arguments is gathering *its* arguments.  It would change the behavior of / when mixed up with non-infix functions, while leaving pure infix &quot;precedence&quot; the same.  Maybe too freaky, the but interesting to point out the parentheses *could* be avoided.
+
+While it might seem a little weird to say that &quot;picking&quot; one integer out of another integer somehow means to &quot;divide&quot; them, it doesn&#39;t seem like the end of the world if **1/2** comes out as 0.5.
+
+The bigger conceptual issue is what happens when people see **a / b** and can&#39;t trust that&#39;s mathematical division.  Generally speaking the experiment of Rebol has a lot to do with allowing that rug to be pulled out from under you a bit, in order to expand your expressivity.  And I do a lot more FILE! or URL!  construction from parts than I do math in Rebol.
+
+So I dunno.  If your variables have meaningful names and your code is laid out contextually right, it shouldn&#39;t be much of a problem.  I guess that&#39;s why I think it would be good to try it and find out.</description>
+    
+    <lastBuildDate>Sun, 30 Dec 2018 07:32:38 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="422">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/brett/40/177_2.png" class="avatar"> Brett:</div>
+<blockquote>
+<p>So I’m wondering if an operation based on pathing is too challenged by the complexity, whether the area is more properly the scope of a dialect and how do these questions relate to future types.</p>
+</blockquote>
+</aside>
+<p>Coming back to this thread much later: I'll more explicitly agree with your point that being bound by pathing's "step A, step B, etc." chain of operation removes the ability to sort of have a "central mind" about what your transformation is going to be.  You become chained to whatever the odd rules are at each step and reverse-engineering what you want, instead of just writing it.  <em>(It doesn't help that what a path step does seems to have been semi-random in the first place.)</em></p>
+<p>My second suggestion I think pointed in the better direction, more of a "dialect" in terms of passing a quoted structure to that "central mind":</p>
+<pre><code>&gt;&gt; make file! '(dir)/subdir/["file-" num ".txt"]
+== %home/projects/subdir/file-10.txt
+</code></pre>
+<p>The new curveball I'm throwing in circa 2019 is <a href="https://forum.rebol.info/t/i-love-arbitrary-escaping-but-backslash-may-not-be-the-one/986">% as a generic quoting operator</a>, and killing FILE! altogether.</p>
+<pre><code>&gt;&gt; x: %(dir)/subdir/["file-" num ".txt"]
+== (dir)/subdir/["file-" num ".txt"]
+
+&gt;&gt; type of x
+== path!
+
+&gt;&gt; file-ify x
+== "home/projects/subdir/file-10.txt" // not a FILE!, because there is no FILE!
+</code></pre>
+<p>So this FILE-IFY or whatever could be fully userspace.  Write and remix your own.  Make it a small enough amount of code that if the basic implementation wasn't doing what you wanted for a particular case, you could just hack on it yourself.</p>
+<p>A hard part of all this really is coming up with names.  Rebol took a lot of the good ones, and here I'm afraid to use TO-FILE.  Even if Rebol had never had a FILE! datatype, I might still be wary of it... because it makes it sound like it can't return TEXT!...it breaks the pattern of the TO-XXX functions.  <img src="//forum.rebol.info/images/emoji/twitter/frowning.png?v=7" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>So maybe this is what encourages putting functionality under pathing or MAKE and TO vs. any real desire to leverage any infrastructure they have, because they don't really <em>have</em> that much "infrastructure".  Just the name (or in pathing's case, the lack of a name!)</p>
+          <p><a href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/8</link>
+        <pubDate>Sun, 30 Dec 2018 07:30:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-422-8</guid>
+        <source url="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss">NewerPath... making &quot;/&quot; a generic pathing operator</source>
+      </item>
+      <item>
+        <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>As another epicycle of the NewPath design saga, here's a more modest (yet still powerful) proposal:</p>
+<h3>Let MAKE FILE! take a PATH!, then interpret it creatively</h3>
+<pre><code>&gt;&gt; dir: %home/projects/
+&gt;&gt; num: 10
+
+&gt;&gt; make file! '(dir)/subdir/["file-" num ".txt"]
+== %home/projects/subdir/file-10.txt
+</code></pre>
+<p>Note how the path-interstitial "/" gets a magic de-duplication, and won't be added if it's already there.  So it doesn't wind up being <code>projects//subdir</code>.</p>
+<p>The idea of running UNSPACED-style logic when a path segment is a BLOCK! is an idea that has come up before, and seems common enough to be worth it.  An added bonus could be that this interpretation could be extended to MAKE FILE! of a plain BLOCK!:</p>
+<pre><code> &gt;&gt; make file! ["file-" num ".txt"]
+ == %file-10.txt
+</code></pre>
+<p>And it shaves 7 characters off of <strong>as file! unspaced ["file-" num ".txt"]</strong>.  As a sidenote, <strong>make file! (...)</strong> would arguably work "consistently" since that would just run an evaluation.</p>
+<p>This could mean <a href="https://github.com/rebol/rebol-issues/issues/2305" rel="nofollow noopener">getting rid of the path picking out of file abnormality</a>.  Which would be good.</p>
+          <p><a href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/7</link>
+        <pubDate>Tue, 22 May 2018 12:18:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-422-7</guid>
+        <source url="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss">NewerPath... making &quot;/&quot; a generic pathing operator</source>
+      </item>
+      <item>
+        <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>As with arbitrary WORD!s I think the idea of data bearing paths is that you would be quoting it... so you'd do '2/3/2008 or having it in dialects where you interpret it, <strong>data: [Foo: <span class="hashtag">#bar</span> 2/3/2008]</strong></p>
+<p>The concept of paths that don't necessarily have evaluative meaning isn't so different from blocks whose contents can't run under DO...</p>
+          <p><a href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/6</link>
+        <pubDate>Sat, 13 Jan 2018 13:07:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-422-6</guid>
+        <source url="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss">NewerPath... making &quot;/&quot; a generic pathing operator</source>
+      </item>
+      <item>
+        <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>I like the idea that <code>2/3</code>, <code>2/3/2018</code>, <code>2/Mar/2018</code> are true paths.<br>
+But if 2/3 was a decimal 0.6666... then we are lost when writing 2/3/2018 :-/<br>
+Then we need a new type FRACTION!<br>
+so that fraction/integer gives a DATE!<br>
+Same way, we need <code>2/Mar</code> be valid  -- could be = 2/Mar/(current year)</p>
+          <p><a href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/5</link>
+        <pubDate>Sat, 13 Jan 2018 09:39:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-422-5</guid>
+        <source url="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss">NewerPath... making &quot;/&quot; a generic pathing operator</source>
+      </item>
+      <item>
+        <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="422">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/brett/40/177_2.png" class="avatar"> Brett:</div>
+<blockquote>
+<p>Then there is the use of / in file and url paths.  Seems natural that the operator be /, but is it confusing?  I'm not advocating + but by comparison perhaps it is less confusing visually when concatenating file paths with things.</p>
+</blockquote>
+</aside>
+<p>The advantage is that <strong>+</strong> doesn't imply adding a slash if needed.  The current pathing operator accommodates for double-slashes, as well as adding one if not present.  So if I were stuck with a raw concatenation operator, the odds of it trying to have "pathing intelligence" are slim.</p>
+<p><em>(And I'd argue the semiotics of + meaning "concatenation" aren't really very solid... 10 + 20 isn't 1020.  At least when you're making a path, the <strong><code>/</code></strong> has -some- semiotics.)</em></p>
+<p>But indeed...merits of the idea do hinge 100% on the idea that we want path composition to concatenate files.  Which has come into question.  It was just an observation that if we keep that, and if we went with the notion of <strong><code>/</code></strong> as a generic pathing operator, that it would work.  But if either of those two ideas are rejected, then it won't work.</p>
+<aside class="quote no-group" data-post="3" data-topic="422">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/brett/40/177_2.png" class="avatar"> Brett:</div>
+<blockquote>
+<p>Daydreaming, perhaps invoking a conversion dialect with something enfix and a specified output type might be interesting:</p>
+<p>url from [%some-dir/ filename "-" number %.txt]</p>
+<p>Ok so evaluator wise maybe that's not so new now. To spice it up maybe pathing could pass through to a from or something else more generically appropriate for pathing for it's 80/20 implementation.</p>
+</blockquote>
+</aside>
+<p>It's a more standard idea, but I guess I'm interested in the idea of seeing if it's possible to use infix operations to "riff off" the idea of just seeing a FILE! there and being able to know you want to use infix to shift into a file mode.</p>
+<p>But yeah, the competing demands on pathing vs. picking are certainly a  little less ideal than it could be with the integers needing conversion... but it looks <em>almost</em> good... if you didn't have to actually say TO-FILE on the ID :-/</p>
+<pre><code> topic: %newerpath-making-a-generic-pathing-operator
+ id: 422
+ d: read https://forum.rebol.info/t / topic / id</code></pre>
+          <p><a href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/4</link>
+        <pubDate>Mon, 18 Dec 2017 00:35:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-422-4</guid>
+        <source url="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss">NewerPath... making &quot;/&quot; a generic pathing operator</source>
+      </item>
+      <item>
+        <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <p>Some thoughts (fuzzier than normal due to a head cold)... and I hope I haven't not completely missed the point.</p>
+<p>This is creative and cool expressivity.</p>
+<p>Though, the examples show path composition as file concatenation.</p>
+<p>Ordinarily, in an expression, people might expect <strong>+</strong> or <strong>&amp;</strong> or something as concatenation - can't remember if I've seen <strong>/</strong> as concatenation.   So I'm asking myself, "are there other composition operations other than concatenation that point to <strong>/</strong> as the best operator?" (other than historical pathing) but my fuzzy head can't get me there straight off.</p>
+<p>Of course <strong>+</strong> has the same issues you point out as <strong>/</strong>.</p>
+<p>Then there is the use of <strong>/</strong> in file and url paths.  Seems natural that the operator be <strong>/</strong>, but is it confusing?  I'm not advocating <strong>+</strong> but by comparison perhaps it is less confusing visually when concatenating file paths with things.</p>
+<p>So I accept that you're looking at a big picture design here but my head has locked on a bit concretely to file concatenation and I'm challenged to work through any other applicative areas.</p>
+<aside class="quote no-group" data-post="2" data-topic="422">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If you have something that's an integer and you want to path it onto a FILE!, convert it to a file first.  %foo / %1</p>
+</blockquote>
+</aside>
+<p>My gut reaction is unease with this, seems like it will be more symbols to achieve a straight forward result. Also, I know files and urls have their string nature, but I also intuitively can think of them (block nature) where each path element is an atomic representation of something on disk - especially if I've done the work to validate that. In my mind: "is there an alternative, is there a wider enquiry?"</p>
+<aside class="quote no-group" data-post="2" data-topic="422">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But again, I think one runs into problems with just how varied the combinatorics get...with every type picking differently out of every other type, with no cohesion across superclasses.</p>
+</blockquote>
+</aside>
+<p>So yes, a block seems most useful to be converted unspaced, but as you point out this may be non-trivial with a mix of types. So I'm wondering if an operation based on pathing is too challenged by the complexity, whether the area is more properly the scope of a dialect and how do these questions relate to future types.  That said, I note that even if one has a user function or built-in dialect, the questions stand because pathing may have a 80 for 20 application.</p>
+<p>Daydreaming, perhaps invoking a conversion dialect with something enfix and a specified output type might be interesting:</p>
+<pre><code>url from [%some-dir/ filename "-" number %.txt]
+</code></pre>
+<p>Ok so evaluator wise maybe that's not so new now. To spice it up maybe pathing could pass through to a <strong>from</strong> or something else more generically appropriate for pathing for it's 80/20 implementation.</p>
+<p>Ok I'm probably delirious - to bed..</p>
+          <p><a href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/3</link>
+        <pubDate>Sun, 17 Dec 2017 20:38:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-422-3</guid>
+        <source url="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss">NewerPath... making &quot;/&quot; a generic pathing operator</source>
+      </item>
+      <item>
+        <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I'll mention though, that this capability of FILE! is controversial, because it means that a decision must be made about whether <strong>%foo / 1</strong> is <code>#"f"</code> or <code>%foo/1</code>...given that pathing and picking are unified <em>(which I believe strongly has been a great idea)</em>.</p>
+<p>My view is that it should be consistent across string types, and <strong>pick "foo" 1</strong> has to be #"f" pretty much.  If you have something that's an integer and you want to path it onto a FILE!, convert it to a file first.  <strong>%foo / %1</strong></p>
+<p>Another relevant thing to think about is the meaning of BLOCK!.  It seems very useful to say that the block be unspaced converted:</p>
+<pre><code>&gt;&gt; filename: "log"
+
+&gt;&gt; number: 10
+
+&gt;&gt; %some-dir / [filename "-" number %.txt]
+== %some-dir/log-10.txt
+</code></pre>
+<p>But again, I think one runs into problems with just how varied the combinatorics get...with every type picking differently out of every other type, with no cohesion across superclasses.</p>
+          <p><a href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/2</link>
+        <pubDate>Sat, 16 Dec 2017 21:55:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-422-2</guid>
+        <source url="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss">NewerPath... making &quot;/&quot; a generic pathing operator</source>
+      </item>
+      <item>
+        <title>NewerPath... making &quot;/&quot; a generic pathing operator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>At one point I wrote up a thought experiment about something called <a href="http://blog.hostilefork.com/new-path-debate-rebol-red/" rel="nofollow noopener">NewPath</a>.  Executive summary: I thought it might be more flexible if things like <strong>%foo/bar</strong> were actually a PATH! with a FILE! in its first slot and a WORD! in its second slot.  Then when it was evaluated, it would produce the singular FILE! value <code>%"foo/bar"</code>.</p>
+<p>This made it seem like you could do interesting path compositions, with GROUP!s and such, and have it look like a file.  <a class="mention" href="/u/rgchris">@rgchris</a> (rightly) complained that this took away some of the simplicity for those dealing in regular FILE!s or URLs.</p>
+<p>NewerPath is built on a long-running pet idea of mine to change <strong><code>/</code></strong> from simply meaning "divide" to being expanded to a generic pathing operator.  Just as a proof of concept...check this demo out <em>(to actually try it, you have to say <code>set/enfix quote / func ...</code> because /: is not a legal SET-WORD! at the moment)</em></p>
+<pre><code>&gt;&gt; /: enfix func [#left #right] [
+    as file! unspaced [left "/" right]
+]
+
+&gt;&gt; subdir: func [x] [
+    as file! unspaced ["subdir-" x * 10]
+]
+
+&gt;&gt; (subdir 10) / %foo / (subdir 20) / %myfile.txt
+== %subdir-100/foo/subdir-200/myfile.txt
+</code></pre>
+<p>The result is pretty cool.  If it's a tight infix operator following the same rules as old dividing <strong>/</strong>, then you need the parenthesization, else it would be greedy and try "10 / %foo" and such.  Though that was part of the Old NewPath proposal too, since you had to parenthesize to get code executed in paths.</p>
+<p>But...if we were willing to take a little bit of a hit on pure compatibility with DIVIDE, it could be a <em>left normal, right tight</em> op.</p>
+<pre><code>&gt;&gt; /: enfix func [left #right] [
+    as file! unspaced [left "/" right]
+]
+
+&gt;&gt; subdir 10 / %foo / subdir 20 / %myfile.txt
+== %subdir-100/foo/subdir-200/myfile.txt
+</code></pre>
+<p>The left normality means you can avoid some amount of parenthesization (as long as it's one complete expression).  The right tightness stops greedy infixing if it winds up with an opportunity for that while one of its arguments is gathering <em>its</em> arguments.  It would change the behavior of / when mixed up with non-infix functions, while leaving pure infix "precedence" the same.  Maybe too freaky, the but interesting to point out the parentheses <em>could</em> be avoided.</p>
+<p>While it might seem a little weird to say that "picking" one integer out of another integer somehow means to "divide" them, it doesn't seem like the end of the world if <strong>1/2</strong> comes out as 0.5.</p>
+<p>The bigger conceptual issue is what happens when people see <strong>a / b</strong> and can't trust that's mathematical division.  Generally speaking the experiment of Rebol has a lot to do with allowing that rug to be pulled out from under you a bit, in order to expand your expressivity.  And I do a lot more FILE! or URL!  construction from parts than I do math in Rebol.</p>
+<p>So I dunno.  If your variables have meaningful names and your code is laid out contextually right, it shouldn't be much of a problem.  I guess that's why I think it would be good to try it and find out.</p>
+          <p><a href="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422/1</link>
+        <pubDate>Sat, 16 Dec 2017 21:20:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-422-1</guid>
+        <source url="https://forum.rebol.info/t/newerpath-making-a-generic-pathing-operator/422.rss">NewerPath... making &quot;/&quot; a generic pathing operator</source>
+      </item>
+  </channel>
+</rss>

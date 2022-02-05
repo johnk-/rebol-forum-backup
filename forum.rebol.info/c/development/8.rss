@@ -1,0 +1,1663 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Development - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/8</link>
+    <description>Topics in the &#39;Development&#39; category Discussion of the development of Rebol itself: language design, implementation and standard library.</description>
+    
+      <lastBuildDate>Fri, 21 Jan 2022 17:01:02 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/8.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>Should END-able constructs all use ^META parameters?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>R3-Alpha and Rebol2 could only have functions that were "endable" if the argument they took was quoted.  This feature was added primarily for HELP, so that you could say either:</p>
+<pre><code>&gt;&gt; help
+; (would display generic HELP usage information)
+
+&gt;&gt; help topic
+; (would display help for the given topic)
+</code></pre>
+<p>It was a <em>very limited form of variadic-ness</em>...generally used only in console-oriented commands (HELP, LS).  You couldn't write a function that was evaluative, like:</p>
+<pre><code>redbol&gt;&gt; printer 1 + 2
+3
+
+redbol&gt;&gt; printer
+You called the PRINTER function with no arguments
+    ; ^-- not possible to accomplish with an otherwise evaluative argument!
+</code></pre>
+<p>Being able to handle getting to the end of input was entwined with taking quoted arguments.</p>
+<h2>Ren-C added <code>&lt;end&gt;</code>-able Evaluative Parameters</h2>
+<p>To facilitate certain demos in Ren Garden, Ren-C could mark an ordinary parameter as being <code>&lt;end&gt;</code>-able.  This would mean that the argument would show up as being NULL if the end was reached before an argument was seen.</p>
+<p>This was--however--ambiguous with if you actually passed an evaluative NULL.</p>
+<pre><code>ren-c&gt;&gt; printer 1 + 2
+3
+
+ren-c&gt;&gt; printer
+You called the PRINTER function with no arguments
+
+ren-c&gt;&gt; printer null  
+You called the PRINTER function with no arguments  ; d'oh
+</code></pre>
+<p><strong>This kind of ambiguity wasn't new...the Redbol version had it.</strong>  The signal for quoted parameters that were endable-and-missing was to make the parameter an UNSET!.  Which meant they couldn't tell the difference between <strong>help #[unset!]</strong> and just-plain-help:</p>
+<pre><code>red&gt;&gt; help #[unset!]
+To use HELP, supply a word or value as its
+argument:
+
+    help insert
+    help system
+    help system/script
+
+To view all words that...
+</code></pre>
+<p><strong>Interestingly enough, Ren-C has a solution for this with quoted parameters, because NULL cannot appear literally in source...so it can't be at the callsite.  Thus NULL can represent a missing quoted argument.</strong>  Which is neat.</p>
+<h2>^META parameters can do <code>&lt;end&gt;</code> another way...</h2>
+<p>A meta parameter is quoted, but will be a plain non-quoted BAD-WORD! if the callsite was passing an isotope.  With the <a href="https://forum.rebol.info/t/pure-vs-impure-invisibility-do-we-need-both/1782">recent design concept that suggests ~void~ isotopes are "pure" and equivalent to the full absence of a value</a>, you get evaluative endability without needing a separate feature.</p>
+<p>So if our PRINTER took a ^META argument:</p>
+<pre><code>&gt;&gt; printer 1 + 2
+3
+; (it actually received '3, quoted)
+
+&gt;&gt; printer
+You called the PRINTER function with no arguments
+; (it actually received ~void~, not quoted)
+</code></pre>
+<p>The ambiguity is still there, though...</p>
+<pre><code>&gt;&gt; printer ~void~
+You called the PRINTER function with no arguments
+; (again, it actually received ~void~, not quoted)
+</code></pre>
+<p>If you're following the details then I pointed out that supermeta parameters would be necessary to implement something that would know the difference in the suggested model.</p>
+<p><strong>But at least you could differentiate NULL from an end.</strong>  The conflation of an invisible argument with the end doesn't seem that troubling to me, as the problem with HELP is fixed since it quotes and can tell when you say <strong>help ~void~</strong> vs. plain <strong>help</strong></p>
+<h2>Killing off <code>&lt;end&gt;</code> as a core parameter flag would simplify things...</h2>
+<ul>
+<li>
+<p>If a quoted parameter tolerates NULL as one of its legal types that's sufficient to say it is "endable"</p>
+</li>
+<li>
+<p>If an evaluative parameter needs to detect endability, it could be your job to make it a ^META parameter and look for void, and unquote it to handle other results.</p>
+</li>
+</ul>
+<p>The code and typeset flags for <code>&lt;end&gt;</code> could then be scrapped.</p>
+<p>If someone really liked the NULL conflating version of endability they could write something to do it in usermode.</p>
+<p><strong>You'd have to see the code to understand why I would think throwing away <strong><code>&lt;end&gt;</code></strong> is worth it.</strong> The way the type checking is done frames have to be filled first, which means if a function doesn't want an actual null but wants just ends to reflect as null... or wants an actual null but doesn't want ends reflected as null... hidden bits need to be grafted onto these nulls at the time of frame fulfillment to say whether it's an "endish" null or a regular null.  Various parts of the system then need to test a NULL for this invisible property.  <strong>^META parameters pull such invisible state into the light.</strong></p>
+<p><strong>Basically take my word for it: meta is much cleaner, and offers a way to expose these distinctions to the user--so I think the odds are that <code>&lt;end&gt;</code> and its current mechanics need to die.</strong></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/should-end-able-constructs-all-use-meta-parameters/1783">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/should-end-able-constructs-all-use-meta-parameters/1783</link>
+          <pubDate>Fri, 21 Jan 2022 17:01:02 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1783</guid>
+          <source url="https://forum.rebol.info/t/should-end-able-constructs-all-use-meta-parameters/1783.rss">Should END-able constructs all use ^META parameters?</source>
+        </item>
+        <item>
+          <title>Pure vs. Impure Invisibility: Do We Need Both?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>"Invisibles" <a href="https://forum.rebol.info/t/issues-with-invisibles-a-truly-disappearing-comment/405">were conceived 4 years ago</a>...long before BAD-WORD!s, isotopes, ^META parameters, etc.</p>
+<p>The terminology needs a bit of an update, because I want to make a distinction between two different kinds:</p>
+<ul>
+<li>
+<p><strong>IMPURE INVISIBLITY</strong> is when a special state (like a ~void~ isotope) is discarded in contexts where it's assumed to represent an invisible intent.</p>
+<p>Remember that plain BAD-WORD!s (unevaluated) are normal values and can be in blocks.</p>
+<pre><code>&gt;&gt; first [~void~]
+== ~void~
+</code></pre>
+<p>But an evaluated ~void~ becomes an isotope, and operations like ALL are willing to tolerate that as a signal of invisible intent it should discard:</p>
+<pre><code>&gt;&gt; ~void~
+== ~void~  ; isotope
+
+&gt;&gt; all [10 + 20, ~void~]
+== 30
+</code></pre>
+<p>Unfortunately, this is extra work that ALL must do, since ~void~ isotopes are valid evaluative products.  Every construct that wants to integrate impure invisibility bears the burden.</p>
+</li>
+<li>
+<p><strong>PURE INVISIBILITY</strong> is an evaluator feature when a function call can truly erase arbitrary code, such as to the right of a SET-WORD!:</p>
+<pre><code>&gt;&gt; y: elide (1 + 2 print "Erased!" 3 + 4) 10 + 20
+Erased!
+== 30
+
+&gt;&gt; y
+== 30
+</code></pre>
+<p>This can only be done when a function like ELIDE specially says that it is not expected to return any result at all.  Otherwise it's not clear whether <strong>y:</strong> is supposed to get the <code>~void~</code> isotope or something after it.</p>
+<p>(Over time I embraced the odd idea that just saying RETURN and not giving it an argument would be the way of being purely invisible...which has the interesting property that <strong><code>(return some-other-function ...)</code></strong> can actually chain cases where the other function is sometimes purely invisible and sometimes not!  This insight arose because of the frustrating fact that C/C++ cannot do such chains... if you say <strong><code>return some_other_function(...);</code></strong> and then change the other function from returning <code>int</code> to <code>void</code>, it will complain that you cannot use <code>return</code> with an argument inside of void functions...even if that function itself returns void.)</p>
+</li>
+</ul>
+<h2>Why Not Make "Impure" Invisibility Act "Pure" ("Semipure?")</h2>
+<p>The existence of the ^META types and operators raises an interesting theoretical option...that a ~void~ isotope could be treated as pure by the evaluator, and it's your responsibility to use meta operations if you wanted to see it:</p>
+<pre><code>&gt;&gt; 1 + 2 ~void~
+== 1 + 2
+
+&gt;&gt; x: ~void~ 1 + 2
+== 3
+
+&gt;&gt; x
+== 3
+
+&gt;&gt; y: ^ ~void~ 1 + 2
+== 3
+
+&gt;&gt; y
+== ~void~
+    ; ^-- not an isotope
+</code></pre>
+<p>Pondering the potential implications of this form of thinking, it would mean there wouldn't be a form of invisibility that could beat a ^META operation:</p>
+<pre><code>&gt;&gt; z: ^ comment ["hi"] ~something~
+== ~something~  ; isotope
+
+&gt;&gt; z
+== ~void~
+   ; ^-- the COMMENT was seen by the ^META, instead of bypassed
+   ; (today COMMENT's status as a purely invisible construct means you
+   ; would get Z as a non-isotope ~something~)
+</code></pre>
+<p><strong>Note that since parameters to functions are allowed to be meta if they need to be, changing a parameter from normal to meta would break commenting constructs.</strong>  This is not too surprising, as if you have <code>my-function comment "hi" 1 + 2</code> and change MY-FUNCTION's argument to be quoted instead of evaluated, that's another kind of parameter change that would break the commenting feature.</p>
+<p>Meta parameters should be used very sparingly--far more sparingly than quoted parameters--so this may not be a problem.  I notice that a function like RETURN (which takes its argument meta so it can return isotopes) could still chain an invisible function, as it would receive ~void~ as a measure of what an isotope was.</p>
+<h2>If Truly Pure Invisibility Is Not Implemented, Would People Just Reinvent it with Variadics in a Less Efficient Way Than The Current Evaluator Internals Do It?</h2>
+<p>Let's say someone writes:</p>
+<pre><code>foo: func [] [return comment "hi" 1 + 2]
+</code></pre>
+<p>Today this returns 3 due to comment's "purely invisible" status, RETURN takes its argument as a ^META parameter.  If we decide meta parameters are allowed to see the "semipure" void isotopes described above, then it would just be like you'd written:</p>
+<pre><code>foo: func [] [return comment "hi"]
+</code></pre>
+<p><strong>That would make it seem like COMMENT is unreliable.</strong>  True, if you take a quoted argument you expect COMMENT to break in such cases as well...but meta parameters are evaluative and so it's a bit different.</p>
+<p>Perhaps it should be just the <strong>^</strong> operator at the callsite that has the special vision, and meta parameters are evaluated and discard the void isotopes.  This would mean you only have to learn the rule that <strong>^ comment "hi"</strong> breaks the invisibility.</p>
+<p><em>(Here we wind up with <strong>^</strong> either being a built-in thing the user has no way to write themselves, or invent a "supermeta" parameter flag to say "I can see void isotopes, too".)</em></p>
+<h2>Either way, "Impure Invisibility" Is MUCH Easier To Work With</h2>
+<p>The easy meta-transformations between ~void~ isotopes and plain ~void~ BAD-WORD! allow you to work with an invisible function gracefully...even when you don't know if it's invisible or not.</p>
+<p>Early problems cropped up with pure invisible COMMENT like this:</p>
+<pre><code>&gt;&gt; f: make frame! :comment
+&gt;&gt; f.discarded: "Ignore Me"
+
+&gt;&gt; x: do f   y: 1 + 2
+== 3
+
+&gt;&gt; x
+== 3  ; this could seem surprising, but maybe not?
+</code></pre>
+<p>But the new world does have at least <em>an</em> answer, meta your result and you can test for void cases and handle them as you wish.</p>
+<pre><code>&gt;&gt; x: ^ do f  y: 1 + 2
+== 3
+
+&gt;&gt; x
+== ~void~
+
+; alternately could have said `[^x]: do f  y: 1 + 2`
+</code></pre>
+<p>Yet it's still uncomfortable to imagine that an operation like DO could vanish, which is why DO tried to use void isotopes as a proxy for its return value.  A ~void~ isotope could then be semantically interpreted or converted to pure invisibility on an as-needed basis.</p>
+<h2>"If You Don't Know What You're Doing, Then Do It Meta"</h2>
+<p>My urge to build safety into the system is driven by wanting to enable people to write generic code.</p>
+<p>...but... trying to protect people from <strong><code>do f</code></strong> from vanishing when <strong><code>f</code></strong> is a FRAME! for the COMMENT function may be misguided.  That protection could be breaking the very cool trick they are trying to perform.</p>
+<p>And there's a real complexity cost to having a distinction between pure and impure invisibility.  If you allow that distinction then impure invisibility has a meta form (a plain ~void~ BAD-WORD!) while pure invisibility doesn't have one.  The powerful tool of META therefore offers no answers for a purely invisible function.</p>
+<p>Maybe things like DO should have a switch to say <strong>do/vanishable</strong> and that's the right protection, otherwise they error if they could vanish.  Same with <strong>unmeta</strong>?</p>
+<p>Or maybe there's a better finesse, to say that the evaluator has some generalized protection which notices when you might have meant for an invisible result to be used, and there's generic mitigation for such cases.  Like with <strong><code>x: do f  y: 1 + 2</code></strong>, if it notices the potential for misunderstanding you can say <strong><code>x: vanishable do f y: 1 + 2</code></strong>...and you'd be provoked to decide if you wanted to use VANISHABLE or ^ based on what you were actually trying to accomplish.</p>
+<p><em>That actually sounds like a really clever mitigation, if a word or symbol were picked for it!</em></p>
+<hr>
+<p><strong>This post has been in draft form for a while, as I let it turn over in my head.  But I think I am turning to feeling that void isotopes cannot be stored in variables but are something whose existence can only be philosophically imagined by seeing a meta state register as a plain ~void~ BAD-WORD!.  This is bolstered by the idea that function frames cannot receive isotopes, and parallels to the idea that ~null~ isotopes cannot be stored in variables either (though they decay to ordinary NULL)</strong></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/pure-vs-impure-invisibility-do-we-need-both/1782">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/pure-vs-impure-invisibility-do-we-need-both/1782</link>
+          <pubDate>Fri, 21 Jan 2022 09:19:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1782</guid>
+          <source url="https://forum.rebol.info/t/pure-vs-impure-invisibility-do-we-need-both/1782.rss">Pure vs. Impure Invisibility: Do We Need Both?</source>
+        </item>
+        <item>
+          <title>WHILE [Cold Feet]</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p><strong>I'm really certain that ANY should not be a looping construct in PARSE.</strong>  Rebol's use of ANY everywhere else means "any one of", not "any number of".  That applies to the ANY short-circuit-OR operation, to the ANY-XXX! types, and it can come up in PARSE such as:</p>
+<pre><code>parse block [some any-value!]
+</code></pre>
+<p>I like the shorthand for this this that works across series types with the TAG! combinator:</p>
+<pre><code>uparse block [some &lt;any&gt;]
+</code></pre>
+<p>This meaning <em>any one element</em>.  It gets at that English concept that operators like <strong><code>*</code></strong> (or <strong><code>&lt;*&gt;</code></strong>) just don't have.</p>
+<p>Plus, the "zero-or-more matches of a rule" interpretation doesn't jibe with how we use ANY in English:</p>
+<ul>
+<li>"Do you have ANY bananas?"</li>
+<li>"Yes."</li>
+<li>"Cool.  Can I have one, then?"</li>
+<li>"No, sorry.  I don't have ANY."</li>
+</ul>
+<h2>But I'm Not Happy With Bending WHILE For This</h2>
+<p>It seemed appealing at first to say that WHILE would be standardized in the language as arity-1, both in PARSE and in ordinary code loops.  This would make UNTIL and WHILE line up, and LOOP could take the arity-2 role that WHILE used to have.</p>
+<p>But I've been lamenting <strong><a href="https://en.wikipedia.org/wiki/While_loop">just how universally WHILE is arity-2 in pretty much every language</a></strong> and that LOOP doesn't really quite cut it while reading.  :-/</p>
+<p>Sorry for the flux, but I want to move back to <strong>while [condition] [body]</strong> as it was.  However going through the process has spurred thought...</p>
+<h2>An Observation: OPT SOME &lt;=&gt; WHILE</h2>
+<p>It has in the past occurred to me that PARSE's WHILE (or ANY) was really OPT SOME.  It's three more characters to say it:</p>
+<pre><code>while pattern
+opt some pattern
+</code></pre>
+<p><em>(Note: This is only true in modern Ren-C, as previously the progress requirement differentiated these...that is now broken out into FURTHER.)</em></p>
+<p>...but although it's more characters, "optionally some number of occurrences of the pattern" is pretty literally what you are talking about.  In the UPARSE model of synthesized values it's kind of less confusing, because it's clearer what it returns in the case of nothing...the same thing OPT always returns when a rule doesn't match: NULL.</p>
+<p>Anyway, I'm feeling remorse and a wish to go back to WHILE for arity-2 loops in the language.  But I don't want to go back to ANY in PARSE.</p>
+<h2>Is OPT SOME really so bad?</h2>
+<p><strong>I've gotten to wondering if there is a reason we don't have a separate word for "zero or more" in English.  You actually have to write out "zero or more" to convey that intent... <em>maybe because the intent is too weird for a single word</em>.</strong></p>
+<p>When you just write WHILE it may be that you have a case that's actually supposed to be a SOME but it hasn't really bit you yet.  If you're willing to tolerate between 1 and a million of something, the case of no things being there is distinguished...and calling attention to the fact that the rule you have may not match at all can be an asset.</p>
+<p>I actually think OPT SOME offers an advantage, because it encourages you to look at it and decide if the OPT belongs there or not.  It may feel kind of like a wart, but maybe it's a helpful wart.</p>
+<p>(It reminds me a bit of the UNLESS vs. IF NOT situation.  Many people felt UNLESS is actually obfuscating nearly everywhere it's used, and that it's better to break it apart even if that means two words instead of one.)</p>
+<h2>Trying Out The Change, I Noticed...</h2>
+<p>I actually did find a difference how I read the code.  "This entire next section may not be relevant... <em>none</em> of it could match and it would go on."  That weight of the OPT is felt more heavily when the word is there than the WHILE...which if you <em>frequently</em> expect the thing to be there, you may assume it will <em>always</em> be there for at least one instance.</p>
+<p>You also can see redundancy in OPT more clearly.  Things like:</p>
+<pre><code>opt [
+    while [...]
+]
+</code></pre>
+<p>Stand out more if they look like:</p>
+<pre><code>opt [
+   opt some [...]
+]
+</code></pre>
+<p>I think some things really do read more clearly.  You can look at this as removing 0 or more newlines at the head of a series via a WHILE:</p>
+<pre><code>parse series [
+    remove [while newline]
+    ...
+]
+</code></pre>
+<p>Or rephrase that with OPT SOME:</p>
+<pre><code>parse series [
+    remove [opt some newline]
+    ...
+]
+</code></pre>
+<p>But I think it reads clearest when you bring the OPT outside, to say you're <em>optionally removing some newlines</em>:</p>
+<pre><code>parse series [
+    opt remove [some newline]
+    ...
+]
+</code></pre>
+<h2>More Distinct</h2>
+<p>ANY and WHILE both had the problem that they had analogues in imperative code.  But if SOME remains a PARSE keyword, then this helps better intuit the difference...so the code looks more differentiable.</p>
+<h2>Compression Is Possible By Other Avenues</h2>
+<p>I noticed a particularly laborious substitution in %make-zlib.r which extracts the headers and code for zlib using parse, because it often was parsing C code and looking for the pattern <strong><code>while whitespace</code></strong>.  This would happen multiple lines in a row and multiple times on a line.  When it became <strong><code>opt some whitespace</code></strong> it got more annoying.</p>
+<p>But this is kind of a problem anytime you repeat something over and over.  Maybe that pattern should have been <strong><code>ws*: [opt some whitespace]</code></strong> and then it would just be <strong><code>ws*</code></strong> to mean "any number of whitespace characters here, including zero".</p>
+<h2>A Motivated Individual Can Overrule It</h2>
+<p>Remember, UPARSE is going to let you be the judge.  If you want your own keywords, you can have them.  Maybe you like MANY (some parser combinators seem to think that 0...N is "many" and 1...N is "some").  Maybe you don't care if WHILE is different.  Maybe you don't want to use the ANY parse abstraction that I think is more interesting.</p>
+<h2>I'm Trying It Out</h2>
+<p>One can argue there's a bit of a 1984-newspeak to it ("you don't need words like better or worse, use plus-good and un-good and double-plus-ungood").  But we're sort of asking a programming language to be more "nuanced" in its wording than English, which has evolved to be pretty much where the brain is at.  I've shown some concrete benefits here to breaking out the OPT so you can see its relationship to the other OPTs you have and move it around.</p>
+<p>I do know I'm getting cold feet on the WHILE &lt;=&gt; LOOP change.  And I don't think the arity of WHILE in PARSE should be different from the arity of WHILE in the language, it's jarring.</p>
+<p>I'm giving it a shot in the bootstrap and rebmake to see what kind of thoughts it inspires.  So far it seems to be around equally good and bad...and since the bad is just largely unfamiliarity which should wear off...that points to a win, especially since it means retaking WHILE.</p>
+            <p><small>5 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/while-cold-feet/1772">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/while-cold-feet/1772</link>
+          <pubDate>Sun, 12 Dec 2021 05:02:41 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1772</guid>
+          <source url="https://forum.rebol.info/t/while-cold-feet/1772.rss">WHILE [Cold Feet]</source>
+        </item>
+        <item>
+          <title>DEFAULT with PATH!...What Does It *Mean*?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>The ability to have random side-effects in paths creates all kinds of nasty potentials.</p>
+<p>That is why I made a way to say you only allow paths to contain evaluations if you also ask for an "invariant" representation of the path to be returned...that you could use in place of a path for further assignments.</p>
+<pre><code>&gt;&gt; var: 'x
+
+&gt;&gt; path: 'obj/(print "side effect" var)
+
+&gt;&gt; set path 30
+** Error: PATH contains GROUP!s, must request /STEPS output (can use #)
+
+&gt;&gt; [value steps]: set path 30
+side effect
+== 30
+
+&gt;&gt; steps
+== @[obj x]
+</code></pre>
+<p>You can then use STEPS instead of the path.  e.g. <strong>set @[obj x]</strong> will act like <strong>set 'obj/x</strong>.  (The reason a BLOCK! is used is because not all datatypes would be legal in paths...a GROUP! could evaluate to anything, like an OBJECT!...which is a perfectly valid thing to set in a MAP! for instance.)</p>
+<h2>This "Invariant" Form Was Intended For Things Like DEFAULT</h2>
+<p>The concept was that even if you have evaluations on the left hand side, you will be able to capture where it got the value or absence-of-value from...and then in the event you need to write it back because a default is necessary, you don't have to run the evaluation again:</p>
+<pre><code>&gt;&gt; n: 5
+
+&gt;&gt; data.(n: n + 1): default [10]
+</code></pre>
+<p>Internally, DEFAULT can make a GET request of <strong>data.(n: n + 1)</strong> and get back STEPS with a fixed value for N, like <strong><code>@[data 6]</code></strong>.  If it discovers that the value is set to blank and needs defaulting, it can then use the steps instead of the path as the basis for the SET...so N is not changed twice.</p>
+<h2>But Other Things Can Change...</h2>
+<p>All kinds of changes can happen between the GET and the SET in DEFAULT.  What about this?</p>
+<pre><code>&gt;&gt; data.(n: n + 1): default [data: ~gone~, 10]
+</code></pre>
+<p>We've prevented running imperative code and getting side effects from the path...but the side effects can come from other places.  <strong>Anything you do between the GET and the SET can make the "invariant" steps not so invariant.</strong></p>
+<p>Let's say DATA was a BLOCK! at the outset.  Should the <strong><code>@[...]</code></strong> steps have actually stored a reference to the block instead of the WORD! data, so that changes to the variable couldn't redirect the invariant reference?</p>
+<p>That doesn't work for immediate types.  Let's say you have:</p>
+<pre><code>&gt;&gt; time: 4:00
+
+&gt;&gt; path: 'time.(if true ['hour])
+
+&gt;&gt; [# steps]: set path 12
+== 12
+
+&gt;&gt; steps
+== @[4:00 hour]
+</code></pre>
+<p>Now you can't use that steps to go back and change the original time, because 4:00 is an immediate value.  You need to get at the object the time lives in.  You'd wind up with a 3-element steps in that case:</p>
+<pre><code>&gt;&gt; steps
+== @[make object! [...] time hour]
+</code></pre>
+<h2>If Nothing Is Going To Be Perfect... Should We Shortcut It?</h2>
+<p>Let's say you have a path like:</p>
+<pre><code>obj1.obj2.(if true [obj3]).obj4.date.time
+</code></pre>
+<p>We could say that the "steps" for this path are:</p>
+<pre><code>@[obj1 obj2 obj3 obj4 date time]
+</code></pre>
+<p>But is that empirically more desirable than just noticing when we cross the line from non-immediate values into immediate values, and preserving only as much as we need?</p>
+<pre><code>@[(make object! [...this is obj4...]) date time]
+</code></pre>
+<p>That's enough to write back to obj4...but it is fully disconnected from the path that was initially being represented.  <strong>But which is more suitable for the intent of something like DEFAULT?</strong></p>
+<h2>My Head Hurts <img src="https://forum.rebol.info/images/emoji/twitter/face_with_head_bandage.png?v=9" title=":face_with_head_bandage:" class="emoji" alt=":face_with_head_bandage:">
+</h2>
+<p>...and it's not because of a booster shot.  It's because this is crazy, and way past the point of being fun.</p>
+<p>What started out as a nice idea for taming GROUP!s in PATH!s becomes a real headache.</p>
+<p><strong>So I'm going to leave well enough alone, and say that this does only that.</strong>  If you want to prune a path to get better invariants, that's on you:</p>
+<p>For example:</p>
+<pre><code>(obj1.obj2.obj3.obj4).date.time: default [...]
+</code></pre>
+<p>When you do this, then when DEFAULT asks for steps it will get 4 items in the block:</p>
+<pre><code>&gt;&gt; steps
+== @[(make object! [...]) date time]
+</code></pre>
+<p>It has latched onto the object, and so you can say inside the body of the defaulting code things like <strong><code>obj1: null</code></strong> or <strong>obj1.obj2.obj3: []</strong> and the assignment will apply to what it was looking at, because those names aren't in the steps.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/default-with-path-what-does-it-mean/1770">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/default-with-path-what-does-it-mean/1770</link>
+          <pubDate>Sat, 11 Dec 2021 23:58:00 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1770</guid>
+          <source url="https://forum.rebol.info/t/default-with-path-what-does-it-mean/1770.rss">DEFAULT with PATH!...What Does It *Mean*?</source>
+        </item>
+        <item>
+          <title>SmartGit Free For Personal Use</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>GitHub</category>
+          <description><![CDATA[
+            <p>This isn't really advertised all that loudly.  But SmartGit is free for personal use now:</p>
+<p><a href="https://www.syntevo.com/smartgit/" class="inline-onebox">SmartGit – Git Client for Windows, macOS, Linux</a></p>
+<p>I've only been using it a little bit so far, but from the bit I've seen it seems to be a lot more functional than SourceTree.</p>
+<p>I imagine that things like VSCode having pretty passable in-built version control and extensions is probably putting some pressure on these kinds of products.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/smartgit-free-for-personal-use/1769">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/smartgit-free-for-personal-use/1769</link>
+          <pubDate>Sun, 05 Dec 2021 16:32:09 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1769</guid>
+          <source url="https://forum.rebol.info/t/smartgit-free-for-personal-use/1769.rss">SmartGit Free For Personal Use</source>
+        </item>
+        <item>
+          <title>Rye Language (?)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Foreign Inspiration</category>
+          <description><![CDATA[
+            <p>So here's another language which doesn't look very Rebol-like but is by Refaktor who is Rebol-inspired:</p>
+<aside class="onebox githubfolder">
+  <header class="source">
+      <img src="https://github.githubassets.com/favicons/favicon.svg" class="site-icon" width="32" height="32">
+      <a href="https://github.com/refaktor/rye" target="_blank" rel="noopener">github.com</a>
+  </header>
+  <article class="onebox-body">
+    <div class="aspect-image" style="--aspect-ratio:690/345;"><img src="https://opengraph.githubassets.com/122f981b955a64e477a664f1404312f7b4587117bc60742da6aea9e4d871023a/refaktor/rye" class="thumbnail" width="690" height="345"></div>
+
+<h3><a href="https://github.com/refaktor/rye" target="_blank" rel="noopener">GitHub - refaktor/rye: work in progress rebol+factor+shell inspired language</a></h3>
+
+
+  <p><span class="label1">work in progress rebol+factor+shell inspired language</span></p>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>Notably, it is written in Go.  <em>(I've mentioned that increasingly I have been leaning toward modeling things after Go for a runtime.  It would of course be easier to do by actually writing the runtime in Go, vs. trying to reproduce the effect in low-level C code.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"> )</em></p>
+<p>It's probably very interesting, but I don't really feel like looking at it right at this moment.  Maybe someone else can study it and explain what it's about in a reply here.</p>
+<p>The main carry-away I'll take for the moment is the 1:1 language-designer:user ratio that Rebol users are inevitably converging toward.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/rye-language/1768">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/rye-language/1768</link>
+          <pubDate>Sun, 05 Dec 2021 16:21:46 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1768</guid>
+          <source url="https://forum.rebol.info/t/rye-language/1768.rss">Rye Language (?)</source>
+        </item>
+        <item>
+          <title>Reconsidering Return Values From IMPORT vs. DO</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>The state of things <strong>right now</strong> is:</p>
+<ul>
+<li>
+<p>DO returns the evaluative result of running a script, which can be any datatype.  It can return an INTEGER!, an ACTION!, an OBJECT!, or nothing at all <em>(e.g. a ~none~/~unset~/~void~ isotope)</em>.  If it wanted, it could also return a MODULE!...but this module could be unrelated to the context the script you are DO-ing is running in.</p>
+</li>
+<li>
+<p>IMPORT will return the MODULE! of the script, <em>if you use an assignment form on its left</em>.</p>
+<pre><code>module: import %some-library.r
+</code></pre>
+<p>This module is a way of accessing any of the EXPORTed things from the module, as <strong>module.exportedthing</strong> ... but you can't access definitions inside the module that are not exported in this way.  <em>(Or at least you shouldn't be able to.)</em></p>
+<p>If you don't have a SET-WORD! on the left, it assumes you want to make all the exports of that module available in your current...uh, let's say "binding environment"...</p>
+<pre><code>import %some-library.r
+</code></pre>
+</li>
+</ul>
+<p>I'm deliberately vague about what this is actually doing, because historical Rebol doesn't have answers to binding that demonstrate reasonable composability...and I'm dabbling in trying to make solutions that will work for bigger projects.</p>
+<h2>IMPORT's SET-WORD! Lookback Is Probably A Bad Idea</h2>
+<p>What if you wanted:</p>
+<pre><code>func-that-takes-module (import %some-library.r)
+</code></pre>
+<p>You don't want to have to write:</p>
+<pre><code>func-that-takes-module (dummy: import %some-library.r)
+</code></pre>
+<p>Or:</p>
+<pre><code>func-that-takes-module ([@]: import %some-library.r)
+</code></pre>
+<p>The thing I've been leaning toward is a generalized operator which lets you pull an object's fields into the ensuing scope.  A prototype exists right now, it's called USING:</p>
+<pre><code>obj: make object! [x: 10 y: 20]
+using obj
+print [x + y]  ; would print 30
+</code></pre>
+<p>So if you didn't want to get a module as a value but rather "use" that, you could say something more like:</p>
+<pre><code>using import %some-library.r
+</code></pre>
+<p>And then we could offer a shorthand when USING received a file, like:</p>
+<pre><code>using %some-library.r
+</code></pre>
+<p>In fact, I think this could be popular enough to warrant overtaking the name USE.</p>
+<pre><code>use parse [10 "twenty"] [
+    emit x: integer!
+    emit y: text!
+] else [
+    fail "Expected integer followed by text"
+]
+
+print ["Integer was" x "and text was" mold y]
+</code></pre>
+<p>Though from an overloading standpoint, it's a bit shaky when you leverage the same name for both running already loaded code in your environment as pulling something off a network.    (Today's DO has this problem, that someone can wedge in a little bit of code to trick you into running arbitrary code off a network instead of a local BLOCK!)  So maybe having the FILE!-and-HTTP capable USING be distinct from USE would be a smart distinction.</p>
+<p>That would mean that:</p>
+<pre><code>using %some-library.r  &lt;=&gt;  use import %some-library.r
+</code></pre>
+<h2>How To Get More Granularity?</h2>
+<p>I've pointed out the <a href="https://forum.rebol.info/t/design-for-import/1570">variations of import syntaxes in JavaScript before</a> when talking about a design for IMPORT:</p>
+<pre><code>import defaultExport from "module-name";
+import * as name from "module-name";
+import { export1 } from "module-name";
+import { export1 as alias1 } from "module-name";
+import { export1 , export2 } from "module-name";
+import { foo , bar } from "module-name/path/to/specific/un-exported/file";
+import { export1 , export2 as alias2 , [...] } from "module-name";
+import defaultExport, { export1 [ , [...] ] } from "module-name";
+import defaultExport, * as name from "module-name";
+import "module-name";
+var promise = import("module-name");
+</code></pre>
+<p>Their <strong>import defaultExport from "module-name";</strong> case acts like what I'm proposing for <strong>using %module-name.r</strong> above.</p>
+<p>In my other post I bring up these issues.  It seems like USE would want this too.  But as my other post argues, the dialecting is difficult to make look good.</p>
+<h2>Extra Return Results</h2>
+<p>The core routine that is behind both IMPORT and DO actually has two return results... it gives back both the context the code was run in and the final by-product of evaluating the script.  IMPORT only returns the module, and DO only returns the product.</p>
+<p>It doesn't make a lot of sense to ask IMPORT for the evaluation product, because import caches the module.  So it may not run the code in response to the IMPORT, and wouldn't have the result available (unless it saved it somewhere?)  Right now you can ask it, but it might just give you back the BAD-WORD! of ~cached~ to tell you that no script code ran.  This indicates to me that you probably shouldn't be able to ask.</p>
+<p>Perhaps there are more instances where asking DO for the module would make sense.  I don't know--and there is some friction with the question of this separation.  Should all DO be guaranteed to not contaminate the environment they are called from...forcing you to use an IMPORT if you want the contamination?  (This would mean Redbol's DO would have to be rigged up to actually be an IMPORT underneath.)</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767</link>
+          <pubDate>Sat, 04 Dec 2021 20:38:32 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1767</guid>
+          <source url="https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767.rss">Reconsidering Return Values From IMPORT vs. DO</source>
+        </item>
+        <item>
+          <title>Extensions as DLLs / Shared Libraries: Resurrected</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>The initial concept Shixin and I talked about with extensions was essentially giving you three choices for each extension:</p>
+<p><strong><code>[+]</code></strong> : Build the extension into the interpreter executable<br>
+<strong><code>[-]</code></strong> : Don't build the extension at all.<br>
+<strong><code>[*]</code></strong> : Build the extension as a separately loadable .dll or .so file</p>
+<p>And supposedly it was at some point able to do that.  <strong>But I'd never seen it work.</strong>  Because it was a mixture of Rebmake and the R3 Historical Extension model and loading code.  Since it wasn't part of any testing regimen--and I never understood it to begin with--it probably only worked the day Shixin wrote it (if it would have worked for me at all, on another machine).</p>
+<p>The mysterious feature atrophied, but I kept things related to it around.  Because we need this ability to load bits of "native" code dynamically...most especially on the web (where native=wasm).</p>
+<p>I decided to spend some time attacking the desktop versions.  By no means was this fun, but, I did get it to work on Windows, Mac and Linux.</p>
+<p>As a demonstration of it working, I made the UUID extension a DLL on all the platforms, and call it in a test:</p>
+<ul>
+<li>
+<a href="https://github.com/metaeducation/ren-c/runs/4412834535?check_suite_focus=true#step:23:46">Windows</a> (<code>.DLL</code> file)</li>
+<li>
+<a href="https://github.com/metaeducation/ren-c/runs/4412352346?check_suite_focus=true#step:22:23">Linux</a> (<code>.so</code> file)</li>
+<li>
+<a href="https://github.com/metaeducation/ren-c/runs/4412835593?check_suite_focus=true#step:16:23">Mac</a> (<code>.dylib</code> file)</li>
+</ul>
+<p><em>(I'm fairly sure that the Mac version could not have worked prior to the development of the libRebol API and extension mechanics in their modern form.  So it probably was in an "almost working since it's a lot like the linux version--except for link errors" state at the time of Shixin's writing.)</em></p>
+<h2>How Do You Use It?</h2>
+<p>Right now you do LOAD-EXTENSION and pass it a path.  It gives you back a module, which you could then IMPORT or use directly as an object.</p>
+<p>The UUID module was not designed to be IMPORT-friendly.  It calls its method "generate" which is generic, so it only makes sense as <code>mod-uuid.generate</code>.  So I just did:</p>
+<pre><code> mod-uuid: load-extension %/path/to/r3-uuid.dll
+ uuid: mod-uuid.generate
+</code></pre>
+<p>The way I've set up to think about extensions is that from a user's point of view, you can't tell the difference really from ordinary modules.  So really this should be folded into IMPORT.  You should be able to use a URL just as easily as you can use a FILE!.</p>
+<p>Shorthand lookups present a bit of a problem, because since these contain native code there's not a single location that would work for all platforms.  We could perhaps adopt a standard naming strategy so that if you put all the extensions in the same directory alongside each other it would know how to pick the right one...</p>
+<p>It is kind of neat to see the single file encapsulating script code and native code together.  But what would be really neat to see beyond this is having a form that works in the web browser.  But this was not fun and so I'm going to need to do something else for a bit.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/extensions-as-dlls-shared-libraries-resurrected/1766">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/extensions-as-dlls-shared-libraries-resurrected/1766</link>
+          <pubDate>Fri, 03 Dec 2021 20:52:16 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1766</guid>
+          <source url="https://forum.rebol.info/t/extensions-as-dlls-shared-libraries-resurrected/1766.rss">Extensions as DLLs / Shared Libraries: Resurrected</source>
+        </item>
+        <item>
+          <title>DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>As we are familiar, DATE! can have a TIME! component:</p>
+<pre><code>&gt;&gt; d: now
+== 21-Nov-2021/18:56:45-5:00 
+
+&gt;&gt; type of d
+== #[datatype! date!]
+
+&gt;&gt; t: d.time
+== 18:56:45
+
+&gt;&gt; type of t
+== #[datatype! time!]
+</code></pre>
+<p>Although TIME! can exist as a separate cell and value type, <em>a DATE! doesn't store a time cell inside of it</em>.  It packs the date and time information into a single cell.</p>
+<p>Hence when you say <strong>d.time</strong> above, a <em>new</em> TIME! value has to be synthesized.  There's not a whole cell worth of time to hand a pointer back to...its woven into the bits of the DATE!.</p>
+<p><strong>That might not sound like much of an issue, but it creates the problem I refer to as <em>"sub-cell addressing"</em>.</strong></p>
+<p><em>If you've missed everything I've griped about with this so far</em>, it means that when you want to see a behavior like the following:</p>
+<pre><code>&gt;&gt; d.time.hour: 12
+== 12
+
+&gt;&gt; date
+== 21-Nov-2021/12:56:45-5:00  ; we want hour updated
+</code></pre>
+<p>We run into the problem that if <strong>d.time</strong> <em>synthesizes</em> a value, then a naive picking process of <strong>(d.time).hour: 12</strong> would only be able to manipulate the bits in the synthesized time.  That wouldn't change <strong>d</strong>.  <em>What the user actually wanted was to update the bits of a time that was folded into the implementation of the date.</em></p>
+<h2>Rebol Lacks The Vocabulary To Do This In An Obvious Way</h2>
+<p>The smallest units that Rebol speaks in terms of are the <strong><code>cell</code></strong> and the <strong><code>node</code></strong>.</p>
+<p><em>(If you need a refresher on these, my <a href="https://www.youtube.com/watch?v=6nsKTpArTCE">conference video tech talk</a> explains them.)</em></p>
+<p><strong>It would appear we could be able to simplify matters if we changed the combination of DATE! and TIME! to point to a 2-cell node.</strong></p>
+<pre><code>DATETIME! cell
+[  ]                DATE!           TIME!
+  --&gt; points to [ 21-Nov-2021 | 18:56:45-5:00 ]  (2 cells)
+</code></pre>
+<p><em>(Whether the "zone" is part of a time or lives in the datetime would depend on whether you wanted to write <code>d.zone: -5:00</code> or <code>d.time.zone: -5:00</code>, I don't know if it ever makes sense to speak of a time with a zone independent of a datetime or not.)</em></p>
+<p>Breaking things up this way, we can say that <strong>d.time</strong> implicates a cell.  And we can have some operation that acts on a cell (let's say POKE) like:</p>
+<pre><code> &gt;&gt; poke 18:56:45 'hour 12
+ == 12:56:45
+</code></pre>
+<h2>Hang On: DATE!, TIME! (and DATETIME!) are IMMEDIATE!</h2>
+<p>We still have a bit of a problem here with our smallest units of representation.  Presumably we don't want this:</p>
+<pre><code> &gt;&gt; d1: 21-Nov-2021/18:56:45-5:00 
+
+ &gt;&gt; d2: d1
+
+ &gt;&gt; d1.time.hour: 12
+ == 12
+
+ &gt;&gt; d1
+ == 21-Nov-2021/12:56:45-5:00
+
+ &gt;&gt; d2
+ == 21-Nov-2021/12:56:45-5:00  ; don't want d2 to change (right?)
+</code></pre>
+<p>But we also don't want to be needlessly copying the 2-cell node each time a date is assigned.  So it would be a <em>copy-on-write</em> mechanic.</p>
+<p>If we're working with a cell-based granularity, then we wind up in a somewhat similar situation to what we had before...where the tuple processing has to propagate backwards.  e.g. when you have the POKE that changes the cell bits for the TIME! to make a new TIME! cell, there has to be some memory going back to the DATETIME! in order to tell it to make a new node and write the cell into the copy.</p>
+<p>Does framing this in terms of cells offer any benefit over letting the DATETIME! be a higher-level entity that does a more specific folding of the TIME! cell into its bits?  This is a question I've been trying to answer, and haven't had an easy time of answering.</p>
+<p><strong>One thing it would do to use a cell-based protocol is that it could generalize properties that had flags on cells, such as being PROTECT'ed.</strong>  Without the picking protocol requiring each step to go through a cell, the system cannot fiddle these bits in a known way.  So just as the DATE! folds the TIME! into it in some arbitrary way, the protect bit would have to go through this through a complex protocol also.</p>
+<p>What I do know is that my current generalized solution is rather complex and slow--and doesn't answer how to do things like PROTECT.  We're seeing a slowdown from many different angles and I am trying to figure out what the best tradeoff is in terms of simplicity and generality.  It's not easy.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765</link>
+          <pubDate>Thu, 02 Dec 2021 16:57:13 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1765</guid>
+          <source url="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765.rss">DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</source>
+        </item>
+        <item>
+          <title>Web Testing Now Takes Screenshots 📸</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Testing</category>
+          <description><![CDATA[
+            <p>I don't particularly enjoy the process of making GitHub Actions...but...the time spent on making the reusable bits of code pays for itself quickly.</p>
+<p>We had only one test of the Repl and it was rickety.  But I'd said from the beginning we should be testing things like <a class="mention" href="/u/gchiu">@gchiu</a>'s chess demo and power calculator...keeping them working.</p>
+<p><strong>But if it doesn't work on the cloud--and works locally--what do you do?</strong></p>
+<h1>Screenshots, of course!</h1>
+<p>I made it so that you can ask for a screenshot when the run completes or times out.  Just give it a name and it will be uploaded as a <em>"GitHub Artifact"</em> for you.</p>
+<p>Here are four little smoke tests in the browser for today's world, and what the screen would look like when they stopped (if there was a screen).  They are available on every test run as the <a href="https://github.com/metaeducation/ren-c/actions/runs/1515287464">artifacts</a> at the bottom of the page.  They expire after 7 days.</p>
+<h2>Chess</h2>
+<hr>
+<pre><code>- name: Test Chess GUI Example
+  uses: metaeducation/ren-c-action@release
+  with:
+    web: true
+    timeout: 15
+    screenshot: chess
+    script: |
+      animate-game: do @chess
+      assert [
+          comment [https://en.wikipedia.org/wiki/Fool%27s_mate]
+          &lt;done&gt; = animate-game [
+              f2f3 e7e6
+              g2g4 d8h4
+          ]
+      ]
+</code></pre>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/6cc23455cfc3da24ffd27291853be315f2845914.png" data-download-href="https://forum.rebol.info/uploads/default/6cc23455cfc3da24ffd27291853be315f2845914" title="image"><img src="https://forum.rebol.info/uploads/default/optimized/1X/6cc23455cfc3da24ffd27291853be315f2845914_2_690x345.png" alt="image" data-base62-sha1="fw7EauntVfjFXXfNHKdRyV35WKw" width="690" height="345" srcset="https://forum.rebol.info/uploads/default/optimized/1X/6cc23455cfc3da24ffd27291853be315f2845914_2_690x345.png, https://forum.rebol.info/uploads/default/optimized/1X/6cc23455cfc3da24ffd27291853be315f2845914_2_1035x517.png 1.5x, https://forum.rebol.info/uploads/default/original/1X/6cc23455cfc3da24ffd27291853be315f2845914.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/6cc23455cfc3da24ffd27291853be315f2845914_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">image</span><span class="informations">1366×683 88.5 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<h2>LATEST-OF</h2>
+<hr>
+<pre><code>- name: LATEST-OF Smoke Test
+  uses: metaeducation/ren-c-action@release
+  with:
+    web: true
+    timeout: 15
+    screenshot: latest-of
+    script: |
+      (url: latest-of)
+      print ["Result was:" mold url]
+      assert [url? url]
+</code></pre>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/05b08ec27c845bbfc82ca5e942c24469db94ff18.png" data-download-href="https://forum.rebol.info/uploads/default/05b08ec27c845bbfc82ca5e942c24469db94ff18" title="image"><img src="https://forum.rebol.info/uploads/default/optimized/1X/05b08ec27c845bbfc82ca5e942c24469db94ff18_2_690x345.png" alt="image" data-base62-sha1="OkEWvWAPb7om7PlZ5THTqdJT3q" width="690" height="345" srcset="https://forum.rebol.info/uploads/default/optimized/1X/05b08ec27c845bbfc82ca5e942c24469db94ff18_2_690x345.png, https://forum.rebol.info/uploads/default/optimized/1X/05b08ec27c845bbfc82ca5e942c24469db94ff18_2_1035x517.png 1.5x, https://forum.rebol.info/uploads/default/original/1X/05b08ec27c845bbfc82ca5e942c24469db94ff18.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/05b08ec27c845bbfc82ca5e942c24469db94ff18_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">image</span><span class="informations">1366×683 119 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<h2>WATCHLIST</h2>
+<hr>
+<pre><code>- name: Watchlist Smoke Test
+  uses: metaeducation/ren-c-action@release
+  with:
+    web: true
+    timeout: 15
+    screenshot: watch
+    script: |
+      x: 10
+      watch x
+      assert [10 = watch 1]
+</code></pre>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/7c3a3dc3179df208f61bad1b8fb42d70040c5b64.png" data-download-href="https://forum.rebol.info/uploads/default/7c3a3dc3179df208f61bad1b8fb42d70040c5b64" title="image"><img src="https://forum.rebol.info/uploads/default/optimized/1X/7c3a3dc3179df208f61bad1b8fb42d70040c5b64_2_690x345.png" alt="image" data-base62-sha1="hIXZey0OhgBlFTfo46tQLBZFBxG" width="690" height="345" srcset="https://forum.rebol.info/uploads/default/optimized/1X/7c3a3dc3179df208f61bad1b8fb42d70040c5b64_2_690x345.png, https://forum.rebol.info/uploads/default/optimized/1X/7c3a3dc3179df208f61bad1b8fb42d70040c5b64_2_1035x517.png 1.5x, https://forum.rebol.info/uploads/default/original/1X/7c3a3dc3179df208f61bad1b8fb42d70040c5b64.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/7c3a3dc3179df208f61bad1b8fb42d70040c5b64_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">image</span><span class="informations">1366×683 73 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<h2>REDBOL</h2>
+<hr>
+<pre><code>- name: Redbol Smoke Test
+  uses: metaeducation/ren-c-action@release
+  with:
+    web: true
+    timeout: 15
+    screenshot: redbol
+    script: |
+      redbol
+      block: [b c]
+      assert [[a b c d] = compose [a (block) d]]
+</code></pre>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/c7ca24fcd4556a03349509c1139dd76a7c315848.png" data-download-href="https://forum.rebol.info/uploads/default/c7ca24fcd4556a03349509c1139dd76a7c315848" title="image"><img src="https://forum.rebol.info/uploads/default/optimized/1X/c7ca24fcd4556a03349509c1139dd76a7c315848_2_690x345.png" alt="image" data-base62-sha1="svq6LFOOe2vaqDYylmmkXtkMEQM" width="690" height="345" srcset="https://forum.rebol.info/uploads/default/optimized/1X/c7ca24fcd4556a03349509c1139dd76a7c315848_2_690x345.png, https://forum.rebol.info/uploads/default/optimized/1X/c7ca24fcd4556a03349509c1139dd76a7c315848_2_1035x517.png 1.5x, https://forum.rebol.info/uploads/default/original/1X/c7ca24fcd4556a03349509c1139dd76a7c315848.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/c7ca24fcd4556a03349509c1139dd76a7c315848_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">image</span><span class="informations">1366×683 111 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<h1>It Really Is (Mostly) That Easy</h1>
+<p>You can use it too.  So why not?  Remember it can run code on GitHub Actions Linux, Windows, and Mac containers too (just don't say <strong>web: true</strong> and it will detect the platform and download the right r3).</p>
+<h1>...Web Automation Still Primitive, More Work To Do...</h1>
+<p>You can see that it makes the last thing it does:</p>
+<pre><code>print reverse {ETELPMOC TSET}
+</code></pre>
+<p>Then a setInterval()-based JavaScript timer kicks in every couple of seconds looking for the text "TEST COMPLETE".  This is not great for the long term.  We should be looking for something out of band (like the title bar of the browser, perhaps...<a href="http://titlewait.hostilefork.com/">I've done that before</a>)</p>
+<p>The newlines are replaced with spaces because if the console gets a newline, it starts running code...and isn't responsive to keypresses until the prompt comes back again.  So characters get lost.  Stripping out the newlines is bad because if you have any semicolon comments to end of line, they will screw things up by turning the subsequent lines into comments.  Also it ruins multiline strings.</p>
+<p>So a better way is needed to actually simulate hitting enter and then waiting (or the console needs to find a way to do keyboard buffering while code is running).</p>
+<p>Deficiencies aside, it gives things more hope to have these kinds of tests.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/web-testing-now-takes-screenshots/1762">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/web-testing-now-takes-screenshots/1762</link>
+          <pubDate>Mon, 29 Nov 2021 10:45:42 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1762</guid>
+          <source url="https://forum.rebol.info/t/web-testing-now-takes-screenshots/1762.rss">Web Testing Now Takes Screenshots 📸</source>
+        </item>
+        <item>
+          <title>DO or IMPORT of GitHub/GitLab Decorated URLs on Desktop</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>The "decorated" URL for a GitHub file looks like this:</p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/master/scripts/unzip.reb"><code>https://github.com/metaeducation/ren-c/blob/master/scripts/unzip.reb</code></a></p>
+<p>And on GitLab, the "decorated" URLs looks like this:</p>
+<p><a href="https://gitlab.com/Zhaoshirong/rebol-chess/-/blob/master/create-board.reb"><code>https://gitlab.com/Zhaoshirong/rebol-chess/-/blob/master/create-board.reb</code></a></p>
+<p>I don't particularly like syntax highlighting (or at least not the kind done on Rebol files by these sites, which also happens to be buggy...so I turn it off on my repos).  But there are other good reasons to like using these links:</p>
+<ul>
+<li>
+<p>It gives you context to see what project the file is in and to navigate around that project to see other related files.</p>
+</li>
+<li>
+<p>You can click on a line number or line number range and then give that link to someone to point to a specific line you're talking to.</p>
+</li>
+<li>
+<p>You have buttons for viewing the file history and "git blame" to see where changed lines came from.</p>
+</li>
+<li>
+<p>If you're an owner on the repo, you can edit it right there in the browser and commit it.</p>
+</li>
+</ul>
+<p><strong>But the HTML decorations mean these URLs give back code that the intepreter will choke on.</strong>  So historically, if you were going to DO or IMPORT them, you would have to translate them to raw links...which lack these conveniences:</p>
+<p><a href="https://raw.githubusercontent.com/metaeducation/ren-c/master/scripts/unzip.reb"><code>https://raw.githubusercontent.com/metaeducation/ren-c/master/scripts/unzip.reb</code></a></p>
+<p><a href="https://gitlab.com/Zhaoshirong/rebol-chess/-/raw/master/create-board.reb"><code>https://gitlab.com/Zhaoshirong/rebol-chess/-/raw/master/create-board.reb</code></a></p>
+<p><em>(Interestingly the GitLab raw link is actually a character shorter than the decorated one, but the GitHub raw link is longer.)</em></p>
+<p><strong>The web build has been willing to assume that when you say DO or IMPORT of the decorated link, what you want is the raw link.</strong></p>
+<p>It wouldn't be good to redirect these URLs generally.  e.g. a READ might actually want to scrape the decorated HTML for something.  But since DO and IMPORT would just choke on the decorated URL, it's just helpful to automatically redirect them.</p>
+<h2>Now This Feature is in the Desktop Builds Too</h2>
+<p>By request from <a class="mention" href="/u/gchiu">@gchiu</a>, I moved the function that does this to <strong><code>sys.adjust-url-for-raw</code></strong> and it is run by the core DO and IMPORT functions on URLs.</p>
+<p>It's a generic utility that can be used by similar functions.  So CSS-DO and JS-DO use the functions as well.</p>
+<p>If a URL is adjusted it returns it, otherwise it returns NULL.  So this is used with MAYBE:</p>
+<pre><code> url: maybe sys.adjust-url-for-raw url
+</code></pre>
+<p>As a reminder of what MAYBE does...it leaves the SET-WORD! on the left unchanged if the result on the right is NULL, otherwise sets it to the new value.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/do-or-import-of-github-gitlab-decorated-urls-on-desktop/1761">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/do-or-import-of-github-gitlab-decorated-urls-on-desktop/1761</link>
+          <pubDate>Mon, 29 Nov 2021 09:33:08 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1761</guid>
+          <source url="https://forum.rebol.info/t/do-or-import-of-github-gitlab-decorated-urls-on-desktop/1761.rss">DO or IMPORT of GitHub/GitLab Decorated URLs on Desktop</source>
+        </item>
+        <item>
+          <title>Multi-Return: Deferred Enfix + Meta Returns</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>So multi-return is based on a (conceptually) simple trick for writing ordinary function calls.  The "extra returns" are really just refinements that are labeled as outputs, but you can invoke them normally as refinements that take a WORD!... as was done historically for extra outputs of a function.</p>
+<p>Traditional code:</p>
+<pre><code>&gt;&gt; block: transcode "1 2 3"
+== [1 2 3]  ; defaults to assuming you want the whole thing transcoded
+
+&gt;&gt; value: transcode/next "1 2 3" 'rest
+== 1  ; asking for /next gives you just one value
+
+&gt;&gt; rest
+== " 2 3"  ; the REST word passed in gets assigned the remainder
+</code></pre>
+<p>Now for some  <img src="https://forum.rebol.info/images/emoji/twitter/candy.png?v=9" title=":candy:" class="emoji" alt=":candy:"> <a href="https://en.wikipedia.org/wiki/Syntactic_sugar"><strong>Syntactic Sugar</strong></a> <img src="https://forum.rebol.info/images/emoji/twitter/lollipop.png?v=9" title=":lollipop:" class="emoji" alt=":lollipop:"> that is enabled when NEXT is marked as an "output refinement" (<strong>next:</strong>) instead of an "ordinary refinement" (<strong>/next</strong>) in the function spec:</p>
+<pre><code>&gt;&gt; [value rest]: transcode "1 2 3" 
+== 1
+
+&gt;&gt; value
+== 1  ; the overall expression was 1, but value was also assigned 1
+
+&gt;&gt; rest
+== " 2 3"  ; just as if you'd named the /NEXT refinement and passed 'REST
+</code></pre>
+<h2>But There Have Been Enfix Complications...</h2>
+<p>Though simple in concept, the multi-returns aren't completely simple in implementation...and at present run through a bit of different code than ordinary function calls (though of course most of the function execution, type checking, etc. are shared).</p>
+<p>The parts that are different--however--were creating problems with enfix...which wasn't managed as part of the frame filling process.  So it just errored.</p>
+<pre><code>&gt;&gt; [value rest]: transcode "1 2 3" then [&lt;item!&gt;]
+** Script Error: Ambiguous infix expression--use GROUP! to clarify
+</code></pre>
+<p>You could get it to execute by putting the part before the THEN in a group:</p>
+<pre><code>&gt;&gt; ([value rest]: transcode "1 2 3") then [&lt;item!&gt;]
+== &lt;item!&gt;
+</code></pre>
+<p>Which works...<em>but what if that isn't the semantics you wanted?</em>  That means your overall expression evaluates to <code>&lt;item!&gt;</code> but value is still getting 1.</p>
+<p>Consider that we usually want the result of an ELSE to get into the value of a variable:</p>
+<pre><code>&gt;&gt; x: if 1 &gt; 2 [10] else [20]
+== 20
+
+&gt;&gt; x
+== 20
+</code></pre>
+<p>If you had to write this with a GROUP! you'd get x as the result of the IF (null in this case, since 1 &lt; 2)</p>
+<pre><code>&gt;&gt; (x: if 1 &gt; 2 [10]) else [20]
+== 20
+
+&gt;&gt; x
+; null
+</code></pre>
+<p>So that's the situation we were in with multi-returns--not having a choice.  You'd wind up with the variable assigned the result of the original function...never being able to use the enfix product.</p>
+<p><strong>It looks like I have a fix for this, so you'll be able to choose either way.</strong></p>
+<h2>Recap of The No-Group-On-Right Limitation</h2>
+<p>I've mentioned how being syntactic sugar kind of limits what we can do with multi-returns.  You can't put the right hand side in a group:</p>
+<pre><code>[value rest]: (transcode "1 2 3")
+</code></pre>
+<p>This is because it could be more than one call, and you don't know what will come after it, and it could be arbitrarily deep:</p>
+<pre><code>[value rest]: ((((transcode "1 2 3", ...))))
+</code></pre>
+<p>You <em>might</em> argue we could still allow it if the multi-returns are tunneled down to the function and the value gets assigned from the final product of the group.</p>
+<p>But I don't like it because then you are talking about something that left quoting enfix couldn't do.  I like the idea that when you get in a pinch and want to override a multi-return assignment you could do it by declaring your function enfix and pick up the SET-BLOCK! on the left as a parameter.</p>
+<p>That interchangeability offers a good dynamic, and it's how <a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634">things like UNPACK</a> fit into this universe...where they seem like first-class language features.  Doing crazy things that don't relate to what users could build themselves isn't the ergonomic we're looking for (e.g. "bad lego alligator" territory).</p>
+<h2>The Meta Dilemma</h2>
+<p>The hard rule that the thing on the right of the SET-BLOCK! be the function with the multi-returns caused a problem with wanting to ask for the "meta" result.</p>
+<p>UPARSE has this desire often.  It may be that a parser returns something like an unset or a null isotope.  We want to handle those distinctly from nulls, as well as to not choke on them as invalid variables.  So we ask for the meta-result of the parser.</p>
+<p>I wrote a special exemption to allow it, like this:</p>
+<pre><code>([result progress]: ^ parser input) then [...]
+</code></pre>
+<p>Recognizing the <strong>^</strong> specially in the multi-return code felt wrong.  Where do such things stop...why not <strong>([...]: ^ ^ ^ parser input)</strong> ?  It has a similar arbitrariness to it that digging through parentheses seemed to have.</p>
+<p>But with the META-WORD! we had a new option...to put the meta on the argument itself:</p>
+<pre><code>([^result progress]: parser input) then [...]
+</code></pre>
+<p>To some people's tastes maybe that looks worse.  but it is more compact.  And it can work even if you don't name a variable:</p>
+<pre><code>&gt;&gt; [^ rest]: transcode "1 2 3"
+== '1
+</code></pre>
+<p>It feels more like things are in the right place this way.  Multi-return was prototyped as just an application of enfix quoting blocks on the left of a function...and I kind of like it not straying too far from what that could do.  This is within reach of that.</p>
+<p>These might seem like small things, but, they are important.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759</link>
+          <pubDate>Fri, 26 Nov 2021 14:18:34 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1759</guid>
+          <source url="https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759.rss">Multi-Return: Deferred Enfix + Meta Returns</source>
+        </item>
+        <item>
+          <title>Tuple Troubles: Version 0.3.01 vs 0.3.1</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>For better or worse, versioning in Rebol has used TUPLE!.  e.g. 0.3.1 is 32-bit Windows, and 0.3.40 is 64-bit Windows</p>
+<p>If you go back and look at the old R3-Alpha file <strong><a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/tools/systems.r#L21">%systems.r</a></strong> you can see that it's pretty typical for Carl to have written the versions out with leading zeros...<em>but only in the third slot</em>.  So <code>0.3.01</code> but not <code>00.03.01</code></p>
+<p>But ultimately the tuple discards this information.  And this has been the way it always worked:</p>
+<pre><code>rebol2&gt;&gt; 0.3.01
+== 0.3.1
+
+red&gt;&gt; 0.3.01
+== 0.3.1
+
+ren-c&gt;&gt; 0.3.01
+== 0.3.1
+</code></pre>
+<p>This leads to problems when you are working with string representations outside of Rebol (say in bash shell, something like "0.3.01") and you pass it into Rebol to process as a tuple.  If bash went and created a directory based on the string...you won't match if you FORM that tuple later.</p>
+<p>You could insist on passing around the tuple as a string, but that undermines the value of having the version be in a tuple in the first place.</p>
+<p>I'd say that the simplest solution is just to stop writing tuples with the leading zeros...instead keeping them in their canon form.  0.3.1 for 32-bit Windows, and 0.3.40 for 64-bit Windows.  Then make the directories reflect this, e.g.:</p>
+<pre><code>https://dd498l1ilnrxu.cloudfront.net/travis-builds/0.3.1/r3-573037b-debug.exe
+</code></pre>
+<p>and not:</p>
+<pre><code>https://dd498l1ilnrxu.cloudfront.net/travis-builds/0.3.01/r3-573037b-debug.exe
+</code></pre>
+<p>That leading zero comes with a whole lot of headaches, so I say hunt them down and get rid of them.  Because non-Rebol systems are going to only operate on them as strings and they'll leak.</p>
+            <p><small>3 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/tuple-troubles-version-0-3-01-vs-0-3-1/1755">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/tuple-troubles-version-0-3-01-vs-0-3-1/1755</link>
+          <pubDate>Wed, 24 Nov 2021 13:28:54 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1755</guid>
+          <source url="https://forum.rebol.info/t/tuple-troubles-version-0-3-01-vs-0-3-1/1755.rss">Tuple Troubles: Version 0.3.01 vs 0.3.1</source>
+        </item>
+        <item>
+          <title>Kaj Gets on the Meta Train</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Foreign Inspiration</category>
+          <description><![CDATA[
+            <p>So Kaj is still out there somewhere, working on a spiritual competitor to Red he is calling "Meta". <img src="https://forum.rebol.info/images/emoji/twitter/roll_eyes.png?v=9" title=":roll_eyes:" class="emoji" alt=":roll_eyes:"></p>
+<p><a href="https://language.metaproject.frl/">https://language.metaproject.frl/</a></p>
+<p>His first target is the Atari 2600 <img src="https://forum.rebol.info/images/emoji/twitter/joystick.png?v=9" title=":joystick:" class="emoji" alt=":joystick:"><img src="https://forum.rebol.info/images/emoji/twitter/space_invader.png?v=9" title=":space_invader:" class="emoji" alt=":space_invader:">  so he's certainly starting from... the basics.</p>
+<p><em>(For whatever it's worth, I actually am interested in things like Atari 2600 programming and seeing what you can do with modern tools.  e.g. there's a neat <a href="https://youtu.be/4X1NdKvNCYQ?t=459">reboot of PAC-MAN</a> and I think a lot of people would like to know what <strong>could</strong> have been done, theoretically.)</em></p>
+<p>There's no source code by which to measure the amount of investment the project represents so far.  He's only giving out binaries, and says:</p>
+<blockquote>
+<p>"There will always be a free version of <em>Meta</em>. We will build a business on top of it, by offering paid premium versions and other products built with <em>Meta</em>."</p>
+</blockquote>
+<h2>What's The Mission Difference From Red?</h2>
+<p>Seemingly not much.  But inevitably, one angle is going to be "faster":</p>
+<blockquote>
+<p>"Red/System is the wrong abstraction level and the wrong format for an intermediate language, certainly for a REBOL language. The abstraction level is that of C, which is too low for the intermediate layer. The format is that of REBOL, which is free form for human use. Red is parsed from free form to something more suitable for machine processing, then a lot of Red/System is generated, then all of that needs to be reparsed. The compiler is painfully slow."</p>
+</blockquote>
+<p>But he's willing to build on LLVM to start with.  I'd said that Red should aim for a LLVM-subset IR, that could then be built with either a simple/small custom emitter or the full "bloated" toolchain if one really wanted to.  That would have provided a fallback; but Nenad wasn't a fan of the LLVM instruction set for some reason, and had ideas about exposing lower-level CPU features (maybe that was why).</p>
+<p>So at least in this sense Kaj's approach seems more pragmatic to me.</p>
+<p>Also inevitably: having people to work with was slowing him down.  He'll make much more progress on his own, <a href="https://atariage.com/forums/topic/315558-a-new-language-for-the-atari/?tab=comments#comment-4719124">as we find from his Atari Forum post</a>:</p>
+<blockquote>
+<p>Red was launched on a REBOL conference of mine in the Netherlands. I helped launch the language and contributed to it for half a decade. After that I left the project, because I am disappointed that it hasn't fulfilled its promises.</p>
+<p>Before all that, I contributed to the latest version of REBOL and lobbied its creator Carl Sassenrath to open-source it. It eventually was, and REBOL could have done most of what Red promised, but Carl abandoned it when his funding ran out. After the leader left, the project was torn apart by competing interests.</p>
+<p>My language is meant to succeed both REBOL and Red.</p>
+</blockquote>
+<h2>There's only ONE Download for Windows, Linux, Mac...?</h2>
+<p>On the surface this seems interesting: he's using something called the <a href="https://justine.lol/ape.html">"APE: Actually Portable Executable"</a> format.  You can use a single download for all platforms--the same single file.  It puts x86 code into a container that can run as either a Windows .COM file or a unix shell script.</p>
+<p>It's a stunt which isn't really all <em>that</em> profound--though I'll admit I'd wondered if there was some polyglot trick that could do exactly this.  Turns out the answer is yes...so that's cool.  I'm glad someone did it.</p>
+<p>But it has more relevance to writing viruses than it does to practical cross-platform development.  Launching the code is a drop in the bucket compared to all the other things you need to worry about in a useful platform abstraction layer.  Not to mention that obviously Macs are now on ARM, so the binaries would have to be emulated or include both instruction sets.</p>
+<p>At this juncture, running WebAssembly in a browser is far more compelling a story...because you have the whole web runtime available.</p>
+<p>Anyway I doubt he's married to the APE format and is just trying it out because it seems cool.  It's not something I want to worry over.  And for what it's worth, it doesn't work for me on Windows 11.  YMMV.</p>
+<h2>Source Comparison?</h2>
+<p>Not much is available to compare.  His examples don't have headers, which is one of the more defining historical properties of Rebol programs.  The word "header" is not mentioned in his manifesto, so it's not clear if that's temporary or permanent.</p>
+<p>Here's a Fibonacci example:</p>
+<pre><code>; Maximum 24 for natural16! result
+; Max 47 for natural32! result
+parameter= 24
+ 
+print "Fibonacci "  print parameter  print ": "
+ 
+natural! [Fibonacci previous]
+; natural32! [Fibonacci previous]
+ 
+either parameter &lt;= 1 [
+    Fibonacci: parameter  ; Fibonacci 0 ... 1
+][
+    Fibonacci: previous: 1  ; Fibonacci 2
+
+    loop parameter - 2 [
+        previous: also
+            Fibonacci
+            Fibonacci: Fibonacci + previous
+     ]
+]
+ 
+print/line Fibonacci 
+</code></pre>
+<p>So...</p>
+<ul>
+<li>
+<p>It seems he wants PRINT to not include a newline, so you have to say PRINT/LINE to get it.</p>
+<ul>
+<li>I prefer the solution of asking those who really want partial line output (e.g. console prompts) to WRITE STDOUT directly...and that PRINT COLLECT be used as a pattern when your code is piecing together a full line from parts generated by distinct bits of code, KEEP-ing each part.</li>
+</ul>
+</li>
+<li>
+<p>Working on Atari means he's getting involved in things like INTEGER16!, and you optimize based on annotating datatypes like that.  I'm more of the "bignum by default" philosophy, so different indeed.</p>
+<ul>
+<li>Putting <strong>natural! [Fibonacci previous]</strong> in the middle of the code to constrain the type--not in a function spec--suggests this is really rather far afield from the evaluator-driven Rebol.</li>
+</ul>
+</li>
+<li>
+<p>He's trotting out historical ALSO in a first example.  No one in the Atari forum clapped with amazement at the genius several Rebolers seem to think it represents.  (So I feel pretty comfortable with <strong><a href="https://forum.rebol.info/t/enfixing-also-stylizing-it-after-then-and-else/402">Ren-C's ALSO and ELIDE</a></strong>.)</p>
+</li>
+</ul>
+<p>Without more to look at I can't have more to say.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/kaj-gets-on-the-meta-train/1753">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/kaj-gets-on-the-meta-train/1753</link>
+          <pubDate>Sat, 20 Nov 2021 23:44:58 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1753</guid>
+          <source url="https://forum.rebol.info/t/kaj-gets-on-the-meta-train/1753.rss">Kaj Gets on the Meta Train</source>
+        </item>
+        <item>
+          <title>Weird Dynamic Binding Idea: Climbing The Chain?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>I've lamented the performance impacts of having to search "specifier" binding chains to look things up, and how it's nice that it finds newly emerging elements (like declarations that get added to modules) but how uncacheable it is...</p>
+<p>But there's an odd thing about a chain of lookup that keeps compounding, in that you could ask not to take the <em>first</em> match, but to involve a count of how many times you've found it.</p>
+<p><em>There are already some ideas for what leading tuple might mean, <strong>but</strong></em>... let's imagine it being used for this purpose.  It could be something else:</p>
+<pre><code>x: 10
+
+foo: func [x] [
+    let x: 30
+    print [x .x ..x]   ; What if this printed `30 20 10` ??
+]
+
+foo 20
+</code></pre>
+<p>Just a thought.  Things are pretty chaotic in binding, and having code demonstrate such a "meta-awareness" of what's going on in the binding above seems like it could be moreso.  But it's crossed my mind a couple times so I thought I'd mention it.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/weird-dynamic-binding-idea-climbing-the-chain/1752">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/weird-dynamic-binding-idea-climbing-the-chain/1752</link>
+          <pubDate>Wed, 27 Oct 2021 09:11:12 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1752</guid>
+          <source url="https://forum.rebol.info/t/weird-dynamic-binding-idea-climbing-the-chain/1752.rss">Weird Dynamic Binding Idea: Climbing The Chain?</source>
+        </item>
+        <item>
+          <title>Rebol And Scopes: Well, Why Not?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>It's frequently said that Rebol "doesn't have scope".  Early examples of that premise might point to something like a block of:</p>
+<pre><code>[x x x y y y]
+</code></pre>
+<p>Then people might say that the Xs and Ys can all resolve to something different.</p>
+<pre><code>&gt;&gt; print [x x x y y y]
+10 20 "foo" 30 40 "bar"
+</code></pre>
+<p>I find it personally frustrating when this is pronounced with glee (as per Red Gitter <em>"there is no spoon!"</em>)...vs. acknowledging that this should seem very alarming.  When you do something weird the burden of proof is on you to prove its benefit.</p>
+<h2>Were Scopes Rejected Because They're Somehow Bad?</h2>
+<p>No.</p>
+<p><em>It's because Rebol's dynamic nature means there isn't a clear moment in time where code can be holistically analyzed to determine scopes</em>.  Code structures are always getting cobbled together from pieces...from disparate locations in the codebase, or sometimes fabricated from thin air with <em>no</em> context.</p>
+<p>So it hasn't had scopes because it hasn't been able to.</p>
+<p>BUT with the prototypes I've done with string interning, it integrates something like "scopes".</p>
+<pre><code>&gt;&gt; print reword {Scopes? $x $x $x $y $y $y}
+Scopes? 10 10 10 foo foo foo
+</code></pre>
+<p>When a string carries along a "binding", it only carries one.  And that effectively captures some map from words to values.  So the answer to "what is X" and "what is Y" will be the same each time you ask that mapping referenced by that string.</p>
+<p>If that's not a "scope", what is it?  And is there a reason the system as a whole should not use them?</p>
+<h2>Historical Rebol Used Mutable Binding</h2>
+<p>Historical Rebol's idea of binding is that ANY-WORD!s get bits in the cell representing an object they are looked up in.  This process of gluing on bindings was done "every now and again" by code that walks around--usually deeply--and mutably changes data it is given.</p>
+<p><strong>On the plus side: programmability.</strong>  If you received a BLOCK! and wanted to go through and say that every SET-WORD! that starts with a vowel is going to be bound to some new object, but others will be left as-is, you can do that.  You can examine not only the properties of the structure, but also make decisions on what the previous binding was...selecting to override some references of the same named variable while leaving others alone.</p>
+<p>(Note: Some binding queries didn't give useful information.  If you asked for the binding of a word linked to a function argument or local, it would just say "true".)</p>
+<p><strong>On the plus side: performance.</strong>  If you're dealing with a concept of binding that wants to freeze in time at the moment you run a bind pass, you can cache the notion of which object and which index in that object a word will be found at.  Although...</p>
+<p>...<strong>On the minus side: requires lots of copies (adversely affects performance, and it's not clear when to make them).</strong> If you assume every value has a binding it can mutably disrupt, this complicates situations where a piece of code needs to be viewed in more than one way.  Just one example is the idea that every method in an object would need to be copied deeply so that its code could be rebound to that object's instance variables.</p>
+<p><strong>Also on the minus side: no reaction to changes.</strong>  For instance, you might bind some code into a place like the LIB context...but later add a new declaration to LIB.  The addition will not be seen.</p>
+<h2>Ren-C Began To "Virtualize" Binding</h2>
+<p>A big focus in Ren-C has been experimenting with binding forms that don't a-priori walk deeply at the outset, but that trickle down and spread as you descend into array structures...each step propagating something called a "specifier".</p>
+<p>One of the first instances was when you run a function body, a specifier would be added that would be the FRAME! of that function's variables.  It starts propagating by slipping a pointer into an extracted block cell for the body when it gets a DO at the top level.  That pointer travels along through nested blocks, so those become aware of the function instance it relates to...one extraction at a time.  Similar techniques allow object instance methods to be differentiated while running the same code used in other objects...the function bodies are the same arrays, but the specifier facilitates finding the object instance.</p>
+<p>There are various incarnations of this technique of having binding be a "view" on an array of values, without having to actually touch the bits in arrays.  But the general name for these techniques I've adopted is <strong>virtual binding</strong>.</p>
+<h2>String Interpolation Tries <em>Fully Virtualized Binding</em>
+</h2>
+<p>At first specifiers were just for functions and methods.  But the concept of making specifiers accrue a more complete map of a persistent binding environment is very tempting, allowing things like <a href="https://forum.rebol.info/t/could-strings-have-context/587/10">binding lookup in strings</a>.</p>
+<p>The idea behind the prototype that lets you look up a map from WORD! =&gt; value on strings is that specifiers compound together in chains.  A new link is added each time something new to consider is added.</p>
+<p>So let's look at that model of operation for something like:</p>
+<pre><code> global: 10
+ x: &lt;not an integer&gt;
+
+ foo: func [x] [
+     let local: 20
+     return reword {The sum is $(x + local)}
+ ]
+
+ foo 30
+</code></pre>
+<p>The virtual bind chain starts out with a module context that has <code>global</code>, <code>x</code>, and <code>foo</code> in it.  This is all there is to stick on the BLOCK!s that gets passed to FUNC.  So the spec and body are blocks with a module as the specifier.</p>
+<p>FUNC stows the body block away in an ACTION! that it generates.  Later when it gets invoked, it creates a FRAME! with <code>return</code> and <code>x</code> in it...and puts that in a chain <em>with</em> the module context.  So upon entry to the function body, that body is being executed with a specifier that looks in the frame first (would find that x) and then in the module second (would find <code>global</code> and <code>foo</code>).  This compound specifier is what the evaluator state initially has for that body block.</p>
+<p>The module inherits from the LIB context, so things like LET and REWORD will be found by means of that inheritance.  So then LET runs...using a special ability to add another link in the chain to the specifier that the evaluator is using, for the word <code>local</code>.</p>
+<p>Finally we get to the RETURN (it's in the frame) and REWORD (falling through to the module) and the whole specifier chain is stuck onto the string.  Because the specifier has snowballed all the information <em>the string could look up anything</em> (except the X in the module that's hidden).</p>
+<p><strong>In simple cases like this, it's essentially just like scope.</strong>   There are no situations that introduce contention.  The flow of context is from the top to the bottom, and there's no parts being unplugged from one place and into another.</p>
+<h2>But What If You Did Unplug and Replug Things?</h2>
+<p>Let's just look at a <em>super simple</em> example of throwing a COMPOSE into the mix.  So instead of calling REWORD directly, you made a call to another function, WRAPPER:</p>
+<pre><code> global: 10
+ x: &lt;not an integer&gt;
+
+ wrapper: func [string] [
+     return do compose [reword (string)]
+ ]
+
+ foo: func [x] [
+     let local: 20
+     return wrapper {The sum is $(x + local)}
+ ]
+
+ foo 30
+</code></pre>
+<p>When wrapper runs, the same basic logic applies to how "scopes" are gathered...and applied to the body of the function when it executes.  But that COMPOSE is splicing in a string that already has a binding on it.  How does the specifier flowing downward (which has the module's X) interact with the specifier already on that string (which has FOO's X overriding the module's X)?</p>
+<p><strong>A simple thought is a default of leaving bindings alone if they already have one.</strong> This seems obviously better than blindly overwriting, because it gives you a simple choice if you want overwriting to happen... you could just unbind the string:</p>
+<pre><code> wrapper: func [string] [
+     return do compose [reword (unbind string)]
+ ]
+</code></pre>
+<p>But all-or-nothing doesn't cover a lot of scenarios.  If you're dynamically creating a function with some block material you got "from somewhere else", that material may have been written with the express knowledge that certain words were supposed to be overridden by the place it's being substituted, with others left alone.</p>
+<p>Also, what if you had a rule like <em>"I want all the GROUP!s in this code to be bound to FOO but only inside the GROUP!s"</em>?</p>
+<h2>Could Binding Be Functional?</h2>
+<p>If you want a programmable sense of binding that doesn't resort to deep walking the structure and mutating it directly... you could allow the binding "specifier" to be (at least conceptually) a function.  That function could be passed the existing binding as an argument, and make a decision based on that of how to resolve it.</p>
+<p>This would result in a kind of "programmable specifier", that only injects its influence <em>if and when</em> a descent into a block with the desire to execute it occurs.</p>
+<p>Whether you could <em>actually</em> provide a function, or just speak in a "mini dialect" of merge and override instructions that behaved as a function, I don't know.  A real usermode function doing the bind merge logic sounds expensive (but would it be worse than deep walking and selectively binding a tree of code?  Who knows.)</p>
+<h2>Pure Virtual Binding Has No Obvious Way To Cache</h2>
+<p>One advantage to storing the "scope chain" is that if contexts in that chain have things added or removed, the evaluation can pick up the change...</p>
+<p>...but a <em>disadvantage</em> is that it's hard to see any way to efficiently remember where to look up bindings.  Where you found a word on the last lookup might not be the same place that you would on the next lookup, if any objects/modules in the chain have changed.  Thinking of binding as some sort of black box function makes this even more intractable than it already is.</p>
+<p><strong>But I really feel the deep walking with putting bindings on things is a dead end.</strong>  That just makes it feel like the focus needs to be on figuring out this means of dialecting the resolution of scopes at the merge points.  There needs to be a richer language than just "unbind" and "no-op" for what you do at these points...but I don't think walking the blocks and pasting bindings on particular items is viable.</p>
+<h2>I Think "Scopes" Have To Come Into Play</h2>
+<p>Rebol's word soup for binding has always been <a href="https://en.wikipedia.org/wiki/DWIM">DWIM technology</a>.  ("do what I mean")  So there's no schematic for how to do this.  It's fundamentally based on wishful thinking.</p>
+<p>The concept of having a fully granular ability to go down to the WORD!-level in a structure of code and declare what <em>that one word</em> points to may seem like it puts all the power in your hands.  But that power has proven difficult or impossible to wield in non-trivial situations... runs afoul of blocks that are imaged multiple places in the source... and winds up leaving code stale and oblivious to when new declarations arise at moments they don't expect.</p>
+<p><strong>What puts me over the top in thinking we need "scopes" is bindings in strings.</strong>  Features based on string interpolation are so undeniably useful that once the possibilities are seen, they can't be unseen.</p>
+<p>But also, what about debuggers that might want to show you lists of what variables are "in scope" at a certain point of execution?  There are a lot of reasons to have a running tally of which contexts and declarations are visible.</p>
+<p><strong>Yet it's important to realize this is kind of just kicking the can down the road a bit: There's no rigorous way to give meaning to word soup being arranged haphazardly.</strong>  What has been able to succeed in Rebol so far (to the extent you can call existing binding "success") is really just the by-product of fairly unambitious code.  "It looks like it works because nothing difficult is being tried."</p>
+<p>Eliminating mutable binding and asking lookup to be accomplished by some nebulous "scope merging" language doesn't have an obvious magic to it.  Beyond that, I don't know how to cache it.  <strong>So this is a radical idea that may just lead to frustration and the slow death of the project.</strong>  <img src="https://forum.rebol.info/images/emoji/twitter/skull_and_crossbones.png?v=9" title=":skull_and_crossbones:" class="emoji" alt=":skull_and_crossbones:"></p>
+<p>But I have said that before about other things that worked out okay.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<p>We'll see.</p>
+            <p><small>5 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751</link>
+          <pubDate>Wed, 27 Oct 2021 03:57:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1751</guid>
+          <source url="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751.rss">Rebol And Scopes: Well, Why Not?</source>
+        </item>
+        <item>
+          <title>&quot;Raw&quot; Strings</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>I'm now 99% sure that { } best serves its purpose as a string form.</p>
+<p>But there were several talking points that came out of that discussion.  One was a desire for "raw" strings.</p>
+<p>This is the idea that outside of the termination sequence, there's <em>no</em> escaping.  This means you can put pretty much anything in the string.  Backslashes, carets...it's all fair game.</p>
+<h2>Two Very Different String Forms: When Are They Raw?</h2>
+<p>To <em>me</em>, it made the most sense that the raw form be the braced form...because it is so frequently applied to sections of arbitrary documentation text (such as the Description: in module headers).</p>
+<pre><code>Description: {
+    If you call this from C, then write:
+
+        if (a ^ b != 0) {  // bitwise XOR
+            printf("This is an example\n");
+        }
+
+     So there you see carets and backslashes working.
+}
+</code></pre>
+<p>With binding support for string interpolation, we can imagine this getting even more useful for representing snippets of other languages with escaped portions inside of them.</p>
+<p>However, <a class="mention" href="/u/giuliolunati">@giuliolunati</a> favored the idea of making quoted strings <em>mostly-raw</em>, because there was an easy-seeming way to escape quotes using only the quote character.</p>
+<pre><code>&gt;&gt; "This would be ""quotes"" inside a string"
+== {This would be "quotes" inside a string}
+</code></pre>
+<p>How braces are escaped historically ( e.g. <code>^}</code> ) is messier.  That drags caret into it, so now you're worrying about needing to escape carets and braces.  A more uniform approach appealed to Giulio, so he favored the quotes form...and would prefer it to be able to represent characters "as-is" by default, with this exception for embedded quotes.</p>
+<p>But from my point of view, I was seeking to avoid is any need to do search/replace on the embedded information.  So <em>mostly-raw</em> wasn't good enough; e.g. I'd like to copy and paste the C code out of the example above, not have its quotes doubled:</p>
+<pre><code>Description: "
+    if (a ^ b != 0) {  // bitwise XOR
+        printf(""This is an example\n"");   &lt;-- doubled quotes not good
+    }
+"
+</code></pre>
+<p>We also discussed that I'm averse to having ordinary quotes as multi-line strings... though maybe we should allow them.  :-/  But even if we did, it feels unintentionally incomplete to see something like:</p>
+<pre><code>Description: "
+</code></pre>
+<p>So for these reasons I wanted to focus the raw string effort on braced strings.  Yet there are a lot of things that it gets hard to represent in a raw string form when you try to use unmatched braces in the content.</p>
+<p>After thinking about it a bit, we came up with the option of being able to set the delimiter according to a number of braces and a vertical bar.</p>
+<pre><code>{...}  ; expects any { } inside to be matched pairs 
+{|...|}  ; allows internal unpaired and mismatched { }, {| |} matched pairs
+{{|...|}}  ; allows internal unpaired and mismatched {| |}, {{| |}} matched
+</code></pre>
+<p>etc. etc.</p>
+<p>This can handle some pretty sticky strings like <strong><code>{|ab"c"} {"d"ef|}</code></strong> if need be, where the data extracted is:</p>
+<pre><code>ab"c"} {"d"ef
+</code></pre>
+<p>The approach would allow any number of {{ }}, which sounds like it could get ugly.  But it's kind of like generic quoting, where I don't anticipate people using ridiculously high levels like {{{{|...|}}}}.  But having it be a general method has value--especially in generated code scenarios.</p>
+<p>Strings starting or ending with vertical bar forms like <strong>{|}</strong> get sacrificed, so you'll have to use "|" instead.  But you would use "}" so this just moves | into the same category as } and {.</p>
+<p>I also suggested an additional rule...that you don't terminate braced strings except as:</p>
+<ul>
+<li>{...} -space-</li>
+<li>{...} -newline-</li>
+<li>{...}]</li>
+<li>{...})</li>
+</ul>
+<p>If we limit it to these possibilities, you can write things like:</p>
+<pre><code> code: {char c = '}';}
+</code></pre>
+<p>It seems that a lot of unpaired brace cases are single character literals like this, which don't fall under the rule.  You might want to put the bars in for good measure anyway:</p>
+<pre><code> code: {|char c = '}';|}
+</code></pre>
+<p>In any case, the other thing we were leaning toward here was that when quoted strings are escaped, they do so compatibility with the classical C backslashes, based on the idea that caret escaping hadn't done the language any particular favors.</p>
+<p>Just wanted to write this up while I still was thinking about it... <img src="https://forum.rebol.info/images/emoji/twitter/zzz.png?v=9" title=":zzz:" class="emoji" alt=":zzz:"></p>
+            <p><small>16 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/raw-strings/1750">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/raw-strings/1750</link>
+          <pubDate>Sat, 23 Oct 2021 13:33:24 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1750</guid>
+          <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+        </item>
+        <item>
+          <title>Python&#39;s Ideas for Dropping the &quot;Global Interpreter Lock&quot;</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Foreign Inspiration</category>
+          <description><![CDATA[
+            <p>Python's C implementation (CPython) parallels the classical Redbol world in many ways.  So some of what they talk about here may be applicable:</p>
+<aside class="onebox googledocs">
+  <header class="source">
+      <a href="https://docs.google.com/document/d/18CXhDb1ygxg-YXNBJNzfzZsDFosB5e6BfnXLlejd9l0/edit#" target="_blank" rel="noopener">docs.google.com</a>
+  </header>
+  <article class="onebox-body">
+    <a href="https://docs.google.com/document/d/18CXhDb1ygxg-YXNBJNzfzZsDFosB5e6BfnXLlejd9l0/edit#" target="_blank" rel="noopener"><span class="googledocs-onebox-logo g-docs-logo"></span></a>
+
+<h3><a href="https://docs.google.com/document/d/18CXhDb1ygxg-YXNBJNzfzZsDFosB5e6BfnXLlejd9l0/edit#" target="_blank" rel="noopener">Python Multithreading without GIL</a></h3>
+
+<p>Multithreaded Python without the GIL  Sam Gross colesbury@gmail.com / sgross@fb.com   Source code: https://github.com/colesbury/nogil   The goal of this project is to remove the global interpreter lock (GIL) from CPython to enable multiple threads to...</p>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/pythons-ideas-for-dropping-the-global-interpreter-lock/1746">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/pythons-ideas-for-dropping-the-global-interpreter-lock/1746</link>
+          <pubDate>Mon, 18 Oct 2021 10:06:37 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1746</guid>
+          <source url="https://forum.rebol.info/t/pythons-ideas-for-dropping-the-global-interpreter-lock/1746.rss">Python&#39;s Ideas for Dropping the &quot;Global Interpreter Lock&quot;</source>
+        </item>
+        <item>
+          <title>Simple Objects vs. What The People Want</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Optimization</category>
+          <description><![CDATA[
+            <p>Ren-C has a more streamlined version of how R3-Alpha implemented simple OBJECT!s, but it's really mostly the same <em>(though MODULE! has changed significantly)</em></p>
+<p>An OBJECT! is just two parallel lists, which I have called the <strong>"keylist"</strong> and the <strong>"varlist"</strong>.</p>
+<p>So if you say something like:</p>
+<pre><code>obj: make object! [
+    x: 1 + 2
+    y: 10 + 20
+]
+</code></pre>
+<p>You will get:</p>
+<pre><code>keylist: {symbol(x) symbol(y)}
+varlist: [*V0* 3 30]
+</code></pre>
+<p>The first slot in a varlist is used for some tracking information.  So:</p>
+<ul>
+<li>
+<code>keylist[0]</code> is the key for <code>varlist[1]</code>
+</li>
+<li>
+<code>keylist[1]</code> is the key for <code>varlist[2]</code>
+</li>
+</ul>
+<h2>You Get A New Keylist With Every MAKE OBJECT!</h2>
+<p>Nothing in the system goes around looking for common patterns in your object creation to notice that you've made several objects with the same keys.</p>
+<pre><code>collect [
+    count-up i 1000 [
+        keep make object! [x: i * 10, y: i * 20]
+    ]
+]
+</code></pre>
+<p>You just made 1000 objects, and all of them have their own copy of the keylist <code>{symbol(X) symbol(Y)}</code>.  Ren-C made this overhead cost less than 1/4 as much as R3-Alpha, but it's still kind of lame.</p>
+<p><strong>The only way you avoid making a new keylist is if you do object inheritance.</strong></p>
+<pre><code>point!: make object! [x: y: null]
+collect [
+    count-up i 1000 [
+        keep make point! [x: i * 10, y: i * 20]
+    ]
+]
+</code></pre>
+<p>This time, there's 1000 objects all sharing a single keylist.</p>
+<p><strong>If you expand keys at all, that will result in a new keylist...</strong></p>
+<p>You spoil the optimization if you put anything additional in your derived object:</p>
+<pre><code>point!: make object! [x: y: null]
+collect [
+    count-up i 1000 [
+        keep make point! [x: i * 10, y: i * 20, z: i * 30]
+    ]
+]
+</code></pre>
+<p>There's no inheritance mechanism that makes use of the common sublist.  So this puts you at <em>1001</em> keylists, because your keylist for the original point! never gets used.</p>
+<p><strong>Object Expansion via APPEND disconnects shared keylists</strong></p>
+<p>R3-Alpha allowed you to add fields to an object.  If you did so, you would lose any sharing that it had taken advantage of before.</p>
+<pre><code>p: make point! [x: 10 y: 20]  ; reuses point!'s keylist
+append p [z: 30]  ; oop, not anymore...gets its own keylist.
+</code></pre>
+<p><strong>Comparisons Are Difficult</strong></p>
+<p>Because there's no global mechanism of canonization of keylists, you get entirely different-looking objects by creating the fields in different orders.</p>
+<pre><code>obj1: make object! [x: 10 y: 20]
+obj2: make object! [y: 20 x: 10]
+</code></pre>
+<p>These objects have been considered to be not equal historically.  Because comparisons are done by walking the fields in order.  So obj1 &lt;&gt; obj2 in this case.</p>
+<p>However, if you create an object via inheritance so it shares a keylist, that will standardize the order of the fields:</p>
+<pre><code>point1: make point! [x: 10 y: 20]
+point2: make point! [y: 20 x: 10]
+</code></pre>
+<p>Here we will have point1 = point2, since their shared keylist forces the order of x and y to whatever it was in POINT!.</p>
+<h2>There Are Fancier Ways Of Dealing With This</h2>
+<p><strong>If you're willing to say that the order of keys in objects shouldn't matter...</strong> then you can rethink the data structures to exploit commonalities in the patterns of keys that are created.</p>
+<p>The V8 JavaScript engine approaches this with <strong><a href="https://richardartoul.github.io/jekyll/update/2015/04/26/hidden-classes.html">Hidden Classes</a></strong>.</p>
+<p>But there's really always some other way of approaching the problem.  The way modules work in "Sea of Words" is an example of a structure that seems to work reasonably well for modules--but wouldn't work as well for lots of little objects.</p>
+<h2>Today's FRAME! Depends On This Non-Fancy Way</h2>
+<p>Right now, when a native runs it does so with a concept of the order of the arguments and refinements that gets baked into the C code directly.  IF knows that the condition is argument 1 and that the branch is argument 2, and it looks directly in slots 1 and 2 of the varlist of the frame to find those variables.</p>
+<p>This is pretty foundational to the idea of the language, and is part of what gives it an appealing "simple-ness".</p>
+<p>Ren-C has come along and permitted higher level mechanisms like specialization and adaptation, but everything is always getting resolved in a way that each step in a function's composition works on putting information into the exact numbered slot that the lower levels expect it to be in.</p>
+<h2>Binding Has Depended On This Non-Fancy Way</h2>
+<p>A premise in Rebol has been that you can make a connection between a variable and an object that has a key with the name of that variable, and once that connection is made it will last.  This rule is why there's been dodginess about deleting keys in objects or rearranging them...and why R3-Alpha permits adding new variables but not removing any.</p>
+<pre><code> obj: make object! [x: 10 y: 20]
+ code: [x + y]
+ bind code obj
+</code></pre>
+<p>If you write something like the above, you are annotating the X inside of CODE with (obj field <span class="hashtag">#1</span>), and the Y inside of CODE with (obj field <span class="hashtag">#2</span>).  So nothing can happen with obj that can break that.</p>
+<p><strong>This isn't strictly necessary.</strong>  It could have annotated X and Y with just (obj) and then gone searching each time it wanted to find it.  This would permit arbitrary rearrangement of OBJ, inserting and removing keys.  It could even remove X or Y and then tell you it couldn't find them anymore.</p>
+<p>There are compromises as well.  The binding could be treated as a potentially fallible cache...it could look in that slot position (if it's less than the total keylist size) and see if the key matched.  If not, it could fall back on searching and then update with the slot where it saw the field.</p>
+<p>(Of course this means you have to look at the keylist instead of just jumping to where you want to be in the varlist, and locality is such that they may not be close together; so having to look at the keylist <em>at all</em> will bring you a slowdown.)</p>
+<h2>But What Is The Goal, Here?</h2>
+<p>I've mentioned how the FRAME! design pretty much seems to go along well with the naive ordering of object fields.</p>
+<p>I guess this is where your intuition comes in as to what represents "sticking to the rules of the game".  <em>And I think that hardcoding of positions into the executable of where to find the argument cells for natives is one of the rules.</em></p>
+<p>This suggests that all functions hardcode the positions of their arguments--even usermode functions.  I'm okay with this.</p>
+<p>So then we get to considering the question about OBJECT!.</p>
+<ul>
+<li>
+<p>A lot of languages force you to predefine the structure of an object before creating instances.  And defining that structure is a good place to define its interfaces.  If Rebol wants to go in a more formal direction (resembling a Rust/Haskell/C++) then you might suggest you <em>always</em> make a base structure...and you can only have the fields named in it.</p>
+</li>
+<li>
+<p>Other languages (like JavaScript) are more freeform, and as mentioned can look for the relationships after-the-fact.  Order of fields does not matter.</p>
+</li>
+</ul>
+<p>It's clear that Rebol's userbase so far are people who would favor better implementation of the JavaScript model over going to more strictness.  I think there'd be a pretty good reception of a model where you could create objects with <strong>{...}</strong> and where fields could be added or removed as people saw fit.  If behind-the-scenes the system was optimizing access to those objects, that would presumably be preferable to this idea that you had to be responsible for declaring prototypes to get efficiencies (that would instantly disappear if you added another field).</p>
+<p>But the mechanics definitely get more complicated.  :-/</p>
+            <p><small>8 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/simple-objects-vs-what-the-people-want/1745">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/simple-objects-vs-what-the-people-want/1745</link>
+          <pubDate>Mon, 18 Oct 2021 06:45:29 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1745</guid>
+          <source url="https://forum.rebol.info/t/simple-objects-vs-what-the-people-want/1745.rss">Simple Objects vs. What The People Want</source>
+        </item>
+        <item>
+          <title>Alternate String Forms if {...} Becomes An Array Type</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <blockquote>
+<p>I've brought up in earnest something I call <strong><a href="https://forum.rebol.info/t/rethinking-braces-as-an-array-type/1727">"The FENCE! Proposal"</a></strong>.  It involves retaking <strong>{...}</strong> for an <em>object-like-purpose</em>.</p>
+<p>The twist is that it's really another ANY-ARRAY! type, peer to [...] and (...) - but with the default evaluator behavior of MAKE OBJECT!.  Then as with [...] and (...), dialects would be free to override {...} in their own way.</p>
+<p>A sad consequence of this would be the loss of the alternative string form {...}.  Discussions of what to use instead were lengthier than the discussion of the proposal itself, so I've moved them onto their own thread here...starting with my initial musing...</p>
+</blockquote>
+<h2>What Other Asymmetric String Technique Might Be Used?</h2>
+<p>Some languages have weird techniques, like even letting you make up your own delimiters by whatever you use in front of the quote:</p>
+<pre><code>str: ?"This says "quote followed by question mark" terminates"?
+str: |"This says "quote followed by bar" terminates"|
+str: xyz"This says "quote followed by zyx" terminates"zyx 
+</code></pre>
+<p>(Not making that up.)</p>
+<p>The risk of using a symbol like | is that even if it looks good in isolation, you might not like it in a parse rule, like <strong>rule1 | |"some string"| | rule2</strong>.  A less-used character might be better:</p>
+<pre><code>parse data [rule1 | ~"some string"~ | rule2]
+</code></pre>
+<p>Or perhaps those who really feel the need for another asymmetric string delimiter should assign a couple keys in their editor to unicode:</p>
+<pre><code>str: «Maybe People «who really care» could use "Chevrons"?»
+</code></pre>
+<p>Who knows.  <strong><a href="https://en.wikipedia.org/wiki/Here_document">One place to look is the topic of "HEREDOC"</a></strong></p>
+<p>Another place to look is the <strong><a href="https://stackoverflow.com/questions/13535172/list-of-all-unicodes-open-close-brackets">List of open/close paired braces/brackets/quotes in Unicode</a></strong></p>
+            <p><small>22 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/alternate-string-forms-if-becomes-an-array-type/1743">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/alternate-string-forms-if-becomes-an-array-type/1743</link>
+          <pubDate>Mon, 18 Oct 2021 01:06:43 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1743</guid>
+          <source url="https://forum.rebol.info/t/alternate-string-forms-if-becomes-an-array-type/1743.rss">Alternate String Forms if {...} Becomes An Array Type</source>
+        </item>
+        <item>
+          <title>Getting data into replpad-js</title>
+          <dc:creator><![CDATA[johnk]]></dc:creator>
+          <category>Emscripten</category>
+          <description><![CDATA[
+            <p>Hi,<br>
+What are the best options for getting data into the replpad-js build (<a href="http://hostilefork.com/media/shared/replpad-js/" class="inline-onebox">Ren Garden</a>)?<br>
+Other than pasting data into the console, I am not clear on what other options exist and how to use them.<br>
+Thanks, John</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/getting-data-into-replpad-js/1742">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/getting-data-into-replpad-js/1742</link>
+          <pubDate>Wed, 13 Oct 2021 23:17:18 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1742</guid>
+          <source url="https://forum.rebol.info/t/getting-data-into-replpad-js/1742.rss">Getting data into replpad-js</source>
+        </item>
+        <item>
+          <title>Rethinking READ</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>My recent mantra has been <em>"callbacks are bad, mmmkay?"</em>  They should be looked at as a low-level mechanic on par with mutexes...used internally to implement other abstractions.  A modern script language should provide infrastructure to allow people to code their algorithms in what <em>looks</em> like a mostly-synchronous style.  Languages like Go do this by design (though they do have mutexes for special low-level features), and languages like JavaScript began to shun callbacks for being able to write code synchronously via async/await.</p>
+<p>This means I've come to the same conclusion as the author of <a href="https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/">"what color is your function"</a>...that Go's methodology is the closest-to-right one.  <em>(And here is a <a href="https://kristoff.it/blog/zig-colorblind-async-await/">talk from the creator of Zig</a> who feels that Go left out an easy way to get the result from a gofunction; it's not hard to make a closure and send it to a channel, but he has a point that Go lacks typechecking to tell you about the unused result.  And not being as easy as it should be is a valid critique too.)</em></p>
+<p>Anyway: all READ operations should <em>look</em> synchronous.  It's just that when they are holding up the code ("blocking"), other code will be able to run.  Long term this would be by means of stackless "green threads"...but I don't have that many qualms about using regular old threads until that time.  <em>(libuv offers a thread abstraction layer that participates with the event loop, we could use that...but stackless isn't really all <em>that</em> far off, I've been bending things toward it for a year now.)</em></p>
+<p>I've mentioned the <a href="https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733/2">catharsis of getting rid of what was there before</a>.  But chopping out a lot of awkward and brittle stuff has still left behind a semantic soup.</p>
+<h2>READ's Historical Properties</h2>
+<p>Let's start with how it has worked:</p>
+<ol>
+<li>
+<p>If you passed READ a URL! or FILE!, it did an OPEN... then what Go would call a <a href="https://pkg.go.dev/io#ReadAll">"ReadAll()"</a> to get everything until the end of input.  Then it CLOSEd the port.  It gives back the data that was read.  This has always been synchronous.</p>
+</li>
+<li>
+<p>If you passed READ an opened (non-filesystem) PORT!, it would immediately return that PORT! right back.  You could keep running other code...but at some point you would call WAIT.  With that WAIT on the stack, the port's AWAKE handler would be called with an EVENT! labeled "read"...and find some (fairly arbitrary) amount of data in the <code>port.data</code> field.  If your handler felt the amount of data in <code>port.data</code> wasn't enough, then it could issue another READ request and return false ("not awake yet").  The next callback would have additional data at the tail of <code>port.data</code>.</p>
+<ul>
+<li>A filesystem port which had READ called on it would return everything to the end.  This is because there was no such thing as asynchonous file I/O.  <em>(Though libuv has that: the idea is that it might take time for a file request to be fulfilled--disk access is by no means instantaneous relative to CPU cycles.  And if the file is on a network file system it could be as long as any other network request, with all the potential for failures that go with it.)</em>
+</li>
+</ul>
+</li>
+<li>
+<p>If you passed READ a /PART this would give back <em>at most</em> that amount of data.  This was only offered on synchronous sources... so it would work on file ports, and on literal FILE! (which opened a file port).  But it wasn't supported by the network ports...so there was no asynchronous semantic.</p>
+<ul>
+<li>If you wanted to know if you hit the end of file before your request was filled, you'd have to check the length of what you got back and ask if it was the same as the /PART request you made.  If it was less, then you hit the end.</li>
+</ul>
+</li>
+</ol>
+<h2>I'm Clearly Saying That (2) Is Out...</h2>
+<p>What about the rest?</p>
+<p>It's weird to have a 1-arg call to READ sometimes mean <em>"read all"</em> and sometimes mean <em>"read as much as the underlying data source feels like giving us at this moment"</em>.  Since people (including myself) are attached to <code>read url</code> giving back all the data...then I think that means plain READ needs to always mean read all.</p>
+<p>READ/PART (3) on the surface looks like Go's basic Read()...in the sense that you're passing in a maximum amount to read and you might get less than that.  But on file ports (the only place this worked) it was historically guaranteed to read either that amount or be truncated at EOF.  So you would feel confident that if you asked for a READ/PART of 100 and got only 50 back that you must have reached the end of the file.  That's not the semantics of a stream Read() in Go.... you can ask for 100 and get 50 back, but there may be more coming later.</p>
+<p>I think that the /PART operations giving you truncation without any signal saying so is something that is systemically bad.  It's bad on READ/PART, it's bad on COPY/PART, and there should be some way through requesting another return result to say that truncation is okay.</p>
+<p>There's nothing in these operations for <em>"read at least n bytes"</em>, like Go's <a href="https://pkg.go.dev/io#ReadAtLeast">ReadAtLeast()</a>.</p>
+<h2>Who Wants "Give Me As Much As You've Got, Right Now"?</h2>
+<p>I explained in the comparison with Go that the "give me as much as you've got right now, up to some limit" was tailored to the convenience for those <em>implementing new data sources</em>.</p>
+<p>End users of streams don't want that.  If you get more than you want for a particular call, you have to worry about what to do with the excess.  If you get less than you want, you have to call it again.</p>
+<p><strong>But piped sources want to move in chunks, and they may not know intrinsically how big a chunk to go by.</strong></p>
+<p>Let's say you are the HTTP protocol.  Assume you've read a TCP connection enough to get to the Content-Length in the header of a transfer.  It says the ensuing transfer will be two gigabytes in size.</p>
+<p>As the person writing the HTTP protocol, you now know how much to ask for.  But do you want to say READ/PART of 2GB from the TCP connection?  That might seem okay if you were going to return the 2GB to the client if they asked for <strong>read url</strong> all at once.  But if you're running that through another pipe like something that compresses or encrypts then you want to be able to get started on that sooner.</p>
+<p>You might say it's the job of that client to ask for a /PART that's a good chunk size for them.  But what if they don't particularly care, and want to be as efficient as possible?  Making up an arbitrary /PART number that forces the creation of a binary of exactly that size could be inefficient...when compared to just letting the http layer pass through a blob that's as big as it got.</p>
+<p>So this motivates why one would have a /PART that means "as much as you feel like giving me"... where that implies "as much as your buffering chunk size considers to be efficient".  The expectation is that a networking layer would not treat "as much as I feel like" as implying 2 GB would be acceptable...but it seems there's no way to avoid that besides picking an arbitrary number.</p>
+<p>I'll keep thinking about it.  The good news is that we have a lot of streaming-capable stuff hanging around to wire together (the ciphers and hashes in mbedTLS are streaming, zlib does streaming compression and decompression...)</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/rethinking-read/1741">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/rethinking-read/1741</link>
+          <pubDate>Thu, 07 Oct 2021 20:48:08 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1741</guid>
+          <source url="https://forum.rebol.info/t/rethinking-read/1741.rss">Rethinking READ</source>
+        </item>
+        <item>
+          <title>&quot;Streaming&quot; Survey from Other Languages</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Foreign Inspiration</category>
+          <description><![CDATA[
+            <p>While PORT!s were ambiguous beasts, one objective we can see was that it should be possible to pipe them together.</p>
+<p>This can be seen in the HTTP port.  It was written to (supposedly) not care what kind of port it was reading from, so long as it could supply a stream of bytes.</p>
+<ul>
+<li>
+<p>If you feed HTTP from a TCP port, you get plain old http</p>
+</li>
+<li>
+<p>If you feed HTTP from a TLS port, you get https</p>
+<ul>
+<li>The TLS port is, in turn, fed from TCP</li>
+</ul>
+</li>
+</ul>
+<p>I've written about how this was pretty convoluted...but is approaching a less tangled state.  So now we can look at it in a comparative light and redesign it.</p>
+<p><strong>We'd really hope that something about Redbol nature can make this more interesting than what more performance-oriented languages offer.</strong></p>
+<p><strong>But if nothing unique can be offered, it hopefully isn't any worse...then it's both <em>slower</em> and <em>worse</em> (which is what it has historically been).</strong></p>
+<p>Comparisons follow...</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/streaming-survey-from-other-languages/1739">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/streaming-survey-from-other-languages/1739</link>
+          <pubDate>Tue, 05 Oct 2021 08:25:31 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1739</guid>
+          <source url="https://forum.rebol.info/t/streaming-survey-from-other-languages/1739.rss">&quot;Streaming&quot; Survey from Other Languages</source>
+        </item>
+        <item>
+          <title>&quot;Destructuring&quot; in FOR-EACH</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p><a class="mention" href="/u/gchiu">@gchiu</a> wrote some code that made a list of drugs and filenames related to those drugs:</p>
+<pre><code> drugs: [
+     ["Benzbromarone" "SA1537.pdf"]
+     ["Teriparatide" "SA1139.pdf"]
+     ["Adalimumab" "SA1847.pdf"]
+     ["Etanercept" "SA1812.pdf"]
+ ]
+</code></pre>
+<p>This is inconvenient to enumerate.  It won't work if you say:</p>
+<pre><code>for-each [drugname filename] [...]
+</code></pre>
+<p>Because what you get then is two successive blocks... e.g. drugname winds up being <strong>["Benzbromarone" "SA1537.pdf"]</strong> and then filename is <strong>["Teriparatide" "SA1139.pdf"]</strong>.</p>
+<p>If this were to work, it would have to offer something like:</p>
+<pre><code>for-each [[drugname filename]] [...]
+</code></pre>
+<p>That could communicate that the information you were looking for was actually in a nested block level.</p>
+<p>Though we don't want to get too literal with the dialect.  If you have:</p>
+<pre><code> drugs: [
+     ("Benzbromarone" "SA1537.pdf")
+     ("Teriparatide" "SA1139.pdf")
+     ("Adalimumab" "SA1847.pdf")
+     ("Etanercept" "SA1812.pdf")
+ ]
+</code></pre>
+<p>...we don't want to make the meaning of GROUP!s in FOR-EACH have to be related to this structure, because we use groups to say that the variable's name is calculated.  :-/</p>
+<p>Similarly, we might imagine more interesting meanings for blocks in FOR-EACH than to point out a nested block level.  Maybe this would be done with quoted blocks and quoted groups?</p>
+<pre><code>for-each ['(drugname filename)] [...]
+</code></pre>
+<p>It gets a bit hairy because you're starting to tread into parsing territory.  Hard to know where to stop.</p>
+<p>Since I'm not sure I just switched Graham's case to use a flat block.</p>
+<pre><code> drugs: [
+     "Benzbromarone" "SA1537.pdf"
+     "Teriparatide" "SA1139.pdf"
+     "Adalimumab" "SA1847.pdf"
+     "Etanercept" "SA1812.pdf"
+ ]
+</code></pre>
+<p>But it should be thought about more.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/destructuring-in-for-each/1738">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/destructuring-in-for-each/1738</link>
+          <pubDate>Mon, 04 Oct 2021 20:08:43 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1738</guid>
+          <source url="https://forum.rebol.info/t/destructuring-in-for-each/1738.rss">&quot;Destructuring&quot; in FOR-EACH</source>
+        </item>
+        <item>
+          <title>Semantics of READ and TCP Streams: Past And Future</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>First things first: If you want to work on network protocols at all--in the Redbolverse or elsewhere--please heed this warning!</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/biohazard.png?v=9" title=":biohazard:" class="emoji" alt=":biohazard:"> <strong>There's a really big potential misunderstanding about TCP when you offer someone a plain READ operation.</strong> <img src="https://forum.rebol.info/images/emoji/twitter/biohazard.png?v=9" title=":biohazard:" class="emoji" alt=":biohazard:"></p>
+<p>You may get the impression that the other side of the connection is sending "messages" with specific lengths.  This is not the case!</p>
+<p>Let's imagine you could say:</p>
+<pre><code>&gt;&gt; read tcp-port
+== #{1FFEC02A}  ; 4 bytes
+
+&gt;&gt; read tcp-port
+== #{E0C1}  ; 2 bytes
+</code></pre>
+<p>Just because you got two chunks of information from that connection does not mean that there were 2 sends from the other side.  The other side might have sent 100 bytes and this is just how you are getting the first 6.  Or it could have done 6 individual 1 byte writes, along with any number of 0 byte writes (which are legal).</p>
+<p><strong>This means all understanding of the data you receive has to be in terms of a protocol.  The only number that matters is <em>how much data you are certain that you can expect</em>... never in any particular length you get from a chunk of data you are provided.</strong></p>
+<h2>Note Today's READ On TCP:// Doesn't Work Like That</h2>
+<p>Rebol hasn't historically let you READ a TCP connection in the way shown above.</p>
+<p><em>( Though honestly, the code for everything would have been more understandable if you could have just done that!  All the convoluted WAITs and AWAKE handlers were in service of some asynchronous nirvana that never materialized.  So what ended up emerging was the most convoluted and poorly engineered way to write ultimately synchronous protocols the world has likely ever seen.  <img src="https://forum.rebol.info/images/emoji/twitter/angry.png?v=9" title=":angry:" class="emoji" alt=":angry:"> )</em></p>
+<p>What happens instead is that READ basically just makes a request, and returns nothing.  If you want anything back, you have to poke an AWAKE handler function onto the port as a function to receive the data.  If you WAIT on the port...then eventually during the course of that wait you should get an EVENT! passed to the AWAKE handler specified.</p>
+<p><a href="https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724">The only thing that event holds is the word "READ"</a>, so the place you need to look for the data would be in the port's DATA member.  That data member would just get bigger with each READ.  So it was the responsibility of the user of the port to clear that data out, or it would just accrue indefinitely.</p>
+<p>If a READ didn't come back with the number of bytes you wanted, you'd have to call READ again...and then return FALSE from your port's AWAKE handler to say you were not done yet.  Returning TRUE from the port's AWAKE handler would indicate that enough progress had been made that something which was performing a WAIT on that port should be unblocked from the WAIT.</p>
+<h2>Can We Improve This?  <em>(rhetorical question)</em>
+</h2>
+<p>If we were only judging R3-Alpha PORT! vs. the low-level unix recv() function, we might say that it's an improvement.  It doesn't concern you with the dynamic memory management of having to pass small fixed size buffers to the recv() and stitch them together into a large blob.  The BINARY! grows on its own, and you take what you want from it.</p>
+<p>The truth is somewhat more complex.  The BINARY! lives in the port and the semantics of how you interact with it are traditionally not clear.  What if you increment the index?</p>
+<pre><code>tcp-port.data: skip tcp-port.data 100
+</code></pre>
+<p>Should the next time the buffer is added to slide the buffer forward to use the unused space at the head?  Or should those 100 bytes at the beginning be preserved indefinitely?</p>
+<p>The way most languages would resolve such questions about "buffered IO" would be to narrow the interface through something like <a href="https://github.com/golang/go/blob/master/src/bufio/bufio.go#L207">GoLang's Reader interface</a>.  You are given specific APIs to "peek" at the data without removing it.  Or if you do remove it, then it's always slid forward to the front of the buffer.</p>
+<h2>Attacking Asynchronousness In A Modern Fashion</h2>
+<p>Empirically people must have noticed that R3-Alpha never delivered the goods on its promised asynchronousness.  I've pointed out some of the reasons, and how "WAIT" has lacked a semantic definition of what it is you're "waiting for" on ports.</p>
+<p>By building on libuv, the nuts and bolts at the systems/C level of being able to make requests and then get a callback is now available...with reasonable handling of errors.  But it would be a big mistake to expose that mechanism by replacing the PORT!/AWAKE mire with some kind of READ/CALLBACK situation where you pass a function that gets called with either the data you asked for or an error.  <em>No one wants to code like that...</em> which is why Node.JS callbacks are all being replaced by async/await patterns.</p>
+<p>My feeling is that if you want to disentangle users of a scripting-class language with the problems that come with threads and mutexes and the like, there have emerged modern answers.  And Go is one of the better examples of this:</p>
+<p><strong><a href="https://www.itechart.com/blog/art-philosophy-and-science-golang-development/"><em>"Do not communicate by sharing memory.  Share memory by communicating."</em></a></strong></p>
+<p>Code would get clearer if we rolled it back to where you write things as if they are synchronous.  And often that's probably going to be fine for people.  But if it's not, then you use channels to split off what you are doing.</p>
+<p><strong>So I think the likely right answer is just to <a href="https://forum.rebol.info/t/switching-to-stackless-why-this-why-now/1247">push forward on stacklessness</a> as the basis for green threading, used to implement asynchronousness as it is needed.</strong></p>
+<p>This would mean that I think all the asynchronous port stuff that exists so far should just be scrapped.  <code>#andnothingofvaluewaslost</code></p>
+<h2>So... READ on a TCP PORT! Should Give Back BINARY!, then?</h2>
+<p>Okay we're back to this:</p>
+<pre><code>&gt;&gt; read tcp-port
+== #{1FFEC02A}  ; 4 bytes
+
+&gt;&gt; read tcp-port
+== #{E0C1}  ; 2 bytes
+</code></pre>
+<p>As I just said, synchronous reading like this is more in line of how we express ourselves...and we get asynchronousness by virtue of some scheduler that can rearrange things as a master of stack-time-and-stack-space.  <em>(I will point out pretty well developed experiments with that scheduler have been reached in the past, and can be reached again...with more insight now.)</em></p>
+<p>But I think we like the concept of READ as a default of "give me all you've got until the EOF" as a default.</p>
+<p>Multi-returns can help us here.  Remember that a function knows how many returns you requested, so it can selectively invoke a behavior when you do so.</p>
+<pre><code>&gt;&gt; [data eof]: read tcp-port  ; asking for EOF means don't force read to EOF
+== #{1FFEC02A}
+
+&gt;&gt; eof
+== false
+
+&gt;&gt; [data @]: read tcp-port  ; remember "circling" and other neat tricks..
+== #[true]  ; asked for eof to be the main return result
+
+&gt;&gt; data
+== #{E0C1}
+
+-- or --
+
+&gt;&gt; read tcp-port  ; don't ask for EOF means read until EOF
+== #{1FFEC02AE0C1}
+</code></pre>
+<p>This feels much more solid.</p>
+<h2>Weird Concept Idea: Buffer As BLOCK! ?</h2>
+<p>Cleansing ourselves of the dead-end of R3-Alpha's asynchronous plan, there are some areas we might look to to play to language strengths.</p>
+<p>I've mentioned the importance of being able to "push things back" into the buffer after having read them...and that it's <a href="https://forum.rebol.info/t/parsing-giant-streams-without-consuming-tons-of-memory-how/1698">likely the best way of doing PARSE on streams</a></p>
+<p>So I began to wonder if the thing that ports would accrue might be a BLOCK! instead of a BINARY!?</p>
+<p>Imagine a TCP port would be feeding in little blobs of BINARY! at the tail.  But when you got the chance to process it, you could make the decision to fold that into some kind of structure.  Then you could emit this higher level processed structure to something that listens down the "pipe".</p>
+<p>These are the kinds of novel directions I'd like to see...where we can do streamed block PARSE on a PORT! that feeds arbitrary values, that was decoded from binary, that was decompressed from a streaming codec on top of a TLS decoder...</p>
+<p>So this might lead to some weird stuff.  Like if you start asking to look into the buffer you'd see that it's a block and see the blobs it plans on giving you in the next READs:</p>
+<pre><code>&gt;&gt; peek/part tcp-port 2
+== [#{1FFEC02A} #{E0C1}]
+</code></pre>
+<p>Anyway, long post...but I feel slightly optimistic that it points toward some of how to dig out of the R3-Alpha port debacle.</p>
+            <p><small>4 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733</link>
+          <pubDate>Sat, 02 Oct 2021 10:49:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1733</guid>
+          <source url="https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733.rss">Semantics of READ and TCP Streams: Past And Future</source>
+        </item>
+  </channel>
+</rss>

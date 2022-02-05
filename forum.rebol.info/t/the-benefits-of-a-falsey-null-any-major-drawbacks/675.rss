@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The benefits of a falsey NULL (any major drawbacks?)</title>
+    <link>https://forum.rebol.info/t/the-benefits-of-a-falsey-null-any-major-drawbacks/675</link>
+    <description>There&#39;s been an ongoing &quot;shift in attitude&quot; about NULL.
+
+**What has not changed:** null is still &quot;not a value&quot;.  You can&#39;t put it in a block.  And a variable can&#39;t &quot;be null&quot;, it can only be unset...which you can find out about via `not set? &#39;varname`.  GET gives you null as a way of *signaling* the unset-ness, but that&#39;s different from saying the variable &quot;holds a null value&quot;.
+
+    x: null
+    if x = null [ ;-- errors on access of x
+        print &quot;if a variable could actually &#39;be null&#39;, this would be legal&quot;
+    ]
+
+**What has changed:** increased acceptance of null to mean &quot;don&#39;t append anything&quot; or &quot;don&#39;t compose anything&quot; or &quot;don&#39;t print anything&quot;.  So it&#39;s not the extreme &quot;hot potato&quot; that it was at one point aiming to be.
+
+But it&#39;s still a slightly warm potato: it differs from BLANK! in the sense that operations won&#39;t generally accept it as a data source.  Non-mutating operations take blanks in and give nulls out.  *(e.g. **select _ &#39;foo** is null, while **select null &#39;foo** is an error--this helps keep error locality vs. collapsing entire chains without a deliberate TRY)*
+
+And there&#39;s a pretty big stigma NULL will never avoid, by virtue of not being able to fetch it from a variable via &quot;normal&quot; variable access.
+
+### But what good is it to not let NULL be falsey?
+
+I just tried implementing the proposal for making APPEND or COMPOSE of BLANK! a no-op unless you used /ONLY.  This has the nice property of **compose [1 (any [...]) 2]** being able to vaporize the ANY expression on failure.  But it also got me to thinking, why isn&#39;t ANY returning null in the first place when it doesn&#39;t find a truthy thing?
+
+The &quot;big reason&quot; was that people write **if any [...] [...]**, and null is &quot;neither true nor false&quot;, so that would be an error should it return NULL.  *But in this day and age, what&#39;s the great argument for why null shouldn&#39;t be falsey?*  When it shifted from name/conception of &quot;void&quot; to the more fitting &quot;null&quot;, that makes the suggestion more palatable.  Certainly NULL is falsey in many languages, C included.
+
+When the question of truthy/falsey of UNSET! was debated in the CureCode days, people looked at the behavior of:
+
+     all [
+         1 &lt; 2
+         print &quot;got here&quot;
+         3 &lt; 4
+     ]
+
+There was a desire to not interrupt the ALL while injecting debug output.  Since PRINT returned an UNSET!, it wasn&#39;t counted.
+
+I thought the example was a bit contrived.  A change to PRINT (or whatever) so that it returned something (perhaps the PORT! it printed to?  The data it printed)? would throw this off.  Or if you were using some other routine, you&#39;d have to say:
+
+     all [
+         1 &lt; 2
+         ((some-diagnostic-function ...) ())
+         3 &lt; 4
+     ]
+
+With Ren-C there is ELIDE, that can be used generically in these situations:
+
+     all [
+         1 &lt; 2
+         elide (some-diagnostic-function ...)
+         3 &lt; 4
+     ]
+
+The existence of ELIDE...and wanting to be careful to not blindly proceed in the case of things like failed selects...were incorporated into an argument for why ALL began treating nulls as errors.  But what if NULL was just plain old falsey, as far as conditionals were concerned?
+
+It would bring back the casual-use scenarios which people liked, with the twist that you don&#39;t always wind up with a set variable (you&#39;d still have to use TRY to get that):
+
+    if x: select data item [
+        ;-- x is known set and not blank or false
+    ] else [
+        ;-- x may be unset, blank, or false
+    ]
+
+NULL could be the result of a failed ALL or ANY.  Again, you&#39;d still want to throw in a TRY if you were going to put it in a variable you wanted to test later.  But by having these constructs return null on failure, you could use ALL and ANY with ELSE, ALSO, !!...
+
+It would make the current hacks which allow nulls for DID, NOT, OR and AND not-hacky.
+
+### The One Sacrifice
+
+The balance of null tolerance other places has shown us that the &quot;safety&quot; aspects aren&#39;t really viable.  Nulls happen.  Where safety comes in is when you read from variables or when you put in asserts or ENSUREs or add type annotations to parameters for your functions.
+
+But there was a sort of an idea that by not blessing NULLs as falsey, there could be an established &quot;tristate&quot; in the system.  Unlike the case of PRINT inside the ALL above...which always wants to &quot;opt-out&quot;...what if you had some MAYBE-VOTE function that wanted to sometimes return truthy, sometimes return falsey, and sometimes abstain from a vote via NULL?  ELIDE doesn&#39;t cover that.
+
+Well, that&#39;s kind of weird, and none of these exist.  In fact the *one* case I had that *did* exist stopped working, because I didn&#39;t want NULLs to be the &quot;no vote&quot;, I wanted them to be effectively the &quot;only falsey value&quot; that could break an ALL-like construct, with all other values treated as &quot;truthy&quot;.
+
+Just to further the point on the subjectivity of this: it&#39;s come into question that if BLANK! is just &quot;the reified form of null&quot;, why would they have a difference in their conditional behavior.  What makes BLANK! so &quot;falsey&quot;?  Why isn&#39;t it &quot;neither-true-nor-false&quot; like null?
+
+### It&#39;s hard to really see the downside
+
+* I *know* that treating null as falsey will mean simpler code inside the core.
+
+* I *am nearly certain* that treating null as falsey will simplify user code.
+
+* Failures of the &quot;opt-out&quot; voting model for nulls led to pushing for errors in ANY and ALL, that has caused usages of DID and TRY that are cluttery.
+
+Can anyone speak up for the last time an error on a null really helped out?</description>
+    
+    <lastBuildDate>Tue, 12 Jun 2018 05:17:12 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/the-benefits-of-a-falsey-null-any-major-drawbacks/675.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The benefits of a falsey NULL (any major drawbacks?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Looking at things holistically, <strong>I think this is on the right track</strong>.</p>
+<p>...and it means that a lot of APIs that used to return BLANK! as their "out of band" value should be returning NULL instead.  This is particularly nice for the API, when things like MATCH and FIND react this way:</p>
+<pre><code>REBVAL *pos = rebRun("find", data, item, END);
+if (not pos) {
+    /* was NULL, so FIND failed... no rebRelease() needed... */
+}
+</code></pre>
+<p>Because NULLs arose from trying to rethink UNSET! (and were originally called 'void'), they've carried over that stigma of being "armed" and difficult to work with.  Whereas BLANK!s came from NONE! and were considered "nice".  Plus with the <strong>_</strong> form they became even more comfortable than <strong>#[none]</strong> (which in historical Rebol often confusingly displayed as just the word <strong>none</strong>)</p>
+<p>But BLANK!s aren't necessarily ideal as a failure result.  They each have identity.  You could have a block with 1000 blanks in it...each one uniquely addressed by a unique pointer, each with its own distinct NEW-LINE flag, etc.</p>
+<p>Yet NULL isn't a value, and can be distinguished with no false-positives from ANY-VALUE! by routines like ELSE and ALSO.  They don't need unique addresses, so C's NULL is used for it, which can be tested for from the API without a separate function call.</p>
+<p><strong>So what's not to like about NULL?</strong>  Isn't it punishment enough that non-type-annotated function parameters by default don't accept it, and it's not an ANY-VALUE! ?</p>
+<p>When routines with <em>"full-band"</em> return results <em>have</em> to use NULL to distinguish from an arbitrary ANY-VALUE!, why should routines with <em>"some-band, but not BLANK!"</em> break rank and use BLANK!, just because they can?  It's more consistent to standardize on NULL, and the API will thank you for it.</p>
+<h3>But here's the catch...</h3>
+<p>You knew there'd be a catch.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>As NULLs step up to the plate being the "light" failure signal we all need... evaporated by COMPOSEs, considered falsey by IFs and ALLs, vanishing in PRINTs... there may be one more thing you can't do with them (besides not putting them in blocks)...</p>
+<p><em>You shouldn't be able to assign them to variables.</em></p>
+<p>This will look a bit like a step back to historical Rebol, because it means <strong>x: ()</strong> would not be legal.  But by that token, <strong>x: all [... false]</strong> would not be legal, nor would <strong>x: find [a b] 'c</strong> be legal!  You could still use direct assignments of this form, but you'd have to be confident that it would succeed...(and not succeeding will be automatically tested for you, by virtue of the error you'll get in the assignment if it doesn't).</p>
+<p><em>(In other words, if you wrote <strong>x: all [...]</strong> it's effectively saying <strong>x: assert [all [...]]</strong>.  Because if you weren't sure they were all going to be truthy, you'd have had to handle the null result somehow, e.g. <strong>x: try all [...]</strong> or <strong>x: all [...] else [...]</strong> or <strong>x: all [...] !! 10</strong>.  Note again that <strong>if all [...] [...]</strong> is perfectly fine, as it's not trying to store that result in a variable, or an array slot.)</em></p>
+<p>So if you weren't sure of success, all of these cases would require being handled it in some way.  Either stick on a DID or a TRY... hook on an ELSE, or an OR, or whatever.  But you won't be able to put nulls into variables.</p>
+<p>There's even more cool things you might not have thought about, e.g. MAYBE.  Maybe is like the anti-DEFAULT, it doesn't bother to do an assignment if the right hand side is null or blank.  <strong>x: maybe find ...</strong> will leave x alone, for instance, if the FIND comes back null and not try to do the assignment.  It's really all rather clever.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<h3>Hence NULL's "hot potato" is "make a decision before storing".</h3>
+<p>This brings up some fairly existential questions of how you'd go about unsetting variables, and I have bigger thoughts on that.  One thought is that perhaps BLANK! is not so friendly after all...maybe variables that hold BLANK! give back NULL when you access them, and you can only get them with GET-WORD! else there's an error.  Because if they didn't hold blank they couldn't be fetched at all, you'd get a not bound error.  <em>so you can assume that a NULL coming back from a variable access means it held BLANK!</em>?</p>
+<p>The mechanics are still in the works.  But I'm trying to outline the path of how it's getting there.</p>
+          <p><a href="https://forum.rebol.info/t/the-benefits-of-a-falsey-null-any-major-drawbacks/675/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-benefits-of-a-falsey-null-any-major-drawbacks/675/2</link>
+        <pubDate>Mon, 11 Jun 2018 18:38:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-675-2</guid>
+        <source url="https://forum.rebol.info/t/the-benefits-of-a-falsey-null-any-major-drawbacks/675.rss">The benefits of a falsey NULL (any major drawbacks?)</source>
+      </item>
+      <item>
+        <title>The benefits of a falsey NULL (any major drawbacks?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>There's been an ongoing "shift in attitude" about NULL.</p>
+<p><strong>What has not changed:</strong> null is still "not a value".  You can't put it in a block.  And a variable can't "be null", it can only be unset...which you can find out about via <code>not set? 'varname</code>.  GET gives you null as a way of <em>signaling</em> the unset-ness, but that's different from saying the variable "holds a null value".</p>
+<pre><code>x: null
+if x = null [ ;-- errors on access of x
+    print "if a variable could actually 'be null', this would be legal"
+]
+</code></pre>
+<p><strong>What has changed:</strong> increased acceptance of null to mean "don't append anything" or "don't compose anything" or "don't print anything".  So it's not the extreme "hot potato" that it was at one point aiming to be.</p>
+<p>But it's still a slightly warm potato: it differs from BLANK! in the sense that operations won't generally accept it as a data source.  Non-mutating operations take blanks in and give nulls out.  <em>(e.g. <strong>select _ 'foo</strong> is null, while <strong>select null 'foo</strong> is an error--this helps keep error locality vs. collapsing entire chains without a deliberate TRY)</em></p>
+<p>And there's a pretty big stigma NULL will never avoid, by virtue of not being able to fetch it from a variable via "normal" variable access.</p>
+<h3>But what good is it to not let NULL be falsey?</h3>
+<p>I just tried implementing the proposal for making APPEND or COMPOSE of BLANK! a no-op unless you used /ONLY.  This has the nice property of <strong>compose [1 (any [...]) 2]</strong> being able to vaporize the ANY expression on failure.  But it also got me to thinking, why isn't ANY returning null in the first place when it doesn't find a truthy thing?</p>
+<p>The "big reason" was that people write <strong>if any [...] [...]</strong>, and null is "neither true nor false", so that would be an error should it return NULL.  <em>But in this day and age, what's the great argument for why null shouldn't be falsey?</em>  When it shifted from name/conception of "void" to the more fitting "null", that makes the suggestion more palatable.  Certainly NULL is falsey in many languages, C included.</p>
+<p>When the question of truthy/falsey of UNSET! was debated in the CureCode days, people looked at the behavior of:</p>
+<pre><code> all [
+     1 &lt; 2
+     print "got here"
+     3 &lt; 4
+ ]
+</code></pre>
+<p>There was a desire to not interrupt the ALL while injecting debug output.  Since PRINT returned an UNSET!, it wasn't counted.</p>
+<p>I thought the example was a bit contrived.  A change to PRINT (or whatever) so that it returned something (perhaps the PORT! it printed to?  The data it printed)? would throw this off.  Or if you were using some other routine, you'd have to say:</p>
+<pre><code> all [
+     1 &lt; 2
+     ((some-diagnostic-function ...) ())
+     3 &lt; 4
+ ]
+</code></pre>
+<p>With Ren-C there is ELIDE, that can be used generically in these situations:</p>
+<pre><code> all [
+     1 &lt; 2
+     elide (some-diagnostic-function ...)
+     3 &lt; 4
+ ]
+</code></pre>
+<p>The existence of ELIDE...and wanting to be careful to not blindly proceed in the case of things like failed selects...were incorporated into an argument for why ALL began treating nulls as errors.  But what if NULL was just plain old falsey, as far as conditionals were concerned?</p>
+<p>It would bring back the casual-use scenarios which people liked, with the twist that you don't always wind up with a set variable (you'd still have to use TRY to get that):</p>
+<pre><code>if x: select data item [
+    ;-- x is known set and not blank or false
+] else [
+    ;-- x may be unset, blank, or false
+]
+</code></pre>
+<p>NULL could be the result of a failed ALL or ANY.  Again, you'd still want to throw in a TRY if you were going to put it in a variable you wanted to test later.  But by having these constructs return null on failure, you could use ALL and ANY with ELSE, ALSO, !!...</p>
+<p>It would make the current hacks which allow nulls for DID, NOT, OR and AND not-hacky.</p>
+<h3>The One Sacrifice</h3>
+<p>The balance of null tolerance other places has shown us that the "safety" aspects aren't really viable.  Nulls happen.  Where safety comes in is when you read from variables or when you put in asserts or ENSUREs or add type annotations to parameters for your functions.</p>
+<p>But there was a sort of an idea that by not blessing NULLs as falsey, there could be an established "tristate" in the system.  Unlike the case of PRINT inside the ALL above...which always wants to "opt-out"...what if you had some MAYBE-VOTE function that wanted to sometimes return truthy, sometimes return falsey, and sometimes abstain from a vote via NULL?  ELIDE doesn't cover that.</p>
+<p>Well, that's kind of weird, and none of these exist.  In fact the <em>one</em> case I had that <em>did</em> exist stopped working, because I didn't want NULLs to be the "no vote", I wanted them to be effectively the "only falsey value" that could break an ALL-like construct, with all other values treated as "truthy".</p>
+<p>Just to further the point on the subjectivity of this: it's come into question that if BLANK! is just "the reified form of null", why would they have a difference in their conditional behavior.  What makes BLANK! so "falsey"?  Why isn't it "neither-true-nor-false" like null?</p>
+<h3>It's hard to really see the downside</h3>
+<ul>
+<li>
+<p>I <em>know</em> that treating null as falsey will mean simpler code inside the core.</p>
+</li>
+<li>
+<p>I <em>am nearly certain</em> that treating null as falsey will simplify user code.</p>
+</li>
+<li>
+<p>Failures of the "opt-out" voting model for nulls led to pushing for errors in ANY and ALL, that has caused usages of DID and TRY that are cluttery.</p>
+</li>
+</ul>
+<p>Can anyone speak up for the last time an error on a null really helped out?</p>
+          <p><a href="https://forum.rebol.info/t/the-benefits-of-a-falsey-null-any-major-drawbacks/675/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-benefits-of-a-falsey-null-any-major-drawbacks/675/1</link>
+        <pubDate>Sat, 09 Jun 2018 12:15:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-675-1</guid>
+        <source url="https://forum.rebol.info/t/the-benefits-of-a-falsey-null-any-major-drawbacks/675.rss">The benefits of a falsey NULL (any major drawbacks?)</source>
+      </item>
+  </channel>
+</rss>

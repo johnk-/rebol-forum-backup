@@ -1,0 +1,655 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Redbol - AltRebol</title>
+    <link>https://forum.rebol.info/c/domains/redbol/47</link>
+    <description>Topics in the &#39;Redbol&#39; category Issues regarding compatibility and emulation of Rebol2 and Red.</description>
+    
+      <lastBuildDate>Wed, 22 Sep 2021 18:11:42 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/domains/redbol/47.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>PATH! usage for Function Dispatch Only Unless in Redbol Mode</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>For a while now I've been a pretty big convert on the look of dots for member selection.  It's not just that it's more standard--I think it's visually better.  It also lets you be reassured that when you see a slash in a path, that the thing to the left of that slash was a function:</p>
+<pre><code>foo.bar.baz
+   ;
+   ; ^-- I may not know what foo.bar.baz is, but at least I know that
+   ; foo and foo.bar are *not* functions
+
+foo.bar.baz/mumble
+   ;
+   ; ^-- Under the convention that slashes are for refinements only, I
+   ; can tell the author intends that (foo.bar.baz) must be a function
+
+foo.baz.bar/
+   ;
+   ; ^-- With Ren-C's path generality, you can even decorate a case
+   ; without refinements to show it's a function.
+</code></pre>
+<h2>It Hasn't Been A <em>Rule</em>, but...</h2>
+<p>So far Ren-C has been allowing you to use slashes wherever you historically could.  So the new rules were only applying to dots--restricting them on not being usable on functions.</p>
+<pre><code>append.dup [a b c] [d] 2  ; this would cause an error, for instance
+</code></pre>
+<p>However, you could still pick members out of objects with slashes:</p>
+<pre><code>&gt;&gt; obj: make object! [field: 10]
+
+&gt;&gt; obj/field   ; not obj.field
+== 10
+</code></pre>
+<p>I had a feeling this might be prohibited eventually...though it would need to be possible to make Redbol emulation work.  So there'd have to be some kind of flag for allowing it.</p>
+<h2>...But Now, I Might Have A Good Reason To Enforce It</h2>
+<p>The reason is that in trying to do a good job of building an extensibility mechanism for member selection, it is difficult to make that mechanism able to communicate information about specialized functions in a "light" way.</p>
+<p>When pathing is done hardcoded in the evaluator, it can do little sneaky tricks to push the words of refinements onto a stack.  It doesn't have to create an entirely new specialized function.</p>
+<p>But once you're using a generic interface to usermode functions which can extend <strong><code>PICK*</code></strong> and <strong><code>POKE*</code></strong>, that interface has to speak in "reified" forms.  We have partial specialization so these refied forms exist... I just feel like what's happening in that case isn't "picking" or "poking".  And it's tying my hands to make anything efficient if we say that path dispatch runs through code which might be usermode.</p>
+<h2>The Flag Will Be Introduced Gradually</h2>
+<p>I've been experimenting with the flag turning itself on automatically, and giving you a warning.  So you only hear about it the first time.</p>
+<pre><code>&gt;&gt; obj: make object! [x: 10]
+
+&gt;&gt; obj/x
+The PATH! obj/x doesn't evaluate to an ACTION! in the first slot.
+SYSTEM.OPTIONS.REDBOL-PATHS is FALSE so this is not allowed by default.
+For now, we'll enable it automatically...but it will slow down the system!
+Please use TUPLE! instead, like obj.x
+== 10
+
+&gt;&gt; obj/x
+== 10
+</code></pre>
+<p>What happens when you enable the flag is that it actually turns any PATH! with no ACTION! in the first slot into a TUPLE!, and then permits you to use refinements in TUPLE!s like <code>append.dup</code>.  This is because I'm avoiding creating a separate extensibility mechanism for paths...it just does the not-easy-to-optimize extensibility.</p>
+<p>I haven't committed this, and I'd be phasing it in slowly.  But as it's phased in, the performance of paths for member selections vs. tuples will degrade.  So it's worth knowing about.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723</link>
+          <pubDate>Wed, 22 Sep 2021 18:11:42 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1723</guid>
+          <source url="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723.rss">PATH! usage for Function Dispatch Only Unless in Redbol Mode</source>
+        </item>
+        <item>
+          <title>Red changing FIND/MATCH to not default to /TAIL</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>Historically, the /MATCH option to FIND has implied returning the tail of the matched region.</p>
+<pre><code>rebol2&gt;&gt; find/match "abc" "ab"
+== "c"
+</code></pre>
+<p>That has been true despite the fact that there is a /TAIL option to FIND.  In trying to make FIND more orthogonal I have questioned this decision.</p>
+<p><strong><a href="https://github.com/red/red/issues/4943">Red has made the move to say you have to provide /TAIL with /MATCH, otherwise you get the head of the match</a></strong>.  So now:</p>
+<pre><code>red&gt;&gt; find/match "abc" "ab"
+== "abc"
+
+red&gt;&gt; find/match/tail "abc" "ab"
+== "c"
+</code></pre>
+<p>I can agree with the intent behind this, although I wonder if it should accompany a changing of the refinement name.  /MATCH doesn't really fit with the meaning of "match" as I've been using it, e.g.</p>
+<pre><code>&gt;&gt; match integer! 10
+== 10
+
+&gt;&gt; match integer! &lt;abc&gt;
+; null
+</code></pre>
+<p>So maybe something like FIND/AT or FIND/STAY or FIND/HERE...something along those lines.  Then /MATCH could be deprecated in a more structured way.</p>
+<p>But nope... they're pro breaking this for some reason.  Who am I to argue, especially given that I wanted it changed anyway?</p>
+<p>It does underscore that Redbol emulation will need Red and Bol modes.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/red-changing-find-match-to-not-default-to-tail/1654">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/red-changing-find-match-to-not-default-to-tail/1654</link>
+          <pubDate>Thu, 12 Aug 2021 06:52:35 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1654</guid>
+          <source url="https://forum.rebol.info/t/red-changing-find-match-to-not-default-to-tail/1654.rss">Red changing FIND/MATCH to not default to /TAIL</source>
+        </item>
+        <item>
+          <title>About the Redbol category</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>Issues regarding compatibility and emulation of Rebol2 and Red.</p>
+<p>It's generally a goal that Ren-C be able to bend in order to do most anything that Rebol2 or Red can do...with modest effort.  Pursuant to that goal is the <a href="https://forum.rebol.info/t/beginnings-of-the-redbol-module/755">Redbol module</a> to have an actual emulation of a reasonable compatible subset of the languages.</p>
+<p>More generally, this category could be for discussing anything related to Rebol2 or Red semantics or features.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/about-the-redbol-category/1312">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/about-the-redbol-category/1312</link>
+          <pubDate>Tue, 28 Jul 2020 08:47:40 +0000</pubDate>
+          <discourse:topicPinned>Yes</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1312</guid>
+          <source url="https://forum.rebol.info/t/about-the-redbol-category/1312.rss">About the Redbol category</source>
+        </item>
+        <item>
+          <title>Red&#39;s Design Issues Wiki</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>Here's a page posted on Red's GitHub:</p>
+<h2><a href="https://github.com/red/red/wiki/%5BLINKS%5D-Design-questions">Red Design Questions Wiki</a></h2>
+<p>I'm bookmarking it here, along with some quick review notes.</p>
+<h4>Vector &amp; matrix DSL design</h4>
+<p>No real comment, other than it's interesting that the order of the page ranks things as "most influential".  While in Ren-C, R3-Alpha's VECTOR! has been removed from the core (you can build a Ren-C without it).  Hence it isn't one of the built-in types identified by a byte in the header.  So it's <a href="https://forum.rebol.info/t/user-defined-datatype-discussion/1203">a primordial test of a custom type</a>, and that is the main lens through which its relevance is considered.</p>
+<p>I'm sure if they want plenty of opinions on VECTOR! they can talk to Oldes.</p>
+<h4>Parse DSL: simplify  <code>fail</code>  rule to  <code>[end skip]</code> ,  <code>break</code> / <code>reject</code>  to return success/failure  <em>from the loop (while/any/some)</em> ,  <code>break now</code>  as an emergency exit from the loop, bring  <code>also</code>  into parsing</h4>
+<p>END SKIP as a way to force a fail is an amusing idea.  But much improvedly, Ren-C just gives meaning to LOGIC! true in PARSE as "keep parsing" and LOGIC! false as "fail here".  (See below for cool ramifications of that.)  So you can fail just by saying FALSE.  It takes away from the ability to match LOGIC! values literally, but you can't match INTEGER! values or BLOCK! values literally without a "QUOTE".  And with the <a href="https://forum.rebol.info/t/quoted-arrives-formerly-known-as-lit-bit/995/2">generic quoting Red argues against</a> you've got more convenience in that area, e.g. <strong>'#[true]</strong> or <strong>'[a b c]</strong> or <strong>'3</strong>.</p>
+<p>It is good for naming reasons, too since FAIL has very specific meaning in Ren-C (way to raise errors, <strong>fail "msg"</strong> is nicer than <strong>do make error! "msg"</strong> and provides a dialecting opportunity).</p>
+<p>The rest I'd have to look at in more detail to have an opinion on.</p>
+<h4>Parse DSL: rules with arguments</h4>
+<p>If I read this right...Ren-C has all this and more with GET-GROUP!.  <img src="https://forum.rebol.info/images/emoji/twitter/boxing_glove.png?v=9" title=":boxing_glove:" class="emoji" alt=":boxing_glove:">  This evaluates much like a plain GROUP! in a PARSE...but instead of the result vaporizing...it dynamically composes itself into the parse stream.  That makes it a full superset of PARSE's unusual IF...since in Ren-C LOGIC! true means "keep parsing" and LOGIC! false means "rule fails".  Thus <strong>:(mode = 'foo)</strong> gets you the continue-or-not you want.  But far more open-ended than that, especially since NULL vaporizes and continues the PARSE as #[true] would.  It's all kinds of keen:</p>
+<p><a href="https://forum.rebol.info/t/get-group-s-in-parse-mean-execute-and-splice-as-rule/968">GET-GROUP!s in PARSE mean execute-and-splice-as-rule</a></p>
+<p>So if you want a dynamically generated rule as a function, just say <strong>:(my-rule-maker arg1 arg2)</strong> and it will be spliced in.</p>
+<p>I consider that bit solved.  But the part that isn't solved is saving you the trouble of capturing material to pass separately...kind of as if you could extend PARSE with your function acting kind of like a keyword.  Imaginative pseudocode:</p>
+<pre><code> &gt;&gt; print-reverse: parse-func [x] [print reverse x]
+ &gt;&gt; parse "aaabcdef" [3 "a" print-reverse [to end]]
+ fedcb
+</code></pre>
+<p>e.g. the "argument fulfillment" phase is using parse rules--and not the evaluator--to do it.  But where I lean in this direction is asking about whether there is a model by which PARSE can be extensible in the same way DO of a BLOCK! is extensible... some kind of analogue to regular functions that lets you batch together "native" PARSE extensions (like THRU or INTO) along with user-added ones that speak the protocol (as if someone could add COLLECT after-the-fact).</p>
+<blockquote>
+<p><strong>UPDATE:</strong> This has been <a href="https://forum.rebol.info/t/introducing-uparse-the-hackable-usermode-parse/1529">hit with a bullseye by UPARSE</a>...and the problem of calling normal functions while passing them captured parse material is covered by <a href="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608">the ACTION! combinator</a></p>
+<pre><code> &gt;&gt; print-reverse: func [x] [print reverse x]
+ &gt;&gt; uparse "aaabcdef" [3 "a" print-reverse/ [across to &lt;end&gt;]]
+ fedcb
+</code></pre>
+<p><em>Yes, that actually works in UPARSE!</em></p>
+</blockquote>
+<h4>Core: open problems of the object design</h4>
+<p>Tip of the iceberg of the problems with the model.  <img src="https://forum.rebol.info/images/emoji/twitter/ice_cube.png?v=9" title=":ice_cube:" class="emoji" alt=":ice_cube:">  While Ren-C inherited the same object-model madness, techniques like generic quoting <a href="https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997">are making inroads representationally</a>, and things like <a href="https://github.com/metaeducation/ren-c/pull/727">derived binding</a> are aiding classic problems:</p>
+<blockquote>
+<p><em>"Derived binding is an interesting design that overcomes a serious weakness of historical Rebol combinatorics (where 1000 instances of an object with 50 member functions each had to make deep copies of the bodies of each function so the words in the bodies would point to the instance, so you're making 50,000 deep copies just to create those 1000 objects)."</em></p>
+</blockquote>
+<p>For a simple example, see <a href="https://github.com/metaeducation/ren-c/blob/3183acf3ee59e8ebc316ca5afeed09d493de8234/tests/datatypes/object.test.reb#L115">"O-Big"</a></p>
+<h4>Core: efficient vector arithmetic</h4>
+<p>Regarding their "<a href="https://github.com/red/red/issues/2216">Adding a number to a vector changes the vector itself #2216</a>", I have proposed a concept whereby operations like ADD and MULTIPLY follow Rebol's "mutate by default" rules, and PLUS (infix alias +) and TIMES (infix alias *) finesse the idea of not mutating.  These ideas originated in design for <a href="https://forum.rebol.info/t/planning-ahead-for-bignum-arithmetic/623">efficient BigNum arithmetic</a>, which shares many of the same issues.</p>
+<p>Devil is in the details there, but it proposes building things on a model that is foundationally mutating.</p>
+<h4>VID DSL: automatically bind (literal only?) actor &amp; reaction bodies to the face?</h4>
+<p>N/A.</p>
+<h4>Core: loop return values</h4>
+<p>Ren-C has a systemic <a href="https://forum.rebol.info/t/the-simple-yet-powerful-magic-of-the-loop-result-protocol/609">loop return result protocol</a>.  All loops that BREAK return NULL, and there is no BREAK/RETURN.  If you wish to violate the protocol, you do so with THROW to a CATCH.</p>
+<p>This is a helpful protocol for building your own loop constructs out of other loops...without having to reach in and figure out how to hook their BREAK.  Being able to tell from the outside if the loop was interrupted far outweighs the idea of BREAK/RETURN, and null isotopes are an idea well worth it to ensure that NULL keeps its unique status for representing break.</p>
+<h4>Core: behavior of series access outside the data boundaries</h4>
+<p>I talk some about this in <a href="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141">"Where the Series Ends"</a> <em>(for you young folks, that's a <a href="https://en.wikipedia.org/wiki/Where_the_Sidewalk_Ends">Shel Silverstein reference</a>)</em>.</p>
+<h4>VID DSL: should it allow to override already defined actors (e.g.  <code>base on-down [probe 1] [probe 2]</code> )?</h4>
+<p>N/A</p>
+<h4>Core: how to solve inelegancies and dangers of  <code>error? try</code> ,  <code>attempt</code>  and  <code>catch</code>  on  <em>arbitrary</em>  code?</h4>
+<p>As usual, it is hiiamboris asking the good questions.  Don't know the answers, but I'll offer a thought here... that conventional error-trapping should not conflate things that arise from "typos" with explicitly raised errors:</p>
+<pre><code>red&gt;&gt; attempt [print "blah" do make error "On purpose!"]
+blah
+== none
+
+red&gt;&gt; attempt [prnt "oops" print "But I didn't mean to raise an error"]
+== none  
+</code></pre>
+<p>So beyond Boris's example, it shows that the already sketchy nature of error handling via exceptions is turned into even more of a minefield in Redbol.  Again: I don't have answers, I just appreciate the questions.</p>
+<h4>Web: how should cached versions of remote files be named (considering user-friendliness, pathname length, sanitization of invalid chars)?</h4>
+<p>Beyond the scope of current concerns, and likely not all that relevant as the main target is Wasm.</p>
+<h4>Core: should operators use the result from funcs with literal arguments? (if  <code>f: func [:x][x * 2]</code> , should  <code>f 1 + 2</code>  be equivalent to  <code>(f 1) + 2</code> ?)</h4>
+<p>Yes.  I won't delve into details on this esoteric (-seeming) point...other than to say that several features I'm very pleased with depend on this behavior.  <em>(For example: <a href="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020">soft-quoted branching</a>.)</em>  I find no compelling points in any counter-argument worth sacrificing the related features.</p>
+<h4>Core: should percent type allow scientific notation, and should it be constrained in range?</h4>
+<p>Don't care.</p>
+<h4>VID DSL: should  <code>panel</code>  face draw a  <code>text</code>  facet on it?</h4>
+<p>N/A</p>
+<h4>Core: do we want  <code>/deep</code>  refinement for  <code>take</code> ?</h4>
+<p>Doesn't seem like the worst idea.  But I think the better angle is just to make sure that even if TAKE didn't have it, that someone who wanted it could make it easily.  So <a href="https://forum.rebol.info/t/augment-add-parameters-and-refinements-after-the-fact/1216">features like AUGMENT</a> are geared in this direction.</p>
+<h1>Historical questions &amp; explanations</h1>
+<h4>Arguments on why paths evaluate picked items (so-called active accessors)</h4>
+<p>It's a reasonable-sounding argument that it is "unlikely" that you want <strong>block/1</strong> to run the first function in a block.  But mechanically it's the simpler-seeming rule.  I guess it folds into a large part of the sketchiness that is path-processing.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<p>I will say that Ren-C's "get-pathing" and PICK-ing, and "set-pathing" and POKE-ing, are unified and run under the same dispatcher.  So <strong>:path/1</strong> and <strong>pick path 1</strong> are the same, and <strong>:path/x</strong> and <strong>pick path 'x</strong> are the same, for whatever those things happen to be.  There's not a separate codebase for getting paths from PICK or setting paths from POKE.  Hence it's called "path picking" and not "path selection".</p>
+<h4>Command line argument parsing rules</h4>
+<p><a href="https://github.com/metaeducation/ren-c/issues/996">This previously crossed my radar.</a>  If they do the work of writing test cases, sounds great.  Better them than me.</p>
+<h4>Why word and a single-word path are different (despite the visual similarity)</h4>
+<p>They shouldn't be, and single-word PATH!s should be outlawed...as WORD!s with all spaces are.  Ren-C has implemented PATH! immutability (at the "top level")...which isn't that unprecedented, as it makes them more parallel to TUPLE!.  By making paths immutable, it's possible to enforce a set of rules on them at the time of their creation (e.g. no PATH!s in their top level, that aren't inside GROUP!s, no FILE!s or URL!s, just GROUP!s/BLOCK!s/WORD!s/INTEGER!s etc.).</p>
+<p>If this sounds constraining, consider the WORD! analogy again.  Making a PATH! with a PATH! in it like having a WORD! with a slash in it.  When things are immutable you have a moment of creation to enforce your check and then you just don't worry about it.  It works for WORD!, why not PATH!?</p>
+<p>(You can still cheaply alias PATH!s via AS to get a BLOCK!...but the BLOCK! you get is simply read-only.  With "UTF-8 Everywhere" you can also alias WORD! as a string via AS, but once again the resulting value will be read-only.  <a href="https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186">You can even alias them all as BINARY!</a>, as in Rebol2.  :-P)</p>
+<p>The idea that PATH!s are some kind of generic "ANY-BLOCK!" is not all that compelling.  DocKimbel himself has complained about people wanting long or multi-line paths.  If you really want to mutate a path freely and promise not to end in a bad state, then COPY AS BLOCK! your path...muck with it, and then AS PATH! it (which will mark the underlying array read only, and do an integrity check that you didn't reduce it to one word).</p>
+<p><em>(Overall this ties into great work done in Ren-C on PATH!, which includes generalizing REFINEMENT! so there isn't just <strong><code>/a</code></strong> but also <strong><code>a/</code></strong> and <strong><code>a//b</code></strong> ... a BLANK! in a PATH! is simply not rendered.  The immutability of paths means that even though <strong><code>/a</code></strong> is a 2-element path with a blank in the first slot, it can still be represented in one cell and not worry about being unable to handle mutations.  See <a href="https://forum.rebol.info/t/heart-bytes-explained/1008">Heart <img src="https://forum.rebol.info/images/emoji/twitter/heart.png?v=9" title=":heart:" class="emoji" alt=":heart:"> Bytes</a>)</em></p>
+<h4>Core: :get-word function argument evaluation semantics: R2- or R3-like? (final?)</h4>
+<p>There absolutely has to be <em>some</em> way to literally get a symbol/value in the position, regardless of what it looks up to.  I don't know if I'm in love with the notation for <strong>:x</strong> for unescapable quoting and <strong>'x</strong> for escapable quoting, but that's a different question.</p>
+<h4>Core: how to allow maps to have  <code>none</code>  values?</h4>
+<p>Some day Red will realize how much they miss out on by not having NULL.  I guess it's kind of like societies that never grokked the invention of zero.</p>
+<p><a href="https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249">NULL, BLANK!, VOID!: History Under Scrutiny</a></p>
+<h4>Core: how money datatype equality and comparison rules should work?</h4>
+<p><a href="https://www.youtube.com/watch?v=qMkkfuSizc4">It's like the Joker says...</a></p>
+<h4>Core: what should empty  <code>any []</code>  and  <code>all []</code>  return?</h4>
+<p>Empty ANY returns NULL.  (But if you don't have that, I guess a NONE! will have to do.)</p>
+<p>Empty ALL returns <em>a ~void~ isotope</em>.  This means people who care about the actual value will get something that is kind of ornery and indicative that there was nothing there, whereas those who only care about the lack of failure can react with THEN and ELSE.</p>
+<p>I think the void isotope helps represent something that doesn't indicate failure (as NULL would) yet still doesn't synthesize a value, as coming up with logic #[true] would.  It seems a good case of being in limbo...which is just what isotopes are for...and it communicates the situation honestly.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/reds-design-issues-wiki/1282">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/reds-design-issues-wiki/1282</link>
+          <pubDate>Sat, 06 Jun 2020 02:03:23 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1282</guid>
+          <source url="https://forum.rebol.info/t/reds-design-issues-wiki/1282.rss">Red&#39;s Design Issues Wiki</source>
+        </item>
+        <item>
+          <title>Analogue to Rebol2&#39;s Hidden Parameters</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>Rebol2 had the property that any refinements after a local would not show up in HELP...but still be available:</p>
+<pre><code>rebol2&gt;&gt; foo: func [arg /local loc /bar baz] [
+    print ["Unsurprisingly:" arg]
+    if bar [print ["Surprise:" baz]]
+]
+
+rebol2&gt;&gt; help foo
+USAGE:
+    FOO arg
+
+DESCRIPTION:
+    (undocumented)
+    FOO is a function value.
+                           ; &lt;-- look, no /BAR...
+ARGUMENTS:
+     arg -- (Type: any)
+
+rebol2&gt;&gt; foo/bar "Ordinary argument." "Hidden refinement!"
+Unsurprisingly: Ordinary argument.
+Surprise: Hidden refinement!
+</code></pre>
+<p>It's actually just exploiting the fact that HELP stops printing out everything after /LOCAL in the spec block.</p>
+<p>While it may seem like a loophole that gave rise to a useless feature, <em><strong>there actually is a reasonable use case for functions having out-of-band arguments.</strong></em></p>
+<p>The use case is when a function recurses, and wants to pass some private state into the recursion.  If you try to do this in C or some other language, you have to write two functions with two different interfaces.  Simplistic example:</p>
+<pre><code>fiveprint-core: func [value depth] [
+    print [value]
+        if depth &lt;&gt; 0 [
+            fiveprint-core value (depth - 1)
+        ]
+    ]
+
+fiveprint: func [
+    {Print a value five times (but use recursion to do it...)}
+    value
+][
+    fiveprint-core value 5
+]
+</code></pre>
+<p>Having a way to slip in hidden state gives you another option, <em>and it's an option that doesn't make you replicate the interface twice</em>.  This FIVEPRINT only takes one argument, but imagine if it had ten arguments with types and descriptions...and it's very helpful to not have to repeat that in a second function with a few extra internal parameters:</p>
+<pre><code>fiveprint: func [
+    {Print a value five times (but use recursion to do it...)}
+    value
+    /local /recurse depth
+][
+     either recurse [
+         if depth &lt;&gt; 0 [
+             print [value]
+             fiveprint/recurse value (depth - 1)
+         ]
+     ][
+         fiveprint/recurse value 5
+     ]
+]
+</code></pre>
+<h2>Ren-C Has Light-Years More Tools, but How To Apply Them Here?</h2>
+<p>If we didn't clear local variables during <a href="https://trello.com/c/Bu40ecLC" rel="nofollow noopener">tail-calls</a>, you could slip state to a recursion that way.  I'm not crazy about the idea of having locals be anything but null at the outset of any call, though.</p>
+<p>Maybe REDO could offer a refinement to request the locals be kept as-is (or name specific ones to keep?)</p>
+<p>It's a low-priority feature, but I had to document what it was for Redbol...and I figured having a post to talk about it was better than writing an essay there.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/analogue-to-rebol2s-hidden-parameters/1273">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/analogue-to-rebol2s-hidden-parameters/1273</link>
+          <pubDate>Fri, 10 Apr 2020 15:13:24 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1273</guid>
+          <source url="https://forum.rebol.info/t/analogue-to-rebol2s-hidden-parameters/1273.rss">Analogue to Rebol2&#39;s Hidden Parameters</source>
+        </item>
+        <item>
+          <title>Redbol Emulation Runs %pdf-maker.r...and now on the web!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>The <a href="https://forum.rebol.info/t/beginnings-of-the-redbol-module/755">Rebol2-ish-or-Red emulation layer "Redbol"</a> now runs on the web REPL!  There's a lot of caveats at this early stage, but it's still pretty interesting.</p>
+<p>It was first developed to build the static <code>hostilefork.com</code> site, using the aging codebase from my early attempts at dialecting.  (The code is now being deliberately held back, so I have an incentive to make the Redbol layer work.)</p>
+<p>Now it's run on its second not-insignificant-codebase, Gabriele's %pdf-maker.r... <a href="http://www.rebol.org/view-script.r?script=pdf-maker.r" rel="nofollow noopener">(the older, single-file version on the rebol script archive)</a>.  With only minor modifications, it successfully made a PDF from the dialect input:</p>
+<pre><code>layout-pdf [[textbox ["This is some text."]]]
+</code></pre>
+<p>(With that working, I'm now looking at questions of how to run it with <em>zero</em> modifications.)</p>
+<p>Despite the small size of the input, it does exercise a lot of the code paths from start to finish to make a PDF file.  I don't know that the rest of it (except possibly IMAGE! support) would exercise all that much more of the system.</p>
+<p>Some points to raise:</p>
+<ul>
+<li>
+<p><strong>The emulation is relatively slow.</strong>  The focus is on understanding what the compatibility issues are, and not on optimization.  Though I've mentioned that with Redbol as an extension, it would be able to do some of its work through natives.</p>
+</li>
+<li>
+<p><strong>Redbol still takes over the whole user context</strong>.  It leaves all the lib definitions alone, but then skins the user context with its emulation.  But this means any other code you run in the user context will get the Rebol2 rules.  So it doesn't work with modules or running normal Ren-C code side-by-side.  What we'd rather do is have you put your code in a module and say "this uses Redbol" and let just that module get the definitions...which is the kind of thing the module system <em>should</em> be able to do, but it was missing a lot of these design points.  So this is a definite next step.</p>
+</li>
+<li>
+<p><strong>We have to decide about Latin1 Redbol support</strong>.  Just because the default for LOAD/SAVE was Latin1 before, is that really what we want Redbol to do?  This PDF case is an odd one because it actually is using the Latin1 encoding for an embedded table with font metrics information.  Rather than modify Redbol's LOAD to take in and spit out Latin1, I just converted the table to UTF-8 and re-encoded it.  Is this the better idea than bending over backwards on this compatibility point?  Would people probably <em>prefer</em> a UTF-8 Everywhere Redbol?</p>
+</li>
+<li>
+<p><strong>R3-Alpha bitsets were incomplete and buggy</strong>.  There was <a href="http://www.rebol.net/r3blogs/0114.html" rel="nofollow noopener">awareness of the issues involved in the representation that was chosen</a>.  Even so, the code to handle it was not written.  I don't know exactly where on the schedule something like that is supposed to go--it would be nice if someone who was not me could write a coherent solution and do all the tests for it.  It's a fairly standalone task.  Anyway, the PDF maker uses them--I hacked around the case that was using the negated bitsets.</p>
+</li>
+<li>
+<p><strong>FORM is pretty different</strong>.  Decimal numbers print to a different number of digits in Rebol2 vs. R3-Alpha and Red--which is frustrating in the PDF output because hex differs get thrown off and think there's more difference than there really is.  ISSUE! formed without its # instead of with it.  I have not been pleased that <strong>form [1 2 [3 4]]</strong> is "1 2 3 4" while <strong>append "" [1 2 [3 4]]</strong> is "123 4"...there's just a lot of random-seeming behavior, where it needs to be straightened out.  But in an ad-hoc and as-needed manner, I'm adding the differences in behavior to Redbol.  This makes good documentation of the behavior, if nothing else.</p>
+</li>
+<li>
+<p><strong>Things that depend on inheritance have to use METHOD</strong>.  It used to be that if you had any function that happened to be referenced from an object, deriving from that object would cause it to rebind.  It also deep copied every function in the process!  Design-wise, Ren-C's METHOD uses the strategy of looking to its left to see what set-word! you are assigning it to, and then binds the generated function to the context of that set-word!.  Right now this means such instances have to be changed to METHOD.</p>
+</li>
+</ul>
+<p>On this latter point, I'm getting to wonder if we do need to make enfixedness a property of ACTION!s instead of words.  That way FUNC and DOES could be enfix and having some smarts about their left hand side being a skippable SET-WORD!...without people using them needing to know they are enfix.  With these tricks it seems that it's coming to be so entwined in a function's meaning that for many of them, you can't really divorce their enfixedness from the definition.</p>
+<p>Back when trying to avoid a separate OP! datatype, I was wary of the bit living in the function at all.<br>
+As a sample concern: I was thinking about a world where all functions were potentially enfix, but maybe would ignore their left argument.  Yet if everything were enfix there would be no EVALUATE (e.g. "DO/NEXT")...because these fake enfix functions would be forcing the entire operation to completion.  But there's been mountains of change since these questions were looked at...we have <code>&lt;skip&gt;</code>-able arguments and a lot more understanding.</p>
+<p>But anyway, long story short is: Redbol has had its second demo codebase going and is on the web!</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/redbol-emulation-runs-pdf-maker-r-and-now-on-the-web/1142">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/redbol-emulation-runs-pdf-maker-r-and-now-on-the-web/1142</link>
+          <pubDate>Tue, 09 Apr 2019 05:05:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1142</guid>
+          <source url="https://forum.rebol.info/t/redbol-emulation-runs-pdf-maker-r-and-now-on-the-web/1142.rss">Redbol Emulation Runs %pdf-maker.r...and now on the web!</source>
+        </item>
+        <item>
+          <title>Having unrefined fun: REDBOL-FUNC &amp; REDBOL-FUNCTION</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>I have implemented <a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120">Pure and Refined: Simplifying Refinements to One or Zero Args</a>.  It's so much better in so many ways...usermode and internal...that it's essentially a bug that Rebol ever did it any other way.</p>
+<p>Despite being a significant change, it's pretty easy to update client code to.  The majority of refinements don't actually take arguments in the first place--so there's nothing you need to do for those.  If a refinement took an argument but didn't give a datatype for it, you now have to...it's the type block's presence that indicates it needs an argument at all.  But maybe rather than just slapping <strong>[any-value!]</strong> on, it would be a good time to actually annotate with what the expected types are.</p>
+<p>Because there's a goal to be able to emulate Rebol2/Red style in usermode, I decided that before committing the change I would update the Redbol emulation.  This would process a function defined in the historical way to a new spec and body for the new rules.  <em>(Though note that Redbol will be an extension, and fundamental transformations like this would be rewritten as natives--in whole or in part.)</em></p>
+<p>Nothing too fancy...it transforms the ANY-WORD! refinement arguments into SET-WORD!s, and then when the body runs it moves the value from the refinement into the local and sets the refinement's variable to true or false.  A more complex one that allowed multiple refinement arguments would have to be variadic...I'm interested in the workings of that but it's low priority considering everything else.</p>
+<p>Technique-wise, what I really like is how smooth it's getting to add set-ness/get-ness/lit-ness with COMPOSE:</p>
+<pre><code>insert body compose/deep [
+    (argument): :(refinement)
+    if not blank? :(refinement) [(refinement): true]
+]
+</code></pre>
+<p>REFINEMENT is a PATH! in this case (as /foo is a path).  While such paths with blanks at the head are inert, their GET-PATH! and SET-PATH! forms are active, so <strong>/foo:</strong> acts just like <strong>foo:</strong> and <strong>:/foo</strong> acts just like <strong>:foo</strong>.  Scenarios like this one motivate that.</p>
+<p>Another thing that I'm getting comfortable with is the no-op status of NULL when used with things like the value to APPEND or the value to KEEP.  Historically I had some mixed feelings about it, but as NULL has become the true "non-thing" parallel to what NONE! was trying to signal, it would be a real waste to not be able to use its non-thing-ness.  And when you're doing operations like a REPLACE in a block and want to actually replace with nothing, a BLANK! won't do.  When you take that to its logical conclusion you realize that something like <strong>if keep match text! value [...]</strong> is a good thing.  VOID! is there to fill in the gaps if you want to have an "ornery" error-triggering value.</p>
+<p>Anyway, this is just an example of how the state of everyday coding is evolving for the better.  It's a non-trivial function to write, but can be written without feeling in the dark about edge cases.</p>
+<p>This includes the other parts of the transformation, like dealing with <code>/extern</code> on function, or making it so you can mutate the body by tweaking the <code>&lt;const&gt;</code> marker out of the spec for the <code>body</code> parameter.  It's actually working in practice, and I just ran the Rebol2-ish script to build <code>hostilefork.com</code> with it!</p>
+<pre><code>rewrite-spec-and-body: function [
+    spec "(modified)" [block!]
+    body "(modified)" [block!]
+][
+    ; R3-Alpha didn't implement the Rebol2 `func [[throw catch] x y][...]`
+    ; but it didn't error on the block in the first position.  It just
+    ; ignored it.  For now, do the same in the emulation.
+    ;
+    if block? first spec [take spec]  ; skip Rebol2's [throw]
+
+    spool-descriptions-and-locals: does [
+        while [match [text! set-word!] first spec] [
+            spec: my next
+        ]
+    ]
+
+    while [not tail? spec] [
+        refinement: try match path! spec/1
+
+        ; Refinements with multiple arguments are no longer allowed, and
+        ; there weren't many of those so it's not a big deal.  But there
+        ; are *many* instances of the non-refinement usage of /LOCAL.
+        ; These translate in Ren-C to the &lt;local&gt; tag.
+        ;
+        if refinement = lit /local [
+            change spec &lt;local&gt;
+            refinement: _
+        ]
+
+        spec: my next
+        if not refinement [continue]
+
+        if tail? spec [break]
+        spool-descriptions-and-locals
+        if tail? spec [break]
+
+        if not argument: match [word! lit-word! get-word!] spec/1 [
+            continue  ; refinement didn't take args, so leave it alone
+        ]
+        take spec ; don't want argument between refinement + type block
+
+        if not tail? spec [spool-descriptions-and-locals]
+
+        ; may be at tail, if so need the [any-value!] injection
+
+        if types: match block! first spec [  ; explicit arg types
+            spec: my next
+        ]
+        else [
+            insert/only spec [any-value!]  ; old refinement-arg default
+        ]
+
+        append spec as set-word! argument  ; SET-WORD! in specs are locals
+
+        ; Take the value of the refinement and assign it to the argument
+        ; name that was in the spec.  Then set refinement to true/blank.
+        ;
+        ; (Rebol2 missing refinements are #[none], or #[true] if present
+        ; Red missing refinements are #[false], or #[true] if present
+        ; Rebol2 and Red arguments to unused refinements are #[none]
+        ; Since there's no agreement, Redbol goes with the Rebol2 way,
+        ; since NONE! is closer to Ren-C's BLANK! for unused refinements.)
+
+        insert body compose/deep [
+            (argument): :(refinement)
+            if not blank? :(refinement) [(refinement): true]
+        ]
+
+        if tail? spec [break]
+        spool-descriptions-and-locals
+        if tail? spec [break]
+
+        if extra: match any-word! first spec [
+            fail [
+                {Refinement} refinement {can't take more than one}
+                {argument in the Redbol emulation, so} extra {must be}
+                {done some other way.  (We should be *able* to do}
+                {it via variadics, but woul be much more involved.)}
+            ]
+        ]
+    ]
+
+    spec: head spec  ; At tail, so seek head for any debugging!
+
+    ; We don't go to an effort to provide a non-definitional return.  But
+    ; add support for an EXIT that's a synonym for returning void.
+    ;
+    insert body [
+        exit: specialize 'return [set/any (lit value:) void]
+    ]
+    append spec [&lt;local&gt; exit]  ; FUNC needs it (function doesn't...)
+]
+
+; If a Ren-C function suspects it is running code that may happen more than
+; once (e.g. a loop or function body) it marks that parameter `&lt;const&gt;`.
+; That prevents casual mutations.
+;
+ ; !!! See notes in RESKINNED for why an ADAPT must be used (for now)
+
+func-nonconst: reskinned [
+     body [block!]  ; no &lt;const&gt; tag
+] adapt :func []
+
+function-nonconst: reskinned [
+    body [block!]  ; no &lt;const&gt; tag
+] adapt :function []
+
+
+redbol-func: function [
+    return: [action!]
+    spec [block!]
+    body [block!]
+][
+    spec: copy spec
+    body: copy body
+    rewrite-spec-and-body spec body
+
+    return func-nonconst spec body
+]
+
+redbol-function: function [
+    return: [action!]
+    spec [block!]
+    body [block!]
+    /with [object! block! map!]  ; from R3-Alpha, not adopted by Red
+    /extern [block!]  ; from R3-Alpha, adopted by Red
+][
+    if block? with [with: make object! with]
+
+    spec: copy spec
+    body: copy body
+    rewrite-spec-and-body spec body
+
+    ; The shift in Ren-C is to remove the refinements from FUNCTION, and
+    ; put everything into the spec dialect...marked with &lt;tags&gt;
+    ;
+    if with [
+        append spec compose [&lt;in&gt; (with)]  ; &lt;in&gt; replaces /WITH
+    ]
+    if extern [
+        append spec compose [&lt;with&gt; ((extern))]  ; &lt;with&gt; replaces /EXTERN
+    ]
+
+    return function-nonconst spec body
+]</code></pre>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137</link>
+          <pubDate>Thu, 04 Apr 2019 21:26:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1137</guid>
+          <source url="https://forum.rebol.info/t/having-unrefined-fun-redbol-func-redbol-function/1137.rss">Having unrefined fun: REDBOL-FUNC &amp; REDBOL-FUNCTION</source>
+        </item>
+        <item>
+          <title>Beginnings of the &quot;Redbol&quot; Module</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>There have been three areas of backwards compatibility effort so far:</p>
+<ul>
+<li>
+<p><strong>r3-legacy</strong> - This started as a collection of runtime switches and shim code to revert Ren-C to act like R3-Alpha.  Over time the runtime switches were phased out, as more and more adaptation could be accomplished in usermode.</p>
+</li>
+<li>
+<p><strong>warnings</strong> - Various constructs were changed to offer warnings or errors.  So rather than UNSET? just start acting completely different, it gave a deprecation message.</p>
+</li>
+<li>
+<p><strong>r3-future</strong> - This is a shim which would allow an R3-Alpha to be used for bootstrap, so that the bootstrap code could be written in more modern/idiomatic Ren-C.</p>
+</li>
+</ul>
+<hr>
+<p>I've gone ahead and factored out r3-legacy to its own file, <a href="https://github.com/metaeducation/ren-c/blob/master/scripts/redbol.reb" rel="nofollow noopener">%redbol.reb</a> -- the renewed focus of this will be to be Rebol2/Red compatibility.</p>
+<p>It's not a module yet, but it makes a pretty good pathological test case of a module...due to how much it alters the system.  It wants to export something like UNSET? with the "old" meaning (similar to NULL?), while at the same time use the current meaning within its own implementation.  Right now I've just boxed all the definitions inside of something called EMULATE which binds it into lib, but modules may need to offer support for this kind of situation more generally.</p>
+<p>Then I've broken out the warnings into <a href="https://github.com/metaeducation/ren-c/blob/master/scripts/r2warn.reb" rel="nofollow noopener">%r2warn.reb</a>.  There really is overlap with what knowledge it takes to emulate Rebol2 along with what it would take to warn someone writing to new conventions where something might have a confusing new behavior.  So it would be nice to have whether there is emulation, warnings, or both... just as options on %redbol.reb.  But right now modules don't do parameterizations (beyond versioning) so let's hold that thought.</p>
+<p>With the direction headed toward emulation and legacy support coming from files outside the core, I've gone ahead and bitten the bullet and pulled all the support for things like PAREN! or FOREACH or other things.  They "weren't causing any trouble", but they were cluttering things.  I'd like to see any hypothetical user who would be depending on those definitions to be hacking on %redbol.reb, to be able to pick all or part of what they wanted...and try and start getting the core tightened up so it's easy to see what's there.</p>
+<h3>There's some really impressive stuff going on here</h3>
+<p>When you look at the code, it's really pretty awesome.  Even something small, like <a href="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751">the change to the splicing behavior</a>:</p>
+<pre><code>oldsplicer: helper [
+    func [action [action!]] [
+        adapt :action [
+            all [not only | any-array? :series | any-path? :value] then [
+                value: as block! value ;-- guarantees splicing
+            ]
+            ;-- fall through to action's normal implementation
+        ]
+    ]
+]
+
+append: emulate [oldsplicer :append]
+insert: emulate [oldsplicer :insert]
+change: emulate [oldsplicer :change]
+</code></pre>
+<p>Ren-C's behavior changed to the point of being able to say appending a PATH! didn't splice unless it was to another path.  And here you have a surgical tweak that can reverse this--in usermode.  All while giving you the same interface and refinements for the functions.</p>
+<p>You can try and imagine yourself what doing this would be like in Rebol2, R3-Alpha, or Red.</p>
+<h3>Modules are hard and there's a long road ahead, there</h3>
+<p>We see that JavaScript still doesn't have modules sorted out--and it's been quite a long time with a world of people working on it.  Rebol's landscape is even more complex.  And modules are very tied up in binding, which still has a lot of open questions.</p>
+<p>What I think has to happen is that I have to sit down and look at the fundamentals.  I don't see how anything too big can happen too soon, so really it's probably just going to be one feature at a time.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/beginnings-of-the-redbol-module/755">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/beginnings-of-the-redbol-module/755</link>
+          <pubDate>Wed, 25 Jul 2018 05:35:17 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-755</guid>
+          <source url="https://forum.rebol.info/t/beginnings-of-the-redbol-module/755.rss">Beginnings of the &quot;Redbol&quot; Module</source>
+        </item>
+        <item>
+          <title>Requirements List for the Redbol Compatibility Module</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>There needs to be some candidate Rebol2/Red/R3-Alpha-ish codebase to be the guinea pig for the "Redbol" emulation module.  I'm going to sacrifice my <a href="http://draem.hostilefork.com/" rel="nofollow noopener">Draem</a> blog generator to stay in the world of Redbol compatibility.  It doesn't make me tremendously happy to hold it back--but I've already been holding it back for the purposes of testing <code>&lt;r3-legacy&gt;</code>.  So this just means a little bit more holding back.</p>
+<p>That will require backporting it to Rebol2.  Then I will twist up <code>&lt;r3-legacy&gt;</code> until it can run it also.  And if I haven't strangled myself with my own tongue by then, I will see what I can do to run it under Red.  Then rename <code>&lt;r3-legacy&gt;</code> to <code>&lt;redbol&gt;</code> and try and get the module-based approach going.</p>
+<p>It's not terribly ambitious code, though it does need Markdown processing.  Hopefully that's already been addressed in Red or Rebol2 somewhere.</p>
+<h3>"Redbol"</h3>
+<p>In this sense I'm using the term "Redbol" to mean <em>"roughly the language agreed upon  represented by Rebol2 and Red"</em>.  If Red and Rebol2 agree on something, and R3-Alpha made another choice, it doesn't seem to me to make much sense for this compatibility layer to pick R3-Alpha's choice out of principle--even if it's arguably a better choice.  The point is emulation, not arguing.</p>
+<p>This needs to be done with actual modules, isolating the behavior so that a Redbol module can be called from a Ren-C module, and vice-versa.  How things have been done so far with <code>&lt;r3-legacy&gt;</code> can't handle that.  It just mucks up the user context.</p>
+<h3>Thoughts on baseline?</h3>
+<p>Rebol2 was skinned to incorporate many of R3-Alpha features via something known as "R2/Forward".  Since we're not necessarily looking at <em>exact</em> compatibility with any of Rebol2/Red/R3-Alpha, it's reasonable to say that someone using the Redbol emulation would likely have a few little stubs loaded.</p>
+<p><em>(So to run a Redbol codebase in Rebol2 you'd use <code>%redbol.r</code>, to run it in Red you'd use <code>%redbol.red</code>, and in Ren-C you'd tag your module as <code>Depends: &lt;redbol&gt;</code> or whatever the way that winds up working.  I don't think a <code>%redbol.r3</code> would be used by anyone, and things like the indexing are impractical to bend from within an R3-Alpha binary.)</em></p>
+<p>So given that, does anyone have any "known" lists of tweaks they know each would need?  What did Red change from Rebol2 that's favorable, unfavorable?  Most of what I've got going on compatibility so far is code in the <a href="https://github.com/metaeducation/ren-c/blob/f2a4fa199eb341315d856563a50aee040855e49f/src/mezz/mezz-legacy.r#L625" rel="nofollow noopener"><code>%mezz-legacy.r</code></a>, so that's going to be the starting point for Ren-C's <code>&lt;redbol&gt;</code>...the question is just what more will be needed than that.</p>
+<hr>
+<p>My main intention is just to get a proof of concept going, and then those interested can see what's involved and hack on it as they notice things it could do more compatibly.  I'm not going to spearhead any protracted development process for it.</p>
+<p>But if someone has a relatively simple Rebol2 script and wants to put in a bit of elbow grease to see it run under emulation, maybe you could post about it here and explain what challenges (if any) there would be.</p>
+            <p><small>21 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/requirements-list-for-the-redbol-compatibility-module/722">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/requirements-list-for-the-redbol-compatibility-module/722</link>
+          <pubDate>Tue, 03 Jul 2018 14:29:04 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-722</guid>
+          <source url="https://forum.rebol.info/t/requirements-list-for-the-redbol-compatibility-module/722.rss">Requirements List for the Redbol Compatibility Module</source>
+        </item>
+        <item>
+          <title>Rebol 3 compared with Red</title>
+          <dc:creator><![CDATA[darrencruse]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>As someone somewhat new to the community here I'm maybe a tiny bit confused about the Rebol 3/Ren-C efforts as compared to Red.</p>
+<p>Clearly it's a friendly relationship right.</p>
+<p>But as someone new I confess for a bit I was thinking the message was that Red is the future and the Rebol 3 efforts were more or less defunct and replaced by Red.</p>
+<p>I realize now that was mistaken, but can someone clarify for me - if both efforts are continuing into the future are there ways in which they are truly different/complementary?</p>
+<p>Looking to the future when would I be likely to choose one versus the other?</p>
+            <p><small>22 posts - 8 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/rebol-3-compared-with-red/192">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/rebol-3-compared-with-red/192</link>
+          <pubDate>Fri, 07 Jul 2017 00:28:17 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-192</guid>
+          <source url="https://forum.rebol.info/t/rebol-3-compared-with-red/192.rss">Rebol 3 compared with Red</source>
+        </item>
+        <item>
+          <title>Forum name and Red</title>
+          <dc:creator><![CDATA[asampal]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>It's been suggested that, in order to not be exclusive to Red users, the name of this forum shouldn't include just the word Rebol. <a class="mention" href="/u/gchiu">@gchiu</a>, would you be OK with this kind of change, for the reason mentioned? If there is a change to be made, it probably should be done sooner rather than later. What to do?</p>
+            <p><small>16 posts - 5 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/forum-name-and-red/72">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/forum-name-and-red/72</link>
+          <pubDate>Mon, 22 May 2017 17:20:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-72</guid>
+          <source url="https://forum.rebol.info/t/forum-name-and-red/72.rss">Forum name and Red</source>
+        </item>
+  </channel>
+</rss>

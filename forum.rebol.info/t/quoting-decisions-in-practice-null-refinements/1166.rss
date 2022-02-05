@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Quoting Decisions In Practice: NULL Refinements</title>
+    <link>https://forum.rebol.info/t/quoting-decisions-in-practice-null-refinements/1166</link>
+    <description>I&#39;m moving along with the [unused-refinements-are-null concept](https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140), and absorbing the consequences.
+
+One thing that it breaks was a way we&#39;d been testing for a refinement being used or not in a JavaScript native.  Previously one could write:
+
+    reb.Did(reb.ArgR(&#39;refine-no-args&#39;))
+
+That used &quot;normal `reb.Did`&quot; which did not quote its splices, as opposed to `reb.DidQ` which does quote splices.  For a reminder of what that&#39;s all about--and why I struggled over not quoting being the default and needing the `Q` to get the quotes--please review the reasoning here:
+
+[Beta/One Quoting in the API decision: rebValue() and rebValueQ()](https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebrun-and-rebrunq/1095/3)
+
+Despite not using Q, the normal `reb.Did` worked before because the two possibilities were BLANK! (**`_`**) or the refinement itself (**`/refine-no-args`**), both of which were inert.  Now they&#39;re going to both be active.  Refinement-style-paths are like a GET-WORD! that&#39;s null-tolerant...they evaluate.  And nulls actually cannot be seen literally in the evaluator at all: they&#39;re considered errors if they ever come up, which is relatively esoteric to do when not using the API (though you can, e.g. `eval null`)
+
+Long story short: if you&#39;re going to use plain `reb.Did()`, you have to splice quoted:
+
+    reb.Did(reb.Q(reb.ArgR(&#39;refine-no-args&#39;)))
+
+Or you can use the form of `Did` that adds a quote level on its splices by default:
+
+    reb.DidQ(reb.ArgR(&#39;refine-no-args&#39;))
+
+## Does this suggest refinements with no args should be LOGIC!?
+
+One potential conclusion we might reach is that refinements which have no argument are forced very particularly to a state of truth or falsehood...that they are a special case.
+
+That doesn&#39;t feel as &quot;neat&quot; to me as having their specialness be that when they are used, the truthy value they pick encodes the word of the refinement name itself.  Then when they are unused they are null just like any other type of refinement would be.  This makes chaining easier.
+
+I think my feeling is no, and I like the current direction, where all unused refinements are null.
+
+## Are we starting to need a helper library?
+
+I really wanted to keep the focus on a small API.  But even with that, should we have some standardized helpers on top of the low level ones?  Something like a `rebx` namespace?
+
+    if (rebx.HasRefineArg(&#39;some-refinement&#39;)) { ... }
+
+I&#39;m a bit torn on this question.  I feel like you won&#39;t get very far in using the API if you don&#39;t understand what it&#39;s doing, and such things obscure the mechanics.
+
+While the issues of the Q vs. not might *seem* like they&#39;re artifacts of the API, they are not.  You&#39;d see them anywhere you are trying something like a **`do compose [...]`** in plain Rebol.  In R3-Alpha you had to say:
+
+    do compose [some-word: quote (expression-that-makes-a-word)]
+
+Fortunately Ren-C has a lighter notation with generalized quoting:
+
+    do compose [some-word: &#39;(expression-that-makes-a-word)]
+
+This method even works with null, which a function like `LIT` (aka R3-Alpha&#39;s QUOTE) couldn&#39;t do...because there&#39;d be no way to hold the null in a BLOCK!.
+
+    &gt;&gt; compose [lit (null)]
+    == [lit]  ; uh oh, the group!&#39;s block slot just vaporized
+
+    &gt;&gt; compose [&#39;(null)]
+    == [&#39;]  ; slot didn&#39;t completely vaporize, left the quote
+
+    &gt;&gt; do [&#39;]
+    ; null
+
+So all that&#39;s really happening is that the API is putting you face-to-face with the nuts and bolts of the language.  reb.Q() on each splice site is a bit bulkier than an apostrophe, but that&#39;s why it was folded into the operator as `reb.DidQ()` if you are happy having it applied to all sites.  I&#39;ve suggested that a certain type of person might tend to be a &quot;Q&quot;-ist and always use the Q forms, then reb.U() to call out the places to unquote.
+
+Anyway, I&#39;m curious what API users think.  @BrianOtto, @giuliolunati, @gchiu ?</description>
+    
+    <lastBuildDate>Wed, 22 May 2019 23:07:49 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/quoting-decisions-in-practice-null-refinements/1166.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Quoting Decisions In Practice: NULL Refinements</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm moving along with the <a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140">unused-refinements-are-null concept</a>, and absorbing the consequences.</p>
+<p>One thing that it breaks was a way we'd been testing for a refinement being used or not in a JavaScript native.  Previously one could write:</p>
+<pre><code>reb.Did(reb.ArgR('refine-no-args'))
+</code></pre>
+<p>That used "normal <code>reb.Did</code>" which did not quote its splices, as opposed to <code>reb.DidQ</code> which does quote splices.  For a reminder of what that's all about--and why I struggled over not quoting being the default and needing the <code>Q</code> to get the quotes--please review the reasoning here:</p>
+<p><a href="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebrun-and-rebrunq/1095/3">Beta/One Quoting in the API decision: rebValue() and rebValueQ()</a></p>
+<p>Despite not using Q, the normal <code>reb.Did</code> worked before because the two possibilities were BLANK! (<strong><code>_</code></strong>) or the refinement itself (<strong><code>/refine-no-args</code></strong>), both of which were inert.  Now they're going to both be active.  Refinement-style-paths are like a GET-WORD! that's null-tolerant...they evaluate.  And nulls actually cannot be seen literally in the evaluator at all: they're considered errors if they ever come up, which is relatively esoteric to do when not using the API (though you can, e.g. <code>eval null</code>)</p>
+<p>Long story short: if you're going to use plain <code>reb.Did()</code>, you have to splice quoted:</p>
+<pre><code>reb.Did(reb.Q(reb.ArgR('refine-no-args')))
+</code></pre>
+<p>Or you can use the form of <code>Did</code> that adds a quote level on its splices by default:</p>
+<pre><code>reb.DidQ(reb.ArgR('refine-no-args'))
+</code></pre>
+<h2>Does this suggest refinements with no args should be LOGIC!?</h2>
+<p>One potential conclusion we might reach is that refinements which have no argument are forced very particularly to a state of truth or falsehood...that they are a special case.</p>
+<p>That doesn't feel as "neat" to me as having their specialness be that when they are used, the truthy value they pick encodes the word of the refinement name itself.  Then when they are unused they are null just like any other type of refinement would be.  This makes chaining easier.</p>
+<p>I think my feeling is no, and I like the current direction, where all unused refinements are null.</p>
+<h2>Are we starting to need a helper library?</h2>
+<p>I really wanted to keep the focus on a small API.  But even with that, should we have some standardized helpers on top of the low level ones?  Something like a <code>rebx</code> namespace?</p>
+<pre><code>if (rebx.HasRefineArg('some-refinement')) { ... }
+</code></pre>
+<p>I'm a bit torn on this question.  I feel like you won't get very far in using the API if you don't understand what it's doing, and such things obscure the mechanics.</p>
+<p>While the issues of the Q vs. not might <em>seem</em> like they're artifacts of the API, they are not.  You'd see them anywhere you are trying something like a <strong><code>do compose [...]</code></strong> in plain Rebol.  In R3-Alpha you had to say:</p>
+<pre><code>do compose [some-word: quote (expression-that-makes-a-word)]
+</code></pre>
+<p>Fortunately Ren-C has a lighter notation with generalized quoting:</p>
+<pre><code>do compose [some-word: '(expression-that-makes-a-word)]
+</code></pre>
+<p>This method even works with null, which a function like <code>LIT</code> (aka R3-Alpha's QUOTE) couldn't do...because there'd be no way to hold the null in a BLOCK!.</p>
+<pre><code>&gt;&gt; compose [lit (null)]
+== [lit]  ; uh oh, the group!'s block slot just vaporized
+
+&gt;&gt; compose ['(null)]
+== [']  ; slot didn't completely vaporize, left the quote
+
+&gt;&gt; do [']
+; null
+</code></pre>
+<p>So all that's really happening is that the API is putting you face-to-face with the nuts and bolts of the language.  reb.Q() on each splice site is a bit bulkier than an apostrophe, but that's why it was folded into the operator as <code>reb.DidQ()</code> if you are happy having it applied to all sites.  I've suggested that a certain type of person might tend to be a "Q"-ist and always use the Q forms, then reb.U() to call out the places to unquote.</p>
+<p>Anyway, I'm curious what API users think.  <a class="mention" href="/u/brianotto">@BrianOtto</a>, <a class="mention" href="/u/giuliolunati">@giuliolunati</a>, <a class="mention" href="/u/gchiu">@gchiu</a> ?</p>
+          <p><a href="https://forum.rebol.info/t/quoting-decisions-in-practice-null-refinements/1166/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/quoting-decisions-in-practice-null-refinements/1166/1</link>
+        <pubDate>Wed, 22 May 2019 23:00:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1166-1</guid>
+        <source url="https://forum.rebol.info/t/quoting-decisions-in-practice-null-refinements/1166.rss">Quoting Decisions In Practice: NULL Refinements</source>
+      </item>
+  </channel>
+</rss>

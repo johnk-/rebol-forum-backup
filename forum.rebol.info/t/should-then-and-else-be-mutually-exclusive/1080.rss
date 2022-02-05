@@ -1,0 +1,477 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should THEN and ELSE be Mutually Exclusive?</title>
+    <link>https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080</link>
+    <description>With the following code and today&#39;s THEN, if condition is true, *all the branches will be assured of running*:
+
+    if 1 &lt; 2 [
+        print &quot;this runs&quot;
+        null  ; even if the branch evaluates to null
+    ] then [
+        print &quot;this also runs&quot;
+        null  ; even if there&#39;s a null here, too (!)
+    ] then [
+        print &quot;this runs too&quot;
+    ]
+
+The only way the THEN branches wouldn&#39;t run would be if the previous result were null.  *But* an IF whose condition is true will never return null--if the branch produces NULL, it will be turned into a **~null~ isotope**.  Since THEN follows the same policy, you get into a chain of always-running.
+
+So even though it&#39;s THEN&#39;s result being propagated on to the next THEN to see, it&#39;s &quot;telegraphing&quot; the success or failure of the condition by ensuring that result is not null.  This has permitted the following pattern:
+
+     case [
+         thing1 [...]
+         thing2 [...]
+     ] then [
+         ...
+     ] else [
+         ...
+     ]
+
+What happens is that whether the CASE succeeded or not becomes the driver of the ELSE&#39;s decision, not the result of evaluating the THEN branch.  This is not very useful for IF, because most of the time you could have added code to the success case by putting it in the branch.  But for something like CASE, you&#39;re adding code that runs when any of its branches succeed--and that is interesting, because there&#39;s no single place inside the case you could do that.
+
+## For the sake of sanity, IF must turn NULLs to isotopes
+
+You might wonder why change the branch result at all.  Can&#39;t the people who write branches be savvy enough to make sure their branch doesn&#39;t return NULL, and just live with the consequences of the ELSE running in the odd case that it does?  (Maybe they even *wanted* that...the ability to have a null signal to the ELSE come from either the condition failing, or a decision in the branch?)
+
+**But it&#39;s not an odd case.**  Having a branch evaluate to NULL is common, since conditional expressions generate them:
+
+    if condition1 [
+        if condition2 [...]
+    ] else [
+       ...
+    ]
+
+Without throwing some kind of interference onto that NULL result, you&#39;re hitching that outer ELSE to the result of the inner IF.  When condition1 or condition2 are false, that ELSE runs.
+
+This strikes me as counterintuitive.  I wouldn&#39;t want to have to remember to write:
+
+    if condition1 [
+        if condition2 [...]
+        ~null~  ; or any other non-pure-NULL.  this would be easy to forget!
+    ] else [
+       ...
+    ]
+
+## But is THEN a different beast?
+
+If you look at a chain like `if condition [...] then [...] then [...]`, might you argue that there is something fundamentally different about expectations of the second THEN than the first?  It&#39;s certainly the kind of thing that would make you pause when you first saw it, to ask &quot;what does that mean?&quot;
+
+*(FWIW, the Promise chains in JavaScript are designed to work by taking each .then() and feeding it from the previous .then()...they don&#39;t all run just because the first one ran.)*
+
+The first is taking a branch off of an IF, so it can think of itself as an &quot;IF-THEN&quot;.  But might the second see itself as more of a &quot;THEN-THEN?&quot;, where it&#39;s reacting to the THEN&#39;s branch evaluation, as opposed to the condition that triggered it?
+
+This changes the dynamic for users of the `if condition [...] then [...] else [...]` pattern mentioned in the beginning of this post.  The else is becoming responsive to the then&#39;s branch, it&#39;s a `THEN-ELSE` not a `condition-else`.
+
+## There&#39;s also, uh, ALSO
+
+ALSO exists as a way to not affect the result:
+
+    &gt;&gt; case [
+           1 &gt; 2 [&lt;branch-one&gt;]
+           1 &lt; 2 [&lt;branch-two&gt;]
+       ] also [
+           print &quot;I ran!&quot;
+           &lt;also-branch&gt;
+       ]
+
+    I ran!
+    == &lt;branch-two&gt;
+
+Unlike THEN, it discards its own result...so it tossed `&lt;also-branch&gt;` in favor of propagating the `&lt;branch-two&gt;` it received from the case.  So people who wanted the &quot;telegraph the prior&#39;s success&quot; behavior have a much more direct way of doing it.  Use `also [...] then [...]`.
+
+*(There&#39;s no parallel for a &quot;telegraphing ELSE&quot;, because the only thing it would telegraph would be the null that triggered it.  If you want a telegraphing ELSE, you can say `else [... null]`, which seems better for this esoteric-seeming need than coming up with a keyword for it.  I doubt anyone will have a great suggestion for a name for this, because any name seems less clear than just saying that.  &quot;ELSO&quot;?  :stuck_out_tongue_closed_eyes:)*
+
+## Does Evidence Point In Favor of NULLable THEN/ELSE?
+
+I think people have a very strict model of how **if condition [...] else [...]** should work.  The ELSE is reacting to the condition, not to the what the branch produced in particular.  Turning NULL to ~null~ isotopes gives us the best of both worlds...cued by a branch result that is usually passed as-is...but tweaked in the rare case that it needs to be in order to signal a (slightly) distinct state from null.
+
+But `then [...] then [...]` doesn&#39;t come with these expectations.  When you look for the clause driving it, then it seems reasonable to look one unit to the left...and be sensitive to the branch&#39;s result.  If the branch ended in a conditional, and that conditional failed, it seems plausible to imagine the conditional inside of the branch having an effect on the outside.
+
+The argument for `then [...] else [...]` acting as it has comes somewhat from the idea that &quot;Other languages that have both THEN and ELSE would pair them in such a way that they both reach back to react to a root condition&quot;.  But Rebol doesn&#39;t need a THEN for its IF--you&#39;re already dealing with something different.  So just as you have to learn [it&#39;s not `if condition then [code]`](https://forum.rebol.info/t/the-siren-song-of-the-arity-1-if/749), you have to learn that `then [...] else [...]` is the ELSE reacting to the then&#39;s outcome.
+
+Really this is just bringing THEN more in sync with ELSE, which today allows a plain NULL result.
+
+## The mitigation is not that difficult
+
+If you&#39;re want to write `then [...] else [...]` and have it act as before, just make sure the THEN branch doesn&#39;t itself return NULL.  It will evaluate to null if what was triggering it was null, so the only case you have to worry about is a branch evaluating to null.
+
+So you&#39;d be fine with something like this:
+
+       ...
+    ] then [
+       reduce [...]
+    ] else [
+       reduce [...]
+    ]
+
+Blocks aren&#39;t null.  If you&#39;re passing back a result, most of the time the results aren&#39;t null...and if you&#39;re not passing back a result, then you can use also:
+
+       ...
+    ] also [
+        ...
+        if condition [do side-effect]
+    ] else [
+        ...
+    ]
+
+Like I say, this seems pretty learnable.  Just means an ELSE following a THEN may not have the relationship one might stereotypically expect.  But it seems well grounded in rationale, and it&#39;s a drop in the bucket of &quot;other language unlearning&quot; that is required (!)</description>
+    
+    <lastBuildDate>Fri, 13 Aug 2021 11:20:31 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should THEN and ELSE be Mutually Exclusive?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="6" data-topic="1080">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><em>I got bit by this again</em>, with an <strong>all [...] then [...] else [...]</strong> chain where the THEN ended in NULL and I didn't anticipate it, so it ran the ELSE unintended</p>
+</blockquote>
+</aside>
+<p>I just had another perfect example of why THEN and ELSE exclusivity is important.</p>
+<p>I was trying to make "endable" combinators (easier than variadic combinators).  This is like the <code>&lt;end&gt;</code> feature of functions, where an argument gets NULL if it hits an expression barrier.  So if a rule buts up against the end of a BLOCK!, or a | or || or comma, then that rule sees no more arguments...so any <code>&lt;end&gt;</code>-able args become NULL.</p>
+<p>But think about what would happen here if THEN didn't turn NULL into ~null~ isotopes:</p>
+<pre><code>any [
+    not ^rules.1
+    find [, | ||] ^rules.1
+]
+then [
+    if not endable? bind param f [
+        fail "Too few parameters for combinator"
+    ]
+    f.(param): null  ; the THEN is thus *incidentally* evaluating to NULL
+]
+else [
+    f.(param): [# rules]: parsify state rules
+]
+</code></pre>
+<p>If we didn't turn that THEN branch result into a ~null~ isotope, the ELSE would run.</p>
+<p>I really do like the conservative default of making the isotope...with the solution of being able to generically make any branch pass through the NULL if you use the <strong><code>@[...]</code></strong> form.  That gives flexibility across the board.</p>
+<pre><code>&gt;&gt; if true [print "Branch"] then [print "Normal." null] else [print "Cool."]
+Branch
+Normal.
+== ~null~  ; isotope
+
+&gt;&gt; if true [print "Branch"] then @[print "Special!" null] else [print "Cool."]
+Branch
+Special!
+Cool. 
+
+&gt;&gt; if true [print "Branch"] then @[print "Valued." true] else [print "Cool."]
+Branch
+Valued.
+== #[true]
+</code></pre>
+<p>I'll also point out that anywhere you can use a branch, you can even use the :[...] form or the '[...] forms!</p>
+<pre><code>&gt;&gt; if true [print "Flexibility!"] then :[1 + 2 10 + 20] else '[so cool!]
+Flexibility!
+== [3 30]
+
+&gt;&gt; if false [print "Flexibility!"] then :[1 + 2 10 + 20] else '[so cool!]
+Flexibility!
+== [so cool]
+</code></pre>
+<p>It's all these little touches that make me excited about Ren-C.  Historical Rebol and Red are so flat by comparison, imo.  And libRebol is like no other C language interop I've seen...</p>
+          <p><a href="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/8</link>
+        <pubDate>Sun, 08 Aug 2021 13:26:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1080-8</guid>
+        <source url="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080.rss">Should THEN and ELSE be Mutually Exclusive?</source>
+      </item>
+      <item>
+        <title>Should THEN and ELSE be Mutually Exclusive?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I should point out that this issue of THEN and ELSE exclusivity is felt to be "covered well enough" by <a href="https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249/11">NULL isotopes</a>.</p>
+<pre><code>all [...] then [...] else [...]
+</code></pre>
+<p>If the THEN branch is taken ends in NULL, using a plain block for the branch means you will get a ~null~ isotope, which will not trigger the ELSE.</p>
+<p>If you actually meant to trigger the ELSE when the THEN ends in NULL, you would write:</p>
+<pre><code>all [...] then @[...] else [...]
+</code></pre>
+<p>The same would apply if you wanted an ELSE that ended in NULL to trigger another else:</p>
+<pre><code>all [...] then @[...] else @[...] else [...]
+</code></pre>
+<p>It's a generic thing that applies to all branches.  The one irregularity to note from all of this is that although these two are equivalent:</p>
+<pre><code>if condition [...] else [...]
+either condition [...] [...]
+</code></pre>
+<p>and these two are equivalent:</p>
+<pre><code>if condition [...] else @[...]
+either condition [...] @[...]
+</code></pre>
+<p>these two are <em>not</em> equivalent:</p>
+<pre><code>(a) if condition @[...] else @[...]
+(b) either condition @[...] @[...]
+</code></pre>
+<p>Because a true condition with a first branch that evaluates to NULL in the (a) will run the second branch.  In case (b), a true first branch evaluating to NULL means the overall expression will evaluate to NULL and the second branch won't run.</p>
+<p>This edge case seems acceptable, as use of @[...] branches is usually not necessary in the first place...and if it is, you're being very specific about what you want to happen.</p>
+          <p><a href="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/7</link>
+        <pubDate>Sat, 03 Apr 2021 16:22:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1080-7</guid>
+        <source url="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080.rss">Should THEN and ELSE be Mutually Exclusive?</source>
+      </item>
+      <item>
+        <title>Should THEN and ELSE be Mutually Exclusive?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="5" data-topic="1080">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>No one else ever weighed in on this. Which probably means I'm the only one writing THEN/ELSE chains. :-/ But I actually made a mistake with this recently--reminding me that it's another power-vs-safety tradeoff.</p>
+</blockquote>
+</aside>
+<p><em>I got bit by this again</em>, with an <strong>all [...] then [...] else [...]</strong> chain where the THEN ended in NULL and I didn't anticipate it, so it ran the ELSE unintended.  Due to the circumstances, it took a while to debug, which is never good.</p>
+<p>I think the answer of a generic override based on a new branch marker is the only way to go.</p>
+          <p><a href="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/6</link>
+        <pubDate>Mon, 19 Oct 2020 06:04:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1080-6</guid>
+        <source url="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080.rss">Should THEN and ELSE be Mutually Exclusive?</source>
+      </item>
+      <item>
+        <title>Should THEN and ELSE be Mutually Exclusive?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-username="hostilefork" data-post="3" data-topic="1080">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>While this defies the conventual notion of exclusivity of THEN and ELSE in most languages, it is strictly more powerful. The lack of a mandatory THEN on IF statements makes this seem like the better choice.</p>
+</blockquote>
+</aside>
+<p>No one else ever weighed in on this.  Which probably means I'm the only one writing THEN/ELSE chains.  :-/  But I actually made a mistake with this recently--reminding me that it's another power-vs-safety tradeoff.</p>
+<p>Early in Ren-C there was an <strong><code>if*</code></strong> which did not modify branch results, and you take your chances if you use it.  But I didn't like the slippery slope that now every branching construct would need a form that did it "as-is" and did not isotopify.  Extra forms of <code>CASE*</code>, <code>SWITCH*</code>, etc.  I figured power users could leverage THROW and CATCH to get what they needed.</p>
+<p>But perhaps THE-BLOCK! could mean "run as code, but don't isotopify it"?</p>
+<pre><code>&gt;&gt; if true [null]
+== ~null~  ; isotope
+
+&gt;&gt; if true @[null]
+; null
+</code></pre>
+<p>By marking the branch and not the conditional, you wouldn't need extra refinements.  So you can say:</p>
+<pre><code>&gt;&gt; case [
+    1 = 2 [fourth [a b c]]
+    1 = 1 @[fourth [d e f]]  ; don't turn into null isotope
+]
+; null
+
+&gt;&gt; case [
+    2 = 2 [fourth [a b c]]  ; no @, so turn to null isotope
+    1 = 2 @[fourth [d e f]]
+]
+== ~null~  ; isotope
+</code></pre>
+<p>It's kind of like how soft quoted branching avoided the /ONLY debacle from early IFs:</p>
+<pre><code>&gt;&gt; if true [print "Hello"]
+Hello
+
+&gt;&gt; if/only true [print "Hello"]  ; available in R3-Alpha
+== [print "Hello"]
+
+&gt;&gt; if true '[print "Hello"]  ; modern Ren-C concept
+== [print "Hello"]
+
+&gt;&gt; if true '[print "Mix"] else [print "and Match"]
+== [print "Mix"]
+
+&gt;&gt; if false '[print "Mix"] else [print "and Match"]
+and Match
+</code></pre>
+<p>You can't write <strong>@'[print "Mix"]</strong>, as there is no such thing as a THE-QUOTE!.  But you wouldn't need to, because the only QUOTED! that can evaluate to NULL is a quote of nothing.  And if you request a literal null, then perhaps it should be assumed you knew what you were doing?</p>
+<pre><code>&gt;&gt; if true ' else [print "You said 'literally nothing', why second-guess you?"]
+; null
+</code></pre>
+<p>If that edge case is considered too hot for TV, under this proposal you could just say <strong>@[null]</strong> or <strong>@[']</strong></p>
+<p>Anyway, points:</p>
+<ul>
+<li>Non-mutual-exclusivity of THEN and ELSE is the kind of thing that can bite people</li>
+<li>You can get into awkward contortions with today's SWITCH or CASE etc. when you wish to evaluate a branch -and- get a null</li>
+<li>I do not like every branching construct having a refinement form for "pass through NULL as-is"; and it may be better to control on a per-branch basis, in a similar way to soft-quoted branching</li>
+</ul>
+          <p><a href="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/5</link>
+        <pubDate>Thu, 12 Dec 2019 18:53:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1080-5</guid>
+        <source url="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080.rss">Should THEN and ELSE be Mutually Exclusive?</source>
+      </item>
+      <item>
+        <title>Should THEN and ELSE be Mutually Exclusive?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The rule for conditionals at the moment is that branching constructs (IF, CASE, SWITCH, etc.) reserve the true null result <em>exclusively</em> to mean a branch did not run.  Hence if a branch evaluates to null, it is forced to a ~null~ isotope instead.</p>
+<pre><code>&gt;&gt; if true [null]
+== ~null~  ; isotope
+</code></pre>
+<p>This has the pleasing result that you don't get suckered into running an ELSE branch in this case:</p>
+<pre><code>&gt;&gt; if true [some-incidentally-null-expression] else [print "Bad if this ran!"]
+== ~null~  ; isotope
+</code></pre>
+<p>In turn, the isotope has a generally pleasing result of becoming a true null if assigned to a variable.  You can use the ^META operations to capture the state by turning the isotope into a plain ~null~ BAD-WORD! if this state is important enough to sense.</p>
+<h2>What about THEN and ELSE?</h2>
+<p>The THEN clause as introduced by Ren-C is a bit of an oddity of programming-language-THENs, because it exists even though you don't generally use it with an IF.  You can, but you're just adding an extra clause:</p>
+<pre><code> if condition [
+     print "This prints if condition is true"
+ ] then [
+     print "And this will also print if condition is true"
+ ]
+</code></pre>
+<p>Using it with IF doesn't make all that much sense, since you could have just put the code in the branch (though it may help you factor code).  But THEN's main usefulness is with more complex branching constructs like CASE or SWITCH, where you want to add code that runs if <em>any</em> of the branches ran.</p>
+<p>However, one wonders if THEN itself is in the same category of "isotopifying" branches or not.  e.g.</p>
+<pre><code>if true [
+    null
+] then [
+    null
+] then [
+    print "Should this print or not?"
+]
+</code></pre>
+<p>We can look at the mirror question of ELSE's job regarding its output.  Should it make it true NULL it, to keep an elsey chain all-elsey...which would line up with isotopifying a THEN chain to keep it all then-y?</p>
+<pre><code>if false [
+    print "Doesn't print"
+] else [
+    true
+] else [
+    print "Should this print or not?"
+]
+</code></pre>
+<p>But that absolutely should print.  Because you want <strong>if condition [...] else [...]</strong> to act as much like <strong>either [...] [...]</strong> as possible.  That means the ELSE branch should yield its result.</p>
+<p>Yet should ELSE turn null results into ~null~ isotopes or not?</p>
+<pre><code>if false [
+    print "Doesn't print"
+] else [
+    null
+] else [
+    print "Should this print or not?"
+]
+</code></pre>
+<p>That's a bit more subtle.  The premise I decided to go with was that it <em>should</em> print, e.g. ELSE passes through its result verbatim...without turning NULL into ~null~ isotope.  Because otherwise, the chain of ELSE...ELSE would never be useful.  You'd never run the second ELSE!</p>
+<p>So by a similar token, I decided THEN should also not turn NULL into ~null~ isotopes, to avoid chains of THEN...THEN <em>always</em> running together.  It seemed strictly more powerful.</p>
+<p>The consequence is that you have to be careful with <strong>some-branching-construct [...1...] then [...2...] else [...3...]</strong>.  Because the 2 and 3 branches are not mutually exclusive.  You have to read that as:</p>
+<pre><code> (some-branching-construct [...1...] then [...2...]) else [...3...]
+</code></pre>
+<p>e.g.</p>
+<pre><code> (black-box) else [...]
+</code></pre>
+<p>The ELSE is reacting to the overall result of that expression, which includes potentially reacting to the nullness of ...2...</p>
+<p><strong>While this defies the conventional notion of exclusivity of THEN and ELSE in most languages, it is strictly more powerful.  The lack of a mandatory THEN on IF statements makes this seem like the better choice.</strong></p>
+<p>If we thought it worth the tradeoffs to use an <a href="https://forum.rebol.info/t/the-siren-song-of-the-arity-1-if/749">arity-1 IF</a>, this choice would absolutely be different.  <em>THEN would absolutely have to ~null~ isotopify its output</em>.   Because you'd want <code>if (...) then [...] else [...]</code> to have mutual exclusivity of the THEN and ELSE branches.  But that's not how Rebol conditionals work.</p>
+<p>So right now neither ELSE nor THEN modify NULL branch results.  I've tried it both ways, I can see both sides.  But seems to me so long as we're covered for <code>if condition [...] else [...]</code> being mutually exclusive on its branches, I feel the THEN/ELSE chainers are going to be power users who are going to want all the flexibility they can get, which means not locking into a no-nulls-chain-state where you can only put one ELSE and you can't ever turn off the chain once you have one.</p>
+          <p><a href="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/3</link>
+        <pubDate>Wed, 05 Jun 2019 16:20:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1080-3</guid>
+        <source url="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080.rss">Should THEN and ELSE be Mutually Exclusive?</source>
+      </item>
+      <item>
+        <title>Should THEN and ELSE be Mutually Exclusive?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>With the following code and today's THEN, if condition is true, <em>all the branches will be assured of running</em>:</p>
+<pre><code>if 1 &lt; 2 [
+    print "this runs"
+    null  ; even if the branch evaluates to null
+] then [
+    print "this also runs"
+    null  ; even if there's a null here, too (!)
+] then [
+    print "this runs too"
+]
+</code></pre>
+<p>The only way the THEN branches wouldn't run would be if the previous result were null.  <em>But</em> an IF whose condition is true will never return null--if the branch produces NULL, it will be turned into a <strong>~null~ isotope</strong>.  Since THEN follows the same policy, you get into a chain of always-running.</p>
+<p>So even though it's THEN's result being propagated on to the next THEN to see, it's "telegraphing" the success or failure of the condition by ensuring that result is not null.  This has permitted the following pattern:</p>
+<pre><code> case [
+     thing1 [...]
+     thing2 [...]
+ ] then [
+     ...
+ ] else [
+     ...
+ ]
+</code></pre>
+<p>What happens is that whether the CASE succeeded or not becomes the driver of the ELSE's decision, not the result of evaluating the THEN branch.  This is not very useful for IF, because most of the time you could have added code to the success case by putting it in the branch.  But for something like CASE, you're adding code that runs when any of its branches succeed--and that is interesting, because there's no single place inside the case you could do that.</p>
+<h2>For the sake of sanity, IF must turn NULLs to isotopes</h2>
+<p>You might wonder why change the branch result at all.  Can't the people who write branches be savvy enough to make sure their branch doesn't return NULL, and just live with the consequences of the ELSE running in the odd case that it does?  (Maybe they even <em>wanted</em> that...the ability to have a null signal to the ELSE come from either the condition failing, or a decision in the branch?)</p>
+<p><strong>But it's not an odd case.</strong>  Having a branch evaluate to NULL is common, since conditional expressions generate them:</p>
+<pre><code>if condition1 [
+    if condition2 [...]
+] else [
+   ...
+]
+</code></pre>
+<p>Without throwing some kind of interference onto that NULL result, you're hitching that outer ELSE to the result of the inner IF.  When condition1 or condition2 are false, that ELSE runs.</p>
+<p>This strikes me as counterintuitive.  I wouldn't want to have to remember to write:</p>
+<pre><code>if condition1 [
+    if condition2 [...]
+    ~null~  ; or any other non-pure-NULL.  this would be easy to forget!
+] else [
+   ...
+]
+</code></pre>
+<h2>But is THEN a different beast?</h2>
+<p>If you look at a chain like <code>if condition [...] then [...] then [...]</code>, might you argue that there is something fundamentally different about expectations of the second THEN than the first?  It's certainly the kind of thing that would make you pause when you first saw it, to ask "what does that mean?"</p>
+<p><em>(FWIW, the Promise chains in JavaScript are designed to work by taking each .then() and feeding it from the previous .then()...they don't all run just because the first one ran.)</em></p>
+<p>The first is taking a branch off of an IF, so it can think of itself as an "IF-THEN".  But might the second see itself as more of a "THEN-THEN?", where it's reacting to the THEN's branch evaluation, as opposed to the condition that triggered it?</p>
+<p>This changes the dynamic for users of the <code>if condition [...] then [...] else [...]</code> pattern mentioned in the beginning of this post.  The else is becoming responsive to the then's branch, it's a <code>THEN-ELSE</code> not a <code>condition-else</code>.</p>
+<h2>There's also, uh, ALSO</h2>
+<p>ALSO exists as a way to not affect the result:</p>
+<pre><code>&gt;&gt; case [
+       1 &gt; 2 [&lt;branch-one&gt;]
+       1 &lt; 2 [&lt;branch-two&gt;]
+   ] also [
+       print "I ran!"
+       &lt;also-branch&gt;
+   ]
+
+I ran!
+== &lt;branch-two&gt;
+</code></pre>
+<p>Unlike THEN, it discards its own result...so it tossed <code>&lt;also-branch&gt;</code> in favor of propagating the <code>&lt;branch-two&gt;</code> it received from the case.  So people who wanted the "telegraph the prior's success" behavior have a much more direct way of doing it.  Use <code>also [...] then [...]</code>.</p>
+<p><em>(There's no parallel for a "telegraphing ELSE", because the only thing it would telegraph would be the null that triggered it.  If you want a telegraphing ELSE, you can say <code>else [... null]</code>, which seems better for this esoteric-seeming need than coming up with a keyword for it.  I doubt anyone will have a great suggestion for a name for this, because any name seems less clear than just saying that.  "ELSO"?  <img src="https://forum.rebol.info/images/emoji/twitter/stuck_out_tongue_closed_eyes.png?v=9" title=":stuck_out_tongue_closed_eyes:" class="emoji" alt=":stuck_out_tongue_closed_eyes:">)</em></p>
+<h2>Does Evidence Point In Favor of NULLable THEN/ELSE?</h2>
+<p>I think people have a very strict model of how <strong>if condition [...] else [...]</strong> should work.  The ELSE is reacting to the condition, not to the what the branch produced in particular.  Turning NULL to ~null~ isotopes gives us the best of both worlds...cued by a branch result that is usually passed as-is...but tweaked in the rare case that it needs to be in order to signal a (slightly) distinct state from null.</p>
+<p>But <code>then [...] then [...]</code> doesn't come with these expectations.  When you look for the clause driving it, then it seems reasonable to look one unit to the left...and be sensitive to the branch's result.  If the branch ended in a conditional, and that conditional failed, it seems plausible to imagine the conditional inside of the branch having an effect on the outside.</p>
+<p>The argument for <code>then [...] else [...]</code> acting as it has comes somewhat from the idea that "Other languages that have both THEN and ELSE would pair them in such a way that they both reach back to react to a root condition".  But Rebol doesn't need a THEN for its IF--you're already dealing with something different.  So just as you have to learn <a href="https://forum.rebol.info/t/the-siren-song-of-the-arity-1-if/749">it's not <code>if condition then [code]</code></a>, you have to learn that <code>then [...] else [...]</code> is the ELSE reacting to the then's outcome.</p>
+<p>Really this is just bringing THEN more in sync with ELSE, which today allows a plain NULL result.</p>
+<h2>The mitigation is not that difficult</h2>
+<p>If you're want to write <code>then [...] else [...]</code> and have it act as before, just make sure the THEN branch doesn't itself return NULL.  It will evaluate to null if what was triggering it was null, so the only case you have to worry about is a branch evaluating to null.</p>
+<p>So you'd be fine with something like this:</p>
+<pre><code>   ...
+] then [
+   reduce [...]
+] else [
+   reduce [...]
+]
+</code></pre>
+<p>Blocks aren't null.  If you're passing back a result, most of the time the results aren't null...and if you're not passing back a result, then you can use also:</p>
+<pre><code>   ...
+] also [
+    ...
+    if condition [do side-effect]
+] else [
+    ...
+]
+</code></pre>
+<p>Like I say, this seems pretty learnable.  Just means an ELSE following a THEN may not have the relationship one might stereotypically expect.  But it seems well grounded in rationale, and it's a drop in the bucket of "other language unlearning" that is required (!)</p>
+          <p><a href="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080/1</link>
+        <pubDate>Thu, 21 Feb 2019 07:41:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1080-1</guid>
+        <source url="https://forum.rebol.info/t/should-then-and-else-be-mutually-exclusive/1080.rss">Should THEN and ELSE be Mutually Exclusive?</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should function arguments to functions be disallowed by default</title>
+    <link>https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167</link>
+    <description>Rebol2, R3-Alpha, and Red all protect against passing unsets to functions, requiring you to mark parameters that tolerate them explicitly.  So instead of `takes-void: func [x] [...]` you have to write `takes-void: func [x [any-type!]] [...]` for `takes-void ()` to work.
+
+Ren-C tweaks this around a little.  Firstly, ANY-VALUE! has replaced ANY-TYPE!, due to potential confusion over those who might think that in the pattern like ANY-SERIES! (instance of block!, instance of string!, etc.) that ANY-TYPE! might mean ANY-DATATYPE!... so the datatypes block!, string!, integer! etc.  And secondly, ANY-VALUE! specifically excludes voids, as they are not values.
+
+So the way to indicate an argument can take void is the `&lt;opt&gt;` tag.  `takes-void: func [x [&lt;opt&gt; any-value!]] [...]`
+
+But there is an additional twist, because FUNCTION! was then disallowed for parameters or return results *unless* you say ANY-VALUE! or include it specifically.  I don&#39;t know how much good this has done in the scheme of things, but the rationale for trying it was to make it unnecessary for the average routine to have to bulletproof itself against function arguments.
+
+Consider, for instance:
+
+    check-secret: func [guess] [
+        secret: &quot;abracadabra&quot;
+        print [&quot;guess:&quot; guess &quot;actual:&quot; secret]
+        return guess = secret
+    ]
+
+    tricky: func [whatever pass] [
+        print [&quot;HAHA YOUR PASSWORD IS&quot; pass]
+        quit
+    ]
+
+    check-secret (get &#39;tricky)
+
+The output of this is `HAHA YOUR PASSWORD IS abracadabra`. 
+
+I do not want to bemoan the concept of &quot;security&quot; here for several reasons.  I&#39;m just wondering if it&#39;s possible to make it a little easier to avoid getting functions when the callee doesn&#39;t expect them.
+
+Let&#39;s look at what might be thought of as a &quot;good use&quot; of passing a function in:
+
+```
+value: none
+count: 0
+cacher: does [
+     unless value [
+         print &quot;calculating!&quot; ;-- imagine this were slow
+         value: reverse &quot;arbadacarba&quot;
+     ]
+     print &quot;returning!&quot;
+     return value
+]
+
+check-secret (get &#39;cacher)
+```
+
+That will output:
+
+```
+calculating!
+returning!
+guess: abracadabra actual: abracadabra
+returning!
+== true
+```
+
+Because `check-secret` uses `guess` twice, we see two calls.  But it only does the calculation the first time.  So here we get a trick, that because `guess` has no special syntax to say it is-or-isn&#39;t a function call, it was able to handle being either.  It&#39;s being cooperative, though--expecting that the caller wanted it to act &quot;value-like&quot;.
+
+But the picture gets a bit complicated when GET (or a GET-WORD!) is used.  Consider this:
+
+```
+ something: func [arg key [word!]] [
+     word: either some-condition [&#39;arg] [key]
+     return get word
+ ]
+```
+
+Here we see a code author who tries to abstract out the place to get their value from.  They&#39;ll either get it from the arg parameter, _or_ from the word passed in.  This won&#39;t work if `arg` is a function and the intent the caller had was for `something` to invoke the function and used a call of it _as if it were a value_.
+
+### Question: How&#39;s a Function&#39;s Parameters Different from Any Object or Word?
+
+So basically, let&#39;s say I have a function **foo: func [bar] [...]** and I know bar is not a function, but it might be a block or an object, and I write something like **bar/:baz**, or maybe **:bar/:baz**. All the same issues seem to apply, bar might be a block with a function in it or not.  Maybe it&#39;s a MAP! with a function in it.  There&#39;s only one level of protection provided by guarding the function arguments from being functions...and it&#39;s going to need to be overridable anyway.
+
+So given that, is it worth the inconsistency?  In practice, how many times do people _actually_ try passing functions as arguments when they weren&#39;t expected?
+
+When @earl weighed in on the topic long ago, he said he probably made more functions-that-take-functions than most.  The casual convenience of not having to mark them as such helped for quick-and-dirty programming.  This isn&#39;t a defense of the idea that one can easily write a function that didn&#39;t expect a function argument will have any chance of handling it intelligently.  Just that &quot;well, what else can it handle intelligently anyway?  so why not let the people who want type signatures pay the cost, they really should be putting type signatures on anyway if they want the routines to be any good&quot;.</description>
+    
+    <lastBuildDate>Tue, 12 Jun 2018 07:00:28 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should function arguments to functions be disallowed by default</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So one step back on the increase in strictness is that I've made it so functions no longer require a <strong>RETURN:</strong> annotation to return NULLs or ACTION!s.</p>
+<p>The key motivator for doing this <em>right now</em> is the "de-stigmatization" of NULL.  With so many actions returning them now, writing simple wrapper functions becomes complex.</p>
+<p>But it was already hanging by a thread, anyway.  Over a fair period of usage, I feel like the return result checking probably was creating about as much headache as it was catching any bugs.  The upside of any annoyance it brought is that at least a lot more functions wound up documenting their return types!</p>
+<aside class="onebox githubcommit">
+  <header class="source">
+      <a href="https://github.com/metaeducation/ren-c/commit/1738bad91de959ba77f9bea0b5e391895cf98dc8" target="_blank" rel="noopener">github.com/metaeducation/ren-c</a>
+  </header>
+  <article class="onebox-body">
+    <div class="github-row">
+  <div class="github-icon-container" title="Commit">
+    <svg width="60" height="60" class="github-icon" viewBox="0 0 14 16" aria-hidden="true"><path d="M10.86 7c-.45-1.72-2-3-3.86-3-1.86 0-3.41 1.28-3.86 3H0v2h3.14c.45 1.72 2 3 3.86 3 1.86 0 3.41-1.28 3.86-3H14V7h-3.14zM7 10.2c-1.22 0-2.2-.98-2.2-2.2 0-1.22.98-2.2 2.2-2.2 1.22 0 2.2.98 2.2 2.2 0 1.22-.98 2.2-2.2 2.2z"></path></svg>
+  </div>
+
+  <div class="github-info-container">
+    <h4>
+      <a href="https://github.com/metaeducation/ren-c/commit/1738bad91de959ba77f9bea0b5e391895cf98dc8" target="_blank" rel="noopener">Allow actions to return &lt;opt&gt; any-value! by default</a>
+    </h4>
+
+    <div class="github-info">
+      <div class="date">
+        committed <span class="discourse-local-date" data-format="ll" data-date="2018-06-12" data-time="06:55:04" data-timezone="UTC">06:55AM - 12 Jun 18 UTC</span>
+      </div>
+
+      <div class="user">
+        <a href="https://github.com/hostilefork" target="_blank" rel="noopener">
+          <img alt="hostilefork" src="https://avatars1.githubusercontent.com/u/20440?v=4" class="onebox-avatar-inline" width="20" height="20">
+          hostilefork
+        </a>
+        
+      </div>
+
+      <div class="lines" title="changed 1 files with 6 additions and 29 deletions">
+        <a href="https://github.com/metaeducation/ren-c/commit/1738bad91de959ba77f9bea0b5e391895cf98dc8" target="_blank" rel="noopener">
+          <span class="added">+6</span>
+          <span class="removed">-29</span>
+        </a>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+  <div class="github-row">
+    <pre class="github-content" style="white-space: normal;">To try and help people writing FUNCTIONs (as opposed to PROCEDUREs)
+be sure they were "actually returning a value", nulls were disallowed
+by...</pre>
+  </div>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+          <p><a href="https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167/3</link>
+        <pubDate>Tue, 12 Jun 2018 07:00:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-167-3</guid>
+        <source url="https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167.rss">Should function arguments to functions be disallowed by default</source>
+      </item>
+      <item>
+        <title>Should function arguments to functions be disallowed by default</title>
+        <dc:creator><![CDATA[draegtun]]></dc:creator>
+        <description><![CDATA[
+            <p>I have previously discussed this with <a class="mention" href="/u/hostilefork">@hostilefork</a> before - <a href="https://github.com/metaeducation/ren-c/pull/481#pullrequestreview-34974129" rel="nofollow noopener">https://github.com/metaeducation/ren-c/pull/481#pullrequestreview-34974129</a></p>
+<p>I think this is an important feature that <a class="mention" href="/u/hostilefork">@hostilefork</a> has added here.</p>
+<p>I think the choice for community is whether this should be....</p>
+<ul>
+<li>on by default?</li>
+<li>show a warning instead of runtime error? (bit like Perl's <code>use warnings</code>, which is a pragma you can turn on/off or even force warning into runtime error)</li>
+<li>set by command-line switch (eg. part of perhaps?  <code>./r3 +s</code>) or in Rebol header (eg. <code>Rebol [secure: yes]</code>?</li>
+</ul>
+          <p><a href="https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167/2</link>
+        <pubDate>Mon, 03 Jul 2017 15:40:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-167-2</guid>
+        <source url="https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167.rss">Should function arguments to functions be disallowed by default</source>
+      </item>
+      <item>
+        <title>Should function arguments to functions be disallowed by default</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebol2, R3-Alpha, and Red all protect against passing unsets to functions, requiring you to mark parameters that tolerate them explicitly.  So instead of <code>takes-void: func [x] [...]</code> you have to write <code>takes-void: func [x [any-type!]] [...]</code> for <code>takes-void ()</code> to work.</p>
+<p>Ren-C tweaks this around a little.  Firstly, ANY-VALUE! has replaced ANY-TYPE!, due to potential confusion over those who might think that in the pattern like ANY-SERIES! (instance of block!, instance of string!, etc.) that ANY-TYPE! might mean ANY-DATATYPE!... so the datatypes block!, string!, integer! etc.  And secondly, ANY-VALUE! specifically excludes voids, as they are not values.</p>
+<p>So the way to indicate an argument can take void is the <code>&lt;opt&gt;</code> tag.  <code>takes-void: func [x [&lt;opt&gt; any-value!]] [...]</code></p>
+<p>But there is an additional twist, because FUNCTION! was then disallowed for parameters or return results <em>unless</em> you say ANY-VALUE! or include it specifically.  I don't know how much good this has done in the scheme of things, but the rationale for trying it was to make it unnecessary for the average routine to have to bulletproof itself against function arguments.</p>
+<p>Consider, for instance:</p>
+<pre><code>check-secret: func [guess] [
+    secret: "abracadabra"
+    print ["guess:" guess "actual:" secret]
+    return guess = secret
+]
+
+tricky: func [whatever pass] [
+    print ["HAHA YOUR PASSWORD IS" pass]
+    quit
+]
+
+check-secret (get 'tricky)
+</code></pre>
+<p>The output of this is <code>HAHA YOUR PASSWORD IS abracadabra</code>.</p>
+<p>I do not want to bemoan the concept of "security" here for several reasons.  I'm just wondering if it's possible to make it a little easier to avoid getting functions when the callee doesn't expect them.</p>
+<p>Let's look at what might be thought of as a "good use" of passing a function in:</p>
+<pre><code class="lang-auto">value: none
+count: 0
+cacher: does [
+     unless value [
+         print "calculating!" ;-- imagine this were slow
+         value: reverse "arbadacarba"
+     ]
+     print "returning!"
+     return value
+]
+
+check-secret (get 'cacher)
+</code></pre>
+<p>That will output:</p>
+<pre><code class="lang-auto">calculating!
+returning!
+guess: abracadabra actual: abracadabra
+returning!
+== true
+</code></pre>
+<p>Because <code>check-secret</code> uses <code>guess</code> twice, we see two calls.  But it only does the calculation the first time.  So here we get a trick, that because <code>guess</code> has no special syntax to say it is-or-isn't a function call, it was able to handle being either.  It's being cooperative, though--expecting that the caller wanted it to act "value-like".</p>
+<p>But the picture gets a bit complicated when GET (or a GET-WORD!) is used.  Consider this:</p>
+<pre><code class="lang-auto"> something: func [arg key [word!]] [
+     word: either some-condition ['arg] [key]
+     return get word
+ ]
+</code></pre>
+<p>Here we see a code author who tries to abstract out the place to get their value from.  They'll either get it from the arg parameter, <em>or</em> from the word passed in.  This won't work if <code>arg</code> is a function and the intent the caller had was for <code>something</code> to invoke the function and used a call of it <em>as if it were a value</em>.</p>
+<h3>Question: How's a Function's Parameters Different from Any Object or Word?</h3>
+<p>So basically, let's say I have a function <strong>foo: func [bar] [...]</strong> and I know bar is not a function, but it might be a block or an object, and I write something like <strong>bar/:baz</strong>, or maybe <strong>:bar/:baz</strong>. All the same issues seem to apply, bar might be a block with a function in it or not.  Maybe it's a MAP! with a function in it.  There's only one level of protection provided by guarding the function arguments from being functions...and it's going to need to be overridable anyway.</p>
+<p>So given that, is it worth the inconsistency?  In practice, how many times do people <em>actually</em> try passing functions as arguments when they weren't expected?</p>
+<p>When <span class="mention">@earl</span> weighed in on the topic long ago, he said he probably made more functions-that-take-functions than most.  The casual convenience of not having to mark them as such helped for quick-and-dirty programming.  This isn't a defense of the idea that one can easily write a function that didn't expect a function argument will have any chance of handling it intelligently.  Just that "well, what else can it handle intelligently anyway?  so why not let the people who want type signatures pay the cost, they really should be putting type signatures on anyway if they want the routines to be any good".</p>
+          <p><a href="https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167/1</link>
+        <pubDate>Wed, 28 Jun 2017 21:07:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-167-1</guid>
+        <source url="https://forum.rebol.info/t/should-function-arguments-to-functions-be-disallowed-by-default/167.rss">Should function arguments to functions be disallowed by default</source>
+      </item>
+  </channel>
+</rss>

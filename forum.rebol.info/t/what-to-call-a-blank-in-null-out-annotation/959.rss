@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>What to call a blank-in, null-out annotation?</title>
+    <link>https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959</link>
+    <description>The convention of BLANK-in, NULL-out...in which routines act as no-ops when they receive a blank...is extremely common.  So far it&#39;s meant you wind up writing things like:
+
+    exists?: function [file [blank! file!]] [
+         if blank? file [return null]
+         ... // actual code
+    ]
+
+With @rgchris&#39;s recent updating efforts running against the &quot;more nulls&quot; convention, I&#39;ve tried to emphasize that following this convention is what makes it all &quot;work&quot;.  It&#39;s why COLLECT returning NULL becomes smart and palatable.  The conditional falsey-ness of NULLs, with the ease by which TRY can turn it into a &quot;friendlier&quot; nothing that most routines are willing to pass on, is an elegant design.
+
+There&#39;s a lot of upside to this.  Especially if the evaluator knows a parameter means &quot;don&#39;t run if blank&quot;...it can avoid the processing and overhead involved in a call.  That&#39;s on top of all the savings you get by not generating the empty blocks or strings in the first place, then having to GC them.  It&#39;s better, I promise!!!
+ 
+**But it only works if the convention is pervasive.**  So it has to be easier...what should the annotation be called?  If it were Zen it could be `&lt;unask&gt;` or `&lt;mu&gt;` for &quot;unasking a question&quot;.  :-)
+
+I think a good choice is to just use a TAG! that says `&lt;blank&gt;` vs. the datatype BLANK!.
+
+    exists?: function [file [&lt;blank&gt; file!]] [
+         ... // actual code, that never receives a blank
+         ... // because the function won&#39;t be run if it gets one!
+    ]
+
+It&#39;s similar to an existing convention for return types.  When you say `return: &lt;void&gt;`, it means &quot;no matter what is returned, make it a void, so other results don&#39;t leak out&quot;.  While `return: [void!]` is just like returning any other datatype...e.g. &quot;void is one of the acceptable return types, check that the routine doesn&#39;t return anything else&quot;.
+
+So my thought here is that it&#39;s learnable that `&lt;blank&gt;` means &quot;special blank&quot;.  You&#39;d find out pretty quickly there&#39;s a difference from plain `blank!` in your typeset, because your function won&#39;t run at all if it is blank!
+
+I&#39;d be wary of a name that didn&#39;t mention blank at all, and talked only about the effects.  Like that it returns null, or something:
+
+    exists?: function [file [&lt;nullifies&gt; file!]] ...
+    exists?: function [file [&lt;revokes&gt; file!]] ...
+    exists?: function [file [&lt;retracts&gt; file!]] ...
+
+To my mind, *the word blank has to be in there to draw attention to blank&#39;s role*.  But more than one word seems it would get clunky.   `&lt;no-op-if-blank&gt;`, `&lt;blank-revokes&gt;`, `&lt;blank-in-null-out&gt;` ad nauseum.  There are some other one-word options, like `&lt;blankable&gt;` or `&lt;blankifies&gt;` but I&#39;m not sure what it adds.
+
+So my vote is plain `&lt;blank&gt;`.  Admittedly, it is subtle to just be &quot;special blank!&quot;, and leave it up to the imagination of what&#39;s so special about that blank.  But I think in the long run, the cleanness and appreciation for less typing outweighs its somewhat enigmatic nature.
+
+Anyone object?</description>
+    
+    <lastBuildDate>Thu, 13 Dec 2018 22:40:31 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>What to call a blank-in, null-out annotation?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Something has kind of come to me while thinking about when something would take a blank argument vs. a null one.</p>
+<ul>
+<li>
+<p>A null passed to an <code>&lt;opt&gt;</code> argument means <em>I am opting out of this argument</em>...but I still want to receive the result of the operation.  e.g. you don't want <strong>append block if false []</strong> to return null and not follow the APPEND protocol.</p>
+</li>
+<li>
+<p>A BLANK! passed to a <code>&lt;blank&gt;</code> argument (or whatever it is called) means <em>I am opting out of this operation</em>.</p>
+</li>
+</ul>
+<p>This helps provide some guidance on things like DELIMIT and its "delimiter" parameter.  It should take a NULL, not a BLANK! to mean "no delimiter".  Because even without a delimiter, you are asking it to do some work and give you a return result.</p>
+<h2>The lunatic fringe: Should APPEND not run if the series is blank?</h2>
+<aside class="quote no-group" data-post="3" data-topic="959">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I feel like you should have more of a reason <em>not</em> to allow blanks to opt out of arguments and ask the function not to be called, than to need a reason to have it.</p>
+</blockquote>
+</aside>
+<p>A classic example of "what seems like a bad idea" has been the concept of APPEND to a blank series opting out:</p>
+<pre><code>data: _
+...
+append data value // it could do nothing and return null, but who checks it?!
+</code></pre>
+<p>It's clear this provides more flexibility than erroring.  But is it way too dangerous?</p>
+<p><em>Maybe not, if blanks aren't very common.</em></p>
+<p>Note that refinement arguments no longer default to blank, they're unset.  It's becoming extremely rare for routines to return blanks...you might find them if you're doing structural work on blocks.  Most things return null when they fail, and no one is suggesting <strong>append null value</strong> being anything but an error.</p>
+<p>This is one of those "sounds kinda scary" ideas that also "sounds kinda cool".  If BLANK! can shift its role to being the "reified black hole" and acting like a sort of generalized /dev/null, that could be interesting.</p>
+<p>For the moment, I kind of feel that operations for which people usually don't check a result, and expect a mutation, it is probably still better to err on the safe side.  And it's always better to err on the safe side...as what's an error today could be eased later, while going to other direction is harder on people.</p>
+<p>But it's something to think about--in light of the point about what blanks and nulls mean.</p>
+          <p><a href="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959/4</link>
+        <pubDate>Thu, 13 Dec 2018 22:40:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-959-4</guid>
+        <source url="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959.rss">What to call a blank-in, null-out annotation?</source>
+      </item>
+      <item>
+        <title>What to call a blank-in, null-out annotation?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="2" data-topic="959">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>I’ll reserve judgment for those like <a class="mention" href="/u/rgchris">@rgchris</a> who are busy absorbing and applying these new conventions.</p>
+</blockquote>
+</aside>
+<p>We have another question, which is <em>when should a blank not opt out</em>.  Branches of conditionals?  Bodies of loops?</p>
+<pre><code>condition: _
+body: [...]
+while condition body // why shouldn't this be a no-op?
+
+condition: [...]
+body: _
+while condition body // why shouldn't this be a no-op?
+</code></pre>
+<p>Blanks are the intentional form of "I meant to do that" nothing, while to get nulls you'd be working with unset variables, or function calls...and the design is being careful to have functions return nulls vs. blanks on "nothing found".</p>
+<p>One critique could be that it's not as obviously safe when no one checks the result...like with a WHILE, there's nothing to error on a null.  Though I would ask: why did you use BLANK! if you didn't want the smooth and errorless opting out?  Why not use null, so the variable was unset?</p>
+<p>This is quite useful for code golf.  But also for building library routines...the new efficient trick of not calling function bodies at all when parameters are marked <code>&lt;blank&gt;</code> makes it desirable to take advantage of it wherever possible.  I feel like you should have more of a reason <em>not</em> to allow blanks to opt out of arguments and ask the function not to be called, than to need a reason to have it.</p>
+          <p><a href="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959/3</link>
+        <pubDate>Thu, 13 Dec 2018 17:45:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-959-3</guid>
+        <source url="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959.rss">What to call a blank-in, null-out annotation?</source>
+      </item>
+      <item>
+        <title>What to call a blank-in, null-out annotation?</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>No objection here. Seems fine but I'll reserve judgment for those like <a class="mention" href="/u/rgchris">@rgchris</a> who are busy absorbing and applying these new conventions.</p>
+          <p><a href="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959/2</link>
+        <pubDate>Thu, 13 Dec 2018 15:16:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-959-2</guid>
+        <source url="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959.rss">What to call a blank-in, null-out annotation?</source>
+      </item>
+      <item>
+        <title>What to call a blank-in, null-out annotation?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The convention of BLANK-in, NULL-out...in which routines act as no-ops when they receive a blank...is extremely common.  So far it's meant you wind up writing things like:</p>
+<pre><code>exists?: function [file [blank! file!]] [
+     if blank? file [return null]
+     ... // actual code
+]
+</code></pre>
+<p>With <a class="mention" href="/u/rgchris">@rgchris</a>'s recent updating efforts running against the "more nulls" convention, I've tried to emphasize that following this convention is what makes it all "work".  It's why COLLECT returning NULL becomes smart and palatable.  The conditional falsey-ness of NULLs, with the ease by which TRY can turn it into a "friendlier" nothing that most routines are willing to pass on, is an elegant design.</p>
+<p>There's a lot of upside to this.  Especially if the evaluator knows a parameter means "don't run if blank"...it can avoid the processing and overhead involved in a call.  That's on top of all the savings you get by not generating the empty blocks or strings in the first place, then having to GC them.  It's better, I promise!!!</p>
+<p><strong>But it only works if the convention is pervasive.</strong>  So it has to be easier...what should the annotation be called?  If it were Zen it could be <code>&lt;unask&gt;</code> or <code>&lt;mu&gt;</code> for "unasking a question".  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>I think a good choice is to just use a TAG! that says <code>&lt;blank&gt;</code> vs. the datatype BLANK!.</p>
+<pre><code>exists?: function [file [&lt;blank&gt; file!]] [
+     ... // actual code, that never receives a blank
+     ... // because the function won't be run if it gets one!
+]
+</code></pre>
+<p>It's similar to an existing convention for return types.  When you say <code>return: &lt;void&gt;</code>, it means "no matter what is returned, make it a void, so other results don't leak out".  While <code>return: [void!]</code> is just like returning any other datatype...e.g. "void is one of the acceptable return types, check that the routine doesn't return anything else".</p>
+<p>So my thought here is that it's learnable that <code>&lt;blank&gt;</code> means "special blank".  You'd find out pretty quickly there's a difference from plain <code>blank!</code> in your typeset, because your function won't run at all if it is blank!</p>
+<p>I'd be wary of a name that didn't mention blank at all, and talked only about the effects.  Like that it returns null, or something:</p>
+<pre><code>exists?: function [file [&lt;nullifies&gt; file!]] ...
+exists?: function [file [&lt;revokes&gt; file!]] ...
+exists?: function [file [&lt;retracts&gt; file!]] ...
+</code></pre>
+<p>To my mind, <em>the word blank has to be in there to draw attention to blank's role</em>.  But more than one word seems it would get clunky.   <code>&lt;no-op-if-blank&gt;</code>, <code>&lt;blank-revokes&gt;</code>, <code>&lt;blank-in-null-out&gt;</code> ad nauseum.  There are some other one-word options, like <code>&lt;blankable&gt;</code> or <code>&lt;blankifies&gt;</code> but I'm not sure what it adds.</p>
+<p>So my vote is plain <code>&lt;blank&gt;</code>.  Admittedly, it is subtle to just be "special blank!", and leave it up to the imagination of what's so special about that blank.  But I think in the long run, the cleanness and appreciation for less typing outweighs its somewhat enigmatic nature.</p>
+<p>Anyone object?</p>
+          <p><a href="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959/1</link>
+        <pubDate>Thu, 13 Dec 2018 04:11:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-959-1</guid>
+        <source url="https://forum.rebol.info/t/what-to-call-a-blank-in-null-out-annotation/959.rss">What to call a blank-in, null-out annotation?</source>
+      </item>
+  </channel>
+</rss>

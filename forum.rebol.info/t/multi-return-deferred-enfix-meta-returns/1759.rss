@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Multi-Return: Deferred Enfix + Meta Returns</title>
+    <link>https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759</link>
+    <description>So multi-return is based on a (conceptually) simple trick for writing ordinary function calls.  The &quot;extra returns&quot; are really just refinements that are labeled as outputs, but you can invoke them normally as refinements that take a WORD!... as was done historically for extra outputs of a function.
+
+Traditional code:
+
+    &gt;&gt; block: transcode &quot;1 2 3&quot;
+    == [1 2 3]  ; defaults to assuming you want the whole thing transcoded
+
+    &gt;&gt; value: transcode/next &quot;1 2 3&quot; &#39;rest
+    == 1  ; asking for /next gives you just one value
+
+    &gt;&gt; rest
+    == &quot; 2 3&quot;  ; the REST word passed in gets assigned the remainder
+
+Now for some  🍬 [**Syntactic Sugar**](https://en.wikipedia.org/wiki/Syntactic_sugar) 🍭 that is enabled when NEXT is marked as an &quot;output refinement&quot; (**next:**) instead of an &quot;ordinary refinement&quot; (**/next**) in the function spec:
+
+    &gt;&gt; [value rest]: transcode &quot;1 2 3&quot; 
+    == 1
+
+    &gt;&gt; value
+    == 1  ; the overall expression was 1, but value was also assigned 1
+
+    &gt;&gt; rest
+    == &quot; 2 3&quot;  ; just as if you&#39;d named the /NEXT refinement and passed &#39;REST
+
+## But There Have Been Enfix Complications...
+
+Though simple in concept, the multi-returns aren&#39;t completely simple in implementation...and at present run through a bit of different code than ordinary function calls (though of course most of the function execution, type checking, etc. are shared).
+
+The parts that are different--however--were creating problems with enfix...which wasn&#39;t managed as part of the frame filling process.  So it just errored.
+
+    &gt;&gt; [value rest]: transcode &quot;1 2 3&quot; then [&lt;item!&gt;]
+    ** Script Error: Ambiguous infix expression--use GROUP! to clarify
+
+You could get it to execute by putting the part before the THEN in a group:
+
+    &gt;&gt; ([value rest]: transcode &quot;1 2 3&quot;) then [&lt;item!&gt;]
+    == &lt;item!&gt;
+
+Which works...*but what if that isn&#39;t the semantics you wanted?*  That means your overall expression evaluates to `&lt;item!&gt;` but value is still getting 1.
+
+Consider that we usually want the result of an ELSE to get into the value of a variable:
+
+    &gt;&gt; x: if 1 &gt; 2 [10] else [20]
+    == 20
+
+    &gt;&gt; x
+    == 20
+
+If you had to write this with a GROUP! you&#39;d get x as the result of the IF (null in this case, since 1 &lt; 2)
+
+    &gt;&gt; (x: if 1 &gt; 2 [10]) else [20]
+    == 20
+
+    &gt;&gt; x
+    ; null
+
+So that&#39;s the situation we were in with multi-returns--not having a choice.  You&#39;d wind up with the variable assigned the result of the original function...never being able to use the enfix product.
+
+**It looks like I have a fix for this, so you&#39;ll be able to choose either way.**
+
+## Recap of The No-Group-On-Right Limitation
+
+I&#39;ve mentioned how being syntactic sugar kind of limits what we can do with multi-returns.  You can&#39;t put the right hand side in a group:
+
+    [value rest]: (transcode &quot;1 2 3&quot;)
+
+This is because it could be more than one call, and you don&#39;t know what will come after it, and it could be arbitrarily deep:
+
+    [value rest]: ((((transcode &quot;1 2 3&quot;, ...))))
+
+You *might* argue we could still allow it if the multi-returns are tunneled down to the function and the value gets assigned from the final product of the group.
+
+But I don&#39;t like it because then you are talking about something that left quoting enfix couldn&#39;t do.  I like the idea that when you get in a pinch and want to override a multi-return assignment you could do it by declaring your function enfix and pick up the SET-BLOCK! on the left as a parameter.
+
+That interchangeability offers a good dynamic, and it&#39;s how [things like UNPACK](https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634) fit into this universe...where they seem like first-class language features.  Doing crazy things that don&#39;t relate to what users could build themselves isn&#39;t the ergonomic we&#39;re looking for (e.g. &quot;bad lego alligator&quot; territory).
+
+## The Meta Dilemma
+
+The hard rule that the thing on the right of the SET-BLOCK! be the function with the multi-returns caused a problem with wanting to ask for the &quot;meta&quot; result.
+
+UPARSE has this desire often.  It may be that a parser returns something like an unset or a null isotope.  We want to handle those distinctly from nulls, as well as to not choke on them as invalid variables.  So we ask for the meta-result of the parser.
+
+I wrote a special exemption to allow it, like this:
+
+    ([result progress]: ^ parser input) then [...]
+
+Recognizing the **^** specially in the multi-return code felt wrong.  Where do such things stop...why not **([...]: ^ ^ ^ parser input)** ?  It has a similar arbitrariness to it that digging through parentheses seemed to have.
+
+But with the META-WORD! we had a new option...to put the meta on the argument itself:
+
+    ([^result progress]: parser input) then [...]
+
+To some people&#39;s tastes maybe that looks worse.  but it is more compact.  And it can work even if you don&#39;t name a variable:
+
+    &gt;&gt; [^ rest]: transcode &quot;1 2 3&quot;
+    == &#39;1
+
+It feels more like things are in the right place this way.  Multi-return was prototyped as just an application of enfix quoting blocks on the left of a function...and I kind of like it not straying too far from what that could do.  This is within reach of that.
+
+These might seem like small things, but, they are important.</description>
+    
+    <lastBuildDate>Fri, 26 Nov 2021 16:16:06 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Multi-Return: Deferred Enfix + Meta Returns</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So multi-return is based on a (conceptually) simple trick for writing ordinary function calls.  The "extra returns" are really just refinements that are labeled as outputs, but you can invoke them normally as refinements that take a WORD!... as was done historically for extra outputs of a function.</p>
+<p>Traditional code:</p>
+<pre><code>&gt;&gt; block: transcode "1 2 3"
+== [1 2 3]  ; defaults to assuming you want the whole thing transcoded
+
+&gt;&gt; value: transcode/next "1 2 3" 'rest
+== 1  ; asking for /next gives you just one value
+
+&gt;&gt; rest
+== " 2 3"  ; the REST word passed in gets assigned the remainder
+</code></pre>
+<p>Now for some  <img src="https://forum.rebol.info/images/emoji/twitter/candy.png?v=9" title=":candy:" class="emoji" alt=":candy:"> <a href="https://en.wikipedia.org/wiki/Syntactic_sugar"><strong>Syntactic Sugar</strong></a> <img src="https://forum.rebol.info/images/emoji/twitter/lollipop.png?v=9" title=":lollipop:" class="emoji" alt=":lollipop:"> that is enabled when NEXT is marked as an "output refinement" (<strong>next:</strong>) instead of an "ordinary refinement" (<strong>/next</strong>) in the function spec:</p>
+<pre><code>&gt;&gt; [value rest]: transcode "1 2 3" 
+== 1
+
+&gt;&gt; value
+== 1  ; the overall expression was 1, but value was also assigned 1
+
+&gt;&gt; rest
+== " 2 3"  ; just as if you'd named the /NEXT refinement and passed 'REST
+</code></pre>
+<h2>But There Have Been Enfix Complications...</h2>
+<p>Though simple in concept, the multi-returns aren't completely simple in implementation...and at present run through a bit of different code than ordinary function calls (though of course most of the function execution, type checking, etc. are shared).</p>
+<p>The parts that are different--however--were creating problems with enfix...which wasn't managed as part of the frame filling process.  So it just errored.</p>
+<pre><code>&gt;&gt; [value rest]: transcode "1 2 3" then [&lt;item!&gt;]
+** Script Error: Ambiguous infix expression--use GROUP! to clarify
+</code></pre>
+<p>You could get it to execute by putting the part before the THEN in a group:</p>
+<pre><code>&gt;&gt; ([value rest]: transcode "1 2 3") then [&lt;item!&gt;]
+== &lt;item!&gt;
+</code></pre>
+<p>Which works...<em>but what if that isn't the semantics you wanted?</em>  That means your overall expression evaluates to <code>&lt;item!&gt;</code> but value is still getting 1.</p>
+<p>Consider that we usually want the result of an ELSE to get into the value of a variable:</p>
+<pre><code>&gt;&gt; x: if 1 &gt; 2 [10] else [20]
+== 20
+
+&gt;&gt; x
+== 20
+</code></pre>
+<p>If you had to write this with a GROUP! you'd get x as the result of the IF (null in this case, since 1 &lt; 2)</p>
+<pre><code>&gt;&gt; (x: if 1 &gt; 2 [10]) else [20]
+== 20
+
+&gt;&gt; x
+; null
+</code></pre>
+<p>So that's the situation we were in with multi-returns--not having a choice.  You'd wind up with the variable assigned the result of the original function...never being able to use the enfix product.</p>
+<p><strong>It looks like I have a fix for this, so you'll be able to choose either way.</strong></p>
+<h2>Recap of The No-Group-On-Right Limitation</h2>
+<p>I've mentioned how being syntactic sugar kind of limits what we can do with multi-returns.  You can't put the right hand side in a group:</p>
+<pre><code>[value rest]: (transcode "1 2 3")
+</code></pre>
+<p>This is because it could be more than one call, and you don't know what will come after it, and it could be arbitrarily deep:</p>
+<pre><code>[value rest]: ((((transcode "1 2 3", ...))))
+</code></pre>
+<p>You <em>might</em> argue we could still allow it if the multi-returns are tunneled down to the function and the value gets assigned from the final product of the group.</p>
+<p>But I don't like it because then you are talking about something that left quoting enfix couldn't do.  I like the idea that when you get in a pinch and want to override a multi-return assignment you could do it by declaring your function enfix and pick up the SET-BLOCK! on the left as a parameter.</p>
+<p>That interchangeability offers a good dynamic, and it's how <a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634">things like UNPACK</a> fit into this universe...where they seem like first-class language features.  Doing crazy things that don't relate to what users could build themselves isn't the ergonomic we're looking for (e.g. "bad lego alligator" territory).</p>
+<h2>The Meta Dilemma</h2>
+<p>The hard rule that the thing on the right of the SET-BLOCK! be the function with the multi-returns caused a problem with wanting to ask for the "meta" result.</p>
+<p>UPARSE has this desire often.  It may be that a parser returns something like an unset or a null isotope.  We want to handle those distinctly from nulls, as well as to not choke on them as invalid variables.  So we ask for the meta-result of the parser.</p>
+<p>I wrote a special exemption to allow it, like this:</p>
+<pre><code>([result progress]: ^ parser input) then [...]
+</code></pre>
+<p>Recognizing the <strong>^</strong> specially in the multi-return code felt wrong.  Where do such things stop...why not <strong>([...]: ^ ^ ^ parser input)</strong> ?  It has a similar arbitrariness to it that digging through parentheses seemed to have.</p>
+<p>But with the META-WORD! we had a new option...to put the meta on the argument itself:</p>
+<pre><code>([^result progress]: parser input) then [...]
+</code></pre>
+<p>To some people's tastes maybe that looks worse.  but it is more compact.  And it can work even if you don't name a variable:</p>
+<pre><code>&gt;&gt; [^ rest]: transcode "1 2 3"
+== '1
+</code></pre>
+<p>It feels more like things are in the right place this way.  Multi-return was prototyped as just an application of enfix quoting blocks on the left of a function...and I kind of like it not straying too far from what that could do.  This is within reach of that.</p>
+<p>These might seem like small things, but, they are important.</p>
+          <p><a href="https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759/1</link>
+        <pubDate>Fri, 26 Nov 2021 14:18:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1759-1</guid>
+        <source url="https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759.rss">Multi-Return: Deferred Enfix + Meta Returns</source>
+      </item>
+  </channel>
+</rss>

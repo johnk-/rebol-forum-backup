@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Semantics of PORT!s vs. Streams vs. Iterators</title>
+    <link>https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689</link>
+    <description>I&#39;ve complained often about PORT! seeming to try and serve two masters... it tries to act as something of an OBJECT!, but also a stream.
+
+Here is the definition of system.standard.port...the template object from which PORT!s are created:
+
+    system.standard.port: make object! [
+        spec: &#39;
+        scheme: &#39;
+        actor: &#39;
+        awake: ~unset~
+        state: &#39;
+        data: &#39;
+        locals: &#39;
+
+        connections: &#39;  ; currently used only by TCP ports
+    ]
+
+That&#39;s an OBJECT!, but the underlying datatype is switched to PORT! when the port is created.
+
+## How Do You Interact With This Object as an Object?
+
+The [&quot;What is a Port&quot;](https://forum.rebol.info/t/what-is-a-port/617) document says this:
+
+&gt; Specific *action functions* can be applied to a port. Some common actions are:
+&gt; 
+&gt; * **make** - create a new port
+&gt; * **open** - initialize the port
+&gt; * **close** - finalize the port
+&gt; * **read** - read data from port
+&gt; * **write** - write data to port
+&gt; * **query** - get other information from port
+&gt; * **update** - detect external changes to the port
+&gt; 
+&gt; But, there are many other actions as well, as generally defined by Rebol datatypes.
+
+What else qualifies as these &quot;many other actions?&quot;  
+
+* [Rebol2&#39;s ODBC](http://www.rebol.com/docs/database.html) suggests **PICK (FIRST)**, **INSERT**, and **COPY** as choices.
+
+* Source code for [File Port in R3-Alpha](https://github.com/rebol/rebol/blob/master/src/core/p-file.c) shows **APPEND**, **DELETE**, **RENAME**, **MODIFY**, **OPEN?**, **LENGTH?**, **HEAD**, **TAIL**, **NEXT**, **BACK**, **SKIP**, **HEAD?**, **TAIL?**, **PAST?**, **CLEAR**.
+
+*This is awfully saturated, and it seems nothing is off the table for what this abstract idea of a PORT! might want to react to.*
+
+So how do you get at these object fields safely?  How do you PICK the SPEC field?  How do you POKE the AWAKE function?  
+
+## More Problems: PORT and 1:1 with STREAM Correspondence
+
+When you&#39;re working with a TCP connection, you supposedly think of that as a bidirectional PORT!.  You don&#39;t open a connection for your input, and one for your output--you read and write to the same port.
+
+If so, why is there **system.ports.input** and **system.ports.output** instead of **system.ports.stdio**?
+
+One technical good reason there is that there are actually two stdio output streams: the stdout and the stderr for error messages.  Often these are directed to the same place, but not always.
+
+So here you see that maybe something like stdio would like to be an object aggregating three data streams: 1 for input and two for output.
+
+## Difference Between Ports and User Defined Datatypes?
+
+It doesn&#39;t really seem like anything is off the table for what you can override on a PORT!.
+
+Can you define what it means to ADD to a PORT!?  If not, why not?
+
+What about path selection on a PORT! (or today&#39;s field access via TUPLE!, another option).
+
+Once you get into this &quot;anything goes&quot; attitude you are essentially talking about an implementation for user-defined datatypes.
+
+This points out an important aspect of the articulation of any design: **You need to be able to say what it isn&#39;t, or there&#39;s no meaningful definition of what it is.**
+
+## Streaming/Iterating Is Narrower And Needs a Protocol
+
+While PORT! is slippery, I&#39;m going to be attacking just the more basic questions of streaming and iteration.
+
+We want to be able to say `parse some-100-mb-file [&quot;FOO&quot; &lt;stop&gt;]` and not have to read 100 megabytes just to know if it started with &quot;FOO&quot;
+
+And we want to be able to do that with something like FOR-EACH as well...
+
+     for-each [x y z] some-100-mb-file [
+         all [x = #f, y = #o, z = #o] then [break]
+     ]
+
+That shouldn&#39;t need to have all 100 megabytes in memory.  And a generic solution to this which puts iteration in the mix should allow for streams to be piped and connected to each other to do filtering, encryption/decryption, compression, etc...
+
+So I&#39;m going to focus on the narrower question of how to do that, vs. the muddle of &quot;What is a PORT!&quot;, at this time.  Wishful thinking isn&#39;t going to solve that problem, but rational adaptation of the methods used by other languages that do this might.</description>
+    
+    <lastBuildDate>Fri, 27 Aug 2021 13:03:27 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Semantics of PORT!s vs. Streams vs. Iterators</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <p>I'll add one extra perspective around the semantics of ports from a user pov, at least for Rebol 2.</p>
+<p>Way back when, I got interested in ports because I thought Rebol interpreters were going to talk dialects to each other via ports. I was eventually disappointed.  In my only documented port scheme <a href="http://www.rebol.org/documentation.r?script=do-pop-scheme.r">do-pop</a>, I thought a port was a better option than an object because it could cleanup after itself. Nevertheless, I side-stepped the clunky port interface and the cognitive burden of trying to translate the semantic action I wanted into port actions - they don't fit well anyway.  Instead I used the port as an bind and evaluator of simple function calls, where the "evaluation" happened remotely.  I don't know that it was a great idea, but it was interesting to me because it was like a "relative expression" was being evaluated over the wire transparently.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1689">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I'm going to be attacking just the more basic questions of streaming and iteration.</p>
+</blockquote>
+</aside>
+<p>Wise.</p>
+          <p><a href="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689/3</link>
+        <pubDate>Fri, 27 Aug 2021 13:03:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1689-3</guid>
+        <source url="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689.rss">Semantics of PORT!s vs. Streams vs. Iterators</source>
+      </item>
+      <item>
+        <title>Semantics of PORT!s vs. Streams vs. Iterators</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I never really liked ports to begin with. I'd more likely create my own object to encapsulate the port and use my own functions to interact with it.</p>
+          <p><a href="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689/2</link>
+        <pubDate>Fri, 27 Aug 2021 09:16:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1689-2</guid>
+        <source url="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689.rss">Semantics of PORT!s vs. Streams vs. Iterators</source>
+      </item>
+      <item>
+        <title>Semantics of PORT!s vs. Streams vs. Iterators</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've complained often about PORT! seeming to try and serve two masters... it tries to act as something of an OBJECT!, but also a stream.</p>
+<p>Here is the definition of system.standard.port...the template object from which PORT!s are created:</p>
+<pre><code>system.standard.port: make object! [
+    spec: '
+    scheme: '
+    actor: '
+    awake: ~unset~
+    state: '
+    data: '
+    locals: '
+
+    connections: '  ; currently used only by TCP ports
+]
+</code></pre>
+<p>That's an OBJECT!, but the underlying datatype is switched to PORT! when the port is created.</p>
+<h2>How Do You Interact With This Object as an Object?</h2>
+<p>The <a href="https://forum.rebol.info/t/what-is-a-port/617">"What is a Port"</a> document says this:</p>
+<blockquote>
+<p>Specific <em>action functions</em> can be applied to a port. Some common actions are:</p>
+<ul>
+<li>
+<strong>make</strong> - create a new port</li>
+<li>
+<strong>open</strong> - initialize the port</li>
+<li>
+<strong>close</strong> - finalize the port</li>
+<li>
+<strong>read</strong> - read data from port</li>
+<li>
+<strong>write</strong> - write data to port</li>
+<li>
+<strong>query</strong> - get other information from port</li>
+<li>
+<strong>update</strong> - detect external changes to the port</li>
+</ul>
+<p>But, there are many other actions as well, as generally defined by Rebol datatypes.</p>
+</blockquote>
+<p>What else qualifies as these "many other actions?"</p>
+<ul>
+<li>
+<p><a href="http://www.rebol.com/docs/database.html">Rebol2's ODBC</a> suggests <strong>PICK (FIRST)</strong>, <strong>INSERT</strong>, and <strong>COPY</strong> as choices.</p>
+</li>
+<li>
+<p>Source code for <a href="https://github.com/rebol/rebol/blob/master/src/core/p-file.c">File Port in R3-Alpha</a> shows <strong>APPEND</strong>, <strong>DELETE</strong>, <strong>RENAME</strong>, <strong>MODIFY</strong>, <strong>OPEN?</strong>, <strong>LENGTH?</strong>, <strong>HEAD</strong>, <strong>TAIL</strong>, <strong>NEXT</strong>, <strong>BACK</strong>, <strong>SKIP</strong>, <strong>HEAD?</strong>, <strong>TAIL?</strong>, <strong>PAST?</strong>, <strong>CLEAR</strong>.</p>
+</li>
+</ul>
+<p><em>This is awfully saturated, and it seems nothing is off the table for what this abstract idea of a PORT! might want to react to.</em></p>
+<p>So how do you get at these object fields safely?  How do you PICK the SPEC field?  How do you POKE the AWAKE function?</p>
+<h2>More Problems: PORT and 1:1 with STREAM Correspondence</h2>
+<p>When you're working with a TCP connection, you supposedly think of that as a bidirectional PORT!.  You don't open a connection for your input, and one for your output--you read and write to the same port.</p>
+<p>If so, why is there <strong>system.ports.input</strong> and <strong>system.ports.output</strong> instead of <strong>system.ports.stdio</strong>?</p>
+<p>One technical good reason there is that there are actually two stdio output streams: the stdout and the stderr for error messages.  Often these are directed to the same place, but not always.</p>
+<p>So here you see that maybe something like stdio would like to be an object aggregating three data streams: 1 for input and two for output.</p>
+<h2>Difference Between Ports and User Defined Datatypes?</h2>
+<p>It doesn't really seem like anything is off the table for what you can override on a PORT!.</p>
+<p>Can you define what it means to ADD to a PORT!?  If not, why not?</p>
+<p>What about path selection on a PORT! (or today's field access via TUPLE!, another option).</p>
+<p>Once you get into this "anything goes" attitude you are essentially talking about an implementation for user-defined datatypes.</p>
+<p>This points out an important aspect of the articulation of any design: <strong>You need to be able to say what it isn't, or there's no meaningful definition of what it is.</strong></p>
+<h2>Streaming/Iterating Is Narrower And Needs a Protocol</h2>
+<p>While PORT! is slippery, I'm going to be attacking just the more basic questions of streaming and iteration.</p>
+<p>We want to be able to say <code>parse some-100-mb-file ["FOO" &lt;stop&gt;]</code> and not have to read 100 megabytes just to know if it started with "FOO"</p>
+<p>And we want to be able to do that with something like FOR-EACH as well...</p>
+<pre><code> for-each [x y z] some-100-mb-file [
+     all [x = #f, y = #o, z = #o] then [break]
+ ]
+</code></pre>
+<p>That shouldn't need to have all 100 megabytes in memory.  And a generic solution to this which puts iteration in the mix should allow for streams to be piped and connected to each other to do filtering, encryption/decryption, compression, etc...</p>
+<p>So I'm going to focus on the narrower question of how to do that, vs. the muddle of "What is a PORT!", at this time.  Wishful thinking isn't going to solve that problem, but rational adaptation of the methods used by other languages that do this might.</p>
+          <p><a href="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689/1</link>
+        <pubDate>Fri, 27 Aug 2021 07:50:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1689-1</guid>
+        <source url="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689.rss">Semantics of PORT!s vs. Streams vs. Iterators</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>User natives: what should functions like `printf` actually call?</title>
+    <link>https://forum.rebol.info/t/user-natives-what-should-functions-like-printf-actually-call/949</link>
+    <description>When making the original TCC natives, Shixin wanted to make it so that you didn&#39;t have to have anything but a single &quot;rebol.exe&quot; on your disk to compile and run code.  That meant making sure that whatever was needed to process `malloc()` or other functions needed to ship in that executable.
+
+TCC offered a small library called `libtcc1.a` which implemented a subset of the standard C runtime library.  But when the TCC API is compiling code into memory (and not hitting the disk at all), you can give it pointers to functions in your host executable to run for each symbol.
+
+Presumably in order to give the most &quot;tcc-like&quot; experience, Shixin forked TCC into a variant that could give you a table of everything in libtcc1.a.  This meant when you&#39;d call malloc() or printf() you&#39;d get the same implementation that calling tcc on the command line would get, if you only had tcc installed on your system (no GCC, so no GNU libc).
+
+But this is fairly wasteful.  The running Rebol already has malloc() in it, and several other basic functions you might rely on for math or otherwise in your C code.  Using those is as easy as `tcc_add_symbol(&quot;malloc&quot;, &amp;malloc);`   So really we could save a lot of grief (and some redundant memory usage) just by making a little table of C functions from the libc we&#39;re already using for Rebol, and add them.  This would mean getting rid of the maintenance and building of forked repositories of TCC--a very desirable objective.
+
+## But Rebol doesn&#39;t include printf...
+
+Rebol doesn&#39;t itself include printf in release builds (and if you want a little motivation as to why to stick to this decision and instead develop structured Rebol-powered printing, [here&#39;s a little primer on why](http://blog.hostilefork.com/where-printf-rubber-meets-road/)).
+
+That&#39;s not a big deal, as the tcc extension could include it.  Then you only get it in the EXE if you build the extension into the EXE, otherwise you get it in the DLL for TCC.
+
+*Yet there may be a more interesting option.*  Why would we want to use libc&#39;s printf, and not a custom printf that targeted the Rebol output device?  As a simplified example of what this might mean:
+
+    int tcc_printf( const char* format, ... ) {
+        char *buffer = ...
+        ... unpack format string and args into buffer ...
+        rebElide(&quot;write-stdout&quot;, rebT(buffer));
+        ... free buffer, return num chars printed ...
+    }
+
+    REBNATIVE(compile) {
+         ...
+         tcc_add_symbol(&quot;printf&quot;, &amp;tcc_printf);
+         ...
+    }
+
+It&#39;s probably the case, as per my article--that the right place to hook this is actually `write` to stdout&#39;s device--which would be more complex.  And you&#39;d want to intercept read too, so scanf() would work properly.
+
+Basically this would allow you to intercept the I/O from a built TCC executable and use it in whatever GUI console you liked.  If TCC added support for webassembly in-memory targets someday, you could have user natives on the web, too.
+
+Of course people can also use libRebol directly, which is what new code should do...but it&#39;s interesting to think about just being able to paste in C routines unmodified and have it integrate directly into whatever your console is.</description>
+    
+    <lastBuildDate>Sun, 09 Dec 2018 01:40:23 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/user-natives-what-should-functions-like-printf-actually-call/949.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>User natives: what should functions like `printf` actually call?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When making the original TCC natives, Shixin wanted to make it so that you didn't have to have anything but a single "rebol.exe" on your disk to compile and run code.  That meant making sure that whatever was needed to process <code>malloc()</code> or other functions needed to ship in that executable.</p>
+<p>TCC offered a small library called <code>libtcc1.a</code> which implemented a subset of the standard C runtime library.  But when the TCC API is compiling code into memory (and not hitting the disk at all), you can give it pointers to functions in your host executable to run for each symbol.</p>
+<p>Presumably in order to give the most "tcc-like" experience, Shixin forked TCC into a variant that could give you a table of everything in libtcc1.a.  This meant when you'd call malloc() or printf() you'd get the same implementation that calling tcc on the command line would get, if you only had tcc installed on your system (no GCC, so no GNU libc).</p>
+<p>But this is fairly wasteful.  The running Rebol already has malloc() in it, and several other basic functions you might rely on for math or otherwise in your C code.  Using those is as easy as <code>tcc_add_symbol("malloc", &amp;malloc);</code>   So really we could save a lot of grief (and some redundant memory usage) just by making a little table of C functions from the libc we're already using for Rebol, and add them.  This would mean getting rid of the maintenance and building of forked repositories of TCC--a very desirable objective.</p>
+<h2>But Rebol doesn't include printf...</h2>
+<p>Rebol doesn't itself include printf in release builds (and if you want a little motivation as to why to stick to this decision and instead develop structured Rebol-powered printing, <a href="http://blog.hostilefork.com/where-printf-rubber-meets-road/" rel="nofollow noopener">here's a little primer on why</a>).</p>
+<p>That's not a big deal, as the tcc extension could include it.  Then you only get it in the EXE if you build the extension into the EXE, otherwise you get it in the DLL for TCC.</p>
+<p><em>Yet there may be a more interesting option.</em>  Why would we want to use libc's printf, and not a custom printf that targeted the Rebol output device?  As a simplified example of what this might mean:</p>
+<pre><code>int tcc_printf( const char* format, ... ) {
+    char *buffer = ...
+    ... unpack format string and args into buffer ...
+    rebElide("write-stdout", rebT(buffer));
+    ... free buffer, return num chars printed ...
+}
+
+REBNATIVE(compile) {
+     ...
+     tcc_add_symbol("printf", &amp;tcc_printf);
+     ...
+}
+</code></pre>
+<p>It's probably the case, as per my article--that the right place to hook this is actually <code>write</code> to stdout's device--which would be more complex.  And you'd want to intercept read too, so scanf() would work properly.</p>
+<p>Basically this would allow you to intercept the I/O from a built TCC executable and use it in whatever GUI console you liked.  If TCC added support for webassembly in-memory targets someday, you could have user natives on the web, too.</p>
+<p>Of course people can also use libRebol directly, which is what new code should do...but it's interesting to think about just being able to paste in C routines unmodified and have it integrate directly into whatever your console is.</p>
+          <p><a href="https://forum.rebol.info/t/user-natives-what-should-functions-like-printf-actually-call/949/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/user-natives-what-should-functions-like-printf-actually-call/949/1</link>
+        <pubDate>Sun, 09 Dec 2018 01:40:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-949-1</guid>
+        <source url="https://forum.rebol.info/t/user-natives-what-should-functions-like-printf-actually-call/949.rss">User natives: what should functions like `printf` actually call?</source>
+      </item>
+  </channel>
+</rss>

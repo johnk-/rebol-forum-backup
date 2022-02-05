@@ -1,0 +1,374 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Pathing and Picking Predicament Pans Out</title>
+    <link>https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704</link>
+    <description>## TL;DR
+
+I&#39;m changing path dispatch to be fundamentally recursive, and via a unified action dispatcher called **`PICK-POKE*`**.  As fate would have it, this takes a longstanding annoying edge case in how R3-Alpha methodized path dispatch for GOB!...and makes that &quot;the answer&quot; for how all path dispatch is done.  Additionally:
+
+* It employs FRAME! reuse for native dispatch, which allows a memory use profile similar to the the &quot;PVS&quot; (Path Value State?) structure from R3-Alpha...even though it&#39;s making recursive evaluator calls.
+
+* This makes path dispatch just ordinary function dispatch, which means pathing doesn&#39;t need special accommodation in stackless.
+
+    * Sidenote: Path dispatch and PARSE were two extremely troublesome areas in the stackless conversion.  Both are being addressed by pushing more and more &quot;custom&quot; recursive C code to do their recursions by means of the interpreter&#39;s evaluator loop.
+
+* It should mean that user-defined data types--or even in the near term perhaps your own OBJECT!s--could customize pathing if they wanted to *(though we may limit customization to **`/`** access in order to provide terra firma for accessing the object)*
+
+## Preface: No One Has Done This Right (Until Now)
+
+Before we get carried away and give GOB! too much credit...  :-)
+
+Redbols try to be bit fiddly and pack things into immediate cell values.  But if you&#39;re going to be that fiddly, you have to remember that &quot;updating a value&quot; really means &quot;updating the container the value lives in&quot;.
+
+Random example from Red and Rebol2:
+
+    red&gt;&gt; b: [x 12-Dec-2021/10:00 y]
+    == [x 12-Dec-2021/10:00:00 y]
+
+    red&gt;&gt; b/2/time/hour
+    == 10
+
+    red&gt;&gt; b/2/time/hour: 20
+    == 20
+
+    red&gt;&gt; b
+    == [x 12-Dec-2021/10:00:00 y]  ; still 10:00, not 20:00
+
+*(R3-Alpha is worse, giving an error and corrupting the time.)*
+
+The reason this happens is because DATE! fits in a cell with the TIME! packed into it.  If you ask for a date&#39;s /TIME then you get a synthesized new cell to hold it.  But poking back into that synthesized cell won&#39;t change the original date.
+
+Hence every SET-PATH! or POKE has to offer a kind of backflow in the chain of poking, in case any of the forward writes require bit updates backwards.  Frame reuse allows that to be made somewhat efficient with one cell&#39;s worth of stack, while PICK can use a [&quot;sibling tail call&quot;](https://stackoverflow.com/questions/22037261/what-does-sibling-calls-mean).
+
+The Ren-C I&#39;m working on takes care of the above example, and should generalize to others!
+
+## Now, Explanation.  Background:
+
+Path Dispatch--or **&quot;PD&quot;** as R3-Alpha called it--was a concept fraught with issues.
+
+On the surface it seems like a simple chain...it&#39;s broken into steps where each one produces a value that is picked by the next step:
+
+    &gt;&gt; outer: make object! [inner: make object! [block: [a b c]]]
+
+    &gt;&gt; outer/inner/block/2  ; expressed as a path
+    == b
+
+    &gt;&gt; pick (pick (pick outer &#39;inner) &#39;block) 2  ; expanded as picks
+    == b
+
+    ; Note: Historical Rebol required a mix of SELECT and PICK, Ren-C unifies it
+
+How &quot;hard&quot; is that?  Well, it&#39;s not *that* hard, though it could be very wasteful.  
+
+Imagine the FFI with **some-struct.million-int-array.1**.  If that&#39;s an FFI interface to a struct with a million C int in it, do you have to generate a BLOCK! of a million INTEGER! just to pick the first one?  That&#39;s what the naive translation of pathing to step-by-step PICK calls would do.
+
+Even without talking about efficiency, we can talk about semantics.  **PICK at least works out semantically for pathing, but POKE does not.**  Try this:
+
+    &gt;&gt; outer/inner/block: [i am a new block]
+    == [i am a new block]
+
+    &gt;&gt; poke (pick (pick outer &#39;inner) &#39;block) [i am a new block]
+    ** Error, wait a second...
+
+That second formulation is *not* equivalent...because the PICK gave back a plain old block.  So it saw:
+
+    &gt;&gt; poke [a b c] [i am a new block]
+
+**This faces the problem that Rebol lacks &quot;Reference&quot; types.** POKE wanted a place to put the new block...effectively the *address* of the block value in the inner object.  But it just got back the *value* of the block in the inner object.
+
+## Could Rebol Have A Reference Type?
+
+Hypothetical code:
+
+    &gt;&gt; obj: make object! [field: &quot;I am a field&quot;]
+
+    &gt;&gt; ref: &amp;obj.field
+    == &amp;&quot;I am a field&quot;
+
+    &gt;&gt; ref: &quot;Field is replaced!&quot;
+
+    &gt;&gt; obj
+    == make object! [field: &quot;Field is replaced!&quot;]
+
+In such a world, changing REF didn&#39;t change the string... *it changed a field in the object the string lived in*.
+
+This is the kind of mechanic that pathing would need if it were to be extensible and truly generic. What each step in the path offered up to the next would have to be a means of writing back to the field if it wanted to.
+
+That sounds like a nightmare...but it wouldn&#39;t even solve the problem if it could be done, because...
+
+## ...Subaddressing Makes It Worse!
+
+Some of the more confusing pats of path dispatch dealt with the fact that path steps might be producing something that didn&#39;t reference a full value at all...but some optimized bit pattern.
+
+    &gt;&gt; obj: make object! [gob: make gob! [x: 10 y: 20]]
+
+    &gt;&gt; obj.gob.size.x: 304
+    == 304
+
+What&#39;s so weird about that?  Well, GOB! stores its bits compactly, so there is no INTEGER! cell for the X, and no PAIR! cell for the size.
+
+This is all easy enough on the PICK side... you ask the GOB! what its size is, and it tells you 10x20 as a new PAIR! it makes out of thin air.  Then you ask that pair what its X is and it tells you 10.
+
+But on the POKE side, *even if you had the address mechanic*, there&#39;s no address of a value that the GOB! can give for that PAIR! to let you write back to it.
+
+## GOB! in R3-Alpha Actually Had The Right Idea...Sort Of
+
+With path dispatchers like R3-Alpha&#39;s **[PD_Block()](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-block.c#L530)** that it has a &quot;picker&quot; (**pvs-&gt;select**) which it is applying to the value that&#39;s a BLOCK! or GROUP! (**pvs-&gt;out**).  It trusts that the &quot;path engine&quot; has pre-evaluated any code in parentheses if necessary to get pvs-&gt;select.
+
+Then it has the detail that if **pvs-&gt;setval** is not null, it needs to know it&#39;s a SET-PATH!.  This is also something the path engine works out...based on whether the end of the path is reached.  Really this looks like it moves one step a time.
+
+So in my early dealings with path dispatch, I&#39;d try to formalize this a bit better...putting horse-blinders on the PD_Xxx() function by giving it narrow parameterization, and removing the PVS as a parameter.  Yet I tripped over &quot;bad&quot; path dispatchers like PD_Gob(), which [called Next_Path() in their implementations](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-gob.c#L676).
+
+But the &quot;bad&quot; handling of GOB! was closer to the right general answer:
+
+* Some portion of the path is consumed by each step in the SET-PATH!
+
+* It then it hands the remainder off to what it can&#39;t handle via a recursive call...
+
+    * The return value of this recursive call is either NULL or an updated image of the cell bits that must be updated in the container to reflect an immediate type.
+
+## Walking Through The Process With GOB!
+
+Imagine you write:
+
+    &gt;&gt; obj/gob/size/x: 304
+
+It might happen like this:
+
+* POKE asks OBJECT! *&quot;Hey, I want to write gob/size/x.  How much of that can you do?&quot;*
+
+* OBJECT! says *&quot;I will update myself if GOB! can tell me the answer to what it wants to be if size/x is written.&quot;*
+
+* GOB! says *&quot;I consumed the entirety of size/x: 304 and there were no changes to my bit pattern that my caller need be aware about.&quot;* (because gobs are allocated in handles, REBGOB*, so the modification of the size bits is not the concern of the reference in object as it still points to that same REBGOB*)
+
+* OBJECT! says *&quot;Okay fine then.&quot;*
+
+Notice that **We never got PAIR! involved in the dispatch, even though the answer to gob/size is a PAIR!.**
+
+That&#39;s not the only way to do it.  There&#39;s actually three ways this could work:
+
+1. (the above way) Don&#39;t just consume one of the steps, but go ahead and do two--e.g. take control of what `size.x` means and don&#39;t synthesize a PAIR! at all.
+            
+2. Synthesize a PAIR! and allow it to do whatever modification it wishes, but ignore its `nullptr` return status and pack the full pair value down to the low-level bits in the GOB!
+
+3. Drop this micro-optimization and store a PAIR! cell in the GOB! structure.
+
+I actually think #3 is the best answer, but, the point here is to study being general. 
+
+## The New Formulation Is About As Good As This Can Get
+
+It&#39;s interesting to be able to do this kind of optimization, and things like the FFI need it.  I mentioned **some-struct.million-int-array.1**.  Naive approaches will be too inefficient to handle this.
+
+So path processing needs this nuance.  And we&#39;d like an answer that doesn&#39;t make the author of STRUCT! have to worry about **some-struct.million-int-array.(1 + 2)**, so the processing of GROUP!s has to be done by the pathing.
+
+Long story long: this is a PITA and I&#39;m making some headway on framing the problem.  Things seem in better shape, as the oddly-shaped PD_Xxx are eliminated.</description>
+    
+    <lastBuildDate>Thu, 16 Sep 2021 15:13:22 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Pathing and Picking Predicament Pans Out</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Translating Pathing Into POKE</h2>
+<p>I mentioned that there's more than meets the eye to path expressions.</p>
+<p>So if you write something like:</p>
+<pre><code>a/(expr b)/c: expr d
+</code></pre>
+<p>You might think that the first step is to get whatever A is, and POKE into that.  Maybe it would translate to something like:</p>
+<pre><code>apply :poke [
+    /location :a
+    /steps compose [(expr b) c]
+    /value (expr d)
+]
+</code></pre>
+<p><strong>But that doesn't generalize.</strong>  Let's say <strong>a</strong> is a DATE!, for instance:</p>
+<pre><code>&gt;&gt; a: 12-Dec-2012/10:20
+&gt;&gt; a.time.hour: 11
+</code></pre>
+<p>If we think of this as <strong>poke :a [time hour] 11</strong> we get <strong>poke 12-Dec-2012/10:20 [time hour] 11</strong>.</p>
+<p>The problem there is that you've lost the knowledge of where the bits that store the date-time live.  In the case of DATE!, they live in whatever object <strong>a</strong> was bound into.</p>
+<p>If <strong>a</strong> lived in the user context, what you really wanted here was:</p>
+<pre><code>poke #&lt;&lt;user-context&gt;&gt; [a time hour] 11
+</code></pre>
+<h2>Generalizing This Is Non-Trivial, Especially Errors</h2>
+<p>I mentioned what I think is a fairly workable recursive formulation:</p>
+<ul>
+<li>
+<p>offer opportunities to each object along the chain to process as many of the "steps" as it wants to.</p>
+</li>
+<li>
+<p>potentially return bits back at each level for the container to update</p>
+</li>
+</ul>
+<p>But if the POKE* method makes these recursive calls directly, there's no central service to map any errors back to a location in a path where they came from.  You'd not be implicating a particular part of the path that caused a problem.</p>
+<p>FWIW, Red doesn't offer that granularity:</p>
+<pre><code>red&gt;&gt; var: 'z
+== z
+
+red&gt;&gt; obj/(var)/(var)
+*** Script Error: cannot access z in path obj/(var)/(var) 
+</code></pre>
+<p>You don't know which step it's complaining about; you just know what the error is, and what path was being processed while it happened.  That's not much, but even that's a bit hard to define when your path mechanism is fully generic.  What if there's a division happening incidental to the path poking but just part of the implementation, and it fails?  Wouldn't it help to know at least that it was the OBJECT! POKE* method that was having trouble, instead of a generic error attached to the PATH!?</p>
+<p>I don't know, but I do know that errors are getting worse...sometimes directly as a result of mechanics becoming generalized and improving.  Generalized code often gives very poor errors; while narrower code that handles fewer cases can give better ones.  That's an unfortunate tradeoff.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          <p><a href="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704/2</link>
+        <pubDate>Thu, 16 Sep 2021 15:13:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1704-2</guid>
+        <source url="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704.rss">The Pathing and Picking Predicament Pans Out</source>
+      </item>
+      <item>
+        <title>The Pathing and Picking Predicament Pans Out</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>TL;DR</h2>
+<p>I'm changing path dispatch to be fundamentally recursive, and via a unified action dispatcher called <strong><code>PICK-POKE*</code></strong>.  As fate would have it, this takes a longstanding annoying edge case in how R3-Alpha methodized path dispatch for GOB!...and makes that "the answer" for how all path dispatch is done.  Additionally:</p>
+<ul>
+<li>
+<p>It employs FRAME! reuse for native dispatch, which allows a memory use profile similar to the the "PVS" (Path Value State?) structure from R3-Alpha...even though it's making recursive evaluator calls.</p>
+</li>
+<li>
+<p>This makes path dispatch just ordinary function dispatch, which means pathing doesn't need special accommodation in stackless.</p>
+<ul>
+<li>Sidenote: Path dispatch and PARSE were two extremely troublesome areas in the stackless conversion.  Both are being addressed by pushing more and more "custom" recursive C code to do their recursions by means of the interpreter's evaluator loop.</li>
+</ul>
+</li>
+<li>
+<p>It should mean that user-defined data types--or even in the near term perhaps your own OBJECT!s--could customize pathing if they wanted to <em>(though we may limit customization to <strong><code>/</code></strong> access in order to provide terra firma for accessing the object)</em></p>
+</li>
+</ul>
+<h2>Preface: No One Has Done This Right (Until Now)</h2>
+<p>Before we get carried away and give GOB! too much credit...  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>Redbols try to be bit fiddly and pack things into immediate cell values.  But if you're going to be that fiddly, you have to remember that "updating a value" really means "updating the container the value lives in".</p>
+<p>Random example from Red and Rebol2:</p>
+<pre><code>red&gt;&gt; b: [x 12-Dec-2021/10:00 y]
+== [x 12-Dec-2021/10:00:00 y]
+
+red&gt;&gt; b/2/time/hour
+== 10
+
+red&gt;&gt; b/2/time/hour: 20
+== 20
+
+red&gt;&gt; b
+== [x 12-Dec-2021/10:00:00 y]  ; still 10:00, not 20:00
+</code></pre>
+<p><em>(R3-Alpha is worse, giving an error and corrupting the time.)</em></p>
+<p>The reason this happens is because DATE! fits in a cell with the TIME! packed into it.  If you ask for a date's /TIME then you get a synthesized new cell to hold it.  But poking back into that synthesized cell won't change the original date.</p>
+<p>Hence every SET-PATH! or POKE has to offer a kind of backflow in the chain of poking, in case any of the forward writes require bit updates backwards.  Frame reuse allows that to be made somewhat efficient with one cell's worth of stack, while PICK can use a <a href="https://stackoverflow.com/questions/22037261/what-does-sibling-calls-mean">"sibling tail call"</a>.</p>
+<p>The Ren-C I'm working on takes care of the above example, and should generalize to others!</p>
+<h2>Now, Explanation.  Background:</h2>
+<p>Path Dispatch--or <strong>"PD"</strong> as R3-Alpha called it--was a concept fraught with issues.</p>
+<p>On the surface it seems like a simple chain...it's broken into steps where each one produces a value that is picked by the next step:</p>
+<pre><code>&gt;&gt; outer: make object! [inner: make object! [block: [a b c]]]
+
+&gt;&gt; outer/inner/block/2  ; expressed as a path
+== b
+
+&gt;&gt; pick (pick (pick outer 'inner) 'block) 2  ; expanded as picks
+== b
+
+; Note: Historical Rebol required a mix of SELECT and PICK, Ren-C unifies it
+</code></pre>
+<p>How "hard" is that?  Well, it's not <em>that</em> hard, though it could be very wasteful.</p>
+<p>Imagine the FFI with <strong>some-struct.million-int-array.1</strong>.  If that's an FFI interface to a struct with a million C int in it, do you have to generate a BLOCK! of a million INTEGER! just to pick the first one?  That's what the naive translation of pathing to step-by-step PICK calls would do.</p>
+<p>Even without talking about efficiency, we can talk about semantics.  <strong>PICK at least works out semantically for pathing, but POKE does not.</strong>  Try this:</p>
+<pre><code>&gt;&gt; outer/inner/block: [i am a new block]
+== [i am a new block]
+
+&gt;&gt; poke (pick (pick outer 'inner) 'block) [i am a new block]
+** Error, wait a second...
+</code></pre>
+<p>That second formulation is <em>not</em> equivalent...because the PICK gave back a plain old block.  So it saw:</p>
+<pre><code>&gt;&gt; poke [a b c] [i am a new block]
+</code></pre>
+<p><strong>This faces the problem that Rebol lacks "Reference" types.</strong> POKE wanted a place to put the new block...effectively the <em>address</em> of the block value in the inner object.  But it just got back the <em>value</em> of the block in the inner object.</p>
+<h2>Could Rebol Have A Reference Type?</h2>
+<p>Hypothetical code:</p>
+<pre><code>&gt;&gt; obj: make object! [field: "I am a field"]
+
+&gt;&gt; ref: &amp;obj.field
+== &amp;"I am a field"
+
+&gt;&gt; ref: "Field is replaced!"
+
+&gt;&gt; obj
+== make object! [field: "Field is replaced!"]
+</code></pre>
+<p>In such a world, changing REF didn't change the string... <em>it changed a field in the object the string lived in</em>.</p>
+<p>This is the kind of mechanic that pathing would need if it were to be extensible and truly generic. What each step in the path offered up to the next would have to be a means of writing back to the field if it wanted to.</p>
+<p>That sounds like a nightmare...but it wouldn't even solve the problem if it could be done, because...</p>
+<h2>...Subaddressing Makes It Worse!</h2>
+<p>Some of the more confusing pats of path dispatch dealt with the fact that path steps might be producing something that didn't reference a full value at all...but some optimized bit pattern.</p>
+<pre><code>&gt;&gt; obj: make object! [gob: make gob! [x: 10 y: 20]]
+
+&gt;&gt; obj.gob.size.x: 304
+== 304
+</code></pre>
+<p>What's so weird about that?  Well, GOB! stores its bits compactly, so there is no INTEGER! cell for the X, and no PAIR! cell for the size.</p>
+<p>This is all easy enough on the PICK side... you ask the GOB! what its size is, and it tells you 10x20 as a new PAIR! it makes out of thin air.  Then you ask that pair what its X is and it tells you 10.</p>
+<p>But on the POKE side, <em>even if you had the address mechanic</em>, there's no address of a value that the GOB! can give for that PAIR! to let you write back to it.</p>
+<h2>GOB! in R3-Alpha Actually Had The Right Idea...Sort Of</h2>
+<p>With path dispatchers like R3-Alpha's <strong><a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-block.c#L530">PD_Block()</a></strong> that it has a "picker" (<strong>pvs-&gt;select</strong>) which it is applying to the value that's a BLOCK! or GROUP! (<strong>pvs-&gt;out</strong>).  It trusts that the "path engine" has pre-evaluated any code in parentheses if necessary to get pvs-&gt;select.</p>
+<p>Then it has the detail that if <strong>pvs-&gt;setval</strong> is not null, it needs to know it's a SET-PATH!.  This is also something the path engine works out...based on whether the end of the path is reached.  Really this looks like it moves one step a time.</p>
+<p>So in my early dealings with path dispatch, I'd try to formalize this a bit better...putting horse-blinders on the PD_Xxx() function by giving it narrow parameterization, and removing the PVS as a parameter.  Yet I tripped over "bad" path dispatchers like PD_Gob(), which <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-gob.c#L676">called Next_Path() in their implementations</a>.</p>
+<p>But the "bad" handling of GOB! was closer to the right general answer:</p>
+<ul>
+<li>
+<p>Some portion of the path is consumed by each step in the SET-PATH!</p>
+</li>
+<li>
+<p>It then it hands the remainder off to what it can't handle via a recursive call...</p>
+<ul>
+<li>The return value of this recursive call is either NULL or an updated image of the cell bits that must be updated in the container to reflect an immediate type.</li>
+</ul>
+</li>
+</ul>
+<h2>Walking Through The Process With GOB!</h2>
+<p>Imagine you write:</p>
+<pre><code>&gt;&gt; obj/gob/size/x: 304
+</code></pre>
+<p>It might happen like this:</p>
+<ul>
+<li>
+<p>POKE asks OBJECT! <em>"Hey, I want to write gob/size/x.  How much of that can you do?"</em></p>
+</li>
+<li>
+<p>OBJECT! says <em>"I will update myself if GOB! can tell me the answer to what it wants to be if size/x is written."</em></p>
+</li>
+<li>
+<p>GOB! says <em>"I consumed the entirety of size/x: 304 and there were no changes to my bit pattern that my caller need be aware about."</em> (because gobs are allocated in handles, REBGOB*, so the modification of the size bits is not the concern of the reference in object as it still points to that same REBGOB*)</p>
+</li>
+<li>
+<p>OBJECT! says <em>"Okay fine then."</em></p>
+</li>
+</ul>
+<p>Notice that <strong>We never got PAIR! involved in the dispatch, even though the answer to gob/size is a PAIR!.</strong></p>
+<p>That's not the only way to do it.  There's actually three ways this could work:</p>
+<ol>
+<li>
+<p>(the above way) Don't just consume one of the steps, but go ahead and do two--e.g. take control of what <code>size.x</code> means and don't synthesize a PAIR! at all.</p>
+</li>
+<li>
+<p>Synthesize a PAIR! and allow it to do whatever modification it wishes, but ignore its <code>nullptr</code> return status and pack the full pair value down to the low-level bits in the GOB!</p>
+</li>
+<li>
+<p>Drop this micro-optimization and store a PAIR! cell in the GOB! structure.</p>
+</li>
+</ol>
+<p>I actually think <span class="hashtag">#3</span> is the best answer, but, the point here is to study being general.</p>
+<h2>The New Formulation Is About As Good As This Can Get</h2>
+<p>It's interesting to be able to do this kind of optimization, and things like the FFI need it.  I mentioned <strong>some-struct.million-int-array.1</strong>.  Naive approaches will be too inefficient to handle this.</p>
+<p>So path processing needs this nuance.  And we'd like an answer that doesn't make the author of STRUCT! have to worry about <strong>some-struct.million-int-array.(1 + 2)</strong>, so the processing of GROUP!s has to be done by the pathing.</p>
+<p>Long story long: this is a PITA and I'm making some headway on framing the problem.  Things seem in better shape, as the oddly-shaped PD_Xxx are eliminated.</p>
+          <p><a href="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704/1</link>
+        <pubDate>Sun, 05 Sep 2021 08:43:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1704-1</guid>
+        <source url="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704.rss">The Pathing and Picking Predicament Pans Out</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,2124 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Internals - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/internals/9</link>
+    <description>Topics in the &#39;Internals&#39; category Internals of the Rebol language</description>
+    
+      <lastBuildDate>Fri, 21 Jan 2022 17:01:02 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/internals/9.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>Should END-able constructs all use ^META parameters?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>R3-Alpha and Rebol2 could only have functions that were "endable" if the argument they took was quoted.  This feature was added primarily for HELP, so that you could say either:</p>
+<pre><code>&gt;&gt; help
+; (would display generic HELP usage information)
+
+&gt;&gt; help topic
+; (would display help for the given topic)
+</code></pre>
+<p>It was a <em>very limited form of variadic-ness</em>...generally used only in console-oriented commands (HELP, LS).  You couldn't write a function that was evaluative, like:</p>
+<pre><code>redbol&gt;&gt; printer 1 + 2
+3
+
+redbol&gt;&gt; printer
+You called the PRINTER function with no arguments
+    ; ^-- not possible to accomplish with an otherwise evaluative argument!
+</code></pre>
+<p>Being able to handle getting to the end of input was entwined with taking quoted arguments.</p>
+<h2>Ren-C added <code>&lt;end&gt;</code>-able Evaluative Parameters</h2>
+<p>To facilitate certain demos in Ren Garden, Ren-C could mark an ordinary parameter as being <code>&lt;end&gt;</code>-able.  This would mean that the argument would show up as being NULL if the end was reached before an argument was seen.</p>
+<p>This was--however--ambiguous with if you actually passed an evaluative NULL.</p>
+<pre><code>ren-c&gt;&gt; printer 1 + 2
+3
+
+ren-c&gt;&gt; printer
+You called the PRINTER function with no arguments
+
+ren-c&gt;&gt; printer null  
+You called the PRINTER function with no arguments  ; d'oh
+</code></pre>
+<p><strong>This kind of ambiguity wasn't new...the Redbol version had it.</strong>  The signal for quoted parameters that were endable-and-missing was to make the parameter an UNSET!.  Which meant they couldn't tell the difference between <strong>help #[unset!]</strong> and just-plain-help:</p>
+<pre><code>red&gt;&gt; help #[unset!]
+To use HELP, supply a word or value as its
+argument:
+
+    help insert
+    help system
+    help system/script
+
+To view all words that...
+</code></pre>
+<p><strong>Interestingly enough, Ren-C has a solution for this with quoted parameters, because NULL cannot appear literally in source...so it can't be at the callsite.  Thus NULL can represent a missing quoted argument.</strong>  Which is neat.</p>
+<h2>^META parameters can do <code>&lt;end&gt;</code> another way...</h2>
+<p>A meta parameter is quoted, but will be a plain non-quoted BAD-WORD! if the callsite was passing an isotope.  With the <a href="https://forum.rebol.info/t/pure-vs-impure-invisibility-do-we-need-both/1782">recent design concept that suggests ~void~ isotopes are "pure" and equivalent to the full absence of a value</a>, you get evaluative endability without needing a separate feature.</p>
+<p>So if our PRINTER took a ^META argument:</p>
+<pre><code>&gt;&gt; printer 1 + 2
+3
+; (it actually received '3, quoted)
+
+&gt;&gt; printer
+You called the PRINTER function with no arguments
+; (it actually received ~void~, not quoted)
+</code></pre>
+<p>The ambiguity is still there, though...</p>
+<pre><code>&gt;&gt; printer ~void~
+You called the PRINTER function with no arguments
+; (again, it actually received ~void~, not quoted)
+</code></pre>
+<p>If you're following the details then I pointed out that supermeta parameters would be necessary to implement something that would know the difference in the suggested model.</p>
+<p><strong>But at least you could differentiate NULL from an end.</strong>  The conflation of an invisible argument with the end doesn't seem that troubling to me, as the problem with HELP is fixed since it quotes and can tell when you say <strong>help ~void~</strong> vs. plain <strong>help</strong></p>
+<h2>Killing off <code>&lt;end&gt;</code> as a core parameter flag would simplify things...</h2>
+<ul>
+<li>
+<p>If a quoted parameter tolerates NULL as one of its legal types that's sufficient to say it is "endable"</p>
+</li>
+<li>
+<p>If an evaluative parameter needs to detect endability, it could be your job to make it a ^META parameter and look for void, and unquote it to handle other results.</p>
+</li>
+</ul>
+<p>The code and typeset flags for <code>&lt;end&gt;</code> could then be scrapped.</p>
+<p>If someone really liked the NULL conflating version of endability they could write something to do it in usermode.</p>
+<p><strong>You'd have to see the code to understand why I would think throwing away <strong><code>&lt;end&gt;</code></strong> is worth it.</strong> The way the type checking is done frames have to be filled first, which means if a function doesn't want an actual null but wants just ends to reflect as null... or wants an actual null but doesn't want ends reflected as null... hidden bits need to be grafted onto these nulls at the time of frame fulfillment to say whether it's an "endish" null or a regular null.  Various parts of the system then need to test a NULL for this invisible property.  <strong>^META parameters pull such invisible state into the light.</strong></p>
+<p><strong>Basically take my word for it: meta is much cleaner, and offers a way to expose these distinctions to the user--so I think the odds are that <code>&lt;end&gt;</code> and its current mechanics need to die.</strong></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/should-end-able-constructs-all-use-meta-parameters/1783">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/should-end-able-constructs-all-use-meta-parameters/1783</link>
+          <pubDate>Fri, 21 Jan 2022 17:01:02 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1783</guid>
+          <source url="https://forum.rebol.info/t/should-end-able-constructs-all-use-meta-parameters/1783.rss">Should END-able constructs all use ^META parameters?</source>
+        </item>
+        <item>
+          <title>Pure vs. Impure Invisibility: Do We Need Both?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>"Invisibles" <a href="https://forum.rebol.info/t/issues-with-invisibles-a-truly-disappearing-comment/405">were conceived 4 years ago</a>...long before BAD-WORD!s, isotopes, ^META parameters, etc.</p>
+<p>The terminology needs a bit of an update, because I want to make a distinction between two different kinds:</p>
+<ul>
+<li>
+<p><strong>IMPURE INVISIBLITY</strong> is when a special state (like a ~void~ isotope) is discarded in contexts where it's assumed to represent an invisible intent.</p>
+<p>Remember that plain BAD-WORD!s (unevaluated) are normal values and can be in blocks.</p>
+<pre><code>&gt;&gt; first [~void~]
+== ~void~
+</code></pre>
+<p>But an evaluated ~void~ becomes an isotope, and operations like ALL are willing to tolerate that as a signal of invisible intent it should discard:</p>
+<pre><code>&gt;&gt; ~void~
+== ~void~  ; isotope
+
+&gt;&gt; all [10 + 20, ~void~]
+== 30
+</code></pre>
+<p>Unfortunately, this is extra work that ALL must do, since ~void~ isotopes are valid evaluative products.  Every construct that wants to integrate impure invisibility bears the burden.</p>
+</li>
+<li>
+<p><strong>PURE INVISIBILITY</strong> is an evaluator feature when a function call can truly erase arbitrary code, such as to the right of a SET-WORD!:</p>
+<pre><code>&gt;&gt; y: elide (1 + 2 print "Erased!" 3 + 4) 10 + 20
+Erased!
+== 30
+
+&gt;&gt; y
+== 30
+</code></pre>
+<p>This can only be done when a function like ELIDE specially says that it is not expected to return any result at all.  Otherwise it's not clear whether <strong>y:</strong> is supposed to get the <code>~void~</code> isotope or something after it.</p>
+<p>(Over time I embraced the odd idea that just saying RETURN and not giving it an argument would be the way of being purely invisible...which has the interesting property that <strong><code>(return some-other-function ...)</code></strong> can actually chain cases where the other function is sometimes purely invisible and sometimes not!  This insight arose because of the frustrating fact that C/C++ cannot do such chains... if you say <strong><code>return some_other_function(...);</code></strong> and then change the other function from returning <code>int</code> to <code>void</code>, it will complain that you cannot use <code>return</code> with an argument inside of void functions...even if that function itself returns void.)</p>
+</li>
+</ul>
+<h2>Why Not Make "Impure" Invisibility Act "Pure" ("Semipure?")</h2>
+<p>The existence of the ^META types and operators raises an interesting theoretical option...that a ~void~ isotope could be treated as pure by the evaluator, and it's your responsibility to use meta operations if you wanted to see it:</p>
+<pre><code>&gt;&gt; 1 + 2 ~void~
+== 1 + 2
+
+&gt;&gt; x: ~void~ 1 + 2
+== 3
+
+&gt;&gt; x
+== 3
+
+&gt;&gt; y: ^ ~void~ 1 + 2
+== 3
+
+&gt;&gt; y
+== ~void~
+    ; ^-- not an isotope
+</code></pre>
+<p>Pondering the potential implications of this form of thinking, it would mean there wouldn't be a form of invisibility that could beat a ^META operation:</p>
+<pre><code>&gt;&gt; z: ^ comment ["hi"] ~something~
+== ~something~  ; isotope
+
+&gt;&gt; z
+== ~void~
+   ; ^-- the COMMENT was seen by the ^META, instead of bypassed
+   ; (today COMMENT's status as a purely invisible construct means you
+   ; would get Z as a non-isotope ~something~)
+</code></pre>
+<p><strong>Note that since parameters to functions are allowed to be meta if they need to be, changing a parameter from normal to meta would break commenting constructs.</strong>  This is not too surprising, as if you have <code>my-function comment "hi" 1 + 2</code> and change MY-FUNCTION's argument to be quoted instead of evaluated, that's another kind of parameter change that would break the commenting feature.</p>
+<p>Meta parameters should be used very sparingly--far more sparingly than quoted parameters--so this may not be a problem.  I notice that a function like RETURN (which takes its argument meta so it can return isotopes) could still chain an invisible function, as it would receive ~void~ as a measure of what an isotope was.</p>
+<h2>If Truly Pure Invisibility Is Not Implemented, Would People Just Reinvent it with Variadics in a Less Efficient Way Than The Current Evaluator Internals Do It?</h2>
+<p>Let's say someone writes:</p>
+<pre><code>foo: func [] [return comment "hi" 1 + 2]
+</code></pre>
+<p>Today this returns 3 due to comment's "purely invisible" status, RETURN takes its argument as a ^META parameter.  If we decide meta parameters are allowed to see the "semipure" void isotopes described above, then it would just be like you'd written:</p>
+<pre><code>foo: func [] [return comment "hi"]
+</code></pre>
+<p><strong>That would make it seem like COMMENT is unreliable.</strong>  True, if you take a quoted argument you expect COMMENT to break in such cases as well...but meta parameters are evaluative and so it's a bit different.</p>
+<p>Perhaps it should be just the <strong>^</strong> operator at the callsite that has the special vision, and meta parameters are evaluated and discard the void isotopes.  This would mean you only have to learn the rule that <strong>^ comment "hi"</strong> breaks the invisibility.</p>
+<p><em>(Here we wind up with <strong>^</strong> either being a built-in thing the user has no way to write themselves, or invent a "supermeta" parameter flag to say "I can see void isotopes, too".)</em></p>
+<h2>Either way, "Impure Invisibility" Is MUCH Easier To Work With</h2>
+<p>The easy meta-transformations between ~void~ isotopes and plain ~void~ BAD-WORD! allow you to work with an invisible function gracefully...even when you don't know if it's invisible or not.</p>
+<p>Early problems cropped up with pure invisible COMMENT like this:</p>
+<pre><code>&gt;&gt; f: make frame! :comment
+&gt;&gt; f.discarded: "Ignore Me"
+
+&gt;&gt; x: do f   y: 1 + 2
+== 3
+
+&gt;&gt; x
+== 3  ; this could seem surprising, but maybe not?
+</code></pre>
+<p>But the new world does have at least <em>an</em> answer, meta your result and you can test for void cases and handle them as you wish.</p>
+<pre><code>&gt;&gt; x: ^ do f  y: 1 + 2
+== 3
+
+&gt;&gt; x
+== ~void~
+
+; alternately could have said `[^x]: do f  y: 1 + 2`
+</code></pre>
+<p>Yet it's still uncomfortable to imagine that an operation like DO could vanish, which is why DO tried to use void isotopes as a proxy for its return value.  A ~void~ isotope could then be semantically interpreted or converted to pure invisibility on an as-needed basis.</p>
+<h2>"If You Don't Know What You're Doing, Then Do It Meta"</h2>
+<p>My urge to build safety into the system is driven by wanting to enable people to write generic code.</p>
+<p>...but... trying to protect people from <strong><code>do f</code></strong> from vanishing when <strong><code>f</code></strong> is a FRAME! for the COMMENT function may be misguided.  That protection could be breaking the very cool trick they are trying to perform.</p>
+<p>And there's a real complexity cost to having a distinction between pure and impure invisibility.  If you allow that distinction then impure invisibility has a meta form (a plain ~void~ BAD-WORD!) while pure invisibility doesn't have one.  The powerful tool of META therefore offers no answers for a purely invisible function.</p>
+<p>Maybe things like DO should have a switch to say <strong>do/vanishable</strong> and that's the right protection, otherwise they error if they could vanish.  Same with <strong>unmeta</strong>?</p>
+<p>Or maybe there's a better finesse, to say that the evaluator has some generalized protection which notices when you might have meant for an invisible result to be used, and there's generic mitigation for such cases.  Like with <strong><code>x: do f  y: 1 + 2</code></strong>, if it notices the potential for misunderstanding you can say <strong><code>x: vanishable do f y: 1 + 2</code></strong>...and you'd be provoked to decide if you wanted to use VANISHABLE or ^ based on what you were actually trying to accomplish.</p>
+<p><em>That actually sounds like a really clever mitigation, if a word or symbol were picked for it!</em></p>
+<hr>
+<p><strong>This post has been in draft form for a while, as I let it turn over in my head.  But I think I am turning to feeling that void isotopes cannot be stored in variables but are something whose existence can only be philosophically imagined by seeing a meta state register as a plain ~void~ BAD-WORD!.  This is bolstered by the idea that function frames cannot receive isotopes, and parallels to the idea that ~null~ isotopes cannot be stored in variables either (though they decay to ordinary NULL)</strong></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/pure-vs-impure-invisibility-do-we-need-both/1782">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/pure-vs-impure-invisibility-do-we-need-both/1782</link>
+          <pubDate>Fri, 21 Jan 2022 09:19:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1782</guid>
+          <source url="https://forum.rebol.info/t/pure-vs-impure-invisibility-do-we-need-both/1782.rss">Pure vs. Impure Invisibility: Do We Need Both?</source>
+        </item>
+        <item>
+          <title>DEFAULT with PATH!...What Does It *Mean*?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>The ability to have random side-effects in paths creates all kinds of nasty potentials.</p>
+<p>That is why I made a way to say you only allow paths to contain evaluations if you also ask for an "invariant" representation of the path to be returned...that you could use in place of a path for further assignments.</p>
+<pre><code>&gt;&gt; var: 'x
+
+&gt;&gt; path: 'obj/(print "side effect" var)
+
+&gt;&gt; set path 30
+** Error: PATH contains GROUP!s, must request /STEPS output (can use #)
+
+&gt;&gt; [value steps]: set path 30
+side effect
+== 30
+
+&gt;&gt; steps
+== @[obj x]
+</code></pre>
+<p>You can then use STEPS instead of the path.  e.g. <strong>set @[obj x]</strong> will act like <strong>set 'obj/x</strong>.  (The reason a BLOCK! is used is because not all datatypes would be legal in paths...a GROUP! could evaluate to anything, like an OBJECT!...which is a perfectly valid thing to set in a MAP! for instance.)</p>
+<h2>This "Invariant" Form Was Intended For Things Like DEFAULT</h2>
+<p>The concept was that even if you have evaluations on the left hand side, you will be able to capture where it got the value or absence-of-value from...and then in the event you need to write it back because a default is necessary, you don't have to run the evaluation again:</p>
+<pre><code>&gt;&gt; n: 5
+
+&gt;&gt; data.(n: n + 1): default [10]
+</code></pre>
+<p>Internally, DEFAULT can make a GET request of <strong>data.(n: n + 1)</strong> and get back STEPS with a fixed value for N, like <strong><code>@[data 6]</code></strong>.  If it discovers that the value is set to blank and needs defaulting, it can then use the steps instead of the path as the basis for the SET...so N is not changed twice.</p>
+<h2>But Other Things Can Change...</h2>
+<p>All kinds of changes can happen between the GET and the SET in DEFAULT.  What about this?</p>
+<pre><code>&gt;&gt; data.(n: n + 1): default [data: ~gone~, 10]
+</code></pre>
+<p>We've prevented running imperative code and getting side effects from the path...but the side effects can come from other places.  <strong>Anything you do between the GET and the SET can make the "invariant" steps not so invariant.</strong></p>
+<p>Let's say DATA was a BLOCK! at the outset.  Should the <strong><code>@[...]</code></strong> steps have actually stored a reference to the block instead of the WORD! data, so that changes to the variable couldn't redirect the invariant reference?</p>
+<p>That doesn't work for immediate types.  Let's say you have:</p>
+<pre><code>&gt;&gt; time: 4:00
+
+&gt;&gt; path: 'time.(if true ['hour])
+
+&gt;&gt; [# steps]: set path 12
+== 12
+
+&gt;&gt; steps
+== @[4:00 hour]
+</code></pre>
+<p>Now you can't use that steps to go back and change the original time, because 4:00 is an immediate value.  You need to get at the object the time lives in.  You'd wind up with a 3-element steps in that case:</p>
+<pre><code>&gt;&gt; steps
+== @[make object! [...] time hour]
+</code></pre>
+<h2>If Nothing Is Going To Be Perfect... Should We Shortcut It?</h2>
+<p>Let's say you have a path like:</p>
+<pre><code>obj1.obj2.(if true [obj3]).obj4.date.time
+</code></pre>
+<p>We could say that the "steps" for this path are:</p>
+<pre><code>@[obj1 obj2 obj3 obj4 date time]
+</code></pre>
+<p>But is that empirically more desirable than just noticing when we cross the line from non-immediate values into immediate values, and preserving only as much as we need?</p>
+<pre><code>@[(make object! [...this is obj4...]) date time]
+</code></pre>
+<p>That's enough to write back to obj4...but it is fully disconnected from the path that was initially being represented.  <strong>But which is more suitable for the intent of something like DEFAULT?</strong></p>
+<h2>My Head Hurts <img src="https://forum.rebol.info/images/emoji/twitter/face_with_head_bandage.png?v=9" title=":face_with_head_bandage:" class="emoji" alt=":face_with_head_bandage:">
+</h2>
+<p>...and it's not because of a booster shot.  It's because this is crazy, and way past the point of being fun.</p>
+<p>What started out as a nice idea for taming GROUP!s in PATH!s becomes a real headache.</p>
+<p><strong>So I'm going to leave well enough alone, and say that this does only that.</strong>  If you want to prune a path to get better invariants, that's on you:</p>
+<p>For example:</p>
+<pre><code>(obj1.obj2.obj3.obj4).date.time: default [...]
+</code></pre>
+<p>When you do this, then when DEFAULT asks for steps it will get 4 items in the block:</p>
+<pre><code>&gt;&gt; steps
+== @[(make object! [...]) date time]
+</code></pre>
+<p>It has latched onto the object, and so you can say inside the body of the defaulting code things like <strong><code>obj1: null</code></strong> or <strong>obj1.obj2.obj3: []</strong> and the assignment will apply to what it was looking at, because those names aren't in the steps.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/default-with-path-what-does-it-mean/1770">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/default-with-path-what-does-it-mean/1770</link>
+          <pubDate>Sat, 11 Dec 2021 23:58:00 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1770</guid>
+          <source url="https://forum.rebol.info/t/default-with-path-what-does-it-mean/1770.rss">DEFAULT with PATH!...What Does It *Mean*?</source>
+        </item>
+        <item>
+          <title>Multi-Return: Deferred Enfix + Meta Returns</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>So multi-return is based on a (conceptually) simple trick for writing ordinary function calls.  The "extra returns" are really just refinements that are labeled as outputs, but you can invoke them normally as refinements that take a WORD!... as was done historically for extra outputs of a function.</p>
+<p>Traditional code:</p>
+<pre><code>&gt;&gt; block: transcode "1 2 3"
+== [1 2 3]  ; defaults to assuming you want the whole thing transcoded
+
+&gt;&gt; value: transcode/next "1 2 3" 'rest
+== 1  ; asking for /next gives you just one value
+
+&gt;&gt; rest
+== " 2 3"  ; the REST word passed in gets assigned the remainder
+</code></pre>
+<p>Now for some  <img src="https://forum.rebol.info/images/emoji/twitter/candy.png?v=9" title=":candy:" class="emoji" alt=":candy:"> <a href="https://en.wikipedia.org/wiki/Syntactic_sugar"><strong>Syntactic Sugar</strong></a> <img src="https://forum.rebol.info/images/emoji/twitter/lollipop.png?v=9" title=":lollipop:" class="emoji" alt=":lollipop:"> that is enabled when NEXT is marked as an "output refinement" (<strong>next:</strong>) instead of an "ordinary refinement" (<strong>/next</strong>) in the function spec:</p>
+<pre><code>&gt;&gt; [value rest]: transcode "1 2 3" 
+== 1
+
+&gt;&gt; value
+== 1  ; the overall expression was 1, but value was also assigned 1
+
+&gt;&gt; rest
+== " 2 3"  ; just as if you'd named the /NEXT refinement and passed 'REST
+</code></pre>
+<h2>But There Have Been Enfix Complications...</h2>
+<p>Though simple in concept, the multi-returns aren't completely simple in implementation...and at present run through a bit of different code than ordinary function calls (though of course most of the function execution, type checking, etc. are shared).</p>
+<p>The parts that are different--however--were creating problems with enfix...which wasn't managed as part of the frame filling process.  So it just errored.</p>
+<pre><code>&gt;&gt; [value rest]: transcode "1 2 3" then [&lt;item!&gt;]
+** Script Error: Ambiguous infix expression--use GROUP! to clarify
+</code></pre>
+<p>You could get it to execute by putting the part before the THEN in a group:</p>
+<pre><code>&gt;&gt; ([value rest]: transcode "1 2 3") then [&lt;item!&gt;]
+== &lt;item!&gt;
+</code></pre>
+<p>Which works...<em>but what if that isn't the semantics you wanted?</em>  That means your overall expression evaluates to <code>&lt;item!&gt;</code> but value is still getting 1.</p>
+<p>Consider that we usually want the result of an ELSE to get into the value of a variable:</p>
+<pre><code>&gt;&gt; x: if 1 &gt; 2 [10] else [20]
+== 20
+
+&gt;&gt; x
+== 20
+</code></pre>
+<p>If you had to write this with a GROUP! you'd get x as the result of the IF (null in this case, since 1 &lt; 2)</p>
+<pre><code>&gt;&gt; (x: if 1 &gt; 2 [10]) else [20]
+== 20
+
+&gt;&gt; x
+; null
+</code></pre>
+<p>So that's the situation we were in with multi-returns--not having a choice.  You'd wind up with the variable assigned the result of the original function...never being able to use the enfix product.</p>
+<p><strong>It looks like I have a fix for this, so you'll be able to choose either way.</strong></p>
+<h2>Recap of The No-Group-On-Right Limitation</h2>
+<p>I've mentioned how being syntactic sugar kind of limits what we can do with multi-returns.  You can't put the right hand side in a group:</p>
+<pre><code>[value rest]: (transcode "1 2 3")
+</code></pre>
+<p>This is because it could be more than one call, and you don't know what will come after it, and it could be arbitrarily deep:</p>
+<pre><code>[value rest]: ((((transcode "1 2 3", ...))))
+</code></pre>
+<p>You <em>might</em> argue we could still allow it if the multi-returns are tunneled down to the function and the value gets assigned from the final product of the group.</p>
+<p>But I don't like it because then you are talking about something that left quoting enfix couldn't do.  I like the idea that when you get in a pinch and want to override a multi-return assignment you could do it by declaring your function enfix and pick up the SET-BLOCK! on the left as a parameter.</p>
+<p>That interchangeability offers a good dynamic, and it's how <a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634">things like UNPACK</a> fit into this universe...where they seem like first-class language features.  Doing crazy things that don't relate to what users could build themselves isn't the ergonomic we're looking for (e.g. "bad lego alligator" territory).</p>
+<h2>The Meta Dilemma</h2>
+<p>The hard rule that the thing on the right of the SET-BLOCK! be the function with the multi-returns caused a problem with wanting to ask for the "meta" result.</p>
+<p>UPARSE has this desire often.  It may be that a parser returns something like an unset or a null isotope.  We want to handle those distinctly from nulls, as well as to not choke on them as invalid variables.  So we ask for the meta-result of the parser.</p>
+<p>I wrote a special exemption to allow it, like this:</p>
+<pre><code>([result progress]: ^ parser input) then [...]
+</code></pre>
+<p>Recognizing the <strong>^</strong> specially in the multi-return code felt wrong.  Where do such things stop...why not <strong>([...]: ^ ^ ^ parser input)</strong> ?  It has a similar arbitrariness to it that digging through parentheses seemed to have.</p>
+<p>But with the META-WORD! we had a new option...to put the meta on the argument itself:</p>
+<pre><code>([^result progress]: parser input) then [...]
+</code></pre>
+<p>To some people's tastes maybe that looks worse.  but it is more compact.  And it can work even if you don't name a variable:</p>
+<pre><code>&gt;&gt; [^ rest]: transcode "1 2 3"
+== '1
+</code></pre>
+<p>It feels more like things are in the right place this way.  Multi-return was prototyped as just an application of enfix quoting blocks on the left of a function...and I kind of like it not straying too far from what that could do.  This is within reach of that.</p>
+<p>These might seem like small things, but, they are important.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759</link>
+          <pubDate>Fri, 26 Nov 2021 14:18:34 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1759</guid>
+          <source url="https://forum.rebol.info/t/multi-return-deferred-enfix-meta-returns/1759.rss">Multi-Return: Deferred Enfix + Meta Returns</source>
+        </item>
+        <item>
+          <title>&quot;Destructuring&quot; in FOR-EACH</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p><a class="mention" href="/u/gchiu">@gchiu</a> wrote some code that made a list of drugs and filenames related to those drugs:</p>
+<pre><code> drugs: [
+     ["Benzbromarone" "SA1537.pdf"]
+     ["Teriparatide" "SA1139.pdf"]
+     ["Adalimumab" "SA1847.pdf"]
+     ["Etanercept" "SA1812.pdf"]
+ ]
+</code></pre>
+<p>This is inconvenient to enumerate.  It won't work if you say:</p>
+<pre><code>for-each [drugname filename] [...]
+</code></pre>
+<p>Because what you get then is two successive blocks... e.g. drugname winds up being <strong>["Benzbromarone" "SA1537.pdf"]</strong> and then filename is <strong>["Teriparatide" "SA1139.pdf"]</strong>.</p>
+<p>If this were to work, it would have to offer something like:</p>
+<pre><code>for-each [[drugname filename]] [...]
+</code></pre>
+<p>That could communicate that the information you were looking for was actually in a nested block level.</p>
+<p>Though we don't want to get too literal with the dialect.  If you have:</p>
+<pre><code> drugs: [
+     ("Benzbromarone" "SA1537.pdf")
+     ("Teriparatide" "SA1139.pdf")
+     ("Adalimumab" "SA1847.pdf")
+     ("Etanercept" "SA1812.pdf")
+ ]
+</code></pre>
+<p>...we don't want to make the meaning of GROUP!s in FOR-EACH have to be related to this structure, because we use groups to say that the variable's name is calculated.  :-/</p>
+<p>Similarly, we might imagine more interesting meanings for blocks in FOR-EACH than to point out a nested block level.  Maybe this would be done with quoted blocks and quoted groups?</p>
+<pre><code>for-each ['(drugname filename)] [...]
+</code></pre>
+<p>It gets a bit hairy because you're starting to tread into parsing territory.  Hard to know where to stop.</p>
+<p>Since I'm not sure I just switched Graham's case to use a flat block.</p>
+<pre><code> drugs: [
+     "Benzbromarone" "SA1537.pdf"
+     "Teriparatide" "SA1139.pdf"
+     "Adalimumab" "SA1847.pdf"
+     "Etanercept" "SA1812.pdf"
+ ]
+</code></pre>
+<p>But it should be thought about more.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/destructuring-in-for-each/1738">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/destructuring-in-for-each/1738</link>
+          <pubDate>Mon, 04 Oct 2021 20:08:43 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1738</guid>
+          <source url="https://forum.rebol.info/t/destructuring-in-for-each/1738.rss">&quot;Destructuring&quot; in FOR-EACH</source>
+        </item>
+        <item>
+          <title>COLLECT Mutation Semantics: KEEP vs. KEEP/ONLY</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>When reimplementing COLLECT for UPARSE on top of the "pending" model, <a href="https://forum.rebol.info/t/getting-hooks-into-events-during-parse/1640/10">I mentioned a potential avenue for optimization</a> by not immediately splicing blocks, but keeping them in a list and then merging the whole list together if-and-when the COLLECT got to the success point:</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="10" data-topic="1640">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"><a href="https://forum.rebol.info/t/getting-hooks-into-events-during-parse/1640/10">Getting Hooks Into "Events" during PARSE</a>
+</div>
+<blockquote>
+<p>(Efficiency sidenote: I might should have used something like @[...] blocks for GATHER, and use BLOCK!s for KEEP to complement the QUOTED!s. This would save splicing until the very end COLLECT when you have a better idea of how big the total series will be.)</p>
+</blockquote>
+</aside>
+<p>The idea of saving splicing until the end might sound good, but... it doesn't work if we presume mutations.</p>
+<p>Just imagine a delaying implementation of ordinary COLLECT:</p>
+<pre><code>&gt;&gt; delayed-splice-collect [
+      block: [a b c]
+      keep block
+      clear block
+      insert block [d e f]
+      keep block
+  ]
+== [d e f d e f]
+</code></pre>
+<p>That's not what we expect from today's COLLECT.</p>
+<p>Though if you're <em>not</em> splicing, you expect mutations to affect what you've already collected.  It's true in all Redbols today, since you're keeping the block by identity:</p>
+<pre><code>red&gt;&gt; collect [
+         block: [a b c]
+         keep/only block
+         clear block
+         insert block [d e f]
+         keep/only block
+      ]
+== [[d e f] [d e f]]
+</code></pre>
+<h2>
+<a href="https://hypirion.com/musings/understanding-persistent-vector-pt-1">Persistent Vector</a> Looks Awfully Tempting  <img src="https://forum.rebol.info/images/emoji/twitter/face_with_monocle.png?v=9" title=":face_with_monocle:" class="emoji" alt=":face_with_monocle:">
+</h2>
+<p>Looking at things like this is always a throwback to saying <em>"mutable state by default is garbage"</em>.  But it depends on what example you're looking at.  Sometimes it's good, sometimes it's bad.</p>
+<p>I guess the thing is to just explore what the good parts are.  Maybe someone will blend in some Clojure bits at some point in a derivative...but that person is not going to be me!</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/collect-mutation-semantics-keep-vs-keep-only/1706">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/collect-mutation-semantics-keep-vs-keep-only/1706</link>
+          <pubDate>Sun, 05 Sep 2021 11:56:38 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1706</guid>
+          <source url="https://forum.rebol.info/t/collect-mutation-semantics-keep-vs-keep-only/1706.rss">COLLECT Mutation Semantics: KEEP vs. KEEP/ONLY</source>
+        </item>
+        <item>
+          <title>The Pathing and Picking Predicament Pans Out</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <h2>TL;DR</h2>
+<p>I'm changing path dispatch to be fundamentally recursive, and via a unified action dispatcher called <strong><code>PICK-POKE*</code></strong>.  As fate would have it, this takes a longstanding annoying edge case in how R3-Alpha methodized path dispatch for GOB!...and makes that "the answer" for how all path dispatch is done.  Additionally:</p>
+<ul>
+<li>
+<p>It employs FRAME! reuse for native dispatch, which allows a memory use profile similar to the the "PVS" (Path Value State?) structure from R3-Alpha...even though it's making recursive evaluator calls.</p>
+</li>
+<li>
+<p>This makes path dispatch just ordinary function dispatch, which means pathing doesn't need special accommodation in stackless.</p>
+<ul>
+<li>Sidenote: Path dispatch and PARSE were two extremely troublesome areas in the stackless conversion.  Both are being addressed by pushing more and more "custom" recursive C code to do their recursions by means of the interpreter's evaluator loop.</li>
+</ul>
+</li>
+<li>
+<p>It should mean that user-defined data types--or even in the near term perhaps your own OBJECT!s--could customize pathing if they wanted to <em>(though we may limit customization to <strong><code>/</code></strong> access in order to provide terra firma for accessing the object)</em></p>
+</li>
+</ul>
+<h2>Preface: No One Has Done This Right (Until Now)</h2>
+<p>Before we get carried away and give GOB! too much credit...  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>Redbols try to be bit fiddly and pack things into immediate cell values.  But if you're going to be that fiddly, you have to remember that "updating a value" really means "updating the container the value lives in".</p>
+<p>Random example from Red and Rebol2:</p>
+<pre><code>red&gt;&gt; b: [x 12-Dec-2021/10:00 y]
+== [x 12-Dec-2021/10:00:00 y]
+
+red&gt;&gt; b/2/time/hour
+== 10
+
+red&gt;&gt; b/2/time/hour: 20
+== 20
+
+red&gt;&gt; b
+== [x 12-Dec-2021/10:00:00 y]  ; still 10:00, not 20:00
+</code></pre>
+<p><em>(R3-Alpha is worse, giving an error and corrupting the time.)</em></p>
+<p>The reason this happens is because DATE! fits in a cell with the TIME! packed into it.  If you ask for a date's /TIME then you get a synthesized new cell to hold it.  But poking back into that synthesized cell won't change the original date.</p>
+<p>Hence every SET-PATH! or POKE has to offer a kind of backflow in the chain of poking, in case any of the forward writes require bit updates backwards.  Frame reuse allows that to be made somewhat efficient with one cell's worth of stack, while PICK can use a <a href="https://stackoverflow.com/questions/22037261/what-does-sibling-calls-mean">"sibling tail call"</a>.</p>
+<p>The Ren-C I'm working on takes care of the above example, and should generalize to others!</p>
+<h2>Now, Explanation.  Background:</h2>
+<p>Path Dispatch--or <strong>"PD"</strong> as R3-Alpha called it--was a concept fraught with issues.</p>
+<p>On the surface it seems like a simple chain...it's broken into steps where each one produces a value that is picked by the next step:</p>
+<pre><code>&gt;&gt; outer: make object! [inner: make object! [block: [a b c]]]
+
+&gt;&gt; outer/inner/block/2  ; expressed as a path
+== b
+
+&gt;&gt; pick (pick (pick outer 'inner) 'block) 2  ; expanded as picks
+== b
+
+; Note: Historical Rebol required a mix of SELECT and PICK, Ren-C unifies it
+</code></pre>
+<p>How "hard" is that?  Well, it's not <em>that</em> hard, though it could be very wasteful.</p>
+<p>Imagine the FFI with <strong>some-struct.million-int-array.1</strong>.  If that's an FFI interface to a struct with a million C int in it, do you have to generate a BLOCK! of a million INTEGER! just to pick the first one?  That's what the naive translation of pathing to step-by-step PICK calls would do.</p>
+<p>Even without talking about efficiency, we can talk about semantics.  <strong>PICK at least works out semantically for pathing, but POKE does not.</strong>  Try this:</p>
+<pre><code>&gt;&gt; outer/inner/block: [i am a new block]
+== [i am a new block]
+
+&gt;&gt; poke (pick (pick outer 'inner) 'block) [i am a new block]
+** Error, wait a second...
+</code></pre>
+<p>That second formulation is <em>not</em> equivalent...because the PICK gave back a plain old block.  So it saw:</p>
+<pre><code>&gt;&gt; poke [a b c] [i am a new block]
+</code></pre>
+<p><strong>This faces the problem that Rebol lacks "Reference" types.</strong> POKE wanted a place to put the new block...effectively the <em>address</em> of the block value in the inner object.  But it just got back the <em>value</em> of the block in the inner object.</p>
+<h2>Could Rebol Have A Reference Type?</h2>
+<p>Hypothetical code:</p>
+<pre><code>&gt;&gt; obj: make object! [field: "I am a field"]
+
+&gt;&gt; ref: &amp;obj.field
+== &amp;"I am a field"
+
+&gt;&gt; ref: "Field is replaced!"
+
+&gt;&gt; obj
+== make object! [field: "Field is replaced!"]
+</code></pre>
+<p>In such a world, changing REF didn't change the string... <em>it changed a field in the object the string lived in</em>.</p>
+<p>This is the kind of mechanic that pathing would need if it were to be extensible and truly generic. What each step in the path offered up to the next would have to be a means of writing back to the field if it wanted to.</p>
+<p>That sounds like a nightmare...but it wouldn't even solve the problem if it could be done, because...</p>
+<h2>...Subaddressing Makes It Worse!</h2>
+<p>Some of the more confusing pats of path dispatch dealt with the fact that path steps might be producing something that didn't reference a full value at all...but some optimized bit pattern.</p>
+<pre><code>&gt;&gt; obj: make object! [gob: make gob! [x: 10 y: 20]]
+
+&gt;&gt; obj.gob.size.x: 304
+== 304
+</code></pre>
+<p>What's so weird about that?  Well, GOB! stores its bits compactly, so there is no INTEGER! cell for the X, and no PAIR! cell for the size.</p>
+<p>This is all easy enough on the PICK side... you ask the GOB! what its size is, and it tells you 10x20 as a new PAIR! it makes out of thin air.  Then you ask that pair what its X is and it tells you 10.</p>
+<p>But on the POKE side, <em>even if you had the address mechanic</em>, there's no address of a value that the GOB! can give for that PAIR! to let you write back to it.</p>
+<h2>GOB! in R3-Alpha Actually Had The Right Idea...Sort Of</h2>
+<p>With path dispatchers like R3-Alpha's <strong><a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-block.c#L530">PD_Block()</a></strong> that it has a "picker" (<strong>pvs-&gt;select</strong>) which it is applying to the value that's a BLOCK! or GROUP! (<strong>pvs-&gt;out</strong>).  It trusts that the "path engine" has pre-evaluated any code in parentheses if necessary to get pvs-&gt;select.</p>
+<p>Then it has the detail that if <strong>pvs-&gt;setval</strong> is not null, it needs to know it's a SET-PATH!.  This is also something the path engine works out...based on whether the end of the path is reached.  Really this looks like it moves one step a time.</p>
+<p>So in my early dealings with path dispatch, I'd try to formalize this a bit better...putting horse-blinders on the PD_Xxx() function by giving it narrow parameterization, and removing the PVS as a parameter.  Yet I tripped over "bad" path dispatchers like PD_Gob(), which <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-gob.c#L676">called Next_Path() in their implementations</a>.</p>
+<p>But the "bad" handling of GOB! was closer to the right general answer:</p>
+<ul>
+<li>
+<p>Some portion of the path is consumed by each step in the SET-PATH!</p>
+</li>
+<li>
+<p>It then it hands the remainder off to what it can't handle via a recursive call...</p>
+<ul>
+<li>The return value of this recursive call is either NULL or an updated image of the cell bits that must be updated in the container to reflect an immediate type.</li>
+</ul>
+</li>
+</ul>
+<h2>Walking Through The Process With GOB!</h2>
+<p>Imagine you write:</p>
+<pre><code>&gt;&gt; obj/gob/size/x: 304
+</code></pre>
+<p>It might happen like this:</p>
+<ul>
+<li>
+<p>POKE asks OBJECT! <em>"Hey, I want to write gob/size/x.  How much of that can you do?"</em></p>
+</li>
+<li>
+<p>OBJECT! says <em>"I will update myself if GOB! can tell me the answer to what it wants to be if size/x is written."</em></p>
+</li>
+<li>
+<p>GOB! says <em>"I consumed the entirety of size/x: 304 and there were no changes to my bit pattern that my caller need be aware about."</em> (because gobs are allocated in handles, REBGOB*, so the modification of the size bits is not the concern of the reference in object as it still points to that same REBGOB*)</p>
+</li>
+<li>
+<p>OBJECT! says <em>"Okay fine then."</em></p>
+</li>
+</ul>
+<p>Notice that <strong>We never got PAIR! involved in the dispatch, even though the answer to gob/size is a PAIR!.</strong></p>
+<p>That's not the only way to do it.  There's actually three ways this could work:</p>
+<ol>
+<li>
+<p>(the above way) Don't just consume one of the steps, but go ahead and do two--e.g. take control of what <code>size.x</code> means and don't synthesize a PAIR! at all.</p>
+</li>
+<li>
+<p>Synthesize a PAIR! and allow it to do whatever modification it wishes, but ignore its <code>nullptr</code> return status and pack the full pair value down to the low-level bits in the GOB!</p>
+</li>
+<li>
+<p>Drop this micro-optimization and store a PAIR! cell in the GOB! structure.</p>
+</li>
+</ol>
+<p>I actually think <span class="hashtag">#3</span> is the best answer, but, the point here is to study being general.</p>
+<h2>The New Formulation Is About As Good As This Can Get</h2>
+<p>It's interesting to be able to do this kind of optimization, and things like the FFI need it.  I mentioned <strong>some-struct.million-int-array.1</strong>.  Naive approaches will be too inefficient to handle this.</p>
+<p>So path processing needs this nuance.  And we'd like an answer that doesn't make the author of STRUCT! have to worry about <strong>some-struct.million-int-array.(1 + 2)</strong>, so the processing of GROUP!s has to be done by the pathing.</p>
+<p>Long story long: this is a PITA and I'm making some headway on framing the problem.  Things seem in better shape, as the oddly-shaped PD_Xxx are eliminated.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704</link>
+          <pubDate>Sun, 05 Sep 2021 08:43:19 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1704</guid>
+          <source url="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704.rss">The Pathing and Picking Predicament Pans Out</source>
+        </item>
+        <item>
+          <title>REDUCE meets DENULL and the BAD-WORD! ~NULL~</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>The question of what to do when REDUCE encounters NULL has been a thorn ever since its introduction.  By definition you can't put NULL in a BLOCK!.</p>
+<p>So you've seemingly got three choices:</p>
+<ul>
+<li>
+<p>Vaporize the expression slot: <strong>reduce [1 null 2]</strong> =&gt; <strong>[1 2]</strong></p>
+</li>
+<li>
+<p>Raise an error: <strong>reduce [1 null 2]</strong> =&gt; <strong><code>** Error: NULLs illegal in REDUCE</code></strong></p>
+</li>
+<li>
+<p>Put some value there: <strong>reduce [1 null 2]</strong> =&gt; <strong>[1 ~null~ 2]</strong> or <strong>[1 _ 2]</strong></p>
+</li>
+</ul>
+<p>I'm exaggerating to call these the "only options".  When you throw in refinements or pass in functions, you've got more options.  I've also made the REDUCE-EACH function, which lets you get involved with the result of each expression evaluation...sky's the limit:</p>
+<pre><code>collect [
+    reduce-each x [1 + 2 null 10 + 20] [
+        if integer? x [keep quote :[&lt;int&gt; x]]
+        if null? x [keep &lt;null&gt;]
+    ]
+]
+== [[&lt;int&gt; 3] &lt;null&gt; [&lt;int&gt; 30]]
+</code></pre>
+<p>But with no parameterization I think there are only three reasonable choices: You vaporize, you error, or you put <strong>~null~</strong> or <strong>_</strong> there.</p>
+<h2>Several People Have Favored Vaporization</h2>
+<p>I myself have <em>usually</em> usually been on the side of erroring.</p>
+<p>But the place that vaporization feels most convenient is when you're doing something like an append of data to a block, and you want to cut out some items.</p>
+<pre><code>&gt;&gt; use-preface: false
+
+&gt;&gt; append data reduce [if use-preface [&lt;preface&gt;] 1 + 2 "Hello"]
+== [1 + 2 "Hello"]
+</code></pre>
+<p>The key to why vaporization works here is that <strong>you're dealing with a situation that has no positional expectations</strong>.</p>
+<p>But I don't generally use REDUCE in these cases.  It can't splice (which I usually want to be able to do).</p>
+<h2>We've Now Tried Vaporization and... <em>I Don't Think I Like It</em>
+</h2>
+<p>Let's look at situations like the use of GET-BLOCK! (I believe must be a synonym for REDUCE) to do ranges in UPARSE.</p>
+<pre><code>; Set min to null so we can easily test if it has been set or not, but is
+; still "a little ornery".  Must set it before running the rule.
+;
+min: null
+
+; Set max to blank so it can opt out by default if we have no max
+;
+max: _
+
+&lt;&lt;BUNCH OF CODE THAT MUST SET MIN AND MAY OR MAY NOT SET MAX&gt;&gt;
+
+uparse data [repeat (:[min max]) rule]
+</code></pre>
+<p>The reason I didn't say <strong><code>(min: ~)</code></strong> or <strong><code>(min: ~overwrite-me~)</code></strong> is because I wanted min to be "middlingly ornery".  So I wanted to use it in expressions like <strong>any [min, ...]</strong> but I didn't want it to be able to be used as an opt out intention.  This is the weird zone that NULL occupies and we're making the most of it.</p>
+<p>Under this understanding...I'd be displeased if that turned into <strong><code>[repeat ([_]) rule]</code></strong>, because I'd have liked to have been told about the issue.</p>
+<p><strong>Remember that it was not too long ago that the non-valued state would error on the variable fetch itself.</strong>  We've made a lot of concessions to get to the point where it is falsey and can be retrieved without a problem.</p>
+<p>So long as the answer isn't vaporization, it would have been okay.  Making <strong><code>[repeat ([~null~ _]) rule]</code></strong> would have been poisonous enough to cause a problem.  And raising an error would have been fine too.</p>
+<h2>A Compromise: DENULL... where DENULL NULL vanishes?</h2>
+<p>If you really want a REDUCE to make nulls go away instead of becoming a ~null~ BAD-WORD! or raising an error, how about this?</p>
+<pre><code>&gt;&gt; reduce [1 denull if true [&lt;x&gt;] 2]
+== [1 &lt;x&gt; 2]
+
+&gt;&gt; reduce [1 denull if false [&lt;x&gt;] 2]
+== [1 2]
+
+&gt;&gt; reduce [1 if false [&lt;x&gt;] 2]
+== [1 ~null~ 2]
+</code></pre>
+<p>This gives the tool for removing things conditionally, while keeping the REDUCE number of expressions consistent.</p>
+<p>Like I say... COMPOSE is my preferred tool for when you want splicing... not just letting you go from 1 expression to 0 values, but from 1 expression to N values.</p>
+<h2>We Can Also Make a REDUCE* Which Drops NULLs</h2>
+<p>...and I've talked about predicates and all the other possibilities.  But I think vaporization just isn't the default I want.  DENULL seems a good way to get past the problem.</p>
+<p>The middle ground of <strong>~null~</strong> -- even though it's not an isotope -- gives a compromise that I think is more discoverable when it goes wrong than vaporization.</p>
+<p>It seems worth trying out.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/reduce-meets-denull-and-the-bad-word-null/1665">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/reduce-meets-denull-and-the-bad-word-null/1665</link>
+          <pubDate>Mon, 16 Aug 2021 02:13:44 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1665</guid>
+          <source url="https://forum.rebol.info/t/reduce-meets-denull-and-the-bad-word-null/1665.rss">REDUCE meets DENULL and the BAD-WORD! ~NULL~</source>
+        </item>
+        <item>
+          <title>Implicit Execution of RETURN in functions = BAD</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>Let's say you write something like this:</p>
+<pre><code>foo: func [
+    return: [integer!]
+    arg [integer! text! tag!]
+][
+    if integer? arg [
+        return arg + 1000
+    ]
+    if text? arg [
+        return reverse arg
+    ]
+    arg
+]
+</code></pre>
+<p>I imagine you'd expect behavior along these lines:</p>
+<pre><code>&gt;&gt; foo 20
+== 1020
+
+&gt;&gt; foo "whoops"
+** Error: FOO doesn't have RETURN enabled for values of type TEXT!
+
+&gt;&gt; foo &lt;bomb&gt;
+** Error: FOO doesn't have RETURN enabled for values of type TAG!
+</code></pre>
+<p>Even though the last value just "falls out" of the function, you presumably don't want that to mean it escapes type checking just because it did.</p>
+<h2>Mechanically, this is Non-Obvious...</h2>
+<p>RETURN is not actually supposed to be a "language feature" per se.  It's actually a feature of the higher-level generator FUNC...and there are lower-level ways of building functions that lack RETURNs.  <em>(If there weren't, how could you write the RETURN function itself?)</em></p>
+<p>Plus it's fully overrideable.  You can set RETURN to some random integer if you feel like it...it's just a variable in the frame.  But more frequently you'd like to specialize or adapt it:</p>
+<pre><code>bar: function [
+    return: [integer!]
+    arg [logic!]
+][
+    return: adapt :return [value: value + 300]
+    if arg [
+       return 4
+    ]
+    720
+]
+
+&gt;&gt; bar true
+== 304
+</code></pre>
+<p>...but here we are at an interesting question.  What do you expect to happen with <strong>bar false</strong>?</p>
+<pre><code>&gt;&gt; bar false
+== 720  ; (A) values falling out of bottom *do not* run RETURN implicitly
+
+&gt;&gt; bar false
+== 1020  ; (B) values falling out of bottom *do* run RETURN implicitly
+</code></pre>
+<p>A usermode implementation of FUNC has a pretty easy trick to implement either behavior.  The question is simply if it takes the body you give it and turns it into a GROUP! and passes it to RETURN or not...</p>
+<p><strong>"real body" option (A) for BAR above</strong></p>
+<pre><code>[
+    return: (make action! ...)  ; low level make return function
+    (  ; no return here, just `as group! body`
+        return: adapt :return [value: value + 300]
+        if arg [
+            return 4
+        ]
+        720
+    )
+]
+</code></pre>
+<p><strong>"real body" option (B) for BAR above</strong></p>
+<pre><code>[
+    return: (make action! ...)  ; low level make return function
+    return (  ; automatic return injected
+        return: adapt :return [value: value + 300]
+        if arg [
+            return 4
+        ]
+        720
+    )
+]
+</code></pre>
+<h2>Or Just Require RETURN with FUNC that has RETURN: ?</h2>
+<p><strong>strict option (C) for BAR above</strong></p>
+<pre><code>[
+   return: (make action! ...)  ; low level make return function
+   (  ; automatic return injected
+       return: adapt :return [value: value + 300]
+       if arg [
+           return 4
+       ]
+       720
+    )
+    fail "Functions which specify RETURN: must use RETURN"
+]
+</code></pre>
+<p><a href="https://forum.rebol.info/t/how-attached-are-we-to-functions-return-last-result/1219">I've brought this up before</a>, and <a class="mention" href="/u/ingohohmann">@IngoHohmann</a> and <a class="mention" href="/u/iarnold">@iArnold</a> seemed to think "dropping out the last value" was somehow fundamental.</p>
+<p>But given what I say above about how the semantics get pretty sketchy on type checking and such, what if we say that functions that don't specify RETURN have no return available, and just drop out their last result?</p>
+<pre><code>bar1: function [
+    arg [logic!]
+][
+    if arg [4] else [720]
+]
+
+&gt;&gt; bar true
+== 4
+
+&gt;&gt; bar false
+== 720
+</code></pre>
+<p>You don't get type checking so you'd have to do it yourself, which will be available:</p>
+<pre><code>bar1-checked: function [
+    arg [logic!]
+][
+    let val: if arg [4] else [720]
+    ensure integer! val
+]
+</code></pre>
+<p>However: if you specify RETURN: in the spec then you are required to use it.  This gives you type checking and guarantee of running any return hooking on all code paths:</p>
+<pre><code>bar2: function [
+    return: [integer!]
+    arg [logic!]
+][
+    return: adapt :return [value: value + 300]
+    if arg [
+       return 4
+    ]
+    return 720
+]
+
+&gt;&gt; bar true
+== 304
+
+&gt;&gt; bar false
+== 1020
+</code></pre>
+<h2>I Think The Case for Requiring RETURN if RETURN: Is Strong</h2>
+<p><strong>It seems rather clear when laid out like I have above that it's the right answer.</strong>  People who hook RETURN are typically doing so because they want it on all return paths.  But I think hiding a RETURN behind the scenes is a cognitive time bomb.  Being explicit sorts that out, and it also provides a rational answer for why you get type checking...<em>the RETURN does the check</em>.</p>
+<p><em>(I can tell you that without that rational answer, the internals have ugliness.  This policy will cleanse the ugliness.)</em></p>
+<p>Lower-level functions that don't have RETURN have to have a way to return values.  Dropping them out the bottom seems a good way to start building up the mechanic.  It's also useful for quick and dirty "macro-like" functions, so I see no problem with that.</p>
+<h2>Should <code>return: &lt;void&gt;</code> and <code>return: &lt;none&gt;</code> be Exceptions?</h2>
+<p>The point of introducing these cases was to help remove concern over letting unwanted variables "fall out", and being able to forego concerns about type checking.  <strong>It's a different case</strong>, because there is no type checking involved of the parameter passed to RETURN as it takes no parameters...and there's no need to type check what falls out the bottom because it is discarded:</p>
+<pre><code>something: func [
+    return: &lt;none&gt;
+    value [text!]
+][
+    if value = "" [return]  ; this RETURN acts as `return ~none~`
+    append data value
+
+    ; expectation has been that this would also yield ~none~
+]
+</code></pre>
+<p>The idea was to make it painless to shield callers from seeing the returned result, and have them know there was no result they were supposed to pay attention to.</p>
+<p>What gets me concerned here is that question of whether or not a hooked or modified RETURN is implicitly run at the end of such a function.</p>
+<p>It seems to suck to have to put the RETURN there.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<pre><code>something: func [
+    return: &lt;none&gt;
+    value [text!]
+][
+    return: adapt :return [print "I AM RETURNING!"]
+    if value = "" [return]
+    append data value
+    return  ; with this here, it's clear you will get the PRINT to happen
+]
+</code></pre>
+<p>But it does benefit from the explicitness.  There's no ambiguity.</p>
+<p><strong>Again, you have to use your imagination to think about a longer function in which there are many control paths through the function...and someone decides to hook RETURN.</strong>  If you are working in a large codebase with long functions, wouldn't you like to know that all control paths will run your hook...and that the language has gotten everyone on the same page that is expected and possible?</p>
+<p><strong>My feeling in the moment is that the only answer I'd consider besides erroring if there's no RETURN would be to implicitly put a RETURN at the end, so a hooked RETURN would be executed if a value drops out the bottom.</strong>  But I've explained that for the other cases I think that's sneaky.  It feels much more forthright to have the call at source level.</p>
+<p>Path of least resistance on this is to add the RETURN implicitly, so I'm going with that.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656</link>
+          <pubDate>Thu, 12 Aug 2021 19:00:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1656</guid>
+          <source url="https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656.rss">Implicit Execution of RETURN in functions = BAD</source>
+        </item>
+        <item>
+          <title>The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>Though I understand anyone being skeptical given the amount of debate: <em>I do honestly think I am zeroing in on "an answer" regarding the core ergonomics for things like APPEND</em>.  But it doesn't feel quite there yet.</p>
+<p>The biggest point of discomfort relates to what I mentioned about WORD!s, which is proving to be a bigger deal in practice than I first realized:</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="8" data-topic="1332">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"><a href="https://forum.rebol.info/t/every-thought-on-array-splicing-has-been-had/1332/8">Every Thought On Array Splicing Has Been Had <img width="20" height="20" src="https://forum.rebol.info/images/emoji/twitter/exploding_head.png?v=9" title="exploding_head" alt="exploding_head" class="emoji"></a>
+</div>
+<blockquote>
+<p><strong>The most obvious side-effect is that you won't be able to append WORD!s/PATH!s/etc. without making them quoted.</strong></p>
+<pre><code>&gt;&gt; append [a b c] 'd
+** Error: evaluative value must be QUOTED! to append
+</code></pre>
+</blockquote>
+</aside>
+<p><em>(Remember of course that APPEND is not receiving <strong>'d</strong> in this case.  The <strong>'</strong> suppresses the evaluation and "vaporizes" so that APPEND winds up receiving the <strong>d</strong>.  To get APPEND to receive a QUOTED! value you'd have to have said <strong>''d</strong> or <strong>the 'd</strong> or <strong>just d</strong> or some other such construction.)</em></p>
+<p>Of course, we can just say "screw it" and allow it...and be no worse off than history (better, really).  But that's small comfort, as I think history was bad!</p>
+<p>Quick refresher:</p>
+<pre><code>rebol2&gt;&gt; value: first [d/e]
+== d/e
+rebol2&gt;&gt; append [a b c] value
+== [a b c d e]
+     ; ^-- not [a b c d/e]
+
+rebol2&gt;&gt; value: first [(d e)]
+== (d e)
+rebol2&gt;&gt; append [a b c] value
+== [a b c d e]
+     ; ^-- not [a b c (d e)]
+
+rebol2&gt;&gt; value: first ['d]
+== 'd
+rebol2&gt;&gt; append [a b c] value
+== [a b c d]
+    ; ^-- not for the Ren-C reason... LIT-WORD! decay on WORD!-fetch
+rebol2&gt;&gt; append [a b c] first ['d]
+== [a b c 'd]
+    ; ^-- see what I mean?  yes this is all kinds of ridiculous
+</code></pre>
+<p><em>(Note: Red at least doesn't do that last one, there is no LIT-WORD! decay on word fetches.)</em></p>
+<p>Point being: <strong>I want people to keep in mind just how crappy history was, in understanding why the search for better is worthwhile...especially if it kills off /ONLY.</strong></p>
+<h2>Back To the WORD! Pain Point</h2>
+<p>Among the places I'm finding it painful to not be able to just pass a WORD!, let's look at FIND.  You'll see code like:</p>
+<pre><code>if not find data 'd [append data 'd]
+</code></pre>
+<p>The readability suffers a bit if you change this to BLOCK!.  In this example in particular, it gets harder to see the branch:</p>
+<pre><code>if not find data [d] [append data [d]]
+</code></pre>
+<p>If you use double quotes it seems confusing:</p>
+<pre><code>if not find data ''d [append data ''d]
+</code></pre>
+<p>It's likely similarly strange to most readers to wonder why you have to "quote twice" when you use the word QUOTE, but it's the generic substitute for /ONLY:</p>
+<pre><code>if not find data quote 'd [append data quote 'd]
+</code></pre>
+<p>And then there's JUST, which reads well but hides a lot of mechanics (it's QUOTE THE):</p>
+<pre><code>if not find data just d [append data just d]
+</code></pre>
+<p>I don't think this is any less learnable than /ONLY when you add it all up, and it has a mechanical rationale behind it.  But there's something else...</p>
+<h2>Bigger Problem: What About OBJECT!</h2>
+<p>If you take operations like FIND and SELECT they've historically been willing to operate on BLOCK! or OBJECT!.  Should the rules about not taking evaluative types apply to them, too?  :-/</p>
+<pre><code>&gt;&gt; obj: make object! [a: 10 b: 20]
+
+&gt;&gt; select obj 'a
+** Error: SELECT can't take evaluative types, use QUOTED!
+
+&gt;&gt; select obj ''a
+== 10
+
+&gt;&gt; select obj [a]
+== 10   ; ???
+</code></pre>
+<p>So that's not good.</p>
+<p><strong>But again, on the whole: there are some things going right here with the QUOTED! behavior...and some things going wrong here with the WORD! behavior...so it's important to stop and think.</strong></p>
+<h2>One Weird Thought: What About <code>@WORD</code> ?</h2>
+<p>Today, the "evaluator inert doesn't need a quote" rule means that the <code>@xxx</code> types--which are inert--append as-is:</p>
+<pre><code>&gt;&gt; append [a b c] @d
+== [a b c @d]  ; today's behavior, whereas appending a `d` WORD! errors
+</code></pre>
+<p>But since there are some types like BLOCK! or BLANK! or QUOTED! that are called out as "special" in terms of behavior w.r.t. the likes of APPEND, what if the inert @ types were treated like QUOTED!?</p>
+<pre><code>&gt;&gt; append [a b c] @d
+== [a b c d]  ; since appending [d] and 'd are special, why not @d too?
+</code></pre>
+<p>This doesn't really help you if you're trying to append SET-WORD!s or other parts to the block, because there's no <strong><code>@foo:</code></strong> type (for instance).  But in the specific case of words, it helps...and that's the case where we have the issue with object keys.</p>
+<p>How far would this go?  Would <code>@word</code> become the universal sign of the key?  Might it be what's offered as the key in FOR-EACH loops?</p>
+<pre><code>&gt;&gt; obj: make object! [a: 10 b: 20]
+&gt;&gt; for-each [key val] obj [print [mold key mold val]]
+@a 10
+@b 20
+</code></pre>
+<p>I'll point out that there are some benefits to these non-evaluative types taking on a bigger role.  When you COMPOSE or use them in the API, plain WORD! can be very inconvenient to handle...you're always having to throw in quotes to suppress their evaluation.  Remember that when you write <strong>'a</strong> you're getting a pass on that being inert for just that one evaluation...whoever receives it still has to treat it as a hot potato.</p>
+<p><strong>I'm just throwing out an idea, here.</strong>  But really, I don't know.  I think making QUOTED! types append their quoted argument as-is is a winner, and I believe it's fundamental to Rebol's DNA that BLOCK! splice by default.  Yet I think the safety net of catching evaluative types is a way of saying <em>"oh, you're putting together something that could be CODE!"</em> where you can catch cases where values might be splicing blocks or throwing away their quotes on accident.</p>
+<hr>
+<p><strong>And of course we can wuss out and just say WORD! is special.</strong>  After all, QUOTED! is an evaluative type and it's given special meaning in APPEND.  (But that is sort of the point--since it has special meaning, we try to protect usages of the other evaluative types from being misinterpreted.)</p>
+<p>I don't really think there's any particular value in saying that the <code>@xxx</code> types are uniquely able to be appended as-is since they are inert, so it kind of feels like a nice option to let them mean append themselves minus the <code>@</code>.  However that implies that ^[...] and @[...] would act the same for APPEND... via different mechanisms.</p>
+<pre><code>&gt;&gt; append [a b c] @d
+== [a b c d]
+
+&gt;&gt; append [a b c] @d/e
+== [a b c d/e]
+
+&gt;&gt; append [a b c] @d.e
+== [a b c d.e]
+
+&gt;&gt; append [a b c] @(d e)
+== [a b c (d e)]
+
+&gt;&gt; append [a b c] @[d e]
+== [a b c [d e]]  ; due to internal logic of APPEND with @
+
+&gt;&gt; append [a b c] ^[d e]  ; -&gt; append [a b c] the '[d e]
+== [a b c [d e]]  ; due to internal logic of APPEND with QUOTED!
+</code></pre>
+<h2>Or we can fully wuss out and say there's no protection</h2>
+<pre><code>&gt;&gt; append [a b c] 'd
+== [a b c d]
+
+&gt;&gt; append [a b c] ''d
+== [a b c d]
+
+&gt;&gt; append [a b c] [d]
+== [a b c d]
+
+&gt;&gt; append [a b c] '[d]
+== [a b c d]
+
+&gt;&gt; append [a b c] ''[d]
+== [a b c [d]]
+
+&gt;&gt; append [a b c] quote [d]
+== [a b c [d]]
+
+&gt;&gt; append [a b c] ^[d]
+== [a b c [d]]
+</code></pre>
+<p>But I think this should be considered carefully.</p>
+            <p><small>4 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653</link>
+          <pubDate>Tue, 10 Aug 2021 23:55:04 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1653</guid>
+          <source url="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653.rss">The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</source>
+        </item>
+        <item>
+          <title>UPARSE needs BREAK, REJECT, ACCEPT... But What Are They?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>When something doesn't sit right in my head, I notice.  Like how I could never remember in the beginning what GET-WORD! or SET-WORD! in PARSE did.  <em>(e.g. is a GET-WORD! GET-ing the parse position to SET a variable, or GET-ting a variable's value to use to SET the parse position?)</em></p>
+<p>And I never really understood ACCEPT, REJECT, BREAK, and FAIL.</p>
+<h2>I Currently Consider the FAIL Confusion "Solved"</h2>
+<p>Things have settled nicely, in that LOGIC! is used to get a pure "keep going" or "stop".  So FAIL is replaced simply by FALSE.  It means <strong>if (expression-returning-logic)</strong> is replaced in UPARSE as <strong>:(expression-returning-logic)</strong>, and we can keep FAIL on the meaning of "raise error".</p>
+<p>This generalization has the pleasing property that we don't need to go introducing "parse switch" or "parse case" or any such things.  Since NULL means the same thing as #[true] for a GET-GROUP! splice, you have every option at your disposal.</p>
+<h2>BREAK and REJECT Seem Too Similar</h2>
+<p>The problem I have is that BREAK sounds a lot like "this didn't work".  In fact, I've enforced that loops return NULL if-and-only-if you BREAK them:</p>
+<pre><code>&gt;&gt; repeat 3 [break]
+; null
+
+&gt;&gt; repeat 3 [null]
+== ~null~  ; isotope
+</code></pre>
+<p>A NULL is used as a signal of "soft failure", e.g. it causes ELSE to run.</p>
+<pre><code> &gt;&gt; repeat 3 [break] else [print "soft failure"]
+ soft failure
+
+ &gt;&gt; repeat 3 [null] else [print "soft failure"]
+ == ~null~  ; isotope
+</code></pre>
+<p>So the distinction between BREAK and REJECT seems a thin one.  I feel like I'd rather that BREAK meant you decided the iterated rule isn't working out...and some other signal indicated that you want to accept it and go on.</p>
+<p>But ACCEPT doesn't really hint at ceasing iteration.  Perhaps STOP?  As a word, it hints more at the ceasing of an iteration...and that's used in CYCLE.</p>
+<pre><code>&gt;&gt; cycle [stop]
+== ~void~  ; isotope
+</code></pre>
+<p>Unlike BREAK (which always returns NULL) it is able to return a non-NULL...and a NULL will be isotopified so it won't be seen as a "soft failure" by ELSE:</p>
+<pre><code>&gt;&gt; cycle [stop 10]
+== 10
+
+&gt;&gt; cycle [stop null]
+== ~null~  ; isotope
+</code></pre>
+<p>Similarly, if you're going to be saying an iterative construct in PARSE is to keep going, then you should have an opportunity to say what the value synthesized from that rule will be.  This requires "endable" rules (because we want a plain stop to work).  I think that's doable.</p>
+<p>So I guess I'm saying prefer BREAK to mean rule failed... return NULL.  And STOP to mean rule succeeded.  Default to returning a void isotope if no argument given, but allow an argument.  The argument would be a rule, so you could actually make the STOP a rule.</p>
+<pre><code>&gt;&gt; uparse "aaab" [while ["a" (print "A") | stop ["b" (1020)]]]
+A
+A
+A
+== 1020
+</code></pre>
+<h2>What About CONTINUE ?</h2>
+<p>If your loop is only one deep in alternates, then all an alternate needs to do continue is succeed:</p>
+<pre><code>&gt;&gt; uparse "aaab" [while ["a" comment "continue" | "b" comment "continue"]]
+</code></pre>
+<p>But if you're deeper than that, it is trickier.  And I don't see any particular reason why you shouldn't be able to ask a rule to CONTINUE a loop.</p>
+<pre><code>&gt;&gt; uparse "abbbaccc" [while [
+    "a" [some "bbb" (print "BBB"), continue | some "ccc" (print "CCC")]
+    (print "like this!")
+]
+BBB
+CCC
+like this!
+</code></pre>
+<p>And CONTINUE could also take an argument, which would matter only if it was the final iteration:</p>
+<pre><code>&gt;&gt; uparse "bba" [repeat (3) ["a" continue (&lt;like this&gt;) | "b"]]
+== &lt;like this&gt;
+</code></pre>
+<h2>Would That Be an Improvement?</h2>
+<p>I think CONTINUE is pretty obviously useful.</p>
+<p>One thing that's a bit weird about what I suggest is that when a BREAK happens in a <em>non-parse</em> loop, the code after it runs.</p>
+<p>But the idea that "failure" stops progression is a cross-cutting design aspect in PARSE.  It seems consistent to me.</p>
+<p>Yet another issue is that STOP is not currently offered by plain WHILE or REPEAT or FOR-EACH or other loops.  The reason is that if you are to try and write your own iterator in terms of other iterators, you cannot tell from the outside if a "cease iterating" intention happened.</p>
+<p>Consider this:</p>
+<pre><code>&gt;&gt; opaque-code: [print "looping", 1000 + 20]
+
+&gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+looping
+looping
+looping
+looping
+== 1020
+</code></pre>
+<p>That's nice because if the opaque-code has a break, the whole thing will break:</p>
+<pre><code>&gt;&gt; opaque-code: [print "entering", break]
+
+&gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+entering
+; null
+</code></pre>
+<p>But if you permit STOP to return a value, the stopping intent is lost:</p>
+<pre><code>&gt;&gt; opaque-code: [print "entering", stop 1020]
+
+&gt;&gt; repeat 2 (opaque-code) then [repeat 2 (opaque-code)]
+entering
+entering
+== 1020
+</code></pre>
+<p>When you're trying to write compound looping expressions that are built up of smaller loops, this really matters.  CYCLE is an oddball because you know the only way it <em>ever</em> terminates with a value is if there was a stopping intent...which is why it allows STOP.</p>
+<h2>Maybe ACCEPT and REJECT Should Be Used and No BREAK?</h2>
+<p>...but this kind of runs into the same problem that non-PARSE WHILE doesn't have ACCEPT or REJECT.  So why get worked up about it having STOP when non-PARSE WHILE doesn't have STOP, if it makes everything line up?</p>
+<p>Or maybe non-PARSE while <em>can</em> have STOP...you just understand that STOP has limits when it comes to loop abstraction.  Not everything works all the time.  So STOP can have a warning on it that you can't tell the stopping intent happened from outside a loop that isn't CYCLE...</p>
+<h2>What Do You Think?</h2>
+<p>Are the needs of PARSE different, or the same?  Should BREAK make the overall expression evaluate to NULL <em>but</em> keep going?  Are ACCEPT and REJECT the right answer?</p>
+<p>It's hard to say.  I have to work out the mechanism by which such things could work in usermode combinators whatever you call them...so there's time to think about it.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650</link>
+          <pubDate>Sat, 07 Aug 2021 11:51:18 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1650</guid>
+          <source url="https://forum.rebol.info/t/uparse-needs-break-reject-accept-but-what-are-they/1650.rss">UPARSE needs BREAK, REJECT, ACCEPT... But What Are They?</source>
+        </item>
+        <item>
+          <title>Understanding FRAME!s and Phases</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>Good news: <a href="https://github.com/metaeducation/ren-c/issues/393"><strong>an old issue is (seemingly) mostly addressed!</strong></a></p>
+<p>Among the various implications of this design improvement, you can AUGMENT a function with new fields that share the name of either locals or specialized values.  The only names you cannot use in extending a function are those that are public parameters on the interface!</p>
+<pre><code>&gt;&gt; ap10: specialize :append [value: 10]
+&gt;&gt; ap10 [a b c]
+== [a b c 10]
+
+&gt;&gt; wow!: adapt (augment :ap10 [/value [integer!]]) [insert series value]
+&gt;&gt; wow!/value [a b c] 20
+== [20 a b c 10]
+</code></pre>
+<p>So what's going on here is that underneath the hood, the <em>single</em> FRAME! for this function call has <em>two</em> slots with the label <strong><code>value</code></strong>.  But they're never in effect and visible at the same time.  This is great news for composability of functions.</p>
+<p>I'm going to try to explain here a little bit of how this works.</p>
+<h2>Every Function Is Defined By an "Exemplar" FRAME!</h2>
+<p>Some time ago I penned the prophetic post: <a href="https://forum.rebol.info/t/seeing-all-action-s-as-variadic-frame-makers/1002">"Seeing all ACTION!s as Variadic FRAME! Makers"</a>.  This set the stage for what ultimately became an implementation mechanism where the interface to all ACTION!s are defined by a FRAME!.</p>
+<p>So if you write something like:</p>
+<pre><code>foo: func [return: [] x [tag! text!] y [integer!] &lt;local&gt; z] [
+    print ["internal foo view:" mold binding of 'x]
+]
+</code></pre>
+<p>Inside of FOO there is a FRAME! that lays out a map of the parameters and locals.  This is called the "exemplar".  We can get direct access to that frame:</p>
+<pre><code>&gt;&gt; exemplar of :foo
+== make frame! [
+    return: make typeset! []
+    x: make typeset! [#[datatype! text!] #[datatype! tag!]]
+    y: make typeset! [#[datatype! integer!]]
+    z: ~unset~
+]
+</code></pre>
+<p>This isn't an "ordinary" frame for the function.  The fields don't hold legitimate values for a function invocation...they are holding typesets.  Except for Z which is a local, so it holds the value that it will have when a frame is made.  <em>(more on that in a second)</em></p>
+<p>So now let's try making an ordinary frame for the function:</p>
+<pre><code>&gt;&gt; f: make frame! :foo
+== make frame! [
+    x: ~unset~
+    y: ~unset~
+]
+</code></pre>
+<p>Okay, that's neat.  It doesn't <em>seem</em> to have the RETURN or Z fields because we aren't supposed to be setting those.  They are there--the memory is part of the frame, and part of what will actually be backing the variables when you DO the function.  But they are hidden in this "phaseless" view.</p>
+<p>I put code inside the function to print out its internal view of that same frame.  Let's try running and see what it says:</p>
+<pre><code>&gt;&gt; f.x: "Hello"
+
+&gt;&gt; f.y: 1020
+
+&gt;&gt; do f
+internal foo view: make frame! [
+    return: '#[action! [^value /isotope]]
+    x: "Hello"
+    y: 1020
+    z: ~unset~
+]
+</code></pre>
+<p>Hey, look at that.  <strong>When we see the frame from <em>inside</em> the function, it has access to RETURN and Z.</strong>  How does it know to hide the fields on the outside, but give access to them on the inside?</p>
+<p>The answer is that each FRAME! value can optionally hold a "phase".  A phase is itself just an ACTION!--it's which step of the composition you are running.  The phase informs which of the fields are supposed to be visible.</p>
+<h2>Now, Let's SPECIALIZE It...</h2>
+<p>Let's make a new function BAR which fixes the value of Y.</p>
+<pre><code>spfoo: specialize :foo [y: 304]
+</code></pre>
+<p>And now let's look at what its internal "fake" exemplar FRAME! looks like:</p>
+<pre><code>&gt;&gt; exemplar of :spfoo
+== make frame! [
+    return: make typeset! []
+    x: make typeset! [#[datatype! text!] #[datatype! tag!]]
+    y: 304
+    z: ~unset~
+]
+</code></pre>
+<p>Something you'll notice is that <em>the type information for Y is now lost, and the slot where the type information would have been has been replaced by the specialized value</em>.  That's a nice little efficiency trick.</p>
+<p>Now if we make a frame for SPFOO, the only thing it will let us set is X:</p>
+<pre><code>&gt;&gt; f: make frame! :spfoo
+== make frame! [
+    x: ~unset~
+]
+</code></pre>
+<h2>What if We Were to ADAPT the Specialization?</h2>
+<p>So this raises an interesting question about the "inside" and "outside" view of things.</p>
+<p>At an interface level, I would argue that it should not usually be possible to tell the difference between SPFOO and any other function that takes a single parameter X.</p>
+<p>So what happens if we ADAPT the SPFOO function and get access to the frame on the inside?</p>
+<pre><code>adspfoo: adapt :spfoo [
+    print ["inside adaptation:" mold binding of 'x]
+]
+
+&gt;&gt; adspfoo "What happens?"
+inside adaptation: make frame! [
+    x: "What happens?"
+]
+internal foo view: make frame! [
+    return: '#[action! [^value /isotope]]
+    x: "What happens?"
+    y: 304
+    z: ~unset~
+]
+</code></pre>
+<p>Ta-da.  ADAPT only saw a function with an X parameter, and none of the other details are exposed to it.  Its view of the frame only sees X.  <em>But it's all the same frame...</em> memory is being reused, just the access to it is controlled.</p>
+<p><strong>Pretty slick, huh?</strong>  Anyway, I'm sure there are bugs but the groundwork is there.  Please experiment and let me know if anything seems to be counterintuitive.</p>
+<p><em>(There's a lot of thinking that needs to be done about how RETURN plays into this...it's a weird case that needs study.  Being inside the ADAPT and not having access to the RETURN is irritating, but it may just be necessary to prevent that access and make you use an ENCLOSE if you might want to return.)</em></p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/understanding-frame-s-and-phases/1645">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/understanding-frame-s-and-phases/1645</link>
+          <pubDate>Wed, 04 Aug 2021 17:32:38 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1645</guid>
+          <source url="https://forum.rebol.info/t/understanding-frame-s-and-phases/1645.rss">Understanding FRAME!s and Phases</source>
+        </item>
+        <item>
+          <title>Thinking We Might Should Nix PROTECT/HIDE For Now</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>R3-Alpha had an interesting feature, <a href="http://www.rebol.net/r3blogs/0189.html">which let you "hide" fields in contexts</a>.</p>
+<p>It was actually something that drew me in to the language in the beginning as "oh, that's cool".</p>
+<p>So it has stuck around in some form, and simple examples do still seem to work:</p>
+<pre><code>&gt;&gt; obj: make object! [x: 10 y: 20]
+== make object! [
+    x: 10
+    y: 20
+]
+
+&gt;&gt; protect/hide 'obj/y
+== obj/y
+
+&gt;&gt; obj
+== make object! [
+    x: 10
+]
+</code></pre>
+<p><strong>But this is a very complex feature to honor systemically.</strong>  Doing it poorly is easy.  Doing it pervasively and correctly is rather difficult.</p>
+<p>In particular, what bothers me about this "user controlled hidden bit" is that I'm trying to get some system-level hidden mechanics working correctly.  And the interaction between things the system needs to hide and this "user can hide anything they want" is somewhat maddening, especially because I know how hard it is to do such a thing <em>right</em>.</p>
+<p>It's an intriguing feature that seems to have been a bit of an off-the-cuff experiment.  I don't see it as mission-critical...and all it does is interfere with the hardening needed to solve the mission-critical problems related to contexts.</p>
+<p>Not going to delete it immediately, but it's certainly in the crosshairs if it causes any more trouble with something I'm trying to fix.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644</link>
+          <pubDate>Tue, 03 Aug 2021 09:05:08 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1644</guid>
+          <source url="https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644.rss">Thinking We Might Should Nix PROTECT/HIDE For Now</source>
+        </item>
+        <item>
+          <title>BLOCK! Behavior In DELIMIT (hence SPACED, UNSPACED, PRINT)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>Because I've thought of Redbols as targeting being a kind of "user friendly" and intuitive language, I was long bent out of shape about how junky things like PRINT and REJOIN were.</p>
+<p>If your "Hello World" level programs are unpredictable nonsense, I don't see how you know where to start.  :-/</p>
+<p>So an early thing I came up with was the idea to replace REJOIN with something that had some nice learnable invariants...which was called COMBINE.  It was harder than I thought.</p>
+<p>Among the various philosophies that were tried out, was that blocks would be reduced recursively:</p>
+<pre><code>&gt;&gt; var: "World"
+
+old&gt;&gt; print ["Hello" var]
+Hello World
+
+&gt;&gt; block: ["Hello" var]
+
+&gt;&gt; print ["((" block "))"]
+(( Hello World ))
+</code></pre>
+<p>But I began having second thoughts, because it seemed like reducing blocks inside the print was a bit "dangerous".  You were in an evaluative context so if you wanted reduction you could ask for it.</p>
+<p>Many ideas were tried over time, such as using BLOCK! as a means of getting "tight spacing" so you could intermix spaced and unspaced portions:</p>
+<pre><code>&gt;&gt; print ["Outer" "spaced" ["inner" "not" "spaced"] "was an" "idea"]
+Outer spaced innernotspaced was an idea
+</code></pre>
+<p>This seemed to give a best of both worlds scenario.  But it wasn't clear whether the blocks should be reduced, or exactly what this "unspaced non-reduced block" operation was.</p>
+<h2>Today, I Think We Have A Direction and Rationale</h2>
+<p><a href="https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641">I just posted my reasoning for why I think this should be true</a>:</p>
+<pre><code>&gt;&gt; print ["abc" [] "def"]
+abc def
+</code></pre>
+<p>Rebol2 and Red throw in two spaces and that's no good.</p>
+<p>If BLOCK! is going to be an aggregator for material inside of PRINT then the base case needs to basically act as if no material is there.  Otherwise it's mostly useless, e.g. it couldn't be used for indentation:</p>
+<pre><code>print [collect [repeat indent [keep tab]]], "what if indent is 0?"]
+</code></pre>
+<p>With that laid down I think it's safe to say that we want what's in a BLOCK! to be considered as being <em>pre-reduced</em>.  But also, <em>that it be unspaced</em>.</p>
+<pre><code>&gt;&gt; word: "part"
+== "part"
+
+&gt;&gt; print ["Mixing" ["unspaced" word] "with" "spaced" word]
+Mixing unspacedword with spaced part
+</code></pre>
+<p>We have a nice tool now with GET-BLOCK! that will reduce, so you have every tool on hand:</p>
+<pre><code>&gt;&gt; print ["Mixing" :["unspaced" word] "with" "spaced" word]
+Mixing unspacedpart with spaced part
+</code></pre>
+<h2>Invariant For BLOCK! Inside DELIMIT (hence PRINT, etc)</h2>
+<p>So I came up with a good model for what the BLOCK! inside of the PRINT above will do.</p>
+<p><strong>It does the same thing that APPEND of a BLOCK! to a string would do.</strong></p>
+<pre><code>&gt;&gt; append copy {} ["unspaced" word]
+== "unspacedword"
+</code></pre>
+<p><strong>Whatever that is, that's what happens with blocks in print.</strong>  So it's not FORM-ing, and no spaces.  It's the behavior of raw material being appended blockwise to a string.</p>
+<p>This keeps us from having to define a separate new behavior.  It doesn't define that behavior, so we're not out of the woods.  But as I say, it's a slow process...one step at a time.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/block-behavior-in-delimit-hence-spaced-unspaced-print/1642">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/block-behavior-in-delimit-hence-spaced-unspaced-print/1642</link>
+          <pubDate>Sat, 31 Jul 2021 17:35:38 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1642</guid>
+          <source url="https://forum.rebol.info/t/block-behavior-in-delimit-hence-spaced-unspaced-print/1642.rss">BLOCK! Behavior In DELIMIT (hence SPACED, UNSPACED, PRINT)</source>
+        </item>
+        <item>
+          <title>The Long-Awaited Death of /ONLY</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p><strong>It is looking 99% certain that I will be killing off /ONLY, and that the only things you can append to BLOCK! (and GROUP!, etc.) will be ANY-ARRAY!, QUOTED!, and BLANK! (no op).</strong></p>
+<p>So let's talk about that...</p>
+<h2>Key Point Up Front: You Can Have /ONLY If You Want It</h2>
+<p><em>Ren-C's flexibility means you can get /ONLY back if you want it, and not break a sweat doing so</em>.   You just become responsible for figuring out what its universal meaning is.  (<span class="hashtag">#goodluckwiththat</span>)</p>
+<p>Remember that AUGMENT lets you add parameters to functions.</p>
+<pre><code>&gt;&gt; foo: func [x] [print ["x is" mold x]]
+&gt;&gt; parameters of :foo
+== [x]
+
+&gt;&gt; foo+: augment :foo [/only "An ONLY parameter"]
+&gt;&gt; parameters of :foo+
+== [x /only]
+
+&gt;&gt; foo+ 10
+x is 10
+
+&gt;&gt; foo+/only 10
+x is 10
+</code></pre>
+<p>But adding parameters doesn't actually do anything but expand the specification.  You have to use another tool like ADAPT or ENCLOSE to make use of the new parameters that FOO never knew about.</p>
+<pre><code>&gt;&gt; foo++: adapt :foo+ [print either only ["/ONLY!"] ["no /ONLY"]]
+
+&gt;&gt; foo++ 10
+no /ONLY
+x is 10
+
+&gt;&gt; foo++/only 10
+/ONLY!
+x is 10
+</code></pre>
+<p>So here's an ONLIFY transformer that adds a refinement to a function, and then injects a little code to pre-process the parameter to quote it:</p>
+<pre><code>onlify: func [
+    {Add /ONLY behavior to APPEND, INSERT, CHANGE}
+    action [action!]
+][
+    adapt (augment :action [/only "Use quoted semantics for value"]) [
+        all [only, any-array? series] then [
+            value: quote :value
+        ]
+        ; ...fall through to normal handling
+    ]
+]
+</code></pre>
+<p>Then you can apply it to the functions:</p>
+<pre><code>append: my onlify  ; e.g. `append: onlify :append` 
+insert: my onlify
+change: my onlify
+</code></pre>
+<p><strong>This is the punchline.</strong>  Ren-C's arsenal of abilities lets language twist and morph in your hands.</p>
+<h2>One Fewer Semantic To Worry About</h2>
+<p>/ONLY was well defined for block-to-block appends.  But other places had no idea.</p>
+<p>What did APPEND/ONLY a BLOCK! to a string vs. regular APPEND to a string mean?  How about a PORT!?</p>
+<p>You could just ignore it, and a lot of places did that.  Yet this is uncomfortable.  It makes it feel like every implementer of an APPEND has to think about what "only-ness" means in that context or they are somehow missing out.</p>
+<p><em>But ONLY-ness has no meaning.</em>  It's always been a Rebol-specific "quirk" that I (especially) hated.  While the non-native-English speakers might have been more willing to accept that "it is whatever it does", it interfered with the desire to make Rebol approximate fluent English as much as possible.</p>
+<p>Certainly seeing it spread to something every datatype might have to react to or define was bad mojo.  The wrappers above show the ball being lobbed into the user's court to decide if they want to give it meaning, instead of having this burden borne by every PORT! or OBJECT! that might want to implement "the APPEND generic action".</p>
+<p>They'll have to figure out what they want to do with QUOTED! items, of course.  But that was going to be a problem anyway.  And it was a problem even when there were just <strong>'word</strong> and <strong>'pa/th</strong> in existence...arguably a harder and weirder problem due to the inability to do something generalized.</p>
+<p>Long story short: Good riddance to having every APPEND/CHANGE/INSERT/FIND/SELECT implementer make up What /ONLY Means for Every parameter combination.</p>
+<h2>There Will Be A Lot Of (Generalized) Tools To Help</h2>
+<p>I've hesitated on going "hard-line" on this, to say that you can't do things like:</p>
+<pre><code>&gt;&gt; find [a b "cde" [f g] h] "cde"
+** Error: FIND on ANY-ARRAY! requires ANY-ARRAY! or QUOTED!
+</code></pre>
+<p>You can grumble a bit and say:</p>
+<pre><code>&gt;&gt; find [a b "cde" [f g] h] ["cde"]
+== ["cde" [f g] h]
+</code></pre>
+<p>But that's now more "blocky" than someone might like.  Moreover, what if it's in a variable?</p>
+<p>Well, the variable case is the one we were actually worrying about.  It's to stop problems with:</p>
+<pre><code>&gt;&gt; find data item
+** Error: FIND on ANY-ARRAY! requires pattern to be ANY-ARRAY! or QUOTED!
+</code></pre>
+<p>You can easily lose your bearings if you are trying to write generic code...to the point that generic code was nigh-impossible to write.</p>
+<p>But with the right tools, I think this becomes so regularized that it feels natural to comply.  You can choose more wordy or more blocky or more symbol-y, it's all up to your style.</p>
+<p>So imagine:</p>
+<pre><code>&gt;&gt; data: [a b "cde" [f g] h]
+&gt;&gt; item: "cde"
+</code></pre>
+<p>There are now an arsenal of tools for manipulating the quoting status:</p>
+<pre><code>&gt;&gt; find data quote item
+== ["cde" [f g] h]
+
+&gt;&gt; find data ^item
+== ["cde" [f g] h]
+
+&gt;&gt; find data just b
+== [b "cde" [f g] h]
+
+&gt;&gt; find data [b]
+== [b "cde" [f g] h]
+
+&gt;&gt; find data ^(first [h i])
+== [h]
+</code></pre>
+<p>And it means that you just think of anytime that you're writing patterns to look for in blocks, you can default to making them be blocks or quoted blocks.</p>
+<pre><code>&gt;&gt; pattern-one: [b "cde"]
+&gt;&gt; pattern-two: quote [f g]  ; or ^[f g], or [[f g]]
+
+&gt;&gt; find data pattern-one
+== [b "cde" [f g] h]
+
+&gt;&gt; find data pattern-two
+== [[f g] h]
+</code></pre>
+<p><strong>Key is to stop losing sleep over these low-level routines being a little more "inconvenient", and instead have faith that making them well-defined will let you build the specializations or adaptations you need.</strong></p>
+<h2>Good Riddance /ONLY</h2>
+<p>The elimination of /ONLY from the semantic model, and to have it not contaminate the user's heads, means that people can learn more generic tools that work in more contexts.</p>
+<p>Its appearance in Ren-C will be limited to the Redbol compatibility module.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/the-long-awaited-death-of-only/1607">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-long-awaited-death-of-only/1607</link>
+          <pubDate>Sat, 15 May 2021 09:48:17 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1607</guid>
+          <source url="https://forum.rebol.info/t/the-long-awaited-death-of-only/1607.rss">The Long-Awaited Death of /ONLY</source>
+        </item>
+        <item>
+          <title>Can The ^Meta Protocol Solve Unsetness?!?!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>Just had a flash <img src="https://forum.rebol.info/images/emoji/twitter/cloud_with_lightning.png?v=9" title=":cloud_with_lightning:" class="emoji" alt=":cloud_with_lightning:"> of inspiration, by thinking about a potential difference between these two things:</p>
+<pre><code>x: '~unset~
+y: ~unset~
+</code></pre>
+<p>The first is legal and puts a BAD-WORD! into the variable x.</p>
+<p>Right now, the second is an error...because the evaluator doesn't like executing BAD-WORD!s.</p>
+<p>But what if the second did not put a typical BAD-WORD! into y, but put it into a distinctly "unset" state?  And what if many contexts couldn't tell the difference...but ^-based detection could tell the difference?</p>
+<pre><code>&gt;&gt; ^x
+== '~unset~
+
+&gt;&gt; ^y
+== ~unset~
+</code></pre>
+<p>It's very much parallel to how ~void~ is shaping up as having a kind of dual nature.  Some functions are invisible, and some modes of calling those invisible functions give ~void~ when it needs a reified result.  Other functions are not invisible, but return ~void~ as a way of saying that they don't have a meaningful result.  When you flip into modes where you care which it is...you shift into a quoted domain, where the unquoted ~void~ is a special non-valued signal.  <em>Void isotopes, basically.</em></p>
+<p>I'll have to turn this over in my head a few times, but on the surface of it... <em>this feels like the solution we've been waiting for</em>.  Unset isotopes.</p>
+<p>Stay tuned.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/can-the-meta-protocol-solve-unsetness/1600">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/can-the-meta-protocol-solve-unsetness/1600</link>
+          <pubDate>Fri, 07 May 2021 11:32:11 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1600</guid>
+          <source url="https://forum.rebol.info/t/can-the-meta-protocol-solve-unsetness/1600.rss">Can The ^Meta Protocol Solve Unsetness?!?!</source>
+        </item>
+        <item>
+          <title>The difference of the binary representation and decimal representation toward the user</title>
+          <dc:creator><![CDATA[iArnold]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>When an integer! is created, its value is kept as in binary form. When in the console is entered:</p>
+<pre><code>&gt;&gt; x: 256
+== 256
+</code></pre>
+<p>The value 256 is converted to a binary representation to save the integer! value in memory.<br>
+And afterwards the result of the operation is returned. The value that was assigned to x is converted from its binary form to the display format of 256.</p>
+<p>Where exactly in the code is this conversion taking place?</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597</link>
+          <pubDate>Thu, 06 May 2021 11:21:27 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1597</guid>
+          <source url="https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597.rss">The difference of the binary representation and decimal representation toward the user</source>
+        </item>
+        <item>
+          <title>Core Evaluator Mechanics: Complex Return Results</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>I mention in <a href="https://forum.rebol.info/t/the-cliffs-of-complexity-how-much-is-too-much/1241">"The Cliffs of Complexity"</a> that every nice-seeming feature brings along with it a ton of issues...where something formerly simple no longer has a simple answer.</p>
+<p>For instance: invisible functions are fantastic.  But in trying to implement invisible combinators in UPARSE, the parse engine has to invoke a function and know whether the result was invisible or not.  How can you be sure?</p>
+<p>One (bad) workaround would be to have some unique identity the function couldn't know about:</p>
+<pre><code> unique-identity: []  ; say this BLOCK! can't be known to the function
+ result: (unique-identity, some-func arg1 arg2)
+ if same? result unique-identity [
+     print "It must have been invisible..."
+ ]
+</code></pre>
+<p>But what if you had a FRAME! for the function, and you used DO?  Is it good for DO to be able to act invisibly?</p>
+<pre><code>&gt;&gt; f: make frame! :comment
+
+&gt;&gt; f.discarded: "the commented thing"
+
+&gt;&gt; 1 + 2 do f
+; null
+</code></pre>
+<p>Today, the answer is no... DO of a frame for an invisible function just returns NULL.</p>
+<p>I don't know if acting invisible is a good idea, or raising an error and making it so you have to use a special function for DO to be invisible, or what.  The point is just that once you come up with a cool feature it has ripples all over the system.</p>
+<p><strong>My opinion is that invisibles are a good example of being worth their disruptiveness.</strong>  Too many good ideas build on these features, so figuring out how to get the rough edges off of them is important.</p>
+<h2>Recent Thought: Every Function Is A MACRO?</h2>
+<p>When I think about "The Evaluator", I imagine it being a very mechanical and regular thing.</p>
+<p>So it kind of felt dirty to <strong><a href="https://forum.rebol.info/t/for-better-or-worse-macro/1410">add MACRO in a somewhat ad-hoc fashion</a></strong>.  Yet it seemed necessary.  Not having the ability to specify a function as what it "expands" into seemed weak.</p>
+<p>Something that came to be on my mind was that with generic quoting, there could be a sort of generalized concept...where the "grind" of the mechanical evaluator would always receive back "what to splice into the evaluation feed".  An ordinary function would simply always return a QUOTED! value of what it wanted to return...which would have one quote level dropped by the evaluator.</p>
+<p>Then, an invisible would simply be an empty block of material to splice.  A "true NULL" could be NULL, while a "valued NULL" could be simply a QUOTED! null.</p>
+<p>e.g.:</p>
+<pre><code> null =&gt; null
+ ' =&gt; "null-2", e.g. although it's a NULL still triggers THEN
+ [] =&gt; invisible
+ '7 =&gt; just the number 7
+ [7] =&gt; also just the number 7, but more costly representation
+ [1 +] =&gt; more complex macro splice, partial expression
+</code></pre>
+<p>If this were the sort of "core" protocol for return values, then FUNC would give you a layer on top of it where you didn't have to worry about issues like invisibility.  But if you wanted to write something that was sometimes invisible, you'd make a macro...so you could return an empty block as a way of saying to splice nothing into the stream.</p>
+<p>We could imagine this level of protocol also having other non-quoted types like ERROR!...to signal the propagation of errors up the stack.</p>
+<h2>Neat Unification, Does It Buy Us Anything?</h2>
+<p>There are still tough questions.  The average person calling DO on a FRAME! doesn't want to have to deal with the result being a BLOCK! representing a macro expansion.  But some clients (like UPARSE) would like to have the full information on things like invisibility.</p>
+<p>So maybe a <strong><code>DO*</code></strong> as a lower-level DO, that the higher level DO is built on.</p>
+<pre><code> &gt;&gt; f: make frame! :add
+ &gt;&gt; f.value1: 10
+ &gt;&gt; f.value2: 20
+ &gt;&gt; do* f
+ == '30  ; asking for "core" result gets it quoted
+
+ &gt;&gt; f: make frame! :comment
+ &gt;&gt; f.discarded: "argument to comment"
+ &gt;&gt; do* f
+ == []  ; asking for "core" result reveals empty expansion, e.g. invisible
+</code></pre>
+<p>I guess we could create different types for ACTION! and MACRO!, and say you couldn't even try to call a macro with plain DO.  But what if the expression is only sometimes partial or invisible?  If the person making the frame thought of the particular parameterization as something they could use <em>as if it were a function</em>, why shouldn't that be permitted?</p>
+<h2>Multiple Return Values Are Going To Likely Just Have Limits</h2>
+<p>How I've been framing multiple return values is really just syntactic sugar on passing variables to refinements.  But they're very limited...they look immediately to the right of the SET-BLOCK! for the function to search for multiple return results.  Just throwing in a GROUP! breaks that:</p>
+<pre><code>[data header]: load %some-file.reb  ; this works
+
+[data header]: (print "won't work", load %some-file.reb)
+</code></pre>
+<p>If you tried to dig into the group to interact with the first expression, you get something very incongruous with how the overall result usually comes from the last expression.  And there's no a-priori way of knowing when you're interacting with the last expression.</p>
+<p>I think this is...just okay.  It's just a notation for convenience.  If it doesn't help you, don't use it, and pass things by refinements like you would historically</p>
+<pre><code>data: (print "this works", load/header %some-file.reb 'header)
+</code></pre>
+<p>There's no current smart behavior for trying to use multiple returns with invisible function.  <a href="https://forum.rebol.info/t/non-interstitial-invisibles-more-trouble-than-theyre-worth/1582">I've challenged <strong>x: comment "hi" 10</strong></a>.  But then, what about:</p>
+<pre><code>[x]: comment "hi" 10
+</code></pre>
+<p>My opinion is that <strong>[x]: ...</strong> and <strong>x: ...</strong> should act the same, or if they don't act the same then [x]: should error.</p>
+<p>Anyway...the key point relevant to this post is that multiple returns are mostly separate from the main "return" protocol.  That's probably for the best.</p>
+<h2>Mostly Just Wanted To Write Up The MACRO Unification</h2>
+<p>So I just wanted to kind of get down this concept of a core evaluation mechanic that could represent invisibility, NULL, and "NULL-2" in a way that was more clear...in particular that idea that an empty block could communicate a "splice of nothing", hence invisibility.</p>
+<p>When I envision how the evaluator works, that feels more regular...that it sees expressions and keeps expanding them and collapsing them until it finishes a frame.  I've talked about how the expansions mean that once you start evaluating a block, you leave the domain of block representation...and so your EVALUATE steps are actually on a frame...so that's important to contemplate as well:</p>
+<aside class="quote quote-modified" data-post="4" data-topic="1496">
+  <div class="title">
+    <div class="quote-controls"></div>
+    <img alt="" width="20" height="20" src="/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar">
+    <a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/4">Pivotal Design Question: Is Evaluator State Just A Block?</a> <a class="badge-wrapper  bullet" href="/c/usage/philosophy/31"><span class="badge-category-parent-bg" style="background-color: #3AB54A;"></span><span class="badge-category-bg" style="background-color: #3AB54A;"></span><span style="" data-drop-close="true" class="badge-category clear-badge" title="How does Rebol differ from other computer languages and what makes code Rebolish and functional vs procedural coding.">Philosophy</span></a>
+  </div>
+  <blockquote>
+    So this actually exposes another point: should all evaluative steps be forced as a model into being steps on the original series at all. 
+For instance, let's imagine I write a macro: 
+macro: twothings [x] [
+   return [print "Hi!" 1 +]
+]
+
+The concept behind MACRO is to splice code into the execution stream.  But how can you single step across that? 
+
+
+We can argue such features are not worth their complexity and forbid them.  Such splicing is disallowed, because a step of execution no longer cor…
+  </blockquote>
+</aside>
+
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/core-evaluator-mechanics-complex-return-results/1590">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/core-evaluator-mechanics-complex-return-results/1590</link>
+          <pubDate>Sun, 18 Apr 2021 09:57:14 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1590</guid>
+          <source url="https://forum.rebol.info/t/core-evaluator-mechanics-complex-return-results/1590.rss">Core Evaluator Mechanics: Complex Return Results</source>
+        </item>
+        <item>
+          <title>Non-Interstitial Invisibles: More Trouble Than They&#39;re Worth?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p><strong><a href="https://forum.rebol.info/t/issues-with-invisibles-a-truly-disappearing-comment/405">Invisibles are a novel and important concept.</a></strong>  But they introduce a lot of wrinkles.</p>
+<p>While there's a lot of technical complexity--I'm not terribly worried about that (technical problems have technical solutions).  But usability and semantic problems need to be confronted.</p>
+<p>Early on, I wanted to avoid situations where an invisible could be in a position where it might look like it was an assignment:</p>
+<pre><code>x: elide print "It's confusing when X gets [a]"
+append [] 'a
+</code></pre>
+<p>Since the ELIDE vanished, the result of the APPEND is what X gets.  Confusing!</p>
+<p>So at first, I figured it should be illegal to do that.  But I later backed off on ruling it out when I thought about a vanishing BREAKPOINT:</p>
+<pre><code>x: breakpoint append [] 'a
+</code></pre>
+<p>Why shouldn't you be able to put a breakpoint wherever you want, I wondered?  So it became legal.</p>
+<p><strong>Now I'm having serious second thoughts about the lenience.</strong>  I don't know this tradeoff is ultimately worth it; it becomes very slippery when you are dealing with constructs that you aren't necessarily noticing are invisible.  This problem feels like it gets worse in PARSE, if plain GROUP!s are invisible and people accidentally put them in slots where they think they are the value, but the value actually comes later:</p>
+<pre><code>&gt;&gt; uparse [1 &lt;whoops&gt;] [return collect [
+       keep integer! keep ("that was a number!") tag!
+   ]]
+== [1 &lt;whoops&gt;]
+</code></pre>
+<p>The person thought they were keeping a string literal in their rule.  But plain GROUP! is invisible, so they actually kept the rule <em>after</em> the string.  (They actually wanted <strong><code>keep @("that was a number!")</code></strong>)</p>
+<p>Anyway, these situations are very much parallel.  So I'm thinking that the error on invisibility for non-interstitials (e.g. assignment sources or argument slots) may make sense...to say that invisibility is something that can only happen in interstitial locations.</p>
+<p>You can still get your breakpoint at odd positions, just introduce a GROUP! so it's not picked up:</p>
+<pre><code>x: (breakpoint append [] 'a)
+</code></pre>
+<p>Of course, a group might interfere with something like a COMPOSE, so you might need to use DO or be otherwise creative:</p>
+<pre><code>x: do [breakpoint append [] 'a]
+</code></pre>
+<p>We might lament the need to worry more about restructuring the code to accommodate the breakpoint in ways that could disrupt the code.  But with dialecting, the appearance of the word BREAKPOINT even just in itself could have caused a disruption.  It's the cost of doing business in this paradigm.</p>
+<h2>What might this imply for other cases, like <strong>do []</strong> ?</h2>
+<p>It may suggest that <code>do []</code> can be invisible and vanish... just not have the result used in assignments.  Which might be perfect; if you get frustrated with that, you can always consciously put a value in-between.</p>
+<p>So instead of:</p>
+<pre><code>x: thing-that-might-be-invisible
+</code></pre>
+<p>You could say:</p>
+<pre><code> x: (&lt;default-value&gt; thing-that-may-be-invisible)
+</code></pre>
+<p>There needs to be some way of specifically evaluating something and finding out if it was invisible...much like there needs to be a way of evaluating something and knowing if it threw, or raised an error, etc.  Not everything fits cleanly as a "result value".  But this shows there'd be at least one way of dealing with it besides that.</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/non-interstitial-invisibles-more-trouble-than-theyre-worth/1582">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/non-interstitial-invisibles-more-trouble-than-theyre-worth/1582</link>
+          <pubDate>Mon, 12 Apr 2021 16:40:45 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1582</guid>
+          <source url="https://forum.rebol.info/t/non-interstitial-invisibles-more-trouble-than-theyre-worth/1582.rss">Non-Interstitial Invisibles: More Trouble Than They&#39;re Worth?</source>
+        </item>
+        <item>
+          <title>Fundamental Changes Needed for GC (Reference Counting)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>So I'd gone ahead with the implementation of virtual binding and LET, because I don't see any real future for the language without it...at least not for the kinds of distinguishing features that I think would make it notable.</p>
+<p>But it means we're creating a lot of garbage.  I've brought up pathological cases, like:</p>
+<pre><code>count-up x 1000000 [
+   let y: x + 1
+   print ["Y is" y]
+]
+</code></pre>
+<p>Creating a million tiny tracking entities for each time through the loop is a lot of junk for the GC to have to crunch through.</p>
+<p>But the problem runs much deeper than this, because even without LETs you get issues with nested loops and their virtual binding information.  It's one example of many.</p>
+<p>It isn't allocating and freeing memory that kills us.  We have memory pools and the layouts of everything are tuned fairly well.  It's having to sweep through all of memory to clear out things that aren't used.</p>
+<h2>Reference Counting Can't Replace GC, But Would Help</h2>
+<p>If we had room in each series node for a reference counter, we could notice when that counter reached zero...and free the series without allowing it to accumulate and tax the GC.</p>
+<p>That won't get everything, because blocks and objects can have cyclical references.  But a lot of the time, it would let us rapidly reclaim memory to reuse...leading to far less accumulation.</p>
+<p>So in the example of the tight COUNT-UP loop above, a FRAME! would be allocated that would have a "specifier chain".  That chain would get the entry for the LET, and so that would count as a reference.  When PRINT runs, the BLOCK! <strong>["Y is" y]</strong> fills into its argument slot...and that instance of the block cell is coupled with the specifier chain...adding another reference.  But when PRINT finished, it would release its hold on the frame where that block cell lived...in this case nothing is holding that frame (it's a native, no debugger, etc.)  That means no one is seeing the cells, so they could all be blanked out...releasing their references.  This would drop the reference <strong>["Y is" y]</strong>'s derelativization has on the specifier chain, bringing it down to 1 reference.  And then, when the frame finished that iteration of the body, it would drop the reference on the specifier chain...reducing its references to 0.  That would free the LET.</p>
+<p><em>Or at least the theory is something like that.</em></p>
+<h2>How Hard Would It Be?</h2>
+<p>Offhand, I'd say very hard.</p>
+<p>With a C++ build to draw on, it becomes easier to check.  Though I'd definitely say this kind of change would be one of those moments where I'd start to seriously question the sanity of trying to keep on building a sophisticated system in C89.</p>
+<p>Doing anything with low-level mechanics is harder the more low-level "core" code you have.  Anything written to higher-levels of abstraction like libRebol wouldn't have to change, but everything that assumes lower access gets a lot hairier.</p>
+<p>It's better at the moment to write the code how it's supposed to look...and tackle big challenges, tolerating the slowness.  But I just wanted to bring this up because I don't think the slowness can be beaten unless we do better bookkeeping to know how to reclaim memory.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/fundamental-changes-needed-for-gc-reference-counting/1527">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/fundamental-changes-needed-for-gc-reference-counting/1527</link>
+          <pubDate>Fri, 26 Feb 2021 08:53:13 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1527</guid>
+          <source url="https://forum.rebol.info/t/fundamental-changes-needed-for-gc-reference-counting/1527.rss">Fundamental Changes Needed for GC (Reference Counting)</source>
+        </item>
+        <item>
+          <title>Should REEVALUATE apply LET bindings?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>So the idea of REEVALUATE (short name REEVAL) is that you get the same behavior "as if" you had written the thing in place:</p>
+<pre><code>&gt;&gt; x: 10
+&gt;&gt; reeval (first [x:]) 20  ; acts like X: 10
+&gt;&gt; x
+== 20
+</code></pre>
+<p>But how far should this "as if you'd written it there" go?  Should the binding be applied?</p>
+<pre><code>&gt;&gt; x: 1000
+&gt;&gt; code: '(x + 20)
+&gt;&gt; do [let x: 284, reeval code]
+== ?
+</code></pre>
+<p>Does it see the new value for X?  Should that give you 1020, or 304?</p>
+<p>I vote 1020.  Seems to me that only source-level code should see the LET's binding.</p>
+<p>But there's an implementation problem because the evaluator has to know to suppress LET bindings on reevaluations.  REEVAL takes pains to make sure it's running through the same code path as the evaluator normally would.  It's not exactly clear what bits to check or flip to know how to control this behavior.</p>
+<p>Tricky as that is, it would get even trickier if we said you <em>wanted</em> to apply the LET binding...because it gets hard to know whether you've applied it twice.  Imagine if you said instead:</p>
+<pre><code>&gt;&gt; x: 1000
+&gt;&gt; code: '(x + 20)
+&gt;&gt; do compose [let x: 284, reeval '(code)]
+== 304  ; we want it to see the LET X
+</code></pre>
+<p>How does REEVAL know if the <strong>let x: 284</strong> was taken into account already or not?  This depends on whether the argument was literal or fetched through a variable.  But REEVAL isn't supposed to know anything about its argument besides its value.  <a href="https://github.com/metaeducation/ren-c/commit/b1721727665d286be3ccafebb70461e2770b108a">I rigged up a fix</a>, and we can see how well it holds up.</p>
+<p><strong>I think this points to the idea that LET and USE should probably stick to having near-parity in outcomes.</strong>  That means the binding only applies to source, not things fetched and then "treated as source" later.</p>
+<p>Anyway, difficult stuff...all on the way to <a href="https://forum.rebol.info/t/what-to-do-about-funct-including-not-calling-it-that/1518">getting rid of FUNCT-behavior-of-FUNCTION</a>.  Since there's such a big monster of a codebase to try it on (including the Mezzanine, Rebmake, and ReplPad) it's getting exercised fairly heavily.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/should-reevaluate-apply-let-bindings/1521">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/should-reevaluate-apply-let-bindings/1521</link>
+          <pubDate>Wed, 24 Feb 2021 20:13:58 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1521</guid>
+          <source url="https://forum.rebol.info/t/should-reevaluate-apply-let-bindings/1521.rss">Should REEVALUATE apply LET bindings?</source>
+        </item>
+        <item>
+          <title>Should EVALUATE bomb on an error?</title>
+          <dc:creator><![CDATA[rgchris]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>Currently if you try something bad in EVALUATE, it throws an error:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; evaluate [unspaced null]
+** Script Error: unspaced requires line argument to not be null
+</code></pre>
+<p>As EVALUATE is a relatively low-level function, it would seem more likely one would want to handle the error on the same basis as other possible return values:</p>
+<pre><code class="lang-nohighlight">; assuming EVALUATE returns [product position]
+&gt;&gt; evaluate [unspaced null foo bar]
+== [**unspaced-null [foo bar]]
+</code></pre>
+<p>In this case, the bomb isn't particularly informative and seems reasonable to say <em>'user beware—assume errors will happen'</em>. It's kind of difficult to work around too.</p>
+<p>This sort of puts it in the same class as TRAP with different semantics:</p>
+<pre><code class="lang-nohighlight">trap [ok ok something bad] =&gt; [**something-bad null]
+trap [ok ok] =&gt; [null ok]
+evaluate [something bad ok ok] =&gt; [**something-bad [ok ok]]
+evaluate [ok ok] =&gt; [ok [ok]]
+</code></pre>
+<p>I guess the wrinkle here is how do you determine where <code>something bad</code> ends and <code>ok ok</code> resumes? That may or may not be obvious.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/should-evaluate-bomb-on-an-error/1491">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/should-evaluate-bomb-on-an-error/1491</link>
+          <pubDate>Sat, 06 Feb 2021 06:24:54 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1491</guid>
+          <source url="https://forum.rebol.info/t/should-evaluate-bomb-on-an-error/1491.rss">Should EVALUATE bomb on an error?</source>
+        </item>
+        <item>
+          <title>Restoring Case-Insensitive Binding</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>I've been working on the frustrating question of how to make case-insensitive binding work without sacrificing the gain of space of a platform pointer per word cell.</p>
+<p>It's rough and not pushed to master yet.  But it's mixing with Virtual Binding:</p>
+<pre><code>&gt;&gt; abba: 304
+&gt;&gt; obj: make object! [abba: 1020]
+&gt;&gt; code: [ABBA 'Abba ''abbA '''aBBa ''''AbbA '''''aBba]
+
+&gt;&gt; do in obj compose [map-each x (code) [get dequote x]]
+== [1020 1020 1020 1020 1020 1020]
+
+&gt;&gt; map-each x code [get dequote x]
+== [304 304 304 304 304 304]
+</code></pre>
+<h2>Strategy: Assume More Than 3 Casing Variations Uncommon</h2>
+<p>The design I've gone with is to assume that there aren't that many case variations of the same word in most situations.  Maybe you have <code>accept-headers</code>, <code>Accept-Headers</code> and <code>ACCEPT-HEADERS</code>.  But you won't go too far beyond that with <code>ACcept-HEAdERS</code> etc.  If you do, then the words start to "cost more".</p>
+<p><strong>Some of this stuff gets pretty vague in terms of whether I'm playing by the "rules" or just twisting code into a pretzel</strong>.</p>
+<p>I've oft-mentioned the "4 platform pointers per cell" baseline.  That's pretty limited.  Also limiting is that R3-Alpha tried to do essentially everything with arrays and linked lists... and this is a far cry from being able to easily pick from any of dozens of vetted data structures to suit your problem.</p>
+<p>So what's going on here is that if you use a "sufficiently weird spelling", then your cell turns into the kind that points to another cell for its content.  This is how QUOTED!s at the higher levels (4 quoting levels or more) work.</p>
+<p><strong>The ramifications are subtle and pervasive.</strong>  A lot of code would assume it could just go and muck with parts of cells, but now that these expanded format cells can be shared you can impact cells you didn't mean to.  If you want to tweak a WORD! cell so that it's a SET-WORD!, you have to worry about whether it's an unusual-spelling word...and if so, you need to make a copy of the shared cell to update its bit patterns.  I've established ways to check some of this at compile-time, but it's kind of hacked together at the moment and needs tuning.</p>
+<p>I'm suspecting that the average program would never need any of these cells (4 levels of quoting or 4 case-variations)...but that makes it all the more important to find ways to test it, by making the uncommon case common.  Basically forcing all words to use the expanded format and seeing what breaks.</p>
+<h2>Object Keys Are Now Canon (Lowercase)</h2>
+<p>This applies to MAKE OBJECT!, and things like function arguments:</p>
+<pre><code>&gt;&gt; make object! [ABC: 10, Def: 20]
+== make object! [
+    abc: 10
+    def: 20
+]
+
+&gt;&gt; func [ABC /Def] [print "Functions too."]
+== #[action! [abc /def]]
+</code></pre>
+<p>I've written about how I believe this is the only sane answer to dealing with it <a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/14">("Case Insensitivity vs. Case Preservation (can't have both)")</a>.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/restoring-case-insensitive-binding/1472">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/restoring-case-insensitive-binding/1472</link>
+          <pubDate>Sun, 24 Jan 2021 08:58:08 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1472</guid>
+          <source url="https://forum.rebol.info/t/restoring-case-insensitive-binding/1472.rss">Restoring Case-Insensitive Binding</source>
+        </item>
+        <item>
+          <title>Revisiting the &quot;Obvious&quot;: Quoting To Suppress Array Splicing?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p>A while ago, <a href="https://forum.rebol.info/t/make-splicing-by-default-only-apply-when-appending-a-block/226/7">@IngoHohmann made a sensible-sounding suggestion</a>:</p>
+<aside class="quote no-group" data-username="IngoHohmann" data-post="7" data-topic="226">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"><a href="https://forum.rebol.info/t/make-splicing-by-default-only-apply-when-appending-a-block/226/7">Make Splicing by default only apply when appending a BLOCK!</a>
+</div>
+<blockquote>
+<p>Well these days to splice or not to splice could be controlled with quoted-, get-, set- variants.</p>
+</blockquote>
+</aside>
+<p>I pointed out that unfortunately this wouldn't have the desired behavior at the callsites... because the evaluation of the parameter would strip the quote off before APPEND saw it:</p>
+<pre><code>&gt;&gt; '[d e]
+== [d e]
+
+&gt;&gt; append [a b c] '[d e]
+== [a b c d e]
+</code></pre>
+<p>For APPEND to "see the tick", it would have to change its parameter convention to take its argument literally...which is not desirable...or you have to use a function that adds it:</p>
+<pre><code>&gt;&gt; quote [d e]
+== '[d e]
+
+&gt;&gt; append [a b c] quote [d e]
+== [a b c [d e]]
+</code></pre>
+<h2>You Could Ask: "So What?"</h2>
+<p>We've been expressing a willingness to use an ONLY operator to signal an intent to add things "as is":</p>
+<pre><code>&gt;&gt; only [d e]
+== [[d e]]
+
+&gt;&gt; append [a b c] only [d e] 
+== [a b c [d e]]
+</code></pre>
+<p>But optimizing that to an extreme would be hard, and weird.  The more I look at it, the more reluctant I am to push the optimizations to the point of not using a series node.  e.g. the "one series node" optimization is about as far as I may feel comfortable pushing ONLY.</p>
+<p>On the other hand...generic quoting is already written, and systemically optimized, even to multiple levels (up to 3)...and does no allocations.  And QUOTE will be something users are already familiar with.</p>
+<p>Plus, you at least have the option when writing expert-optimized code to use the learnable idiom of two ticks when you have a literal:</p>
+<pre><code>&gt;&gt; append [a b c] ''[d e]
+== [a b c [d e]]
+</code></pre>
+<h2>Ok, But, It Makes QUOTED! Another Interfered-With Type <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">
+</h2>
+<p>Let's say you're running through a block of items that contains quoted things and want to append them somewhere...you've now got another type that APPEND chooses to muck with if you don't say /ONLY or QUOTE:</p>
+<pre><code>data1: [1 2 &lt;skipme&gt; x y 'z]
+data2: []
+
+for-each item data1 [
+    if not tag? item [
+        append data2 item
+    ]
+]
+
+&gt;&gt; data2
+== [1 2 x y z]  ; oops, 'z got turned into plain z
+</code></pre>
+<p>Still.. <em>what happened to <strong>'z</strong> would have just as easily happened to <strong>[z]</strong>.</em>  So how much worse is losing of a level of quote than losing the containership of a block?</p>
+<p>Rebol2 messed with your BLOCK!s, GROUP!s and ANY-PATH!s if you forgot to say /ONLY.  Now it would mess with your BLOCK!s and your QUOTED!s.</p>
+<p><strong>I'm not in love with this aspect...but just pointing out that there's been no perfect answer to the problem, yet.</strong>  So having an imperfect property doesn't rule something out automatically.</p>
+<h2>Main Point: Stepping Back From The Abyss of Optimization...</h2>
+<p>Using the sunk cost of work on QUOTED! vs. making a "magic" kind of block came to me while thinking about something related.</p>
+<p>Imagine you have a function that takes actions to run, and you want to pass that something that just returns a constant value.</p>
+<p>One way to do this today is to make a specialization of the IDENTITY function:</p>
+<pre><code>&gt;&gt; three: specialize :identity [value: 3]
+
+&gt;&gt; type of :three
+== #[action!]
+
+&gt;&gt; three
+== 3
+</code></pre>
+<p>But it feels a shame for such an action to take up more space and load the GC than just the simple number 3 would take.  So we can imagine an overlaying cell formats, and how to "lie" about being an ACTION! when the cell is really an INTEGER!.</p>
+<p><em>But oh what a tangled web we weave...</em> trying to engineer this deception has so many problems it becomes hard to count them all.  You can set meta information on actions, but this integer-action has no place to put it.  If you convert it to a real ACTION! on demand, then each such conversion would get a new identity...putting the inefficiencies aside, that's a semantic problem because actions are expected to have individual identities, and these just don't.</p>
+<p><strong>It would be much simpler if you had written the routine that was willing to take an action to also take a QUOTED!</strong>.</p>
+<p>This makes a good argument for why QUOTED!s should answer to the same questions that an action might...just minus that one lie of "I am an action!"</p>
+<pre><code>&gt;&gt; a: func [] [return just x]
+&gt;&gt; q: just 'x
+
+&gt;&gt; do :a
+== x
+
+&gt;&gt; do :q  ; colon not needed, but shows same flow as when using an action
+== x
+
+&gt;&gt; parameters of :a
+== []
+
+&gt;&gt; parameters of :q
+== []
+</code></pre>
+<p>I guess the point I'm trying to make is that while it might seem a bit dissatisfying to have to handle a QUOTED! or an ACTION!, it seems that the places where you would have actual trouble with it is anywhere such methods don't make sense...and those points are exactly where a "fake" optimized action would break down.</p>
+<p>This line of thinking took me to where I thought that making an optimized BLOCK! that doesn't have the implementation character of a BLOCK! (e.g. a series node) is a mistake in a similar vein.  If you demand this particular axis of efficiency, you should use the systemic mechanism of a QUOTED! to get it...or say it's not worth it.</p>
+<h2>So Does Mucking Up QUOTED!s Beat the /ONLY Option?</h2>
+<p>I'm not feeling convinced.</p>
+<p>The only thing I think I've convinced myself of is that the fake no-node block trick I was considering is bad for the health of the system.  We are making 1-element blocks somewhat efficiently, but they're not free.  So I wanted to write up the thinking behind that...and share the rest in case it triggered any brainstorms.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/revisiting-the-obvious-quoting-to-suppress-array-splicing/1463">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/revisiting-the-obvious-quoting-to-suppress-array-splicing/1463</link>
+          <pubDate>Sun, 10 Jan 2021 16:27:14 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1463</guid>
+          <source url="https://forum.rebol.info/t/revisiting-the-obvious-quoting-to-suppress-array-splicing/1463.rss">Revisiting the &quot;Obvious&quot;: Quoting To Suppress Array Splicing?</source>
+        </item>
+        <item>
+          <title>Representing Everything About A Parameter (...except its name)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Internals</category>
+          <description><![CDATA[
+            <p><strong>I'm aiming to draw out the string labels in parameter lists into their own more compact form, that's just the pointer to the string name.</strong></p>
+<p>We can think of splitting out the symbol as if decorations we currently put on the parameter would be moved to the block:</p>
+<pre><code> func ['foo [&lt;end&gt; word!] /bar [integer!] /no-arg] [...]
+ =&gt;
+ func [foo '[&lt;end&gt; word!] bar /[integer!] no-arg-refinement /[]] [...]
+</code></pre>
+<p>That's just how to think of how it's stored.  We don't have to <em>write</em> our specs like that...</p>
+<p>There are a number of good reasons to do this, e.g. implementing <a href="https://richardartoul.github.io/jekyll/update/2015/04/26/hidden-classes.html">"hidden classes"</a> as in V8...each time you do  <strong>for-each [x y] ...</strong> or <strong>make object! [a: 10, b: 20]</strong> the system should detect the similarity of the key collection and reuse it, instead of needing unique [x y] and [a b] list copies allocated every time.</p>
+<p>(I'll point out that consistent chipping away at efficiencies means that things like <strong>/[a b]</strong> do not take up more space than <strong>/[a b]</strong> or <strong>[a b]/</strong> or <strong>[a b].</strong> or <strong>.[a b]</strong> ... though these forms are immutable... keep that in mind...)</p>
+<h2>This <em>reduces</em> how much information a "PARAM!" stores</h2>
+<p>Currently all the information for a parameter--including the symbol, types, and other modes--is stuffed into an internal Frankenstein-like type called a PARAM!.  It's compressed into a single cell as a mismash of packed bits and a pointer to a spelling.</p>
+<p><em>(Historical Note: R3-Alpha acted like these freakish cells were WORD!s...but with an off-to-the-side flag that marked them as "UNWORD"s.  This meant they stored a bunch of type bits where most words would store a binding.  These fake words could easily leak and crash the system, so Ren-C gave parameters a dedicated internal type, asserting on cases of use as if they were WORD!.)</em></p>
+<p>The symbol takes one of the four slots in the PARAM!.  The cell header takes another.  So what's left in the remaining two slots is just a bunch of bits... 64 bits is what's available on both 32-bit  and 64-bit platforms.</p>
+<p>There's a bit for whether or not each fundamental type--like a BLOCK! or TEXT!--is accepted by the parameter.  Then there are bits for <em>"is this parameter <code>&lt;skip&gt;</code>-able"</em> or <em>"can this parameter be the <code>&lt;end&gt;</code> of input"</em>.  This means the number of fundamental types allowed has been less than 64...as other parameter options have to fit in this set too.</p>
+<h1>Can PARAM! be replaced with "normal" values?</h1>
+<p>What if params were not a mysterious compressed form, but values that could be inspected more directly as a "parameter spec"?</p>
+<p>I showed this "represenational concept" above (again, just to think of it as the system stores it, not as how you write it at source level):</p>
+<pre><code> func [foo '[&lt;end&gt; word!] bar /[integer!] no-arg-refinement /[]] [...]
+</code></pre>
+<p>When the burden of representing the parameter name is removed, then <strong><code>'[&lt;end&gt; word!]</code></strong> could be the value that represents how the evaluator deals with the <code>foo</code> parameter.  Today the HELP gets a capture of these typeset blocks in the spec just for reference purposes.  But this would mean that what help used would concretely match what was in the spec.</p>
+<h2>Challenge: Mutability of Referenced Type Words</h2>
+<p>Let's imagine you did this:</p>
+<pre><code>&gt;&gt; foo: func [name [text!]] [print [name]]
+&gt;&gt; foo "before"
+before
+
+&gt;&gt; text!: integer!
+&gt;&gt; foo "after"
+after  ; did not reflect the change
+</code></pre>
+<p>Today it would not reflect the change.  This is because when that <code>TEXT!</code> word is looked up, it finds one of the built in DATATYPE!s for representing text, and sets the corresponding bit in the PARAM!.  No matter how you change TEXT!, it will only affect functions created after that point...not any that already set their bits.</p>
+<p>We could address this by saying that if you use any WORD!s in the type spec of a function, then the binding of that word gets forcibly protected (if it isn't already).</p>
+<pre><code>&gt;&gt; x!: text!
+
+&gt;&gt; foo: func [name [x!]] [print [name]]
+
+&gt;&gt; x!: integer!
+** Access Error: variable x! locked
+; ^-- it would be helpful to mention a "lock reason", though we are a bit short
+; on bits for putting in these reasons...maybe only done in 64-bit builds?
+</code></pre>
+<p>This would give a persistence so the parameter description could store <strong><code>x!</code></strong> without worrying about its meaning changing.  That means you can do things like type check a parameter for a specialization at specialization time...and trust it doesn't need rechecking when used.  It also allows performance tricks that cache bits to make the check faster without having to look up the word every time (since you know it won't change).</p>
+<p>It's a little harsh-seeming, but the type dialect has to be hardened somehow.  If you needed to use X! locally for something else, you've always got <strong>use [x!] [...]</strong> to create a new context for it.</p>
+<h2>Challenge: Performance</h2>
+<p>Checking a bit for a fundamental type in a typeset is pretty fast.  Matching a value against a rich type specification dialect isn't necessarily fast, and this is something every function (including natives) do.  It's particularly important for natives, because they interpret the bits of the cell assuming it has been checked...getting the wrong thing means it will crash.</p>
+<p>This is where internal compactions could come into play.  Users might see the parameter spec as <strong>[text! integer!]</strong> but the system could recognize specific common patterns like that and compress them into something like today's PARAM! bits, behind the scenes.</p>
+<p>We might want to rethink the usage of things like <code>&lt;end&gt;</code> to not use TAG!, but to use a type that can be interned for speed.  The problem with tags is that you could see <code>&lt;end&gt;</code> but actually have <code>next &lt;mend&gt;</code>...so if you had a process of locking down the symbol for speedy recognition you'd not be able to do it.  By contrast, ISSUE! (token) has no position and could be canonized to a word, so the process of checking could turn <code>#end</code> into something that is matched faster.</p>
+<h2>Challenge: Mutability Part II - Type Predicates</h2>
+<p>I've suggested essentially the end of the TYPESET! datatype as a concept; replacing it with functions.  This would mean something like:</p>
+<pre><code>any-type!: :any-type?
+</code></pre>
+<p>This would have the same issue with locking, so once you used ANY-TYPE! in a function spec you couldn't change that particular binding's value of ANY-TYPE! to anything else.</p>
+<p>But further, there needs to be a rule that ANY-TYPE? is a pure function.  It needs to give the same answers for the same input, and that answer cannot depend on anything about that input that can mutate.</p>
+<p>Imagine that you specialized a function with a mutable BLOCK!, and the constraint was that it was a BLOCK! of length 2.  Then you append to the block, and call the specialization.  It no longer matches.</p>
+<p>What you could ultimately end up with is a situation where you pay for type checking of specialized arguments every time (which would also mean you couldn't use the slot where the type information would have been for the specialized value...because you'll need both at the same time, an optimization loss)</p>
+<h2>Challenge: Generics Throw A Wrench Into Types</h2>
+<p>There has never been a good answer to how GENERICs (what Rebol2/Red called actions) work.  If you have something like APPEND that's defined to allow you to append to strings and blocks...but then later add an extension that implements GOB!s, how do you say that APPEND now accepts GOB!s...and how do you constrain the parameters to indicate that?</p>
+<p>Historically, the grab bag of parameters for what these generic functions allow or don't is just updated in the bootstrap files.  But users and extensions can't really do this.</p>
+<p>This is a topic in its own right--but it's worth mentioning.</p>
+<h1>Inventory Of Parts to be Represented</h1>
+<p>That's a lot to take in, but I'll close with the list of things that PARAM! bits currently encode:</p>
+<p><strong>Some of these parts are on the element that names the parameter itself:</strong></p>
+<ul>
+<li>
+<p>the spelling of the parameter's name (<a>currently case-sensitive, please read and discuss implications</a>)</p>
+</li>
+<li>
+<p>its quoting status (WORD! -&gt; normal evaluation, QUOTED! WORD! -&gt; hard literal, GET-WORD! -&gt; soft literal)</p>
+</li>
+<li>
+<p>if it's a refinement that outputs to a variable, which can also be used by multiple return...indicated by being a SET-WORD! if so</p>
+</li>
+<li>
+<p>if it's a local, shown by a leading dot (it's possible to indicate that a range of ordinary words are all local by prefixing them with the <code>&lt;local&gt;</code> tag, e.g. <strong><code>&lt;local&gt; x y</code></strong> is the same as <strong><code>.x .y</code></strong>)</p>
+</li>
+<li>
+<p>whether it is optional or not, denoted by a leading slash</p>
+</li>
+</ul>
+<p><strong>The rest is in a BLOCK! which specifies what types the parameter accepts.</strong>  This includes other attributes of the parameter that don't fit on the first value:</p>
+<ul>
+<li>
+<p>if it is willing to accept NULL or not--denoted by <code>&lt;opt&gt;</code>.  <em>(Note: this has been a gray area in "typesets" as NULL is not a value and "has no type")</em></p>
+</li>
+<li>
+<p>if it is willing to treat the end of a series as if it had received NULL--denoted by <code>&lt;end&gt;</code>.  (to help with the conflation, a separate function allows to ask if a parameter's null actually came from reaching the end or not)</p>
+</li>
+<li>
+<p>if the parameter will be skipped over and given as NULL if there is not a precisely matching type in that position slot, <a href="https://forum.rebol.info/t/skip-able-arguments/1013">denoted by <code>&lt;skip&gt;</code></a> <em>(Note: this is only available on hard literal parameters)</em></p>
+</li>
+<li>
+<p>if the parameter is variadic, denoted by <code>&lt;variadic&gt;</code> <em>(Note: this was once <code>&lt;...&gt;</code> but that is now a 4-element TUPLE! corresponding to <code>[&lt; _ _ &gt;]</code>.  While it might seem like that "should be a tag!" that would be a broken interpretation since <code>&lt;</code> is a WORD! and if used for a function or object it would need <strong><code>&lt;/refinement</code></strong> or <strong><code>&lt;.field</code></strong> to be PATH! and TUPLE! respectively)</em></p>
+</li>
+<li>
+<p>whether a parameter is modal, and controls the optional parameter directly after it in the parameter order.  <em>(Note: <a href="https://forum.rebol.info/t/new-parameter-convention-concept-modal-arguments-or-the-arg/1187">this is an experimental feature</a> that is weird and is still being studied, but it has some places where it's looking like it is fairly critical.)</em></p>
+</li>
+</ul>
+<h2>Addendum: ...that's only information the evaluator uses...!</h2>
+<p>That lengthy list doesn't include the HELP description string...which is just the tip of the iceberg for what a user might want to annotate arguments on a function with.</p>
+<p>But Ren-C pushes all of the help information into a "meta" object.  Function makers have a low-level form that doesn't bother making this object (e.g. <strong><code>specialize*</code></strong>) and then a higher-level version that does.  There's a certain amount of default information put into the object:</p>
+<pre><code>&gt;&gt; meta: meta-of :append
+&gt;&gt; words of meta
+== [description return-type return-note parameter-types parameter-notes
+
+&gt;&gt; meta/parameter-notes/dup
+== "Duplicates the insert a specified number of times"
+</code></pre>
+<p>You can tweak the object to your liking, and use FRAME!s as maps from parameter to value.  For example, you could track a property for each parameter being either <code>&lt;cool&gt;</code> or <code>&lt;uncool&gt;</code>:</p>
+<pre><code> &gt;&gt; append meta compose [coolness: (make frame! :append)]
+ &gt;&gt; meta/coolness/line: &lt;cool&gt;
+ &gt;&gt; meta/coolness/part: &lt;uncool&gt;
+
+&gt;&gt; meta/coolness
+== make frame! [
+    series: '~unset~
+    value: '~unset~
+    part: &lt;uncool&gt;
+    only: '~unset~
+    dup: '~unset~
+    line: &lt;cool&gt;
+]     
+</code></pre>
+<p>It's far from perfect, but it pushes the information out into the open where things like HELP can process it...and it's critical to writing code that inherits and manipulates the information.</p>
+            <p><small>3 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/representing-everything-about-a-parameter-except-its-name/1459">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/representing-everything-about-a-parameter-except-its-name/1459</link>
+          <pubDate>Wed, 06 Jan 2021 18:29:54 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1459</guid>
+          <source url="https://forum.rebol.info/t/representing-everything-about-a-parameter-except-its-name/1459.rss">Representing Everything About A Parameter (...except its name)</source>
+        </item>
+  </channel>
+</rss>

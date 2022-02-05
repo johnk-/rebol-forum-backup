@@ -1,0 +1,397 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Debugger - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/debugger/34</link>
+    <description>Topics in the &#39;Debugger&#39; category It&#39;s best to walk before you run!</description>
+    
+      <lastBuildDate>Wed, 24 Feb 2021 22:09:41 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/debugger/34.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>WATCH Dialect Is Back</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Debugger</category>
+          <description><![CDATA[
+            <p>For a while, the WATCH dialect wasn't working in the ReplPad.  Fixing it actually turned out to be rather difficult, because ReplPad was changed to use FUNC and LET exclusively (no FUNCTION).  So this was really the first complex dialect whose implementation depended fully on virtual LET-binding.  Debugging in the browser is significantly harder, so that made it pretty mean.</p>
+<p>But now that it's working, I have the headless browser test running the dialect.</p>
+<p>It's a fun thing, so why not go ahead and <a href="http://hostilefork.com/media/shared/replpad-js/">load up the ReplPad</a> and try it?</p>
+<p>Interestingly, it loads the watch extension the first time you invoke WATCH.</p>
+<pre><code>&gt;&gt; watch x  ; (slot 1): ~unset~
+</code></pre>
+<p>This should show <code>~unset~</code> in watch slot 1.  If you change the value of <code>x</code>, then you should see the slot update.</p>
+<pre><code> &gt;&gt; x: 304
+ == 304   ; (slot 1): 304
+</code></pre>
+<p>The way the updating works right now is by hooking the console's PRINT-RESULT function.  After the result has been printed, it updates the slots.  So you won't see the values change during the evaluation, only each time you get a console prompt.</p>
+<p>If you want you can ask the watchlist to give you the value stored in a slot, by passing an integer.</p>
+<pre><code>&gt;&gt; watch 1
+== 304
+</code></pre>
+<p>You can hide the watchlist</p>
+<pre><code>&gt;&gt; watch /off
+</code></pre>
+<p>And you can show the watchlist</p>
+<pre><code>&gt;&gt; watch /on
+</code></pre>
+<p>If you want to delete a watch, you can use a negative number</p>
+<pre><code>&gt;&gt; watch -1
+</code></pre>
+<p>It would be helpful if <a class="mention" href="/u/rgchris">@rgchris</a> could look over the splitter and see how sane the strategy is.  What I would like is a way to make panels generically, so they can work in something like <a href="https://golden-layout.com/">Golden Layouts</a>.  I don't want to <em>require</em> something that heavy to run a replpad instance...I'd actually like it to be possible to just kind of load a console on-demand and have it pop up for debugging an app that was using Ren-C as a library.  But it would be great to be <em>able</em> to use Golden Layout (or similar).</p>
+            <p><small>5 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/watch-dialect-is-back/1522">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/watch-dialect-is-back/1522</link>
+          <pubDate>Wed, 24 Feb 2021 22:09:41 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1522</guid>
+          <source url="https://forum.rebol.info/t/watch-dialect-is-back/1522.rss">WATCH Dialect Is Back</source>
+        </item>
+        <item>
+          <title>Why Remote Debugging Is Likely The Right Focus</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Debugger</category>
+          <description><![CDATA[
+            <p>I'd hoped in pursuing the stackless model that it would shed a light onto how debugging would have to work (or at least, on how it wouldn't work).</p>
+<p>I've been wanting a scriptable debugger, where you could write something like:</p>
+<pre><code>&gt;&gt; test: func [] [print "&lt;break&gt;", breakpoint, print "Hello!", print "World!"]
+
+&gt;&gt; test
+&lt;break&gt;
+** Breakpoint hit
+
+[console/test]&gt;&gt; step2: func [] [loop 2 [print "&lt;step&gt;", step/over]]
+
+[console/test]&gt;&gt; step2
+&lt;step&gt;
+Hello!
+&lt;step&gt;
+World!
+</code></pre>
+<p>What stackless brings to the table here is the capability for STEP to put the loop on hold (while still remembering how far along it is in the loop count).  The debugger enters a state of suspended animation and instructs the stack it was running to resume...running long enough to complete one step.</p>
+<p>If you <em>didn't</em> have a stackless model, you'd have to use a continuation-passing style.  STEP would be parameterized with a function to call back when the step completed.</p>
+<h2>Seems Attainable...But...</h2>
+<p>Intuitively, it seems that what you do while using a debugger is something that should be scriptable in this fashion.  There's nothing that profound about how you push the step-over and step out buttons in a typical C debugger...look at the stack...and make decisions.  Why can't that get automated?</p>
+<p>There are some mechanical questions.  Like "what if a breakpoint happens while you are stepping".  Your script has to have an answer to this--but then again, so would you.</p>
+<p>How would you recognize the completion of the STEP you did vs. some other event?  You need some kind of handle to ensure continuity, that you knew a step completed.</p>
+<p>Maybe that's done by thinking of it as a handle you WAIT on, and then you find out about whether that completes or some other event gets triggered:</p>
+<pre><code>req: step-request frame
+wait [
+    req [--handling if that step finishes--]
+    debug-events [--any other debug event?--]
+    1000 [--timeout value?--]
+]
+</code></pre>
+<h2>Stackless Assists, Then Stackless Complicates</h2>
+<p>Stackless does offer the mentioned leverage to be able to put the debugger in a suspended state while picking up another stack's code.  <strong>But once stackless code exists, you have to worry about debugging stackless code too</strong>.</p>
+<p>As with any API, you find the debugger starts to need to have a model of all the various internal entities that you would need to talk about.  So it has to have a model of "threads of execution" (green threads).  It has to discern stacks which belong to the debugger (which should not be stepped into) from those that belong to the client (which should...or maybe only some?)</p>
+<p>Things get really complicated, really quickly.  <img src="https://forum.rebol.info/images/emoji/twitter/exploding_head.png?v=9" title=":exploding_head:" class="emoji" alt=":exploding_head:"></p>
+<h2>Taking A STEP/BACK</h2>
+<p>When you think about the problem of mixing the UI for a debugger into the same process as what is being debugged, this raises questions.</p>
+<p>There are pros and cons to it.  One of the big supposed "pros" of being in the same process is having access to the memory for all the objects.  So you can poke at it and manipulate it directly.</p>
+<p>However, there are good reasons to design a debugger to go through some level of indirection to do these kinds of things.  One very good reason is that it means <strong>you can make a remote debugger</strong>.</p>
+<p>It seems to me a minimal bar for looking for future-forward inspiration on this front is systems that are actually working today.  And you can see that in the <a href="https://chromedevtools.github.io/devtools-protocol/">Chrome DevTools Protocol</a>.</p>
+<p>If you're going to be a client of the devtools protocol, then to do debug evaluations you pass the code to the debugged session...and then you get back either a primitive value (which you can use directly), or a "remote object ID".  If it's a remote object ID, you can use that to do more poking at the client, and extract more primitive values from it.</p>
+<p>Connecting to a remote debugger is a two-step process.  The first is to connect to chrome via a debug port and get a list of the running tabs.  Then you pick a tab, and you get a <em>websocket</em> URL to connect to in order to send the actual API requests.  Keeping that websocket alive is what keeps the remote object IDs alive that you asked for across API calls, and it also makes it possible to do things like subscribe to events in the debugger.</p>
+<h2>This Seems The Way Forward</h2>
+<p>This certainly seems like a staggering and epic undertaking.  But it's better to lay the foundations, and have modest initial features, than to try going down a road that is a dead end in the long run.</p>
+<p>The server and websocket abilities could all initially just come from C code, e.g. the <a href="http://websockets.org">websockets.org</a> library:</p>
+<p><a href="https://libwebsockets.org/">https://libwebsockets.org/</a></p>
+<p>libRebol already provides a good way of tracking API handles, and those could be used as remote object IDs.</p>
+<p>Over the long run, stackless is still crucial here...because we don't necessarily want to keep the entire debug server (that talks over sockets to the client) to be written in C.  But if the server is running as usermode code inside the process being debugged, it's going to need to be able to run without interfering with the mid-stack of user code that it's debugging.</p>
+<p>If done correctly, this could be bridged with talking to websockets in a browser...so a WASM interpreter in a browser could connect through Chrome DevTools and with a little fiddling make the calls.  This would be a case where the interpreter would not need libwebsockets built in, because it would be leveraging what's already in Chrome.</p>
+<p>Being able to start up a plain terminal console session and debug an interpreter in the browser would be a mean demo.  It would show parity with the JavaScript competition.  And I think anything less would risk falling behind on the long bet of saying that WASM means there <em>will</em> be more languages in the browser than just JS.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/why-remote-debugging-is-likely-the-right-focus/1407">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/why-remote-debugging-is-likely-the-right-focus/1407</link>
+          <pubDate>Thu, 19 Nov 2020 13:12:13 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1407</guid>
+          <source url="https://forum.rebol.info/t/why-remote-debugging-is-likely-the-right-focus/1407.rss">Why Remote Debugging Is Likely The Right Focus</source>
+        </item>
+        <item>
+          <title>Very Creaky (but still interesting) Debug Step *DEMO*</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Debugger</category>
+          <description><![CDATA[
+            <p>Though there's been no published news about the debugger in well over a year, I've tried to bear in mind the concerns that a debugger would have.</p>
+<p>Stopping everything to work on the debugger for a few months isn't really an option.  But it's good to do a bit of a status check for where things stand, if "keeping the debugger in mind" has any credibility.  The question to ask is <em>"could a sufficiently motivated individual build a debugger on top of the evaluator infrastructure if they wanted to"</em>.</p>
+<p>So the last few days I've frittered around with a very-buggy-proof-of-concept for single-stepping.  Given:</p>
+<pre><code>foo: function [f] [
+    print "Entering foo"
+    f: bar f
+    f: f + 1000
+]
+
+bar: function [b] [
+     print "Entering bar"
+     breakpoint
+     print "STEPPING!"
+     b: b + 10
+     return b + 100
+]
+</code></pre>
+<p>The following demo seems to run, but it's really just a thought experiment to inform the design:</p>
+<pre><code>&gt;&gt; foo 1
+Entering foo
+Entering bar
+(i) BREAKPOINT hit
+
+!! Entering *EXPERIMENTAL* Debug Console that only barely works for a demo.
+Expect crashes and mayhem.  But see BACKTRACE, RESUME, and STEP.
+
+bar:|1|&gt;&gt; backtrace
+2 [foo 1 ~~]
+1 [...
+    f: bar f ~~
+    f: f + ...]
+0 [
+    print "Entering bar"
+    breakpoint ~~
+    print "STEPPING!"
+    b: ...]
+
+bar:|1|&gt;&gt; step
+STEPPING!
+
+bar:|1|&gt;&gt; backtrace
+2 [foo 1 ~~]
+1 [...
+    f: bar f ~~
+    f: f + ...]
+0 [...
+    breakpoint
+    print "STEPPING!" ~~
+    b: b + ...]
+
+bar:|1|&gt;&gt; b
+== 1
+
+bar:|1|&gt;&gt; step
+
+bar:|1|&gt;&gt; b
+== 11
+
+bar:|1|&gt;&gt; 2
+(i) Interpreting integer input as DEBUG
+
+foo:|2|&gt;&gt; f
+== 1
+
+foo:|2|&gt;&gt; step
+
+bar:|1|&gt;&gt; backtrace
+2 [foo 1 ~~]
+1 [...
+    f: bar f ~~
+    f: f + ...]
+0 [... b + 100 ~~]
+
+bar:|1|&gt;&gt; b
+== 11
+
+bar:|1|&gt;&gt; step
+
+foo:|1|&gt;&gt; backtrace
+1 [foo 1 ~~]
+0 [... f + 1000 ~~]
+
+foo:|1|&gt;&gt; f
+== 1111
+
+foo:|1|&gt;&gt; step
+
+&gt;&gt; resume  ; !!! If you don't type this, it will start acting weird
+</code></pre>
+<p><em>(Discourse put a scroll bar on that, so be sure you scrolled through it all, the scroll bar is easy to miss.)</em></p>
+<h2>The Good News</h2>
+<p>A lot of parts have to come together just for that.  You're seeing a console written in Rebol being able to kick off a recursive call to offer a nested debugger console with a custom skin (also in Rebol).</p>
+<p>Here we see it <a href="https://github.com/metaeducation/ren-c/blob/866c4b5a53e6f8ffd2e587ecebb54ec4879add91/extensions/debugger/ext-debugger-init.reb#L90" rel="nofollow noopener">interpreting raw ENTER as "STEP"</a> and a plain INTEGER! as a request to switch stack levels.  This is the direction I wanted to see, and why I held off from the idea of any further development of a C console... <em>this runs in the web console too</em>!</p>
+<p>It also adds to that hook the <a href="https://github.com/metaeducation/ren-c/blob/866c4b5a53e6f8ffd2e587ecebb54ec4879add91/extensions/debugger/ext-debugger-init.reb#L103" rel="nofollow noopener">binding what you type to the variables of the stack level you are "focused" on</a>.  Above you see it finding the <code>b</code> local in <code>bar</code>, and then switching stack levels and being able to find the <code>f</code> local in <code>foo</code>.</p>
+<p>Even though it's all single threaded (no linkage to pthreads in a console build), that nested command session is doing arbitrary variable inspections...but also running a usermode BACKTRACE command...where you only see the stack levels pertaining to the code you were running.  So it's not stepping through the console code or seeing its implementation.</p>
+<p>Lines are shaping up between the pieces; they can be separated out.  You can build with just the evaluator and no console, or add the console in, or add the debugger in.  It's something you can mix and match--and the paths are laid down to be able to pull in these elements dynamically as well as in a static build.</p>
+<p>The star of the show is really FRAME!, and how that's supporting the whole idea.</p>
+<h2>What's the Bad News?</h2>
+<p>It's important to emphasize <strong>this is still sticks and glue at this point</strong>.</p>
+<p>As mentioned at the top of this post: this was really just a temperature check on how things are going in the evaluator.  I think it's generally the right direction, but seeing it actually trying to line up with reality exposes a lot of issues.  Going to have to go back to the drawing board with some ideas.</p>
+<p><strong>Single Threading</strong></p>
+<p>What's been the longstanding "big issue" is what it means to be attempting to design a scriptable debugger in a single-threaded system.  It's certainly possible to write debuggers on single-threaded platforms (remember Turbo Pascal for DOS?)  But here we have something quite different...where scripting for the debug console is running <em>in the same language on the same execution stack</em>.</p>
+<p>Industrial-strength debuggers tend to be able to connect from remote machines (e.g. debugging on your phone from the PC).  This RPC/messaging runaround can be pretty intimidating, if you look at a sample of <a href="https://cs.chromium.org/chromium/src/v8/test/inspector/inspector-test.cc" rel="nofollow noopener">how to call V8's debug API from C++</a>.</p>
+<p>If we were committed to saying you needed threads and message pumps to do debugging, it would make some things easier.  But multithreaded Rebol is still not a real thing...we would need at least something parallel to V8's "isolates" to be able to have interpreter sessions that could not actually share objects.  So rendering/molding of anything you wanted to look at in the debugger would have to be done in the "debuggee" isolate anyway.</p>
+<p>So trying to abstract the interface so that it can grow into a message-passing solution is a big challenge.  Being able to have it work whether or not you're linked to pthreads is actually kind of interesting.</p>
+<p><strong>Debugging Dialects</strong></p>
+<p>Something I really wanted to see was the debugger generalizing to parse.  And at first glance, it seems like it might:</p>
+<pre><code>&gt;&gt; count: 0
+&gt;&gt; rule: ["a" (count: count + 1 breakpoint)]
+&gt;&gt; parse "aaa" [some rule]
+(i) BREAKPOINT hit
+
+subparse:|1|&gt;&gt; backtrace
+3 [parse "aaa" [some rule] ~~]
+2 [some rule ~~]
+1 ["a" ~~ (count: count + ...)]
+0 [... + 1 breakpoint ~~]
+
+subparse:|1|&gt;&gt; count
+== 1
+</code></pre>
+<p>Seems promising.  But from there on out, the granularity of STEP is not what you want.  In order for STEP to intelligently STEP over a parse rule there has to be a common protocol spoken by PARSE and the evaluator beyond just what the "stack" looks like.</p>
+<p>But this also shows just how many meanings of STEP you might have.  How do dialects get involved in debugging?  What does the "hello world" of making a dialect that offers its own idea of what steps are look like?</p>
+<p>Red has a /TRACE option to parse which will call a callback on "parse events" <a href="https://www.red-lang.org/2013/11/041-introducing-parse.html" rel="nofollow noopener">described in the "Introducing Parse" post</a>.  But at the end of the day, I think what this is aiming for is more what people are going to want...a unified stack concept which fits dialects into a holistic model.  It's got to have a design, though.</p>
+<p><strong>Rendering</strong></p>
+<p>As these snippets show, it's a challenge to know how much to show.  And you're flattening a data structure with nested levels and pointers and (potentially) cycles.</p>
+<p>Even if we had a GUI environment to throw up an annotated source file in...debugging Rebol is like debugging C where everything is a macro.  :-/  There's not always a clear place in something the user thought of "source code" to tie generated blocks to.</p>
+<p><strong>Inheriting Console Behaviors</strong></p>
+<p>The debugger spawns a nested console, and wants to augment it with its own debugger-specific methods.  Right away this ran up against the problem of <code>SYSTEM/CONSOLE</code> being thought of as a global object.  If you want to change the prompt, you say <code>system/console/prompt: "whatever&gt;&gt; "</code>.  How do multiple console objects fit into this picture?</p>
+<p>Not only that, but what if you want to keep some of the customizations you have for your usual console while debugging?  How do you keep your shortcuts or your dialect hooks?</p>
+<p>Compared to the other issues this is kind of a fringe/luxury issue.  So for now, the debugger console is a console unto itself.  Your customizations don't apply when the debugger is running.  My point is just that these aren't questions just magically answer themselves.</p>
+<p><strong>I Could Go On, But...</strong></p>
+<p>...the point is just that there's a lot to think about.  We haven't seen single-stepping of this type in Redbol before this...and it's been decades.  So it would be unrealistic to expect that the first try to be anything but an extremely rough draft.</p>
+<p>But I'd like it to evolve to the point of where we start thinking we can push a pause button and get some kind of debugger up.  So I've gone ahead and included it in the web build--<em>for experimentation and prototyping only</em>.  Do not file bugs against the debugger yet, it doesn't exist.  <img src="https://forum.rebol.info/images/emoji/twitter/ghost.png?v=9" title=":ghost:" class="emoji" alt=":ghost:"></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/very-creaky-but-still-interesting-debug-step-demo/1154">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/very-creaky-but-still-interesting-debug-step-demo/1154</link>
+          <pubDate>Thu, 02 May 2019 06:19:13 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1154</guid>
+          <source url="https://forum.rebol.info/t/very-creaky-but-still-interesting-debug-step-demo/1154.rss">Very Creaky (but still interesting) Debug Step *DEMO*</source>
+        </item>
+        <item>
+          <title>Debugging the Illusion: Function Compositions</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Debugger</category>
+          <description><![CDATA[
+            <p><em>I'm trying to get the debugger working again.  It got broken back when the console was moved to usermode, and so its getting a rewrite to become more userspace itself.</em></p>
+<hr>
+<p>When you ask for a BACKTRACE, it numbers the function frames in the stack.  The numbers are a user convenience, so you can say things about which frame you want to inspect...or where you want to resume running from.  <strong>debug 3</strong> means switch the binding context of the console to the frame you saw numbered 3 in the backtrace, for instance, so it binds words that are function parameters there when you type in the console.</p>
+<p>In a single-threaded world--with a routine like BACKTRACE written in usermode--it has to take into account its own stack frames.  Presumably you don't want to see those, nor do you want other debug routines that try to use the numbers to face an issue of "contamination" from their own stack levels if they (like the aforementioned <strong>debug</strong>) try to turn those numbers back into FRAME! values on the user's behalf as part of their implementation.</p>
+<p>A user-friendly approach is to count frames backward from the last breakpoint.  So long as all the routines which use BACKTRACE's notion of numbering agree on that convention, they don't have to worry about their own stack frames intervening.</p>
+<p>But this raises a curious question: <em>when is a breakpoint on the stack</em>?  Let's say I want to make some kind of logging breakpoint, and I use ADAPT to do it:</p>
+<pre><code>logging-breakpoint: adapt 'breakpoint [
+    write/append %breakpoint-log.txt unspaced [
+        "breakpoint hit at" now newline
+    ]
+]
+</code></pre>
+<p><em>(Note: you'd more likely want to HIJACK the regular BREAKPOINT with this adaptation than to call it via the LOGGING-BREAKPOINT name explicitly, but for the sake of this argument let's say you just call it directly under this new name.)</em></p>
+<p>When I use LOGGING-BREAKPOINT it logs the time, and falls through to breakpoint as the underlying "phase" of the function.  But will BACKTRACE see BREAKPOINT on the stack?  Technically it is running BREAKPOINT's body at that moment... it's morally equivalent to:</p>
+<pre><code>equivalent-breakpoint: func [return: []] [
+    write/append %breakpoint-log.txt unspaced [
+        "breakpoint hit at" now newline
+    ]
+    breakpoint
+]
+</code></pre>
+<p>This particular issue could be checked by another property...asking if a frame itself is <code>paused?</code>.  But it raises a good question.  What do you mean when you ask if a particular function is on the stack, in the face of compositions?</p>
+<p>Mechanically, there is something called a "phase".  So when you call LOGGING-BREAKPOINT it is originally on the stack in the phase of its own adapted body...e.g. its phase is the FUNCTION! of :LOGGING-BREAKPOINT.  But when it falls off the end of the adaptation and continues running BREAKPOINT in the same FRAME!, it will be in the :BREAKPOINT phase.</p>
+<p>So this raises the question of what you get back when you ask for the FUNCTION-OF a FRAME!.  Should the answer be invariant (the top-level function of the frame, whose invocation began it) or should it change depending on how far you've gotten in the execution?  Should there be a PHASE-OF which tells you the phase a frame is in, or should it be considered a "black box" and none of your business?</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564</link>
+          <pubDate>Sun, 11 Mar 2018 06:44:34 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-564</guid>
+          <source url="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564.rss">Debugging the Illusion: Function Compositions</source>
+        </item>
+        <item>
+          <title>What should the output of TRACE look like?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Debugger</category>
+          <description><![CDATA[
+            <p>Rebol's only real historical debugging tool was TRACE.  So before we talk about single-step-debugging, let's talk about what it does...and what it can and can't do.</p>
+<p>For a very simplified example, let's say your code looked like this:</p>
+<pre><code>&gt;&gt; foo: func [x] [add x bar 10]
+&gt;&gt; bar: func [y] [either y = 10 [20] [y + 1]]
+
+&gt;&gt; foo 30
+== 50
+</code></pre>
+<p>With TRACE ON you would get the following output.</p>
+<pre><code>&gt;&gt; foo 30
+  1: foo : function! [x]
+  2: 3n
+     --&gt; foo
+      1: add : action! [value1 value2]
+      2: x : 30
+      3: bar : function! [y]
+      4: 1n
+         --&gt; bar
+          1: either : native! [condition true-branch false-branch /only]
+          2: y : 10
+          3: = : op! [value1 value2]
+          4: 10
+             --&gt; =
+         &lt;-- = == true
+          5: [20]
+          6: [y + 1]
+             --&gt; either
+              1: 20
+         &lt;-- either == 20
+     &lt;-- bar == 20
+         --&gt; add
+     &lt;-- add == 50
+ &lt;-- foo == 50
+ == 50
+</code></pre>
+<p><em>(If you're wondering what <code>2: 3n</code> and <code>4: 1n</code> is, those are supposed to be <code>2: 30</code> and <code>4: 10</code>, respectively.  R3-Alpha had quite a number of memory bugs, and running a trace over large amounts of code was a good way to see them.  One of the earliest tasks in Ren-C was in fact to have TRACE on for the entirety of boot, without tripping any asserts or address sanitizer problems.)</em></p>
+<p>Another example:</p>
+<pre><code>&gt;&gt; do [x: 10 y: add 20 30]
+ 1: do : native! [value /args arg /next var]
+ 2: [x: 10 y: add 20 30]
+    --&gt; do
+     1: x:
+     2: 10
+     3: y:
+     4: add : action! [value1 value2]
+     5: 20
+     6: 30
+        --&gt; add
+    &lt;-- add == 50
+&lt;-- do == 50
+== 50
+</code></pre>
+<p>What we see here is that in terms of the "what am I about to run", you get <em>one unit of information</em>.  If the one unit of thing turns out to be a FUNCTION!, then you get a level of indentation.</p>
+<p>Rebol doesn't really have a way to simulate the evaluator's logic to know how much of an expression is going to be consumed in advance, in order to print that full expression out.  Hence the "one unit".  The only reliable way to know where an expression is going to end is to run it...which means the trace output would come <em>after</em> the expression is run.</p>
+<p>So take into account the evaluation order is such that if you say <strong>foo bar x</strong> then x evaluates, then bar evaluates, then foo evaluates.  So the only way you're going to see output that says the whole expression <code>foo bar x</code> is if you wait until all the sub-expressions have evaluated (and suppress their output) and then show the full expression.</p>
+<p>This suggests the difference between "step-over" and "step-into", where "step-over" generates no output until the stack level you started from has finished, at which point you get the full expression.  I'm not sure how this pertains to trace, or what the relationship between trace and step debugging is.</p>
+<p>I've done some light experimentation with alternatives, and wonder if people have an intuition of what they would like to see.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-should-the-output-of-trace-look-like/268">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-should-the-output-of-trace-look-like/268</link>
+          <pubDate>Thu, 24 Aug 2017 01:24:58 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-268</guid>
+          <source url="https://forum.rebol.info/t/what-should-the-output-of-trace-look-like/268.rss">What should the output of TRACE look like?</source>
+        </item>
+        <item>
+          <title>About the Debugger category</title>
+          <dc:creator><![CDATA[gchiu]]></dc:creator>
+          <category>Debugger</category>
+          <description><![CDATA[
+            <p>It's best to walk before you run!</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/about-the-debugger-category/267">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/about-the-debugger-category/267</link>
+          <pubDate>Thu, 24 Aug 2017 00:29:43 +0000</pubDate>
+          <discourse:topicPinned>Yes</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-267</guid>
+          <source url="https://forum.rebol.info/t/about-the-debugger-category/267.rss">About the Debugger category</source>
+        </item>
+  </channel>
+</rss>

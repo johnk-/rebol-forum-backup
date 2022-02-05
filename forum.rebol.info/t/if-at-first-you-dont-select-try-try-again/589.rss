@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>If at first you don&#39;t SELECT, TRY...TRY again?</title>
+    <link>https://forum.rebol.info/t/if-at-first-you-dont-select-try-try-again/589</link>
+    <description>We have a function that converts blanks to nulls...but passes through everything else.  It&#39;s called **OPT**
+
+    &gt;&gt; opt 3
+    == 3
+
+    &gt;&gt; opt [a b c]
+    == [a b c]
+
+    &gt;&gt; opt _
+    ; null
+
+    &gt;&gt; opt null
+    ; null
+
+While OPT is a bit more abbreviated than one likes to see in Rebol, it has precedent in PARSE.  It&#39;s used frequently in English to discuss optional things. (&quot;opt-in&quot;, &quot;opt-out&quot;).  It has seemingly settled in comfortably in the `&lt;opt&gt;` parameter convention, which connects pretty strongly to the idea that if an OPT native did something, it would be related to that.
+
+I&#39;ve come to feel comfortable with it, personally.  But I&#39;ve never really felt great about its converse...the routine that turns nulls into blanks, but passes through everything else.  We&#39;ve been calling that **TO-VALUE**.
+
+    &gt;&gt; to-value 3
+    == 3
+
+    &gt;&gt; to-value [a b c]
+    == [a b c]
+
+    &gt;&gt; to-value _
+    == _
+
+    &gt;&gt; to-value null
+    == _
+
+I actually called it TO-VALUE independently when I added it--but later saw a post long prior where BrianH had noticed its necessity and called it the same thing.  *(He did so despite the fact that R3-Alpha allowed you to put &quot;UNSET!s&quot; in blocks, meaning they were what I would call &quot;values&quot;...I think the name makes a lot more sense now that the word &quot;value&quot; is not applied to null.  In implementation terminology, something that may or may not be a value is a &quot;cell&quot;.)*
+
+As null has become the lingua-franca of &quot;I didn&#39;t run that branch&quot;, it&#39;s needed somewhat frequently.  But unlike OPT, I never grew to like TO-VALUE.  It&#39;s long and ugly.  It suggests a connection to TO, as if TO VALUE! were a thing, and it isn&#39;t (and won&#39;t be).
+
+There&#39;s a lot of variations when you need this, none of which ever look particularly good:
+
+    case [
+         ...
+    ] else [
+        blank
+    ]
+
+    to-value case [
+        ...
+    ]
+
+    case [
+        ...
+        true [_]
+    ]
+
+The other day I came up with **ran** as a kind of query (did a branch run?) to get back LOGIC! true or false from a null or lack of one.  But that doesn&#39;t help if you want to pass through the value in most cases.
+
+While idly flipping through possibilities one word came to mind that has another use historically, but could be repurposed: **TRY**.  *(The old use of TRY, as in `try/except` has been rethought more eloquently as TRAP, I feel)*
+
+Once I thought of this, it began to make me wonder if this was the missing link from the push/pull over whether things like SELECT should &quot;misleadingly&quot; and automatically conflate not-finding-things with finding blanks.  Early in Ren-C I&#39;d changed it so that:
+
+     &gt;&gt; select [a b c d] &#39;e
+     ; null
+
+     &gt;&gt; select [a b c d e _] &#39;e
+     == _
+
+This reflected--to me--the fundamental necessity of being able to distinguish these two states.  If you&#39;re writing serious code, especially generic code like in the mezzanine or a library, *this matters a lot*.  What @rgchris and @MarkEye managed to sway me on was that there&#39;s quite a bit of user code which wants to gloss over this difference.  It&#39;s simply unlikely that that code would be putting BLANK! (or LOGIC! FALSE) in the data they&#39;re dealing with.
+
+With the existence of CHAIN, I managed to assuage my systems-level concerns by implementing the lower levels in terms of names like `SELECT*`.  Then, SELECT could just be a pipe of that &quot;true select&quot; into a &quot;user friendly&quot; select:
+
+    select: chain [:select* | :to-value]
+
+But... might TRY be the bridge between readability/usability and technical coherence?  Imagine putting SELECT back to being the &quot;real select&quot;...the one that gives null if nothing&#39;s there, vs. conflating with blank:
+
+    if x: try select [a b c d] &#39;e [
+        ...
+    ]  ; x will hold blank
+
+    if try x: select [a b c d] &#39;e [
+        ...
+    ]  ; x will be null
+
+You have this ability to place the TRY at the point in the chain you want.  And it&#39;s literately saying something: you know this could not find what you asked for, and you&#39;re okay with that.  But a casual user will be protected, just as they are with using unassigned variables in general:
+
+    x: select catalog part-number-i-assume-to-be-there
+    print [&quot;The part number is&quot; x]  ; error vs. just churning ahead
+
+It seems applicable across the board.  `try pick`, `try first`, `try switch`... this short, descriptive word conveys your willingness to not find what you&#39;re looking for &quot;disarm&quot; the failure.  And by using null and fitting into that convention, the doors are open to ELSE and ALSO and all the great things that are there.
+
+    x: select catalog part else [fail &quot;part not found&quot;]
+
+Those conventions have changed the landscape, and the meaning and usefulness of null.  DID has come to replace TRUE?/FOUND? and [I think it feels good](http://blog.hostilefork.com/did-programming-opposite-of-not/).  I&#39;d be happy to see TO-VALUE get the axe too, and be replaced with an elegant 3-letter word.
+
+It could fairly easily catch old instances of TRY, by noticing when it was applied to literal blocks.  So as conversions go it would be fairly safe.</description>
+    
+    <lastBuildDate>Sat, 27 Apr 2019 18:06:05 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/if-at-first-you-dont-select-try-try-again/589.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>If at first you don&#39;t SELECT, TRY...TRY again?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>We have a function that converts blanks to nulls...but passes through everything else.  It's called <strong>OPT</strong></p>
+<pre><code>&gt;&gt; opt 3
+== 3
+
+&gt;&gt; opt [a b c]
+== [a b c]
+
+&gt;&gt; opt _
+; null
+
+&gt;&gt; opt null
+; null
+</code></pre>
+<p>While OPT is a bit more abbreviated than one likes to see in Rebol, it has precedent in PARSE.  It's used frequently in English to discuss optional things. ("opt-in", "opt-out").  It has seemingly settled in comfortably in the <code>&lt;opt&gt;</code> parameter convention, which connects pretty strongly to the idea that if an OPT native did something, it would be related to that.</p>
+<p>I've come to feel comfortable with it, personally.  But I've never really felt great about its converse...the routine that turns nulls into blanks, but passes through everything else.  We've been calling that <strong>TO-VALUE</strong>.</p>
+<pre><code>&gt;&gt; to-value 3
+== 3
+
+&gt;&gt; to-value [a b c]
+== [a b c]
+
+&gt;&gt; to-value _
+== _
+
+&gt;&gt; to-value null
+== _
+</code></pre>
+<p>I actually called it TO-VALUE independently when I added it--but later saw a post long prior where BrianH had noticed its necessity and called it the same thing.  <em>(He did so despite the fact that R3-Alpha allowed you to put "UNSET!s" in blocks, meaning they were what I would call "values"...I think the name makes a lot more sense now that the word "value" is not applied to null.  In implementation terminology, something that may or may not be a value is a "cell".)</em></p>
+<p>As null has become the lingua-franca of "I didn't run that branch", it's needed somewhat frequently.  But unlike OPT, I never grew to like TO-VALUE.  It's long and ugly.  It suggests a connection to TO, as if TO VALUE! were a thing, and it isn't (and won't be).</p>
+<p>There's a lot of variations when you need this, none of which ever look particularly good:</p>
+<pre><code>case [
+     ...
+] else [
+    blank
+]
+
+to-value case [
+    ...
+]
+
+case [
+    ...
+    true [_]
+]
+</code></pre>
+<p>The other day I came up with <strong>ran</strong> as a kind of query (did a branch run?) to get back LOGIC! true or false from a null or lack of one.  But that doesn't help if you want to pass through the value in most cases.</p>
+<p>While idly flipping through possibilities one word came to mind that has another use historically, but could be repurposed: <strong>TRY</strong>.  <em>(The old use of TRY, as in <code>try/except</code> has been rethought more eloquently as TRAP, I feel)</em></p>
+<p>Once I thought of this, it began to make me wonder if this was the missing link from the push/pull over whether things like SELECT should "misleadingly" and automatically conflate not-finding-things with finding blanks.  Early in Ren-C I'd changed it so that:</p>
+<pre><code> &gt;&gt; select [a b c d] 'e
+ ; null
+
+ &gt;&gt; select [a b c d e _] 'e
+ == _
+</code></pre>
+<p>This reflected--to me--the fundamental necessity of being able to distinguish these two states.  If you're writing serious code, especially generic code like in the mezzanine or a library, <em>this matters a lot</em>.  What <a class="mention" href="/u/rgchris">@rgchris</a> and <a class="mention" href="/u/markeye">@MarkEye</a> managed to sway me on was that there's quite a bit of user code which wants to gloss over this difference.  It's simply unlikely that that code would be putting BLANK! (or LOGIC! FALSE) in the data they're dealing with.</p>
+<p>With the existence of CHAIN, I managed to assuage my systems-level concerns by implementing the lower levels in terms of names like <code>SELECT*</code>.  Then, SELECT could just be a pipe of that "true select" into a "user friendly" select:</p>
+<pre><code>select: chain [:select* | :to-value]
+</code></pre>
+<p>But... might TRY be the bridge between readability/usability and technical coherence?  Imagine putting SELECT back to being the "real select"...the one that gives null if nothing's there, vs. conflating with blank:</p>
+<pre><code>if x: try select [a b c d] 'e [
+    ...
+]  ; x will hold blank
+
+if try x: select [a b c d] 'e [
+    ...
+]  ; x will be null
+</code></pre>
+<p>You have this ability to place the TRY at the point in the chain you want.  And it's literately saying something: you know this could not find what you asked for, and you're okay with that.  But a casual user will be protected, just as they are with using unassigned variables in general:</p>
+<pre><code>x: select catalog part-number-i-assume-to-be-there
+print ["The part number is" x]  ; error vs. just churning ahead
+</code></pre>
+<p>It seems applicable across the board.  <code>try pick</code>, <code>try first</code>, <code>try switch</code>... this short, descriptive word conveys your willingness to not find what you're looking for "disarm" the failure.  And by using null and fitting into that convention, the doors are open to ELSE and ALSO and all the great things that are there.</p>
+<pre><code>x: select catalog part else [fail "part not found"]
+</code></pre>
+<p>Those conventions have changed the landscape, and the meaning and usefulness of null.  DID has come to replace TRUE?/FOUND? and <a href="http://blog.hostilefork.com/did-programming-opposite-of-not/" rel="nofollow noopener">I think it feels good</a>.  I'd be happy to see TO-VALUE get the axe too, and be replaced with an elegant 3-letter word.</p>
+<p>It could fairly easily catch old instances of TRY, by noticing when it was applied to literal blocks.  So as conversions go it would be fairly safe.</p>
+          <p><a href="https://forum.rebol.info/t/if-at-first-you-dont-select-try-try-again/589/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/if-at-first-you-dont-select-try-try-again/589/1</link>
+        <pubDate>Thu, 12 Apr 2018 14:57:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-589-1</guid>
+        <source url="https://forum.rebol.info/t/if-at-first-you-dont-select-try-try-again/589.rss">If at first you don&#39;t SELECT, TRY...TRY again?</source>
+      </item>
+  </channel>
+</rss>

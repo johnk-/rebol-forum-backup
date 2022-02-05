@@ -1,0 +1,2037 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Domains - AltRebol</title>
+    <link>https://forum.rebol.info/c/domains/15</link>
+    <description>Topics in the &#39;Domains&#39; category Applications of Rebol in various specialized subject domains.</description>
+    
+      <lastBuildDate>Sun, 12 Dec 2021 00:08:48 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/domains/15.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>Old Parse Tutorial</title>
+          <dc:creator><![CDATA[Brett]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <blockquote>
+<p>This is an old tutorial which originally appeared on <a href="http://codeconscious.com">codeconscious.com</a>. It has been posted here in the expectation that <a href="http://codeconscious.com">codeconscious.com</a> will be decommissioned early 2022. Other old articles on REBOL can be found at <a href="https://web.archive.org/web/*/https://codeconscious.com/rebol/">REBOL by codeconscious.com on archive.org</a></p>
+</blockquote>
+<h1>Introduction</h1>
+<blockquote>
+<p>Note: This article is a revised version written for open sourced Rebol (Rebol 3), the original Rebol 2 version is here: <a href="https://codeconscious.com/rebol/parse-tutorial.html">Parse Tutorial for Rebol 2</a>.</p>
+</blockquote>
+<p>If you want to extract data from strings (like HTML, TXT, CSV, etc.) consider Parse.</p>
+<p>If you want to just check some user data against a specific format consider using Parse.</p>
+<p>If you want to validate some message written in your new dialect use Parse.</p>
+<p>Parse is useful.</p>
+<p>Parse is quick.</p>
+<p>Parse operates on string, binary and block input.  Using Parse you can process these types of input in some way, overlaying the input with new meaning. That is you have a string or block and you are perhaps identifying fields of records, tokens of a language or even identifying sections of a message protocol.</p>
+<p>This document is a very rough show by example description of Parse with a few warnings thrown in.</p>
+<h1>Parse Dialect</h1>
+<p>You give Parse a rule block containing instructions to follow written in the Parse dialect. These instructions allow you to utilise Parse to interpret custom external formats or protocols. These instructions can be as simple or as complex as you need. A simple example would be to check that some input against postal code format. A sophisticated example is Rebol's URL parser (help sys/*parse-url/rules).</p>
+<p>The instructions are written using the Parse dialect and tell Parse how to read through your input. In actual fact, the instructions describe the patterns that the input should take. Parse attempts to match the input against your patterns. Parse will return a TRUE result if your instructions accurately describe the input. If your instructions fail to describe the input (or looking at it the other way, the input fails to follow your rules) Parse will return FALSE. You also have the ability to carry out normal Rebol operations as Parse traverses the input and your rules.</p>
+<p>It is very important to realise that the keywords of the Parse dialect are interpreted by Parse in a specific way and should be considered as being different in meaning to Rebol words when used at the console.</p>
+<h2>Let's start at the end</h2>
+<pre><code>&gt;&gt; input-string: {}
+&gt;&gt; parse input-string [end]
+== true
+</code></pre>
+<p>Ah success! Here I am parsing an empty string. My rule says to Parse "check that we are at the end". The result is of course TRUE because the string was empty to begin with.</p>
+<p>This is similar in normal Rebol script to:</p>
+<pre><code>&gt;&gt; tail? input-string
+== true
+</code></pre>
+<h2>Baby steps</h2>
+<p>Next up, let's test that a string matches our expectations:</p>
+<pre><code>&gt;&gt; input-string: "fox"
+== "fox"
+&gt;&gt; parse input-string ["fox" end]
+== true
+</code></pre>
+<p>We successfully tested that the input started with "fox" and then finished. Ok, no big deal.</p>
+<p>But reflect a moment. This is a sequence - first "fox" then END. As Parse traverses the input</p>
+<p>and your rule block, it keeps track of a current position for both. So at the start, the current position in the input is at the head of the string. After the rule "fox" was matched the current position in the input string will be directly after the "x" of "fox".</p>
+<p>In this example, this happens to be the tail of the string, so the very next match rule END will succeed.</p>
+<p>We do not always have to supply an END in the rule block. You can omit it in the last example because Parse effectively slaps one on at the end anyway.</p>
+<pre><code>&gt;&gt; parse input-string ["fox"]
+== true
+</code></pre>
+<p>While you can do this for simple examples, remember you'll likely need to add it in</p>
+<p>explicitly for more complex rules.</p>
+<p>Ok, back to the example again. In an ordinary Rebol session the above example is similar to the following:</p>
+<pre><code>&gt;&gt; input-string: find/match input-string "fox"
+== ""
+&gt;&gt; tail? input-string
+== true
+</code></pre>
+<p>Note that the ordinary Rebol code examples through this article are provided to help learn Parse. There are enough important differences between the Parse examples and the ordinary code examples that you cannot alway treat them as exactly equivalent.</p>
+<h2>Failures / challenges</h2>
+<p>For contrast let's look at an unsuccessful match:</p>
+<pre><code>&gt;&gt; input-string: "dog"
+== "dog"
+&gt;&gt; parse input-string ["fox"]
+== false
+</code></pre>
+<p>The meaning of this is pretty obvious. Hang on though, what actually happens when Parse encounters a failure with one of the rules? Well it backtracks the input to the point it was at when the rule started. So in Rebol code what happens is actually more like this:</p>
+<pre><code>input-string: "dog"
+If position: Find/match input-string "fox" [input-string: position]
+Tail? input-string
+</code></pre>
+<p>Keep this little idea in the back of your mind, it becomes more meaningful with more complex rules.</p>
+<h2>Optional matching and Compound Rules</h2>
+<p>What if we want to check for a number of common pet alternatives?</p>
+<p>Let's accept a "dog" or a "cat" or indeed a "bird":</p>
+<pre><code>&gt;&gt; input-string: "dog"
+== "dog"
+&gt;&gt; parse input-string ["dog" | "cat" | "bird"]
+== true
+</code></pre>
+<p>In ordinary Rebol this is like coding:</p>
+<pre><code>input-string: any [
+    find/match input-string "dog"
+    find/match input-string "cat"
+    find/match input-string "bird"
+]
+tail? input-string
+</code></pre>
+<p>Now, Rebol can be pretty concise and the ANY function definitely helps in writing concise code, but you can see already that the Parse dialect is looking to be better suited to matching than ordinary scripting.</p>
+<p>Reflecting on this a bit. We have here a more interesting rule, a compound rule. Our compound rule is composed of three subrules. Each of the three subrules here are very basic but subrules are allowed to be compound rules themselves. The basic rules perform the lowest level matching of the input, the compound rules check the overall structure/grammar of your data.</p>
+<p>Back to options. What about something that may or may not exist at all? Using OPT we can indicate that a bird could be big or just leave it out:</p>
+<pre><code>&gt;&gt;  input-string: "bigbird"
+== "bigbird"
+&gt;&gt;  parse input-string [opt "big" "bird"]
+== true
+&gt;&gt; input-string: "bird"
+== "bird"
+&gt;&gt; parse input-string [opt "big" "bird"]
+== true
+</code></pre>
+<p>There are more Parse options such as NOT which give you greater flexibility in specifying your rules. We'll cover this later.</p>
+<h2>Spaces and Split</h2>
+<p>Parse treats spaces like any other character. Note that Rebol 3 acts differently here to Rebol 2 as whitespace is now parsed by default without needing the /ALL refinement</p>
+<pre><code>&gt;&gt;  input-string: "black dog"
+== "black dog"
+&gt;&gt;  parse input-string ["black" " " "dog"]
+== true
+</code></pre>
+<p>There are constants defined for common characters such as SPACE, NEWLINE and TAB which can be used instead.</p>
+<pre><code>&gt;&gt;  parse input-string ["black" space "dog"]
+== true
+</code></pre>
+<p>To make things easier we can use the SPLIT function to pre-process the input string. SPLIT breaks up the string based on a given delimeter or other rules.</p>
+<pre><code>&gt;&gt; parse split "brown dog" " " ["brown" "dog"]
+== true
+</code></pre>
+<p>If we look at the output of split we see the following.</p>
+<pre><code>&gt;&gt; split "brown dog" " "
+== [ "brown" "dog" ]
+</code></pre>
+<p>In this case split is returning a block of strings simplifying our work with Parse.</p>
+<h1>Blocks, repetition and more</h1>
+<p>Using Parse for strings is good, but using parse on native Rebol datatypes really shows its power.</p>
+<p>Rebol has a rich set of datatypes which simplify parsing data, and code.</p>
+<p>This mode is used when the value to be parsed is actually a block not a string. You use this mode when you have already loaded data into Rebol values. You write Parse instructions in a rule block using the parse dialect in a similar way to that described for parsing strings except when parsing blocks the semantics are different and you have a couple more keywords to use.</p>
+<p>This is the mode of Parse that deserves the attention of anyone using Rebol. The reason is that you are free to store your data in a form understandable by yourself and others and yet is still computer readable.</p>
+<h2>First steps parsing blocks</h2>
+<p>As we move from strings to blocks we can start to use some of the Rebol datatypes to make our lives much easier.</p>
+<pre><code>&gt;&gt; parse [1234.16] [number!]
+== true
+</code></pre>
+<p>Processing dates and times are a good example. You can see how the datatypes support a wide range of input formats. It is worth noting for Americans that Rebol always assumes day/month/year order.</p>
+<pre><code>&gt;&gt; parse [12/Dec/2012 2:30pm ] [date! time!]
+== true
+</code></pre>
+<p>There are many more datatypes although that does not stop you from using strings for datatypes which do not map to Rebol types.</p>
+<pre><code>&gt;&gt; parse [&lt;div&gt; "Hello" http://rebol.com $1.00 &lt;/div&gt; bob@test.com ] [ tag! "Hello" url! money! tag! email!]
+== true
+</code></pre>
+<h2>Repetition - known range of occurrences</h2>
+<p>Time for some more compound rules.</p>
+<p>Here's how to check for exactly two dogs.</p>
+<pre><code>&gt;&gt; parse "dogdog" [2 "dog"]
+== true
+</code></pre>
+<p>I can specify between 1 and 4 Zs (inclusive) too:</p>
+<pre><code>&gt;&gt;  parse "Zzzz" [1 4 "z"]
+== true
+</code></pre>
+<p>Note that by default Parse is not case sensitive unless you want it to be by using the /CASE refinement:</p>
+<pre><code>&gt;&gt; parse/case "ZZ" [2 "Z"]
+== true
+</code></pre>
+<p>This is also very powerful for parsing blocks:</p>
+<pre><code>&gt;&gt; parse [ http://rebolsource.net http://rebol.org http://rebol.com ] [ 3 url! ]
+== true
+</code></pre>
+<h2>Repetition again <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"> - unknown number of occurrences</h2>
+<p>What if we grab a net and go prawning? We may not know how many prawns are caught by the net when we catch them:</p>
+<pre><code>&gt;&gt; loop random 100 [append input-string: "" "prawn"]
+== "prawnprawnprawnprawn"
+&gt;&gt; parse input-string [some "prawn"]
+== true
+</code></pre>
+<p>Excellent, we have some prawns but we don't know how many.</p>
+<p>The SOME keyword means "match one or more of the following". Again it is a compound rule because I could have as easily done this if it was "raining cats and dogs":</p>
+<pre><code>&gt;&gt; input-string: "dogdogcatdogcat"
+== "dogdogcatdogcat"
+&gt;&gt; parse input-string [some [ "dog" | "cat"] ]
+== true
+</code></pre>
+<p>If it fines up:</p>
+<pre><code>&gt;&gt; input-string: {}
+== ""
+&gt;&gt; parse input-string [some [ "dog" | "cat"]  ]
+== false
+</code></pre>
+<p>It returns false because SOME requires at least one instance to be matched. If however, we don't actually care whether we get some or not we can use ANY:</p>
+<pre><code>&gt;&gt; input-string: {}
+== ""
+&gt;&gt; parse input-string [any [ "dog" | "cat" ] ]
+== true
+&gt;&gt; input-string: "dog"
+== "dog"
+&gt;&gt; parse input-string [any [ "dog" | "cat"] ]
+== true
+</code></pre>
+<p>Here is another example of one of those Rebol words with a new meaning in the context of Parse. In ordinary Rebol ANY is a function that return the first non-false or non-none value in the block it is given. In Parse, by contrast, ANY is a keyword that introduces a compound rule that means, "match zero or more of the following".</p>
+<p>Repetition works equally well for blocks:</p>
+<pre><code>&gt;&gt; parse [Fibonacci 1 1 2 3 5 8 13] [some [number! | word!] ]
+== true
+</code></pre>
+<h2>Moving right along...</h2>
+<p>Sometimes we really couldn't care less what lies between things of interest.</p>
+<p>This example does not "skip c" it reads "match a, skip a character, match c, tail?".</p>
+<pre><code>&gt;&gt; parse {abc} ["a" skip "c" end]
+== true
+</code></pre>
+<p>You want to skip 5 characters? Use repetition:</p>
+<pre><code>&gt;&gt; parse {1234567890} ["123" 5 skip "90" end]
+== true
+</code></pre>
+<p>Sometimes we don't know how much is in between but we do know what is the next interesting bit:</p>
+<pre><code>&gt;&gt; input-string: {1234 fox}
+== "1234 fox"
+&gt;&gt; parse input-string [thru "fox" end]
+== true
+</code></pre>
+<p>This is like the Rebol code of:</p>
+<pre><code>&gt;&gt; input-string: find/tail input-string "fox"
+== ""
+&gt;&gt; tail? input-string
+== true
+</code></pre>
+<p>We can stop where fox starts using TO:</p>
+<pre><code>&gt;&gt;  input-string: "1234 fox"
+== "1234 fox"
+&gt;&gt;  parse input-string [to "fox" "fox" end]
+== true
+</code></pre>
+<p>And the Rebol code that performs similarly:</p>
+<pre><code>input-string: {1234 fox}
+input-string: find input-string "fox"
+input-string: find/match input-string "fox"
+tail? input-string
+</code></pre>
+<p>We can skip to the end as well:</p>
+<pre><code>&gt;&gt;  parse {123456} ["123" to end end]
+== true
+</code></pre>
+<p>This says "match 123, move to the tail, test tail". Pretty obvious we would get a true result if you think of it in these terms.</p>
+<p>While we're here how about a warning. The rule [to end] moves to the tail and reports</p>
+<p>success every time.</p>
+<h2>All these characters</h2>
+<p>Charset. Stands for character set. It is a bitset which makes it fast for pattern matching operations.</p>
+<p>Let's say you only want to check that your input contains the digits 0 to 9.</p>
+<pre><code>&gt;&gt; digit: charset [#"0" - #"9"]
+</code></pre>
+<p>Now parse can use this directly as a pattern matching instruction. It will match one character (byte) only of those in the set 0 - 9.</p>
+<pre><code>&gt;&gt; parse {1} [digit]
+== true
+</code></pre>
+<p>Naturally enough you can use these in compound rules too:</p>
+<p>An Australian postcode consists of 4 numeric digits so:</p>
+<pre><code>&gt;&gt; parse {2069} [4 digit]
+== true
+</code></pre>
+<p>Charsets (bitsets) are sets and you can apply the set operations union, intersection, exclude, etc</p>
+<p>on them:</p>
+<pre><code>letter: charset [#"a" - #"z" #"A" - #"Z"]
+digit: charset [#"0" - #"9"]
+letter-or-digit: union letter digit
+valid-name: [letter any letter-or-digit]
+&gt;&gt;  parse {1abc} valid-name
+== false
+&gt;&gt;  parse {rebol} valid-name
+== true
+&gt;&gt;  parse {xyz1234} valid-name
+== true
+</code></pre>
+<p>Maybe you want everything but digits:</p>
+<pre><code>&gt;&gt; parse {A} [not digit skip]
+== true
+</code></pre>
+<p>Notice how we needed to SKIP forward as NOT simply inverses the following rule and does not advance the input.</p>
+<p>This is different from the Rebol 2 approach of creating a COMPLEMENT of a charset. This may work in some situations, but will not always give you the desired result due to the use of UNICODE in Rebol 3.</p>
+<h2>But I want some information from it!</h2>
+<p>Up to this point I've concentrated on the various matching functionality of Parse. Of course though you want to extract information from your data. The keyword of note for this purpose is COPY. Also of use is the ability to execute Rebol code within the Parse rules (actions) and thereby set and maintain Rebol variables (eg. Counters) using that code.</p>
+<p>Ok COPY.</p>
+<p>Copy is really really simple really. It is a compound rule that takes two arguments a variable and a subrule. Whatever input the subrule matches gets copied into the variable. If the subrule doesn't match anything (fails) COPY returns the failure but leaves the variable unchanged.</p>
+<p>Here the subrule is to match an "A" which obviously fails.</p>
+<pre><code>&gt;&gt; parse {123} [copy some-text "A"]
+== false
+&gt;&gt; some-text
+** Script error: some-text has no value
+</code></pre>
+<p>Here the subrule is a simple skip:</p>
+<pre><code>&gt;&gt; parse {123} [copy some-text skip to end]
+== true
+&gt;&gt; some-text
+== "1"
+</code></pre>
+<p>And here the subrule is to match nothing NONE which is always successful so copy copies that which was matched...an empty string:</p>
+<pre><code>&gt;&gt; parse "123" [copy some-text none]
+== false
+&gt;&gt; some-text
+== ""
+</code></pre>
+<p>Another way of getting data is by using SET:</p>
+<pre><code>&gt;&gt; parse [ $100 ] [ set wallet money! ]
+== true
+&gt;&gt; wallet
+== $100
+</code></pre>
+<h2>Bring on the code (actions)</h2>
+<p>Ordinary Rebol code can be used inside the parse dialect via the use of "(" and ")" i.e. a Paren! series:</p>
+<pre><code>&gt;&gt; parse {} [(print "some code just executed") end]
+some code just executed
+== true
+</code></pre>
+<p>Obviously this is very handy. Even nicer is that it runs according to its placement in the rule. Note though that even if the rule ultimately fails your code may have already run:</p>
+<pre><code>&gt;&gt; parse {123} [
+     "1" (print "found 1!")
+     "2" (print "found 2!")
+     "A" (print "found an A!")
+    end
+]
+found 1!
+found 2!
+== false
+</code></pre>
+<p>So the upshot is you can maintain counters and take actions based on your Parse rules.</p>
+<p>During development it can be useful to put print statements in these allowing you to see what is happening.</p>
+
+<h1>Advanced section</h1>
+<h2>Repeated Repetition</h2>
+<p>Now that I've introduced repetition and compound rules, what happens if I create a compound rule made up of nested repetition rules? Hmm, tricky.</p>
+<p>This next example put Parse into a spin - an infinite loop. The escape key will not work, but you can break out with Ctrl+c:</p>
+<pre><code>&gt;&gt; input-string: {}
+== {}
+&gt;&gt; parse input-string [while [any "dog"] ]
+</code></pre>
+
+<p>To understand why this infinite loop happens you need to know when the ANY rule returns success and when it completes.</p>
+<p>Here's the major answer: WHILE ALWAYS returns success.</p>
+<p>WHILE will keep calling its subrule while that subrule returns success regardless of if the input position advances. WHILE gives up on receipt of bad news (failure) but it itself always returns success. Now if WHILE always receives a success because it's subrule in fact is another WHILE or ANY... Well I think that explains it.</p>
+<p>Remember OPT. It always returns success just like WHILE. So putting an OPT inside an WHILE is bound to lead to trouble as well.</p>
+<p>The point then is that your repetition compound rules must be carefully written because of the possibility of creating these infinite loops. It is not a bug in Rebol, it is consequence of having a flexible Parse dialect.</p>
+<p>Sometimes these infinite loops start only after traversing lots of other complex rules and therefore can become hard to catch. I create these loops less often now since I started considering how I want Parse's input position to move. When writing your rules consider how the input is consumed by the rules.</p>
+<p>That's part of the reason why I've been demonstrating the Rebol code similar to the various Parse examples.</p>
+<p>Not all combinations of repetition rules create infinite loops:</p>
+<pre><code>&gt;&gt;  input-string: {}
+== ""
+&gt;&gt;  parse input-string [while [some "dog"] ]
+== true
+</code></pre>
+<p>This last example is ok because the SOME does not always return success - it must consume some input. If SOME does not have at least one success it</p>
+<p>returns a failure result. So you can see that at some point, given that we can assume that the input is</p>
+<p>finite, the overall rule must terminate.</p>
+<p>Quoting Ladislav, "The dangerous rules are rules, that don't consume any input, yet they return success."</p>
+<p>There is another way to escape when you don't want your rule to progress further - the BREAK keyword. BREAK terminates the rule when it is encountered.</p>
+<p>This could be used to improve performance by stopping evaluation of unnecessary rules.</p>
+<pre><code>&gt;&gt; parse [1 2 end 3 4 5 7 8 9] [some [integer! | 'end break]]
+== false
+</code></pre>
+<p>This rule will exist as soon as it reaches the end keyword improving the performance.</p>
+<h2>Debugging parse rules</h2>
+<p>The ?? command is invaluable in debugging Parse rules.</p>
+<pre><code>&gt;&gt; parse "dog" [ ?? "d" ?? [ "i" | "o" ] ?? "g" ?? ]
+"d": "dog"
+["i" | "o"]: "og"
+"g": "g"
+end!: ""
+== true
+</code></pre>
+<p>It displays the next rule and the current position in the series being parsed.</p>
+<h2>The current index and manipulating it</h2>
+<p>Parse maintains a reference to the input. The reference is a series and so has a current index.</p>
+<p>Some special Parse dialect syntax allows you to get and set this reference. You use a set-word and get-word syntax respectively.</p>
+<p>In this example I set the word "mark" to the input series at the current index that Parse has, don't worry about the false - it is just saying we didn't get all the way through the input:</p>
+<pre><code>&gt;&gt;  parse {123456} ["123" mark:]
+== false
+&gt;&gt; mark
+== "456"
+</code></pre>
+<p>I can manipulate the current index that Parse uses too:</p>
+<pre><code>&gt;&gt;  parse {1234567} ["123" mark: (mark: next next mark) :mark "67"]
+== true
+</code></pre>
+<p>To explain. First "123" is matched, then the word mark is set to the reference.</p>
+<p>Then the Rebol code between the parentheses is evaluated. This code manipulates the reference we hold by two characters. I return this modified reference to Parse using the get-word syntax. Parse seeing the get-word syntax knows that it must update it's reference to that given. Finally I match the "67".</p>
+<h2>More Block examples ...</h2>
+
+<p>An example that shows what can be achieved is Carl Sassenrath's stock transaction example which you can see below. Now what if "sell 300 shares at $89.08" came in via email?</p>
+<p>If you study this example you will see that Carl, in a very small space, has created a small interpreter that parses, validates and performs computations. This is very powerful technology that is easily underestimated because it is so small and simple.</p>
+<pre><code>rule: [
+    set action ['buy | 'sell]
+    set number integer!
+    'shares 'at
+    set price money!
+    (either action = 'sell [
+            print ["income" price * number]
+            total: total + (price * number)
+        ] [
+            print ["cost" price * number]
+            total: total - (price * number)
+        ]
+    )
+]
+total: 0
+parse [sell 100 shares at $123.45] rule
+print ["total:" total]
+total: 0
+parse [
+    sell 300 shares at $89.08
+    buy 100 shares at $120.45
+    sell 400 shares at $270.89
+] [some rule]
+print ["total:" total]
+</code></pre>
+<p>Another powerful example of this is the VID dialect of Rebol/View 2. VID describes in a<br>
+effective but simple way what should appear on screen. VID is actually a block using normal<br>
+Rebol values such as words and strings. The LAYOUT function of Rebol/View 2 takes a VID<br>
+block as an argument to construct the visual objects. Layout uses Parse to process the<br>
+VID specification.</p>
+<h1>Special situations</h1>
+<h2>When you do NOT want to match a pattern</h2>
+
+<p>NOT does not consume input, so you can use it one ore more times before matching something else:</p>
+<pre><code>&gt;&gt; parse "bird" [not "big" "bird"]
+== true
+</code></pre>
+<p>One situation where you might do this is when you have a sub rule that might "consume" something needed by an enclosing rule.</p>
+<p>For my example, I'll Parse a block rather than text but the concept still applies.</p>
+<p>I want to Parse the following block, and print out every word, but if I encounter a bar ("|") I'll print out the text "**********":</p>
+<pre><code>my-block: [ the quick brown fox | jumped | over the lazy]
+</code></pre>
+<p>This next bit of code will not work. If you try it you will see that no "*" is printed, instead you will see the "|":</p>
+<pre><code>single-word: [set item word! (print mold item)]
+phrase: [some single-word]
+parse my-block [ phrase some ['| (print "**********") phrase] ]
+</code></pre>
+<p>The thing to note is that the bar "|" is a word too. Therefore the bar is "consumed" by the rule called SINGLE-WORD.</p>
+<p>So one way to solve this is to give SINGLE-WORD some indigestion (make it fail) when it encounters a bar.</p>
+<p>You can force a rule to fail using the FAIL keyword but here we use AND and NOT to make the rule fail under a specific condition.</p>
+<p>To make it clear what is happening here, I wrap SINGLE-WORD with a rule I call WORD-EXCEPT-BAR. The</p>
+<p>purpose of this new rule is to fail if it finds the "|" word otherwise it goes ahead and runs SINGLE-WORD.</p>
+<p>I've added comments to clarify how WORD-EXCEPT-BAR works:</p>
+<pre><code>word-except-bar: [
+    and not '| ; Without advancing the input position, is this not a bar?
+    single-word ; Match single-word
+]
+</code></pre>
+<p>The point to note here is that the rule AND NOT '| is a "guard" - it guards the next rule from consuming input under a specific condition.</p>
+<p>I also need to modify PHRASE to call WORD-EXCEPT-BAR.</p>
+<pre><code>phrase: [some word-except-bar]
+</code></pre>
+<p>Another way to describe the PHRASE rule, as it is now, is "a rule that matches a series of words which does not contain the word |."</p>
+<p>To finish off I'll create a function to call parse with the correct rule and</p>
+<p>wrap the whole lot in an object just to be tidy:</p>
+<pre><code>word-parsing-object: context [
+    single-word: [set item word! (print mold item)]
+    word-except-bar: [and not '| single-word]
+    phrase: [some word-except-bar]
+    set 'parse-words func[ a-block [block!] ] [
+        parse a-block [phrase some ['| (print "**********") phrase] ]
+    ]
+]
+</code></pre>
+<p>Here is a test run:</p>
+<pre><code>&gt;&gt; parse-words [the quick brown fox | jumped | over the lazy]
+the
+quick
+brown
+fox
+**********
+jumped
+**********
+over
+the
+lazy
+== true
+</code></pre>
+<p>In summary in this section I have demonstrated how one can match a specific pattern even when a more general pattern (that includes the specific pattern) gets to see the input first.</p>
+<h2>Why didn't you just write...</h2>
+<pre><code>parse-words: func [a-block [block!]] [
+    parse a-block [
+        some [
+            '| (print "**********") |
+            set item word! (print mold item)
+        ]
+    ]
+]
+</code></pre>
+<p>That is the better way to solve the problem, but the point is to demonstrate the concept of preventing a subrule from consuming certain input and how to use AND as a guard. There are situations when you need these ideas.</p>
+<h2>The BREAK keyword</h2>
+
+<p>From RT's changes document:</p>
+<pre><code>When the BREAK word is encountered within a rule block, the block is
+immediately terminated regardless of the current input pointer.
+Expressions that follow the BREAK within the same rule block will not
+be evaluated.
+</code></pre>
+<p>BREAK is usually used with repetition. In this example the SOME rule is exited early:</p>
+<pre><code>&gt;&gt; parse "X" [some [ (print "*Break*") break] "X"]
+*Break*
+== true
+</code></pre>
+<p>Here again the SOME rule is exited early just like the previous example. In this case the rule that SOME is processing is referred to by a word:</p>
+<pre><code>&gt;&gt; rule-to-break: [(print "*Break*") break]
+== [(print "*Break*") break]
+&gt;&gt; parse "X" [some rule-to-break "X"]
+*Break*
+== true
+</code></pre>
+<h1>Related toolset</h1>
+<p>I have written "Parse Analysis Toolset" to help learn and analyse the way Parse works. The Explain-parse function of the toolset should help with learning Parse. The script has related documentation. You can find the script and a linkg to the documentation at:</p>
+<p><a href="http://www.rebol.org/cgi-bin/cgiwrap/rebol/view-script.r?script=parse-analysis.r">parse-analysis.r (at REBOL.org Script Library)</a></p>
+<p>One more program I've made can return a parse tree of your input:</p>
+<p><a href="http://www.rebol.org/cgi-bin/cgiwrap/rebol/documentation.r?script=load-parse-tree.r">load-parse-tree.r (at REBOL.org Script Library)</a></p>
+<h1>Comments</h1>
+<p>Parse is a key component Rebol. Rebol is promoted as a messaging<br>
+language. Messages can come in many formats (syntaxes). Parse allows<br>
+you to define the syntax of a message so that you can interpret the message and transform<br>
+it to something else or act on it directly. That may sound complex, but it isn't really.</p>
+<p>What are messages? Lots of things can be considered as messages. Basically if you can<br>
+put it into a file and the format of the file has some rule to it, then I think you have<br>
+a message. You don't have to put it in a file though to use Parse. Rebol's networking<br>
+functions use Parse to interpret many of the internet protocols that Rebol provides<br>
+access to.</p>
+<p>With Rebol you can define a mini-language for a specific purpose - a dialect. Outside Rebol this would be called a domain-specific language or DSL.</p>
+<p>Parse helps you to validate and process such dialects. You might want to design a dialect for creating web pages on your internet site. Or perhaps for controlling a special device you have attached to your computer.</p>
+<h1>Acknowledgement</h1>
+<p>Thank you to John Kenyon for his initiative, edits and effort as we updated this article from the original.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/old-parse-tutorial/1771">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/old-parse-tutorial/1771</link>
+          <pubDate>Sun, 12 Dec 2021 00:08:48 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1771</guid>
+          <source url="https://forum.rebol.info/t/old-parse-tutorial/1771.rss">Old Parse Tutorial</source>
+        </item>
+        <item>
+          <title>Running URLs from the command line</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Console</category>
+          <description><![CDATA[
+            <p>I thought it would be neat to try out the new <a href="https://forum.rebol.info/t/do-or-import-of-github-gitlab-decorated-urls-on-desktop/1761">decorated URL redirection</a> in the console, by running a URL!.  So I tried:</p>
+<blockquote>
+<p><code>r3 https://github.com/metaeducation/rebol-odbc/blob/master/tests/odbc-test.reb rebol-firebird --firebird</code></p>
+</blockquote>
+<p>This didn't give me what I wanted:</p>
+<pre><code>** Access Error: cannot open: %/https/github.com/metaeducation/rebol-odbc/blob/master/tests/odbc-test.reb
+</code></pre>
+<h2>It Thought That Was A Filename...</h2>
+<p>And oddly enough, it could have been.</p>
+<p>On Linux, you can make a directory called <strong><code>https:</code></strong>.  Double slashes are collapsed to assume you meant a single slash.  It could be interpreted as a path.</p>
+<h2>We Should Default This To Treating It As A URL</h2>
+<p>I think it's pretty obvious that should be running a script from a network location.  But if people want a file interpretation there should be a way to do that.  Should we let the % character disambiguate it?</p>
+<pre><code>r3 %http://example.com/script.r
+</code></pre>
+<p>If so, how to deal with files that actually start with %?  %%?</p>
+<p>Or maybe something like:</p>
+<pre><code>r3 --file http://example.com/script.r
+</code></pre>
+<p>In any case, it's not entirely clear what program logic we should use here to interpret this.  Do we explicitly try to see if something can LOAD as a URL! and if not, assume it's a filename?  Do we look more narrowly for alphanumerics followed by a colon?  Special cases for http and https only, for now?</p>
+<p>I'm hacking in the alphanumerics followed by colon.  But the edge case of a "weird" filename should be tended to someday.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/running-urls-from-the-command-line/1764">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/running-urls-from-the-command-line/1764</link>
+          <pubDate>Wed, 01 Dec 2021 14:04:22 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1764</guid>
+          <source url="https://forum.rebol.info/t/running-urls-from-the-command-line/1764.rss">Running URLs from the command line</source>
+        </item>
+        <item>
+          <title>Dialecting URL!s...Should They Ever Be Strings?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Dialects/DSLs</category>
+          <description><![CDATA[
+            <p>So I just tried to use a URL! in PARSE and found it was an error.  It's an error in R3-Alpha, too:</p>
+<pre><code>r3-alpha&gt;&gt; parse http://example.com/foo [http://example.com "/foo"]
+** Script error: PARSE - invalid rule or usage of rule: http://example.com
+</code></pre>
+<p>Red treats it as a string:</p>
+<pre><code>red&gt;&gt; parse http://example.com/foo [http://example.com "/foo"]
+== true
+</code></pre>
+<p><strong>But if you think about it, this is a pretty limited application of the datatype.</strong></p>
+<ul>
+<li>
+<p>If your input is a string, you're saving two characters over putting it in braces or quotes, like <strong><code>["http://example.com" "/foo"]</code></strong></p>
+<ul>
+<li>Ren-C has generic quoting, so there's quoted URL!s with a single character as another option... <strong><code>['http://example.com "/foo"]</code></strong>
+</li>
+</ul>
+</li>
+<li>
+<p>If what you're matching against is a URL it's only going to match the very beginning part.</p>
+</li>
+</ul>
+<h2>Could It Fetch Rules From A Network?</h2>
+<p>In some cases--like the COMPILE dialect--you can build a list of code and libraries to put together, along with user natives.  It's neat there to have URLs be interpreted as fetching from the network.</p>
+<p>But that seems a bit strange for UPARSE.  You'd depend on caching <em>(you wouldn't want to do a network fetch each time you hit the URL! in the rule...?)</em>  In Ren-C you can kind of do this minus the caching, e.g.</p>
+<pre><code>uparse data [... :(load http://example.com/rules/) ...]
+</code></pre>
+<h2>Could It Be Commentary?</h2>
+<p>In the test dialect, I thought it might be nice to just be able to drop URLs in the middle of things without having to make them comments.  It doesn't save that much, but can look more clean:</p>
+<pre><code>[
+    #386
+    http://en.wikipedia.org/wiki/Some_Related_Topic
+    (1 + 1 = 2)
+]
+</code></pre>
+<p>I've also sometimes wondered about this for function specifications.</p>
+<pre><code>foo: func [
+    http://example.com/this-explains-this-function
+    return: [integer!]
+    arg [integer!]
+][
+    ...
+]
+</code></pre>
+<p>This doesn't seem a good fit for PARSE behavior, but I kind of want to mention the idea of different ways that URL! might be used.</p>
+<h2>In UPARSE It's Customizable...Leave it Open?</h2>
+<p>One possibility would be to say that URL! doesn't do anything by default, and you can make a URL! combinator that decides what it does do.</p>
+<p>How useful would it be?  I don't know.</p>
+<p><strong>I'm just questioning whether the knee-jerk response of treating URL! as a string (or matching a URL! value if block parsing) is obviously the way to go.</strong></p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/dialecting-url-s-should-they-ever-be-strings/1763">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/dialecting-url-s-should-they-ever-be-strings/1763</link>
+          <pubDate>Mon, 29 Nov 2021 15:36:40 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1763</guid>
+          <source url="https://forum.rebol.info/t/dialecting-url-s-should-they-ever-be-strings/1763.rss">Dialecting URL!s...Should They Ever Be Strings?</source>
+        </item>
+        <item>
+          <title>How Would Stream PARSE Handle Positions?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>Generically speaking: when dealing with a streaming data source, you often don't know how many bytes or characters you want to read in advance.  You're looking for some pattern in the input to delimit it.</p>
+<p>(The simplest-yet-very-common example would be reading until a newline.)</p>
+<p>Go has dedicated operations for reading up-until one certain byte (<a href="https://pkg.go.dev/bufio#Reader.ReadBytes">ReadBytes(byte)</a>) or one certain UTF-8 character byte sequence (<a href="https://pkg.go.dev/bufio#Reader.ReadString">ReadString(codepoint)</a>).  These are methods of the buffered IO abstraction, because if you didn't go through a buffering middleman you'd have to call a lower-level <code>Read()</code> just one byte at a time.  Otherwise the lack of a buffer would mean you wouldn't have anywhere to hold the queued-up extra data after a newline...if a Read() came back with a bigger chunk.</p>
+<p>Rigging up anything more detailed in Go is harder.  <strong>So this is where I thought a streaming PARSE would offer an interesting answer for a lot of scenarios.</strong>  Getting PARSE worked out correctly would save people the trouble of having to drive the progressive Read process themselves, just to get a more nuanced condition than "until a certain byte is seen".</p>
+<h2>But Streams Aren't Series...So How Would You Call PARSE?</h2>
+<p>When you parse a <em>series</em>, you don't "consume" it:</p>
+<pre><code>&gt;&gt; data: "aaa"
+
+&gt;&gt; uparse data [some "a" (&lt;Yay, some A!&gt;)]
+== &lt;Yay, some A!&gt;
+
+&gt;&gt; data
+== "aaa"  ; hasn't changed
+</code></pre>
+<p>And you can do partial processing and get a position via <code>&lt;here&gt;</code>:</p>
+<pre><code>&gt;&gt; data: "aaabbb"
+
+&gt;&gt; uparse data [some "a" &lt;here&gt;]
+== "bbb"  ; this is a "position" that points into `data`
+
+&gt;&gt; data
+== "aaabbb"  ; again, the unchanged input
+</code></pre>
+<p><strong>However, streams don't have any position <em>but</em> "here".</strong>  So how would <code>&lt;here&gt;</code> be any different from <code>&lt;input&gt;</code>?</p>
+<h2>Some Streams May Internally Know A Position, But Not All</h2>
+<p>In Go we saw an example of how streaming is an interface that something can offer, while having other methods depending on the data source.  Those other methods can offer features like timeouts.  Or something like a file could offer the ability to re-seek so the next call reading from the stream would get from a random access position.</p>
+<p><em>But that's all outside of the streaming interface.</em>  The stream itself is a black box.  And the position is "inside"...all references to the same stream interface will be updated if you read from any reference.</p>
+<p>With Rebol series, the position is "outside"...each instance has its own index.  So when you NEXT a series, you have to save the result, or you will get the same thing again:</p>
+<pre><code>&gt;&gt; series: [a b c]
+
+&gt;&gt; next series
+== [b c]
+
+&gt;&gt; next series
+== [b c]
+</code></pre>
+<p>If streams worked this way, you'd have to constantly be saving the new stream value every time you read from it, as another return value of the READ process.</p>
+<pre><code>[data stream]: read/part stream 10
+</code></pre>
+<p>But if you did have to code like that, how would it react to a situation like this?</p>
+<pre><code>&gt;&gt; [data newstream]: read/part oldstream 10
+
+&gt;&gt; read/part oldstream 10
+</code></pre>
+<p>The (presumably) buffered stream no longer has the data on hand.  So it either preserves the data indefinitely or some of these calls would fail.</p>
+<h2>So Parsing Consumes Streams, But Not Series?</h2>
+<p>Right now, there's no way to leave a stream alone, because reading it consumes it.</p>
+<p>The only way you'd be able to "consume" a series value--e.g. advance the index of the input--would be to pass into parse a variable holding the input.  Because the index of the series is an immediate in the value itself.</p>
+<p>It seems unfortunate that something like a FILE! can know how to do random seeks, and not be able to save and restore positions in PARSE.  But if it did, what would the type of <code>&lt;here&gt;</code> be?  It would have to create a new stream instance into the same file...this would be like being able to say:</p>
+<pre><code>&gt;&gt; s2: clone stream  ; maybe file reads support, but tcp reads don't?
+
+&gt;&gt; read stream
+== #{ABCD0102}
+
+&gt;&gt; read s2
+== #{ABCD0102}
+</code></pre>
+<p>It's probably bad for PARSE to be going this direction.</p>
+<h2>A Better Idea (?) <em>some</em> Streams Offer <code>&lt;index&gt;</code>, Some Don't</h2>
+<p>It's already the case that SEEK will accept either an index number or a series position.  So when you ask for <code>&lt;index&gt;</code> it could tell you the position in the file.</p>
+<p><em>(Although I should mention that file seeking has historically always been offset-based, starting with zero.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  This was true in R3-Alpha and is also true in 1-based languages like Julia.)</em></p>
+<p>This just rules out the idea of having <code>&lt;here&gt;</code> on a stream series altogether; to basically stamp out the concept that there is such a thing as a "stream-at-position".  You only deal with positions separate from streams...and only on the streams that happen to offer them.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740</link>
+          <pubDate>Wed, 06 Oct 2021 16:40:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1740</guid>
+          <source url="https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740.rss">How Would Stream PARSE Handle Positions?</source>
+        </item>
+        <item>
+          <title>Validating Subseries Data In PARSE... INPUT or INTO TAG!s?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>If you want to validate a block of input and return that block, how do you do it?</p>
+<p>By default, UPARSE gives you the last rule match:</p>
+<pre><code>&gt;&gt; uparse [1 2 &lt;three&gt; "four"] [some integer! tag! text!] 
+== "four"
+</code></pre>
+<p>You can bend that last-result behavior to your advantage by invoking a rule that returns the input.  The tag! combinator <strong><code>&lt;input&gt;</code></strong> does exactly that!</p>
+<pre><code>&gt;&gt; uparse [1 2 &lt;three&gt; "four"] [some integer! tag! text! &lt;input&gt;] 
+== [1 2 &lt;three&gt; "four"]
+</code></pre>
+<p>Pretty slick.  But what if it's a <em>nested</em> block?  Does <code>&lt;input&gt;</code> give you the INTO series, or the original series?</p>
+<p>Right now it gives you the INTO series.  e.g. what <code>&lt;input&gt;</code> returns is whatever the <em>currently parsed input</em> is:</p>
+<pre><code>&gt;&gt; uparse [zero [1 2 &lt;three&gt; "four"]] [
+      word: word!
+      validated: into block! [some integer! tag! text! &lt;input&gt;]
+      ("some overall result")
+ ]
+== "some overall result"
+
+&gt;&gt; validated
+== [1 2 &lt;three&gt; "four"]
+
+&gt;&gt; word
+== zero
+</code></pre>
+<p>That's nice, but... you can also imagine being inside some nested rule like this where you want to make a decision like <strong><code>return &lt;input&gt;</code></strong> which wants to imply accepting the original input to the parse.</p>
+<p>Should <strong><code>&lt;input&gt;</code></strong> always return the overall parser input, and a separate rule like <strong><code>&lt;into&gt;</code></strong> give back the current sub-input?</p>
+<ul>
+<li>
+<p>At a combinator level, the currently processed argument is always called INPUT.  So calling it <code>&lt;input&gt;</code> and returning the currently applicable input is consistent with the implementation.</p>
+<ul>
+<li>
+<p>Well...it's actually only partially consistent.  Because the INPUT to each combinator actually is at the current position.  So it's more like HERE.</p>
+<ul>
+<li>I'm actually not that bothered by this</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p>INTO is not the only combinator that we can conceive of can that can go to a nested level.  So calling the tag <code>&lt;into&gt;</code> might not be a good idea.  Also, that doesn't have the ring of generality to return the input at wherever you currently are...e.g. return the main input if you haven't done an INTO</p>
+<ul>
+<li>Shades of meaning are difficult here with other words, as <code>&lt;current&gt;</code> (for instance) is hard to distinguish from <code>&lt;here&gt;</code>... e.g. you'd think it would include the position.</li>
+</ul>
+</li>
+</ul>
+<p><strong>In any case...I lean toward thinking <code>&lt;input&gt;</code> reflecting the <em>current</em> input is the best answer.</strong>  I think this suggests a special term for the main input, like <code>&lt;main-input&gt;</code>.  A better choice for this would maybe be <code>&lt;original&gt;</code>.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/validating-subseries-data-in-parse-input-or-into-tag-s/1737">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/validating-subseries-data-in-parse-input-or-into-tag-s/1737</link>
+          <pubDate>Mon, 04 Oct 2021 15:11:22 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1737</guid>
+          <source url="https://forum.rebol.info/t/validating-subseries-data-in-parse-input-or-into-tag-s/1737.rss">Validating Subseries Data In PARSE... INPUT or INTO TAG!s?</source>
+        </item>
+        <item>
+          <title>PATH! usage for Function Dispatch Only Unless in Redbol Mode</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>For a while now I've been a pretty big convert on the look of dots for member selection.  It's not just that it's more standard--I think it's visually better.  It also lets you be reassured that when you see a slash in a path, that the thing to the left of that slash was a function:</p>
+<pre><code>foo.bar.baz
+   ;
+   ; ^-- I may not know what foo.bar.baz is, but at least I know that
+   ; foo and foo.bar are *not* functions
+
+foo.bar.baz/mumble
+   ;
+   ; ^-- Under the convention that slashes are for refinements only, I
+   ; can tell the author intends that (foo.bar.baz) must be a function
+
+foo.baz.bar/
+   ;
+   ; ^-- With Ren-C's path generality, you can even decorate a case
+   ; without refinements to show it's a function.
+</code></pre>
+<h2>It Hasn't Been A <em>Rule</em>, but...</h2>
+<p>So far Ren-C has been allowing you to use slashes wherever you historically could.  So the new rules were only applying to dots--restricting them on not being usable on functions.</p>
+<pre><code>append.dup [a b c] [d] 2  ; this would cause an error, for instance
+</code></pre>
+<p>However, you could still pick members out of objects with slashes:</p>
+<pre><code>&gt;&gt; obj: make object! [field: 10]
+
+&gt;&gt; obj/field   ; not obj.field
+== 10
+</code></pre>
+<p>I had a feeling this might be prohibited eventually...though it would need to be possible to make Redbol emulation work.  So there'd have to be some kind of flag for allowing it.</p>
+<h2>...But Now, I Might Have A Good Reason To Enforce It</h2>
+<p>The reason is that in trying to do a good job of building an extensibility mechanism for member selection, it is difficult to make that mechanism able to communicate information about specialized functions in a "light" way.</p>
+<p>When pathing is done hardcoded in the evaluator, it can do little sneaky tricks to push the words of refinements onto a stack.  It doesn't have to create an entirely new specialized function.</p>
+<p>But once you're using a generic interface to usermode functions which can extend <strong><code>PICK*</code></strong> and <strong><code>POKE*</code></strong>, that interface has to speak in "reified" forms.  We have partial specialization so these refied forms exist... I just feel like what's happening in that case isn't "picking" or "poking".  And it's tying my hands to make anything efficient if we say that path dispatch runs through code which might be usermode.</p>
+<h2>The Flag Will Be Introduced Gradually</h2>
+<p>I've been experimenting with the flag turning itself on automatically, and giving you a warning.  So you only hear about it the first time.</p>
+<pre><code>&gt;&gt; obj: make object! [x: 10]
+
+&gt;&gt; obj/x
+The PATH! obj/x doesn't evaluate to an ACTION! in the first slot.
+SYSTEM.OPTIONS.REDBOL-PATHS is FALSE so this is not allowed by default.
+For now, we'll enable it automatically...but it will slow down the system!
+Please use TUPLE! instead, like obj.x
+== 10
+
+&gt;&gt; obj/x
+== 10
+</code></pre>
+<p>What happens when you enable the flag is that it actually turns any PATH! with no ACTION! in the first slot into a TUPLE!, and then permits you to use refinements in TUPLE!s like <code>append.dup</code>.  This is because I'm avoiding creating a separate extensibility mechanism for paths...it just does the not-easy-to-optimize extensibility.</p>
+<p>I haven't committed this, and I'd be phasing it in slowly.  But as it's phased in, the performance of paths for member selections vs. tuples will degrade.  So it's worth knowing about.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723</link>
+          <pubDate>Wed, 22 Sep 2021 18:11:42 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1723</guid>
+          <source url="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723.rss">PATH! usage for Function Dispatch Only Unless in Redbol Mode</source>
+        </item>
+        <item>
+          <title>Implicit Capture In PARSE - How To Get It?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>ISO-8601 dates are very close to Rebol dates, but just different enough to make it a pain.</p>
+<pre><code>; ISO-8601
+2021-09-15T12:20:53-04:00
+
+; Rebol
+15-Sep-2021/12:20:53-04:00
+</code></pre>
+<p>Are Rebol dates more readable?  Yes.  Are they so much better as to make it worthwhile to buck the standard?  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:">  Are they in conflict with generalized PATH! representation?  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<h2>Nevermind, This Post Is About Something Else</h2>
+<p>Let's say I just want to capture the YEAR, the MONTH, and the DAY out of an ISO-8601 date.</p>
+<pre><code>uparse isodate [
+    year: between &lt;here&gt; "-"
+    month: between &lt;here&gt; "-"
+    day: between &lt;here&gt; "T"
+    ...
+ ]
+</code></pre>
+<p>Despite having BETWEEN, it's laborious.  <em>(Historical Rebol needs <code>copy to "-"</code> followed by a SKIP, even more convoluted).</em></p>
+<p>It needs a shorthand.  We have TAG! at our disposal, still:</p>
+<pre><code>uparse isodate [year: &lt;*&gt; "-" month: &lt;*&gt; "-" day: &lt;*&gt; "T" ...]
+</code></pre>
+<p>And it could be plain <strong><code>*</code></strong>:</p>
+<pre><code>uparse isodate [year: *, "-", month: *, "-", day: *, "T", ...]
+</code></pre>
+<p>But I kind of find myself wishing for another lexical type that means "capture".  I'd thought about this as being the meaning of <code>@xxx</code> before the current interpretation.</p>
+<p>I'm nearly certain we'll have <strong>$word</strong>, <strong>$[bl o ck]</strong>, <strong>$(gr o up)</strong> and friends.  Maybe that?</p>
+<pre><code>uparse isodate [$year "-" $month "-" $day "T" ...]
+</code></pre>
+<p>Though since the general meaning would be "get-environment-variable" this would raise questions about dialects bending the meaning of things so severely.</p>
+<h2>It Feels Weak To Not Have An Answer For This</h2>
+<p>Other parsing systems will always seem like they have an edge if there isn't a shorthand for this "capture until the next rule".</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/implicit-capture-in-parse-how-to-get-it/1718">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/implicit-capture-in-parse-how-to-get-it/1718</link>
+          <pubDate>Wed, 15 Sep 2021 16:40:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1718</guid>
+          <source url="https://forum.rebol.info/t/implicit-capture-in-parse-how-to-get-it/1718.rss">Implicit Capture In PARSE - How To Get It?</source>
+        </item>
+        <item>
+          <title>PARSE Errors And You: FURTHEST, FAIL, ENSURE?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>So far there's only a little bit of UPARSE featuring related to errors.  One is the FURTHEST return result:</p>
+<pre><code>&gt;&gt; [v furthest]: uparse "abbbabbabcabab" [some ["a" | "b"]]
+; null
+
+&gt;&gt; furthest
+== "cabab"
+</code></pre>
+<p>What it's doing is it's recording the high water mark of whatever a combinator called success.</p>
+<p>It's better than nothing, I guess.  But for parsers that scan ahead it might be worthless.  (I'll point this out to <a class="mention" href="/u/brett">@Brett</a>, since he suggested the feature...)</p>
+<pre><code>&gt;&gt; [v furthest]: uparse "[ababbbcabbab]" [
+       "[" ahead to "]"  ; this pushes the high water mark to the ]
+       some ["a" | "b"]
+       "]"
+   ]
+; null
+
+&gt;&gt; furthest
+== "]"
+</code></pre>
+<p>So here we are not implicating the "c", which people would think of as the actual culprit.  But it's harder than one might think to figure out who that is.</p>
+<h2>Recap of the New FAIL Feature</h2>
+<p>With the new FAIL in UPARSE, you have a little bit of support on implicating the point of the input to complain about.</p>
+<p>The idea is that you make sure the parse position is where you want to implicate, by making the FAIL an alternate to that position:</p>
+<pre><code>&gt;&gt; uparse "{ababcababa}" [
+       into between "{" "}" [
+           some ["a" | "b"] &lt;end&gt;
+           | fail @["Between braces should be just a and b"]
+       ]
+   ]
+** User Error: Between braces should be just a and b
+** Near: "ababcababa"
+</code></pre>
+<p><em>(If you've forgotten why FAIL's argument needs the @, it's because the PARSE dialect has a meaning for BLOCK! already...and for the purposes of "regularity" in the dialect this tries not to override that.  But this is an open issue if FAIL wants to break the rules.)</em></p>
+<p>For demonstration purposes here, I didn't implicate the "c", but actually wrote it so the alternate is set to backtrack to when it started matching b.  You get a different result to make the fail an alternate to the end:</p>
+<pre><code>&gt;&gt; uparse "{ababcababa}" [
+       into between "{" "}" [
+           some ["a" | "b"]
+           [&lt;end&gt; | fail @["Between braces should be just a and b"]]
+       ]
+   ]
+** User Error: Between braces should be just a and b
+** Near: "cababa"
+</code></pre>
+<h2>A New Fuzzy Concept: ENSURE</h2>
+<p>We have ENSURE for values outside of PARSE.  It runs a test and passes through the result if it matches, or stops and errors:</p>
+<pre><code>&gt;&gt; x: 10
+
+&gt;&gt; ensure integer! x
+== 10
+
+&gt;&gt; ensure tag! x
+** Error: ENSURE failed with argument of type integer!
+</code></pre>
+<p>It seems appealing to make PARSE able to do that too:</p>
+<pre><code>&gt;&gt; uparse [&lt;x&gt; 10 #y 20] [collect [while [
+       keep ensure tag!
+       keep ensure integer!
+   ]]
+** Error: ENSURE failed with argument of type ISSUE!
+** Near: [... 10 \\ #y \\ 20]
+</code></pre>
+<p>So a similar idea to FAIL, where you get some feedback on the input location causing the problem.</p>
+<p>But also similar to FAIL, this doesn't work within the model of having alternates.  It sees something it doesn't like and errors in the moment, without giving any <strong>|</strong> options in the rest of the rules a chance.  That's a bit harsh, but maybe still would fit a lot of scenarios.</p>
+<p>The historical ENSURE only works on datatypes.  Could this work on values, or alternate values?</p>
+<p>Far-out idea:</p>
+<pre><code> &gt;&gt; uparse "abbbcababa" [some ensure ["a" | b"]]
+ ** Error: ENSURE would have expected:
+       "a"
+       "b"
+   But it received "c"
+</code></pre>
+<p>The idea would be that once ENSURE started, it might have some way of collecting the "leaf nodes" of failed rules.  But I have no idea how such a thing could actually work.</p>
+<p>More generally I wonder how alternates figure into <em>any</em> system of error delivery.</p>
+<h2>Random Weird Dialect Idea: BAD-WORD!</h2>
+<p>Just wanted to write down a strange idea I had, to use BAD-WORD! to indicate a shorthand for FAIL with a message.  The idea was to make it come after a complete rule and imply a message to give if the rule to its left didn't match:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       some ["a" | "b"] ~a-or-b-expected~
+       "]"
+   ]
+** Error: a-or-b-expected
+** At parse input location: "cabbbab]"
+</code></pre>
+<p>It sucks, but it was just a brainstorming idea as a shorthand for:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       [some ["a" | "b"] | fail ~a-or-b-expected~]
+       "]"
+   ]
+</code></pre>
+<p>Maybe this points to the need for an ELSE construct, as it might be a bit smoother than having to enclose everything in blocks:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       some ["a" | "b"] else fail ~a-or-b-expected~
+       "]"
+   ]</code></pre>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714</link>
+          <pubDate>Mon, 13 Sep 2021 02:05:43 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1714</guid>
+          <source url="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714.rss">PARSE Errors And You: FURTHEST, FAIL, ENSURE?</source>
+        </item>
+        <item>
+          <title>USCII Seen With New Eyes</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Dialects/DSLs</category>
+          <description><![CDATA[
+            <p>In 2008 I used R3-Alpha to make some 5x7 bitmaps out of a stock font I found, plus some data to make symbols for the missing control characters.  The way I defined the missing characters was with blocks of data, like:</p>
+<pre><code>[
+    code: 10
+    name: "Line Feed"
+    abbr: "LF"
+    description: {
+        On typewriters, printers, and some terminal emulators, moves the
+        cursor down one row without affecting its column position. On Unix,
+        used to mark end-of-line.
+    }
+    image: [
+        "XXX  "
+        "  X  "
+        "  X  "
+        "  X  "
+        "XXXXX"
+        " XXX "
+        "  X  "
+    ]
+    notes: {
+        A spin on the carraige return which emphasizes the "downness" of
+        a feed, but also with a horizontal suggestion of the current line
+    }
+    rating: 'good
+] 
+</code></pre>
+<p>Besides not needing commas on the strings, this doesn't really buy a whole lot over JSON.  The script had a couple of talking points--that PNG encoding and IMAGE! was built in, and that you could put BINARY! data directly in your script as hex.  But largely unremarkable.</p>
+<p>Not that the point was to demo "great Rebol practices", really.  I was just using it as a tool.  <em>(And it was 2008, so I had just found the language...one shouldn't expect much regardless.)</em></p>
+<p><strong>I've gotten it working under Redbol emulation--which is kind of a cool trick in and of itself.</strong>  This involved patching up the bad IMAGE! code well enough to work with the script, but it felt worth it to run the rest of it.</p>
+<p><strong>But the real fun begins moving to modern ideas.</strong>  So I put aside a copy as a historical version to keep as a Redbol test, but then started updating it to the new world...</p>
+<h2>Rethought With UTF-8 and a Dialect</h2>
+<p>When you take away the BLOCK! and start using the parts in the box, what you get is a lot more remarkable.</p>
+<pre><code>=== LF: Line Feed (10) ===
+
+◼◼◼▢▢
+▢▢◼▢▢
+▢▢◼▢▢
+▢▢◼▢▢
+◼◼◼◼◼
+▢◼◼◼▢
+▢▢◼▢▢
+
+description: {
+    On typewriters, printers, and some terminal emulators, moves the
+    cursor down one row without affecting its column position. On Unix,
+    used to mark end-of-line.
+}
+notes: {
+    A spin on the carraige return which emphasizes the "downness" of
+    a feed, but also with a horizontal suggestion of the current line
+}
+rating: good
+</code></pre>
+<p>It's much more interesting:</p>
+<ul>
+<li>
+<p>UTF-8 means that we can use solid and hollow boxes to represent the bitmap.  They're legal characters in WORD!s, so instead of 7 TEXT!s the bitmap can be represented as 7 WORD!s and still be LOAD-able.</p>
+</li>
+<li>
+<p>A section-divider can do double duty for the attributes.  A SET-WORD! becomes the shorthand, the name can be turned into regular WORD!s spanning up to a GROUP! that contains the codepoint.</p>
+</li>
+<li>
+<p>There were multiple shorthands in some cases (e.g. 17, Device Control 1, can be known as DC1 or XON).  instead of a SET-WORD! like <strong>LF:</strong> that can be a SET-PATH!, like <strong>DC1/XON:</strong>.</p>
+</li>
+<li>
+<p>Since it's a dialect, there's no need to put a tick mark on the rating of "good/fair/poor".</p>
+</li>
+</ul>
+<h2>A Fluid Format that You Transform With UPARSE</h2>
+<p>The first thing I did was to transform the new representation back to the old representation with UPARSE.  <a href="https://forum.rebol.info/t/collect-of-set-word-text-uparse-reduce/1712">I wrote about how it could be better if UPARSE had REDUCE</a>...</p>
+<p>So it's not optimal, and we wouldn't need such a transformation step anyway if processing directly.  You'd use GATHER/EMIT.</p>
+<p>But I'm pasting it here just to make the point that in just a couple of minutes I was able to have the old code up and running on the new format:</p>
+<pre><code>override-data: uparse load %uscii-5x7-english-c0.reb [
+    collect [while keep ^ collect [
+        '===
+        [
+            abbr: set-word! (abbr: as text! abbr)
+            | abbr: set-path! (abbr: as block! abbr)
+        ]
+        name: between &lt;here&gt; [code: into group! integer!]
+        '===
+
+        keep (compose [
+            code: (code)
+            name: (spaced inert name)
+            abbr: (abbr)
+            image:  ; coming up...
+        ])
+
+        keep ^ collect 7 [w: word!, keep (as text! w)]
+
+        opt [keep ^ 'description:, keep text!]
+        opt [keep ^ 'notes:, keep text!]
+        opt [keep ^ 'rating:, keep ^ ^ word!]
+    ]]
+]
+</code></pre>
+<h2>IMO, This is Rebol's "Deep Lake"</h2>
+<p>Breaking free of the JSON mindset and using the parts really makes this work:</p>
+<p><a href="https://github.com/hostilefork/uscii/blob/master/uscii-5x7-english-c0.reb">https://github.com/hostilefork/uscii/blob/master/uscii-5x7-english-c0.reb</a></p>
+<p>Revisiting this and the Whitespace interpreter are just really good examples of the form.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/uscii-seen-with-new-eyes/1713">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/uscii-seen-with-new-eyes/1713</link>
+          <pubDate>Sun, 12 Sep 2021 13:15:30 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1713</guid>
+          <source url="https://forum.rebol.info/t/uscii-seen-with-new-eyes/1713.rss">USCII Seen With New Eyes</source>
+        </item>
+        <item>
+          <title>COLLECT of SET-WORD! + TEXT!... UPARSE REDUCE?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>I was trying to do something that came out a little awkward, and wondered if there was a better way.</p>
+<p>Imagine you have data like:</p>
+<pre><code>[foo: "a" bar: "b" | foo: "c" bar: "d"]
+</code></pre>
+<p>And you want to write a UPARSE rule with COLLECT to get:</p>
+<pre><code>[[foo: "a" bar: "b"] [foo: "c" bar: "d"]]
+</code></pre>
+<p>So you're recognizing <em>specific</em> SET-WORD!s, each of which you expect to be followed by TEXT!.</p>
+<p>What I did was a bit awkward:</p>
+<pre><code>&gt;&gt; data: [foo: "a" bar: "b" | foo: "c" bar: "d"]
+
+&gt;&gt; uparse data [collect while further [keep ^ collect [
+       [keep [^ 'foo:], keep text!]
+       [keep [^ 'bar:], keep text!]
+       ['| | &lt;end&gt;]
+   ]]]
+== [[foo: "a" bar: "b"] [foo: "c" bar: "d"]]
+</code></pre>
+<p>If you don't like the <strong>^</strong> then use <strong>only</strong>.  Here are a few points demonstrated:</p>
+<pre><code>&gt;&gt; uparse data [collect while further keep only collect [
+       [keep [only the foo:] keep text!]
+       [keep only the bar:, keep text!]
+       ['| | &lt;end&gt;]
+   ]]
+== [[foo: "a" bar: "b"] [foo: "c" bar: "d"]]
+</code></pre>
+<ul>
+<li>
+<p>You can use THE if you don't like the quote marks.</p>
+</li>
+<li>
+<p>We're in a world where <strong>only 3</strong> becomes <strong>only [3]</strong>, so it's not like "KEEP ONLY" is a keyword.  This means you can move things around... <strong>keep [only the foo:]</strong> is just as valid as having the ONLY outside the block.</p>
+</li>
+<li>
+<p>You can play around with the dynamics of BLOCK!s and COMMA!s.  Sometimes the presence of a BLOCK! makes a comma unnecessary.</p>
+<ul>
+<li><em>Sidenote: I actually think we should strongly discourage the idea of commas having semantic meaning in dialects.  The status quo should be that they just provide visual separation...and the only impact adding them should have would be an error if they're not put in an "interstitial" position.</em></li>
+</ul>
+</li>
+</ul>
+<h2>What Would Make This Better?</h2>
+<p>Readability is helped by breaking things into parts of course.  Maybe people would like <strong><code>&lt;end&gt; stop</code></strong> better than having to think about FURTHER... like, just stop iterating when you reach the end...vs. make sure each iteration makes progress:</p>
+<pre><code>foobar-rule: [collect [
+    [keep only ['foo:] keep text!]
+    [keep only ['bar:] keep text!]
+]]
+
+uparse data [collect while [
+    keep only foobar-rule
+    ['| | &lt;end&gt; stop]
+]]
+</code></pre>
+<p>But what was actually bugging me a little bit was having to write two KEEPs in order to pick up the SET-WORD! and the accompanying TEXT!.  We know in ordinary KEEP you can just COLLECT a block:</p>
+<pre><code>&gt;&gt; collect [keep [foo: "a"]]
+== [foo: "a"]
+</code></pre>
+<p>Is there any way to match the pattern <strong>foo: "a"</strong> and KEEP it in one step?</p>
+<h2>REDUCE, but for UPARSE?</h2>
+<p>What I was wanting was something like REDUCE to resolve to all the items individually:</p>
+<pre><code>&gt;&gt; uparse [1 2] [integer! integer!]  ; typical case, last result fallout
+== 2
+
+&gt;&gt; uparse [1 2] [reduce [integer! integer!]]  ; REDUCE keeps processed items
+== [1 2]
+</code></pre>
+<p>UPARSE has alternate meanings for WHILE, and ANY, and many other things.  Does it make sense to call this REDUCE?</p>
+<p>Such a feature would let the FOOBAR-RULE cleanup a bit:</p>
+<pre><code>foobar-rule: [collect [  ; old way
+    [keep only ['foo:] keep text!]
+    [keep only ['bar:] keep text!]
+]]
+
+=&gt;
+
+foobar-rule: [collect [  ; new way
+    keep reduce @['foo:, text!]
+    keep reduce @['bar:, text!]
+]]
+</code></pre>
+<p><strong>Note that the REDUCE combinator would need to take its block as an @[...] or become a "quoting combinator"</strong>.  This is because if it were left as a plain BLOCK! combinator, then REDUCE would not have access to the individual pieces of the block...only the advancement and the result.</p>
+<p>But, maybe you could do it with GET-BLOCK!:</p>
+<pre><code>foobar-rule: [collect [
+    keep :['foo:, text!]
+    keep :['bar:, text!]
+]]
+</code></pre>
+<p>This idea of combinators that break the rules on the meaning of BLOCK! is a heavy thing to think about.  There's some semantically tricky stuff and some technically tricky stuff involved.</p>
+<p>But one way or another, I think we need this.  Thoughts?</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/collect-of-set-word-text-uparse-reduce/1712">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/collect-of-set-word-text-uparse-reduce/1712</link>
+          <pubDate>Sun, 12 Sep 2021 13:02:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1712</guid>
+          <source url="https://forum.rebol.info/t/collect-of-set-word-text-uparse-reduce/1712.rss">COLLECT of SET-WORD! + TEXT!... UPARSE REDUCE?</source>
+        </item>
+        <item>
+          <title>Parsing Giant Streams Without Consuming Tons of Memory: How?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>I've mentioned that before I go through optimizing UPARSE I wanted to make it good at one thing that's been a bit of a pet wish of mine...</p>
+<p>...and that's to be able to PARSE a giant file or network stream without needing to read it all into memory at once.</p>
+<p>There are two levels of goal here:</p>
+<ol>
+<li>
+<p><strong>Big Crazy Goal:</strong> To have something like a long network stream of data <em>(that you can't seek backwards in)</em> and be able to have records in it parsed discretely one at a time.  Even if the stream is 100GB in size, you'd only use a fixed amount of memory to do your processing.</p>
+</li>
+<li>
+<p><strong>More Modest Goal:</strong> To let the PARSE be woven in with the read process, so it can start processing and reacting without waiting for all the data to be read...even if it ultimately isn't able to avoid reading the whole stream of data into a buffer.</p>
+</li>
+</ol>
+<p>Getting 2 to work is the easier of these.  -But- let me be clear that given the lack of existence of "streams" in historical Rebol, it by no means <em>easy</em>!</p>
+<p>1 is the more tricky and interesting one to my tastes, so I'll start by talking about that.</p>
+<h2>If Combinators Inform Us, Then (1) <em>Seems</em> Tractable <img src="https://forum.rebol.info/images/emoji/twitter/tractor.png?v=9" title=":tractor:" class="emoji" alt=":tractor:">
+</h2>
+<p>Let's say we're trying to parse lines with just the letters A and B, and count them as we go:</p>
+<pre><code>p: open %giant-file.txt
+
+count: 0
+
+parse p [while [
+   some ["A" | "B"] newline
+   (count: count + 1)
+]]
+then [
+    print ["Your giant file had" count "lines of ABs"]
+else [
+    print ["Giant file wasn't just lines of ABs"]
+]
+</code></pre>
+<p>Our intuition tells us that we can can do this one line at a time, throwing it out as you go.  But how might PARSE know that?</p>
+<p>It builds a WHILE combinator and can see that's the last thing in the rule block.  Assuming the user doesn't capture any positions with <strong><code>&lt;here&gt;</code></strong> or do any <strong><code>SEEK</code></strong>, there is no way that the WHILE will ever backtrack from the point where it started.  Each iteration can throw out the ability to backtrack.</p>
+<p><em>But right now WHILE is a black box;</em> doing whatever it wants until it finally returns a result.  From PARSE's perspective there's nothing from the outside that differentiates it from something called WHILE-HALF that will repeat a rule some number of times, and then jump back in time to the halfway point of the match:</p>
+<pre><code>&gt;&gt; parse "abababab" [while-half "ab", return &lt;here&gt;]
+== "abab"
+
+&gt;&gt; parse "abababababab" [while-half "ab", return &lt;here&gt;]
+== "ababab"
+</code></pre>
+<p>Without some additional information, the system doesn't know that WHILE won't make a decision like WHILE-HALF would.  It has to let it run until it is finished.</p>
+<h2>How Can Combinators Tell PARSE About Backtrack Needs?</h2>
+<p>One way of looking at this is that the combinator itself becomes responsible for storing any memory that it requires for backtracking.</p>
+<p>That is to say that it pulls information out of the stream...and if it wants to backtrack it pushes it back in.</p>
+<pre><code>&gt;&gt; parse "aaab" [while ["a"] "b"]    
+</code></pre>
+<ul>
+<li>WHILE combinator grabs an "a" from stream, matches the "a"</li>
+<li>WHILE combinator grabs an "a" from stream, matches the "a"</li>
+<li>WHILE combinator grabs an "a" from stream, matches the "a"</li>
+<li>WHILE combinator grabs a "b" from stream, doesn't like it, pushes it back and ends</li>
+<li>TEXT! combinator grabs a "b" from the stream, matches the "b"</li>
+</ul>
+<p>If the WHILE becomes responsible for pushing back any input it doesn't like, then the stream can just discard everything as it goes (in cases where it doesn't see any potential for some rule down the line to request backtrack).  This means offering some kind of "push back into stream" operator that combinators can use if they need to back out.</p>
+<p><strong>This concept of putting back the character is actually how many things like this work.</strong></p>
+<ul>
+<li>
+<p>In C++ iostreams there is <a href="https://stackoverflow.com/questions/6769416/difference-between-putback-and-unget">istream::putback() and istream::unget()</a></p>
+</li>
+<li>
+<p>In Haskell's Data.Stream, there is <a href="https://hackage.haskell.org/package/io-streams-1.5.2.1/docs/System-IO-Streams.html#v:unRead">unRead</a></p>
+</li>
+</ul>
+<p>In C++, unget() requires you give what you read in.  By doing so, then if the data is no longer in a buffer and you're reading from a file...it doesn't need to do anything but push its file offset backwards.  Haskell's unRead and C++ putback() let you push back something different than what you read...and considers that a feature <em>(we'll assume it does a similar optimization to unget() if you were reading from a file and it noticed what you pushed back was the same as the data in the buffer?)</em></p>
+<h2>"Going Unit-By-Unit Sounds Laborious, and <em>Slow</em>...?"</h2>
+<p>It may seem laborious on the surface, but as far as I can tell this is the way streams work.</p>
+<p>I was just working on an implementation of READ-LINE for standard input.  And all the prescribed methods of reading one line at a time from a file in C would go one character at a time.  That sounds like a lot of I/O requests, but the thing is that basically all I/O systems have buffering in them...if you ask to read a character from a file, it isn't going to your hard drive or making a network request for that one character.  It buffers it--and if you try to buffer it yourself you're likely just going to be adding complexity/code/memory and making things worse.</p>
+<p><strong>Unfortunately <a href="http://docs.libuv.org/en/v1.x/stream.html">libuv() streams</a> don't have any putback() or ungetc() ability.</strong>  There's no going back in time with them.  :-/</p>
+<p>And as it turns out Boost.ASIO doesn't have it either.  (Which surprises me.)</p>
+<p>This means if we were building combinators on top of an ungetc()-type logic...and want to go back in time to read a file and not have it fully in memory...we'd have to be using the raw file API if we wanted to keep sync'd to the data that's already on disk and be able to use it instead of keeping the full buffer contents.</p>
+<p>That's a bit depressing.  But if there's any good news, it's that Rebol datatypes are optimized specifically for "unget".  If the buffers are BLOCK!s or BINARY!s or TEXT!s then when you "NEXT" them the data is still there, and you just BACK it to do an ungetc.</p>
+<p>Plus, we'd have to have our own layer for managing this if we were going to seek back in time using <strong><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests">HTTP Range Requests</a></strong> on networks.</p>
+<p>I guess I'll just experiment and see what I can work out.  :-/</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/parsing-giant-streams-without-consuming-tons-of-memory-how/1698">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/parsing-giant-streams-without-consuming-tons-of-memory-how/1698</link>
+          <pubDate>Thu, 02 Sep 2021 05:17:04 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1698</guid>
+          <source url="https://forum.rebol.info/t/parsing-giant-streams-without-consuming-tons-of-memory-how/1698.rss">Parsing Giant Streams Without Consuming Tons of Memory: How?</source>
+        </item>
+        <item>
+          <title>&quot;Current Directory&quot; and Relativism to Script Directory</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Console</category>
+          <description><![CDATA[
+            <p>When you encounter a DO or an IMPORT of a relative path in a script, we've been assuming that the most convenient interpretation of that would be to have it run relative to the script's location.</p>
+<h2>I think we need to stop changing the working directory on DO</h2>
+<p>We no longer use DO for breaking scripts into components, because the module system is starting to work...and it will only work better as time goes on.</p>
+<p>So the idea of DO is now that it is a script that is like a utility, that takes command-line arguments of what it is to operate on.</p>
+<p>The person who invokes a DO--like the person who invokes a script from a command-line--has a concept of the current path.  The filenames they use are relative to their concept of the path, not the concept of the script.  When running from the command line you may not really know or care where the script is--it could be somewhere on the path--why would you relativize your paths to this unknown location?</p>
+<h2>We Can Use New Datatypes Like <span class="mention">@p</span>/a/t.h and <span class="mention">@tup.le</span>
+</h2>
+<p>Files passed on the command line can have pretty gnarly names with arbitrary composition in them...spaces, starting with digits, etc.</p>
+<p>When you DO or IMPORT a script the name is likely more tame.</p>
+<p>What if we said you could IMPORT an <code>@xxx</code> and it would turn that into a path and relativize it?</p>
+<pre><code>import %my-lib.r  ; relative to WHAT-DIR
+import @my-lib.r  ; relative to system.script.path
+</code></pre>
+<p>Having distinct intents for IMPORT isn't as useful as distinct intents for DO.</p>
+<p>If we were willing to establish these two intents, we could make it a property of READ... so this ceases to be anything specific to IMPORT or DO.</p>
+<h2>Questions, Comments, Suggestions?</h2>
+<p>Right now the @-path idea looks like a pretty decent idea.  I think it would solve a lot of pain points I've been dealing with in trying to write GitHub Actions that are getting confused about the directories.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/current-directory-and-relativism-to-script-directory/1688">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/current-directory-and-relativism-to-script-directory/1688</link>
+          <pubDate>Fri, 27 Aug 2021 01:19:34 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1688</guid>
+          <source url="https://forum.rebol.info/t/current-directory-and-relativism-to-script-directory/1688.rss">&quot;Current Directory&quot; and Relativism to Script Directory</source>
+        </item>
+        <item>
+          <title>Reliable Stdio and Input Redirection: Plan of a Tac</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Console</category>
+          <description><![CDATA[
+            <p>Rebol has historically in my experience been very bad at dealing with redirection.  <a href="https://forum.rebol.info/t/how-should-redirected-input-work-for-the-console/1546">I've summarized some of that before.</a></p>
+<p>I've also summarized the varous reasons that the Device Model in R3-Alpha really amounted to obfuscating make-work.  Really it just asked you to unpack assembled Rebol cells into plain-C-only data buffers and types.  It did so all for the sake of throwing over the wall to an abstract OS that didn't match or model any existing OS...and lacked invariants or asserts.</p>
+<p><em>But as far as stdio goes, I've managed to excise the "REBDEV" Device for it.</em>  And yet the stdio is all in an extension.  But it's an extension that knows what Rebol values are, and can speak in terms of them and talk to the OS without needing a middleman.</p>
+<h2>And Now... <a href="https://github.com/metaeducation/ren-c-stdio/blob/9277c615fc8ad74278b1a5aaca7f053f4ecfb3b2/.github/workflows/test-stdio.yml#L88">We Have Stdio Input and Output Redirection Tests!</a>
+</h2>
+<p>Not too many tests, but it was more than enough to keep me busy making them all work cross platform...while not screwing up the console experience.  The model for managing Ctrl-C cancellations is much better now.</p>
+<p>At the moment <a href="https://github.com/metaeducation/ren-c-stdio/actions/runs/1170800228">the tests are all passing</a>.  I'm hoping that we can get tests that check how Ctrl-C reactions are handled and do some dynamic typing in "pseudoterminals" so that the console gets tested.</p>
+<p>Things will be bumpy for a bit, but to make a long story short...they're definitely on a <em>much</em> better track now.  It's getting under control which means that features will be easier tow rite.</p>
+<h2>The Reverse Cat Test</h2>
+<p>For a first test program I picked something simple... to write a Ren-C version of the UNIX "tac" program.  This just reverses the lines in a file.  But I wanted it to do that to a stream of piped text...receive lines in, output reversed lines.</p>
+<p>Here was how I thought to write it:</p>
+<pre><code>write-stdout try delimit/tail newline reverse collect [
+    until [not keep line: try read-line]
+]
+</code></pre>
+<p>It makes use of a new feature of delimit: you can ask the delimiter be added at the /HEAD or /TAIL also:</p>
+<pre><code>&gt;&gt; delimit/tail "," ["a" "b" "c"]
+== "a,b,c,"
+
+&gt;&gt; delimit/head "," ["a" "b" "c"]
+== ",a,b,c"
+
+&gt;&gt; delimit/head/tail "," ["a" "b" "c"]
+== ",a,b,c,"
+</code></pre>
+<p>So when you're taking lines that have been read and given back to you without the newline on them, putting them back to having the newlines should involve adding newlines after each item.  Said another way: "between all the items plus one after the last"</p>
+<h2>We Need More of These Programs!  More of These Tests!</h2>
+<p>There's a lot more I could say about this, but I'm worn out at present.  So I'll just end the post with a plea that more of these small programs, data, and redirection be cooked up.</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/sleeping_bed.png?v=9" title=":sleeping_bed:" class="emoji only-emoji" alt=":sleeping_bed:"></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/reliable-stdio-and-input-redirection-plan-of-a-tac/1686">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/reliable-stdio-and-input-redirection-plan-of-a-tac/1686</link>
+          <pubDate>Thu, 26 Aug 2021 14:49:24 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1686</guid>
+          <source url="https://forum.rebol.info/t/reliable-stdio-and-input-redirection-plan-of-a-tac/1686.rss">Reliable Stdio and Input Redirection: Plan of a Tac</source>
+        </item>
+        <item>
+          <title>What Should the Console Do If You Type Too Fast During Startup?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Console</category>
+          <description><![CDATA[
+            <p>So these days, stdio is an extension, it is loaded late in the boot. You can build the interpreter without stdio to use in a non-interactive library.  Or you can replace it entirely, as the Web Repl does.</p>
+<p>But for the moment let's talk about the standard-stdio...</p>
+<p>One of the things it does is that if you're not redirecting input, it switches over from the so-called "cooked mode" of reading a line at a time to "raw mode", where you can manage each keystroke. So that's why you can process cursor keys, or tab, or if you wanted to make it so when people typed A they saw B, etc.</p>
+<p>But for the duration of the time between when the program starts and when the extension gets run, it's still in cooked mode.</p>
+<p>So if you type some stuff and it hasn't quite finished loading, it will be echoed. I didn't realize this because I was running a program that didn't print a boot banner, and it just had an empty line and I started typing into it.</p>
+<pre><code>$ r3 readline-test.r
+aa   ; I only typed a
+</code></pre>
+<p>I'd type a and see it.  Then after a small delay, it would print another one so that the line said "aa".</p>
+<p>Took some time for me to realize what was happening. Shouldn't have taken that long but it did, because I was focusing on the wrong thing.</p>
+<h2>How To React to This?</h2>
+<p>It's tempting to try and build some kind of compensation for that, where you query the input buffer at the <em>exact moment</em> the switch is flipped from cooked to raw mode.  You assume in that moment that if any input is in the buffer, it must have come during the cooked mode...and has already been printed...</p>
+<p>But that's not a general solution. If your console has made it so when you type A you should get B then leaving the A there from the input buffer and saying "it was echoed already" isn't correct.</p>
+<p>Not only that, you run into trouble if there's any printing before you read.  The text would be <em>above</em> the output, so it wouldn't even be seen.</p>
+<p>So I think you just throw out a message so people know what's going on, and kick over to a newline:</p>
+<pre><code>$ r3 readline-test.r
+abc[you typed too fast!]
+abc
+</code></pre>
+<h2>Suggestions Welcome On What to Print</h2>
+<p>We can actually print the message in a different style in the smart terminal, with a weird background color or something.</p>
+<ul>
+<li>
+<p><strong><code>[rebuffering]</code></strong>  &lt;- it was the first thing I thought of, which doesn't make it good</p>
+</li>
+<li>
+<p><strong><code>[catching up with queued typing]</code></strong> &lt;- clear but lengthy</p>
+</li>
+<li>
+<p><strong><code>[catching up...]</code></strong> &lt;- not as clear, shorter</p>
+</li>
+<li>
+<p>???</p>
+</li>
+</ul>
+            <p><small>3 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-should-the-console-do-if-you-type-too-fast-during-startup/1684">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-should-the-console-do-if-you-type-too-fast-during-startup/1684</link>
+          <pubDate>Thu, 26 Aug 2021 02:07:22 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1684</guid>
+          <source url="https://forum.rebol.info/t/what-should-the-console-do-if-you-type-too-fast-during-startup/1684.rss">What Should the Console Do If You Type Too Fast During Startup?</source>
+        </item>
+        <item>
+          <title>Boris&#39;s &quot;NEW-EACH&quot; Loop Dialecting Proposals</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Dialects/DSLs</category>
+          <description><![CDATA[
+            <p>Here are some ideas for what kinds of things you might put in a FOR-EACH variable block besides just words, and some other ideas:</p>
+<p><a href="https://gitlab.com/hiiamboris/red-mezz-warehouse/-/blob/master/foreach-design.md" class="inline-onebox">foreach-design.md · master · hi i am boris / Red mezz warehouse · GitLab</a></p>
+<p>It's definitely worth thinking about how to ask for the iteration counter automatically while iterating.  Or getting the position <em>and</em> the value somehow at once, instead of being forced to iterate by position and remember to say <code>pos.1</code> to get the value.  We've had some hare-brained schemes for that come down the pipe.</p>
+<p>The simple idea of just asking for it in the vars spec feels pretty solid.  I'm not thrilled about the <strong>/var</strong> notation, but it's a desirable feature and certainly in reach:</p>
+<pre><code>&gt;&gt; for-each [/i x y] [#a &lt;b&gt; #c &lt;d&gt; #e] [
+       print [i x y]
+   ]
+1 #a &lt;b&gt;
+2 #c &lt;d&gt;
+3 #e
+</code></pre>
+<p>But some of the other proposals are a bit heavy, like a type constraint and then skipping out of iterations where the type doesn't match:</p>
+<pre><code>&gt;&gt; for-each [/i x [text! group!] y] ["a" &lt;b&gt; #c &lt;d&gt; (e)] [
+       print [i x y]
+   ]
+1 "a" &lt;b&gt;
+3 (e)
+</code></pre>
+<p>The semantic combinatorics start to add up.  He says that the index keeps counting regardless of whether the iteration was skipped or not... but, is that obvious?</p>
+<p>And isn't the following kind of clearer:</p>
+<pre><code>&gt;&gt; for-each [/i x y] ["a" &lt;b&gt; #c &lt;d&gt; "e"] [
+       match [text! group!] x else [continue]   
+       print [index x y]
+   ]
+1 "a" &lt;b&gt;
+3 (e)
+</code></pre>
+<h2>Things to Avoid: Overdesign, "Parts of Speech" Abuse</h2>
+<p>I think we should be cautious about overdesigning such  core constructs.  (But certainly these things--whether you think they are monstrosities or not--are exactly the kind of thing that people are supposed to be empowered to make if it pleases them.  It's supposed to be a <em>personal</em> language, and you personalize it to the extent of your tastes.)</p>
+<p>As we want to know the loop iteration you're on, maybe the better angle isn't to be abusing word decorations in such weird ways...but to use refinements as labels and then name the variable after it.  I wouldn't call the loop counter the "index" because the index is in the series position... so, /COUNTER or   /COUNT maybe?</p>
+<pre><code>&gt;&gt; for-each [/count i x y] [#a &lt;b&gt; #c &lt;d&gt; #e] [
+       print [i x y]
+   ]
+</code></pre>
+<p>Commas would probably make it clearer, so good we have them:</p>
+<pre><code>&gt;&gt; for-each [/count i, x y] [#a &lt;b&gt; #c &lt;d&gt; #e] [
+       print [i x y]
+   ]
+</code></pre>
+<p>You could get the series position with <strong>/here</strong>.  And <a class="mention" href="/u/blackattr">@BlackATTR</a> and <a class="mention" href="/u/gchiu">@gchiu</a> and I have talked about things like wanting to know if you were on the first or last iteration.  Well, why not <strong>/first?</strong> and <strong>/last?</strong></p>
+<pre><code>&gt;&gt; for-each [/first? f, /last? l, x y] [#a &lt;b&gt; #c &lt;d&gt; #e] [
+       print [f l x y]
+   ]
+true false #a &lt;b&gt;
+false false #c &lt;d&gt;
+false true #e
+</code></pre>
+<p>Some of these could apply to other loop forms like COUNT-UP I guess...</p>
+<pre><code>&gt;&gt; count-up [/first? f, /last? l, x] 3 [print [f l x]]
+true false 1
+false false 2
+false true 3
+</code></pre>
+<p>People who really want shorthands to say that "just a refinement means /count" could put a little preprocessor adapting the spec to the more verbose form.  But I'd rather use the verbose version.</p>
+<h2>Generalized Generators Throw A Thorn in This</h2>
+<p>In moving to a generalized FOR that runs over a generator, the values are being provided by something that gets called N times and returns answers.  The underlying pattern can be shown by the rewrite:</p>
+<pre><code>&gt;&gt; for [/first? f, /last? l, x y] (each [#a &lt;b&gt; #c &lt;d&gt; #e]) [
+       print [f l x y]
+   ]
+</code></pre>
+<p>EACH is a generator.  And FOR is something that calls that generator N times.</p>
+<p>But not all generators operate on series, some fabricate data out of thin air.  So they'd have no series position to answer /HERE with.  And while we can universally answer the "is this the first iteration" in the iteration construct itself, not all generators know if they're on the last time you're calling them...they provide data for each call until they return NULL.</p>
+<p>So I guess the mechanics would have to be to try and request these as output parameters from the generator, and it either has them or it doesn't.  Yay for multi-returns, amiright?  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>But since the answers are coming from the generator you'd probably have to put your questions for it in front of the variable for the iteration # you are asking:</p>
+<pre><code>&gt;&gt; for [/first? f, x, /last? l, y] (each [#a &lt;b&gt; #c &lt;d&gt; #e]) [
+       print [f l x y]
+   ]
+</code></pre>
+<p>This moves the LAST? question so it would ostensibly be grouped with the request for Y.</p>
+<h2>Weird Thought... "FOR specs", like "FUNC specs"?</h2>
+<p>It occurred to me like we might actually want to think about documenting these like specs.</p>
+<pre><code>&gt;&gt; data: [#a &lt;b&gt; #c &lt;d&gt; #e]
+
+&gt;&gt; for-each [
+       /first? f [logic!]
+       x [tag!] "Maybe document what this is for with a TEXT!?"
+       /last? l [logic!]
+       y [issue!] "Same here..."
+   ] data [
+       print [f l x y]
+   ]
+</code></pre>
+<p>It could introduce concepts like <code>&lt;skip&gt;</code> able parameters.</p>
+<p>Of course you wouldn't have to use such wacky things if you didn't want to, I'm just saying you could.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/boriss-new-each-loop-dialecting-proposals/1682">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/boriss-new-each-loop-dialecting-proposals/1682</link>
+          <pubDate>Tue, 24 Aug 2021 04:53:47 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1682</guid>
+          <source url="https://forum.rebol.info/t/boriss-new-each-loop-dialecting-proposals/1682.rss">Boris&#39;s &quot;NEW-EACH&quot; Loop Dialecting Proposals</source>
+        </item>
+        <item>
+          <title>Isotopes and Divergence in Function Spec Dialect</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Dialects/DSLs</category>
+          <description><![CDATA[
+            <p>Right now we have a couple of dark alleys in the function spec dialect.</p>
+<h2>"Divergence" (always throws, fails, etc....never returns)</h2>
+<p>Today's vocabulary word is <a href="https://en.wikipedia.org/wiki/Divergence_(computer_science)">divergent functions</a>...when a function never returns a result in a "normal" way.</p>
+<p>All functions that can FAIL or be THROWN or RETURN'd across have divergence as an <em>option</em> (which is, right now, all functions).  But it becomes an issue of what to say when there really is no type a function <em>ever</em> returns...what do you put in the spec?</p>
+<p>Lately I've been using just <strong><code>[return: []]</code></strong>.  That might look perfect...by saying there's no types you can return, then any return would generate an error.</p>
+<p>But Ren-C is complicated... you've got things like invisible functions, as well as BAD-WORD! isotopes.  And NULL which is a bit of a pickle too--<strong><a href="https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658">I've written about revisiting <code>&lt;opt&gt;</code> in its own post.</a></strong></p>
+<h2>What About Isotopes?</h2>
+<p>If you say your function returns <strong>[bad-word!]</strong>, that doesn't cover isotope forms.</p>
+<p>Right now, there's no type checking on isotopes.  Any function can return any isotope right now--they're outside of type checking.</p>
+<p>We could narrow it down to just certain isotopes by putting them in the spec as BAD-WORD!s, like <strong>[integer! ~none~]</strong>...though there's no place to store a list of such isotopes at present :-/</p>
+<p>Returning <strong>[ any-value!]</strong> is already pretty wordy.  Having to say <strong>[  any-value!]</strong> is a hassle.  The reasoning I had for letting any function return any isotope was that they're close enough to being errors anyway to a caller...so erroring in the type checking didn't serve that much of a point, for the wordiness.</p>
+<h2>What About Invisibility?</h2>
+<p>You can't say plain RETURN these days with no argument unless your function has <strong><code>&lt;invisible&gt;</code></strong> in the return spec (or if it has <strong><code>return: &lt;none&gt;</code></strong> which just ignores whatever you return anyway and gives back NONE).  That's another weird notational tic.</p>
+<p>I just wanted to mention these issues.  No great answers right now, so we've just got the mediocre answers.  It's working, so...not the biggest priority.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/isotopes-and-divergence-in-function-spec-dialect/1667">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/isotopes-and-divergence-in-function-spec-dialect/1667</link>
+          <pubDate>Mon, 16 Aug 2021 02:35:53 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1667</guid>
+          <source url="https://forum.rebol.info/t/isotopes-and-divergence-in-function-spec-dialect/1667.rss">Isotopes and Divergence in Function Spec Dialect</source>
+        </item>
+        <item>
+          <title>The Trickiness of the New ANY Combinator Concept</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>It's a bit of a pain to collect alternate rules.  For instance:</p>
+<pre><code>alternates: copy []
+
+rules: [[some integer!] [3 text!]]
+
+for-each rule rules [
+    append alternates compose [(rule) |]
+]
+
+uparse data [alternates]
+</code></pre>
+<p>That will give you alternates as <strong>[[some integer!] | [3 text!] |]</strong></p>
+<p>But that rule will <em>always succeed</em>...should both the component rules fail to match, it will act as a no-op.  Because it's equivalent to <strong>[[some integer!] | [3 text!] | []]</strong>, and <strong>[]</strong> will always succeed.</p>
+<p>You get a similar problem if you go the other way.</p>
+<pre><code>for-each rule rules [
+    append alternates compose [| (rule)]
+]
+</code></pre>
+<p>Now you've got a rule that is always a no-op: <strong>[| [some integer!] | [3 text!]]</strong>.  Again, this is equivalent to <strong>[[] | [some integer!] | [3 text!]]</strong>, and this time the <strong>[]</strong> succeeds before the other rules get a chance.</p>
+<p>You can hack around this by starting out with <strong>alternates: [false]</strong>.  This way, you can add the <strong>[| (rule)]</strong> and it will never run the false.  So it works.</p>
+<h2>Wouldn't a New Meaning for the ANY Combinator be Better?</h2>
+<p>Having reclaimed ANY it seems it would be perfect for this.  Why not:</p>
+<pre><code>rules: [[some integer!] [3 text!]]
+uparse data [any rules]
+</code></pre>
+<p>You could leave your block in its regular old form, and use it that way.  Dyn-o-mite!</p>
+<p><strong>But wait.  BLOCK! already has semantics as a parse rule.</strong>  Conventionally, ANY doesn't get to see the block at all... it gets a <em>parser function</em> which has been made out of the block.</p>
+<p>Uh oh.</p>
+<h2>Bad Option <span class="hashtag">#1</span> - Quoting</h2>
+<p>So ANY could say it's a quoting combinator.  This means it would get whatever single thing came after it... be it a WORD! or BLOCK! or whatever.  It could try its best to turn that into a BLOCK!.</p>
+<p>In the case above ANY would thus get the WORD! rules.  It could look up the WORD!, get a block.  And then walk through the block, combinatorizing each element in it and running the element in sequence.</p>
+<p>That's rather yucky.</p>
+<h2>Less Bad Option <span class="hashtag">#2</span> - Take BLOCK! as synthesized rule product</h2>
+<p>ANY would be a better citizen if it was willing to say that the BLOCK! it's going to walk through came to it by honest means.</p>
+<pre><code>rules: [[some integer!] [3 text!]]
+uparse data [any (rules)]
+</code></pre>
+<p>At first glance that seems weird to me.  But, is it really that weird?</p>
+<p>It seems to me this is what has to be done--and it makes much more sense than going down the rabbit hole of quoting and destabilizing the whole syntax.</p>
+<h2>Also, This Mitigates Compatibility Concerns</h2>
+<p>If ANY only runs with rules that have BLOCK! synthesized products, that's a (small?) subset of all the ANYs that are out there historically.  It can choke if it doesn't like what it sees and tell you that you may be using the old sense of ANY.</p>
+<p>Even further, we probably <em>can</em> temporarily make ANY a quoting combinator that only accepts GROUP!...as a simulation of accepting any parser in the future.</p>
+<p>I'm going ahead and adding it!</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662</link>
+          <pubDate>Sat, 14 Aug 2021 18:35:44 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1662</guid>
+          <source url="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662.rss">The Trickiness of the New ANY Combinator Concept</source>
+        </item>
+        <item>
+          <title>Converting TRIM To UPARSE for Testing And Inspiration</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>A long time ago, <a class="mention" href="/u/brett">@Brett</a> converted the circuitous native code for TRIM from R3-Alpha to PARSE-based usermode code.</p>
+<p>Since we have that code--and some tests for it--I thought it would be a good idea to go ahead and try running it under UPARSE.  This would be another way of testing UPARSE...as well as to see if the new features gave it any kind of leg up.  We could also look for inspirations for new features...</p>
+<h2>New Features: <code>&lt;index&gt;</code> and MEASURE Combinators</h2>
+<p>There was a calculation of indentation done for the TRIM/AUTO feature.  It uses PARSE* which is the version that doesn't require matching to the end of the input.  <em>(Though since it doesn't check the result and doesn't do any operations which would roll back, it doesn't make a difference.)</em></p>
+<pre><code>indent: _
+if auto [
+    parse* series [
+        ; Don't count empty lines, (e.g. trim/auto {^/^/^/    asdf})
+        remove [while LF]
+
+        (indent: 0)
+        s: &lt;here&gt;, some rule, e: &lt;here&gt;
+        (indent: (index of e) - (index of s))
+    ]
+]
+</code></pre>
+<p>The first thought I had is that with TAG! combinators, though we lost the ability to match TAG!s without a quote like <code>[some '&lt;tag&gt;]</code>...we have a nice noun-space to play with that doesn't interfere with variable name nouns.  So what if <code>&lt;index&gt;</code> gave you the index position in the current series?</p>
+<p>That makes it a bit nicer:</p>
+<pre><code>indent: _
+if auto [
+    parse* series [
+        ; Don't count empty lines, (e.g. trim/auto {^/^/^/    asdf})
+        remove [while LF]
+
+        s: &lt;index&gt;, while rule, e: &lt;index&gt;, (indent: e - s)
+    ]
+]
+</code></pre>
+<p>I also changed the SOME to a WHILE, which always succeeds...and since <code>&lt;index&gt;</code> always succeeds there's no need to pre-emptively set the indent to 0.</p>
+<p>But wouldn't this pattern make a nice combinator in and of itself?  Something that can tell you how long a matched range is.  Well, uparse fans, meet <strong>MEASURE</strong>!</p>
+<pre><code>indent: _
+if auto [
+    parse* series [
+        ; Don't count empty lines, (e.g. trim/auto {^/^/^/    asdf})
+        remove [while LF]
+
+        indent: measure while rule
+    ]
+]
+</code></pre>
+<p>And look how easy the combinator is to write <em>(it's one of those that can just use the default rollback)</em>:</p>
+<pre><code>measure: combinator [
+    {Get the length of a matched portion of content}
+    return: "Length in series units"
+        [&lt;opt&gt; integer!]
+    parser [action!]
+    &lt;local&gt; s e
+][
+    ([# (remainder)]: parser input) else [return null]  ; ignore result
+
+    e: index of get remainder
+    s: index of input
+
+    if s &gt; e [  ; could also return something like ~bad-seek~ isotope
+        fail "Can't MEASURE region where rules did a SEEK before the INPUT"
+    ]
+
+    return e - s
+]
+</code></pre>
+<h2>That's A Pretty Good Start!</h2>
+<p>It seems to me that what the TRIM code needs is probably a bit better definition of the semantics.  TRIM/AUTO is a bit strange:</p>
+<pre><code>&gt;&gt; utrim/auto "  x^/ y^/   z^/"
+== "x^/ y^/ z^/"
+</code></pre>
+<p>It indents relative to the first non-newline-line...but that creates an issue of what to do about the line that comes after it which is <em>less</em> indented.  The rule for processing lines was:</p>
+<pre><code>line-start-rule: compose/deep [
+    remove [((if indent [[opt repeat (indent)]] else ['while])) rule]
+]
+</code></pre>
+<p>The <strong>indent</strong> not being a BLANK! implies TRIM/AUTO.</p>
+<p>That's a /DEEP compose that does splicing (signified these days by <strong><code>((...))</code></strong>.  I rewrote the rule to be a bit clearer as:</p>
+<pre><code>line-start-rule: compose [
+    remove (if indent '[opt repeat (indent) rule] else '[while rule])
+]
+</code></pre>
+<p>That's more pleasing to me, as well as more efficient.  It's a nice use of the quoted branches!</p>
+<p>But back to the semantics: <em>is this right?</em>  It could also slam the less indented lines to the left by moving the OPT.</p>
+<pre><code>line-start-rule: compose [
+    remove (if indent '[repeat (indent) opt rule] else '[while rule])
+]
+</code></pre>
+<p>That would make the <strong><code>y</code></strong> flush with the left:</p>
+<pre><code>&gt;&gt; utrim/auto "  x^/ y^/   z^/"
+== "x^/y^/ z^/"
+</code></pre>
+<p>Anyway... let's keep those UPARSE test cases coming!  It's to a point now where UPARSE is more reliable than R3-Alpha-derived native PARSE (I'm calling PARSE3) and Red.  So it's revealing the bugs and inconsistencies in those codebases, not vice versa.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+            <p><small>5 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/converting-trim-to-uparse-for-testing-and-inspiration/1660">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/converting-trim-to-uparse-for-testing-and-inspiration/1660</link>
+          <pubDate>Fri, 13 Aug 2021 23:09:56 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1660</guid>
+          <source url="https://forum.rebol.info/t/converting-trim-to-uparse-for-testing-and-inspiration/1660.rss">Converting TRIM To UPARSE for Testing And Inspiration</source>
+        </item>
+        <item>
+          <title>Red changing FIND/MATCH to not default to /TAIL</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Redbol</category>
+          <description><![CDATA[
+            <p>Historically, the /MATCH option to FIND has implied returning the tail of the matched region.</p>
+<pre><code>rebol2&gt;&gt; find/match "abc" "ab"
+== "c"
+</code></pre>
+<p>That has been true despite the fact that there is a /TAIL option to FIND.  In trying to make FIND more orthogonal I have questioned this decision.</p>
+<p><strong><a href="https://github.com/red/red/issues/4943">Red has made the move to say you have to provide /TAIL with /MATCH, otherwise you get the head of the match</a></strong>.  So now:</p>
+<pre><code>red&gt;&gt; find/match "abc" "ab"
+== "abc"
+
+red&gt;&gt; find/match/tail "abc" "ab"
+== "c"
+</code></pre>
+<p>I can agree with the intent behind this, although I wonder if it should accompany a changing of the refinement name.  /MATCH doesn't really fit with the meaning of "match" as I've been using it, e.g.</p>
+<pre><code>&gt;&gt; match integer! 10
+== 10
+
+&gt;&gt; match integer! &lt;abc&gt;
+; null
+</code></pre>
+<p>So maybe something like FIND/AT or FIND/STAY or FIND/HERE...something along those lines.  Then /MATCH could be deprecated in a more structured way.</p>
+<p>But nope... they're pro breaking this for some reason.  Who am I to argue, especially given that I wanted it changed anyway?</p>
+<p>It does underscore that Redbol emulation will need Red and Bol modes.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/red-changing-find-match-to-not-default-to-tail/1654">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/red-changing-find-match-to-not-default-to-tail/1654</link>
+          <pubDate>Thu, 12 Aug 2021 06:52:35 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1654</guid>
+          <source url="https://forum.rebol.info/t/red-changing-find-match-to-not-default-to-tail/1654.rss">Red changing FIND/MATCH to not default to /TAIL</source>
+        </item>
+        <item>
+          <title>CLI Dialect</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Dialects/DSLs</category>
+          <description><![CDATA[
+            <p>A long time ago, earl and I discussed the concept of making it so that a script's header would use something like the function spec dialect to define the command line arguments for a script.  So if you declared a refinement like <strong>/foo [integer!]</strong> that would be translated into something appropriate for your platform, like an argument to your script taken as <strong>--foo=3</strong> on Linux or <strong>/foo 3</strong> on Windows.  Or whatever.</p>
+<p>Regular args would be required arguments, you'd get automatic help from the string descriptions in the spec, etc.</p>
+<p>Red's Boris has done nearly exactly this...but he isn't putting a spec into the script header.  He has you make a function and then pass that function to a CLI dialect processor:</p>
+<p><a href="https://gitlab.com/hiiamboris/red-cli/" class="inline-onebox">hi i am boris / CLI dialect for Red · GitLab</a></p>
+<p>I do still like the aesthetics of putting it in the script header; it feels like a good place.  Though that would bake it in somewhat more...and introduces the question of what scope the arguments are in.  Would you have to say <strong>system.processed-args.foo</strong>, or would it be a globally scoped <strong>foo</strong> to the whole script?</p>
+<p>And he mentions a good point of making this something you can apply to any function:</p>
+<blockquote>
+<p><em>"You can turn any Red function into a command line utility with one or two words. Suppose you have a <code>grep</code> function that is to be used from Red. Prefix it with <code>process-into</code>, add <code>print</code> for the output, compile it, and you have a <code>grep</code> utility!"</em></p>
+</blockquote>
+<p>That is worth thinking about.  You can say <strong>--do "..."</strong> on the command line to run arbitrary code, but what if you could specify a script name and say <strong>--function "func-name"</strong>, and have that function suddenly get its arguments from the command line?</p>
+<p>If that sounds dumb compared to <strong>--do "func-name/refine arg1 arg2"</strong> just consider that sometimes you do want to integrate with the shell, and getting arguments spliced via the shell into such a --do string can be a mess.  It also can't be aliased into a single shell command.</p>
+<p>Anyway, their experience with this is worth looking at, as it's something I've wanted for a while.  Whether there's a way of offering this in a script's header or not, I think I'm sold on the "you should be able to do it to any function if you want" angle.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/cli-dialect/1651">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/cli-dialect/1651</link>
+          <pubDate>Sat, 07 Aug 2021 15:21:23 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1651</guid>
+          <source url="https://forum.rebol.info/t/cli-dialect/1651.rss">CLI Dialect</source>
+        </item>
+        <item>
+          <title>NULL Rule Failures and a Weird Parse Generator Idea</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>So a while ago, I was thinking about the idea of a kind of GROUP! as a PARSE rule that would fail if it was NULL.</p>
+<p><em>It's not a property you want for plain GROUP! in PARSE!!!</em></p>
+<pre><code>uparse "aaa" [some ["a" (if trace [print "Matched an A"])]]
+</code></pre>
+<p>You wouldn't want that IF not running to give a NULL that caused the rule to not match.  That would mean you'd have to write:</p>
+<pre><code>uparse "aaa" [some ["a" opt (if trace [print "Matched an A"])]]
+</code></pre>
+<p>That's junky.</p>
+<p>But let's imagine there were <em>another</em> kind of group that did fail when it was NULL.  For the sake of argument let's call it <strong>/(group)</strong>.  Otherwise it's just like GROUP!...result discarded and everything.</p>
+<p>When we had such a group on hand, I noticed we could do something like this:</p>
+<pre><code> gen: func [&lt;static&gt; n (0)] [
+     if n &lt; 3 [return n: n + 1]
+     return null
+ ]
+
+&gt;&gt; uparse "a" ["a", collect [while keep /(gen)]]
+== [1 2 3]
+</code></pre>
+<p>Since generators return NULL when they're done making values, you'd be able to use the natural looping ability of WHILE and then have it stop keeping things, and you'd get your values collected.</p>
+<p>So I wrote a test for that...which broke when that behavior of the group class went away.</p>
+<p>It's probably silly, since we'd be able to write something like <strong>(map :gen)</strong> and get the same effect.  I'm just writing it down here because there was a comment about it, and I had sort of a "hmmm" about uses for a GROUP! form that considered itself a failed parse match if it was NULL.</p>
+<p>Better here than in a comment.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/null-rule-failures-and-a-weird-parse-generator-idea/1648">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/null-rule-failures-and-a-weird-parse-generator-idea/1648</link>
+          <pubDate>Thu, 05 Aug 2021 18:33:22 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1648</guid>
+          <source url="https://forum.rebol.info/t/null-rule-failures-and-a-weird-parse-generator-idea/1648.rss">NULL Rule Failures and a Weird Parse Generator Idea</source>
+        </item>
+        <item>
+          <title>Literal Matching with the @ Types In UPARSE</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>I mentioned that the @ types were slated for use for literal matching.  The most frequent example I have given is:</p>
+<pre><code>&gt;&gt; block: [some "a"]
+
+&gt;&gt; uparse [[some "a"] [some "a"]] [some @block]
+== [some "a"]  ; success gives result of last matching rule
+</code></pre>
+<p>Works with all types:</p>
+<pre><code>&gt;&gt; num: 1
+
+&gt;&gt; uparse [1 1 1] [some @num]
+== 1
+</code></pre>
+<p>I didn't mention things like @(gr o up) but those work too:</p>
+<pre><code>&gt;&gt; uparse [1 1 1] [some @(3 - 2)]
+== 1
+</code></pre>
+<p><strong>I realized I actually do not know how to write the above two cases in Red or Rebol2.</strong>  You can't use the number as a plain variable in Red, since it acts as a repeat rule <em>(UPARSE prohibits that, since it's a rule that takes an argument, you must use REPEAT for such behavior)</em></p>
+<pre><code>red&gt;&gt; num: 1
+
+red&gt;&gt; parse [1 1 1] [some num]
+*** Script Error: PARSE - invalid rule or usage of rule: 1
+</code></pre>
+<p>Also in Red, I'm not clear on why the following isn't an error, since the GROUP! product is just discarded:</p>
+<pre><code>red&gt;&gt; parse [1 1 1] [some (3 - 2)]
+== false
+</code></pre>
+<p>This is something that would work in R3-Alpha, but doesn't in Red or Rebol2:</p>
+<pre><code>red&gt;&gt; parse [1 1 1] [some quote (3 - 2)]
+== false
+</code></pre>
+<p><strong>Your guess is as good as mine.</strong>  Whatever the answer in their world is, it's not obvious.  But I think the @ types give a clean answer in UPARSE.</p>
+<h2>But What About @[bl o ck] ?</h2>
+<p>In the past I suggested that one reason why <code>@[...]</code> might be taken for datatypes is because in cases like this, there'd be no difference between <code>@[bl o ck]</code> and <code>'[block]</code>.  I was imagining these being synonyms, because I couldn't think of anything else (since plain block was already "run rule"):</p>
+<pre><code>&gt;&gt; uparse [[some "a"] [some "a"]] [some '[some "a"]]
+== [some "a"]
+
+&gt;&gt; uparse [[some "a"] [some "a"]] [some @[some "a"]]
+== [some "a"]  ; "wasteful application of @[...], so why not datatype?"
+</code></pre>
+<p>But UPARSE has changed the game for why @[...] and [...] can mean different things...because <em>block rules synthesize values</em>.  And who's to say you might not want to match a rule and use its product as the literal thing to match against?</p>
+<pre><code>&gt;&gt; uparse [1 1 1 2] [@[some '10, (10 + 10) | some '1 (1 + 1)]]
+== 2
+</code></pre>
+<p>In other words your rule can match <em>and</em> provide an answer for the thing to match next.  We have zero experience with how often that might be useful.  But it does have meaning, which I guess is probably the death knell for using the @ types as DATATYPE!.</p>
+<p>So this all looks pretty good.  But back to the drawing board for types.</p>
+            <p><small>4 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643</link>
+          <pubDate>Mon, 02 Aug 2021 18:58:15 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1643</guid>
+          <source url="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643.rss">Literal Matching with the @ Types In UPARSE</source>
+        </item>
+        <item>
+          <title>PRINT for empty BLOCK!, empty TEXT!, or Text of Just Spaces</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Console</category>
+          <description><![CDATA[
+            <p>I just wrote something I thought was kind of neat, a way to do indentation via COLLECT:</p>
+<pre><code>print [collect [repeat indent [keep tab]]], "some indented stuff"]
+</code></pre>
+<p>So if INDENT were 3 this would act as:</p>
+<pre><code>print [[#"^-" #"^-" #"^-"] "some indented stuff"]
+</code></pre>
+<p><strong>This made me feel like the historical answer of PRINT treating a BLOCK! of material as if it were a set of already-reduced and calculated parts was probably a good answer.</strong>  In the past I've questioned it, but I think the value is demonstrated right there.</p>
+<p><em>(I'll also point out that with GET-BLOCK!, we'll have a nice way of asking to reduce the block first... <strong><code>print ["For instance:" :[your vars here]]</code></strong>...this lets you mix up spaced and unspaced parts easily!)</em></p>
+<p>But then I noticed it was screwing up in the base case of zero indentation, e.g.</p>
+<pre><code>ren-c&gt;&gt; print [[] "some stuff"]
+ some stuff
+</code></pre>
+<p>There's an extra leading space there.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  Checking Red, it does the same thing:</p>
+<pre><code>red&gt;&gt; print [[] "some stuff"]
+ some stuff
+</code></pre>
+<p>It made me wonder, does Rebol2 do this?</p>
+<pre><code>rebol2&gt;&gt; print [[] "some stuff"]
+some stuff
+</code></pre>
+<p>Oddly no.  Did R3-Alpha?</p>
+<pre><code>r3-alpha&gt;&gt; print [[] "some stuff"]
+some stuff
+</code></pre>
+<p>Again no.  Is it putting spacing around non-empty blocks?</p>
+<pre><code>r3-alpha&gt;&gt; print [["test"] "some stuff"]
+test some stuff
+</code></pre>
+<p>Well, yes.  But what if that string were empty?</p>
+<pre><code>r3-alpha&gt;&gt; print [[""] "some stuff"]     
+some stuff
+</code></pre>
+<p><em>The reason Red and Ren-C have the extra space is because there's a generic handling of turning values into strings that adds spacing even if a string is empty.</em></p>
+<p>But waitasec: <strong>How does Rebol2 know psychically in advance whether a molding operation is going to produce content or not?</strong>  It would have to use a separate buffer, and I can't imagine Carl doing that.</p>
+<p>So let's try something else:</p>
+<pre><code>rebol2&gt;&gt; print ["here's" [] "some stuff"]
+here's  some stuff
+</code></pre>
+<p>There's the extra space, due to not being psychic.</p>
+<p>We see some weird exception was made regarding empty strings that didn't have a holistic answer.  Red and Ren-C both lack that broken weird exception.</p>
+<p>So what can we do to get desirable results in a non-broken way?</p>
+<h2>Empty BLOCK! Should Act The Same As NULL</h2>
+<p>I've been firm on the "detail" that NULL vaporization really means it's as if it weren't there, and the spacing acts appropriately:</p>
+<pre><code>&gt;&gt; print ["here's" if false ["!!!"] "some stuff"]
+here's some stuff
+</code></pre>
+<p>That's one of my non-negotiables.  Now I'm going to add another to the list:</p>
+<pre><code>&gt;&gt; print ["here's" [] "some stuff"]
+here's some stuff
+</code></pre>
+<p>It's tempting to add another one, which is to not put spacing around empty strings:</p>
+<pre><code>&gt;&gt; print ["here's" {} "some stuff"]
+here's some stuff
+</code></pre>
+<p>The reasoning is that I don't see why robotically putting spacing around an empty string would ever be useful.  But this is a slippery slope.  What if the string contains just spaces, let's say 4?</p>
+<pre><code>&gt;&gt; print ["here's" {    } "some stuff"]
+here's    some stuff
+</code></pre>
+<p>Should there be 4 spaces in that gap?  5 spaces?  6?</p>
+<p>Mechanically the easiest answer would be 6...which is to say that it's agnostic about the string contents and just puts one space before and one space after.  Doing anything else requires analyzing the molded content, which is methodized in the general case.</p>
+<p><em>But the empty string case doesn't really require you to analyze the molded contents.</em>  It just requires you to notice how much the pre-delimiter added to the molding buffer...and then if the buffer didn't get any longer during the molding operation, backtrack the buffer index behind the now-superfluous delimiter.</p>
+<p><strong>To my mind it's worth it to just make the exemption that empty moldings do not get delimited.</strong>  It's a more useful behavior and puts Ren-C once again in the clear lead for usage sanity.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641</link>
+          <pubDate>Sat, 31 Jul 2021 13:37:49 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1641</guid>
+          <source url="https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641.rss">PRINT for empty BLOCK!, empty TEXT!, or Text of Just Spaces</source>
+        </item>
+        <item>
+          <title>Visualizing PARSE</title>
+          <dc:creator><![CDATA[Brett]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <blockquote>
+<p><em>Note: This was originally posted in another thread about things people might want to do with parse events, but discussing the needs of this particular tool warrants its own thread.</em></p>
+</blockquote>
+<p>Because debugging parse rules can be painful, I created a Rebol 2 visual parse debugger of sorts (<a href="http://www.rebol.org/documentation.r?script=parse-analysis-view.r">parse-analysis-view.r</a>). Parse events are needed to track the input position and log each rule's Test, Succeed, or Fail.  The events were mapped to screen coordinates to be able to step forwards/backwards through the parse steps and to be able to find the active rules under a mouse cursor position. Mapping strings was easy, mapping block input was a pain.</p>
+<p>Running the visual debugger thing:</p>
+<pre><code>visualise-parse t j/grammar [parse/all t j/grammar/json]
+</code></pre>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0.png" data-download-href="https://forum.rebol.info/uploads/default/d6e81e9a37e78456b5bb526d8e476ac88a327bd0" title="Screenshot 2021-07-29 094450"><img src="https://forum.rebol.info/uploads/default/optimized/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0_2_690x497.png" alt="Screenshot 2021-07-29 094450" data-base62-sha1="uF9uxaah68wQOa0QmNNleZTWp1K" width="690" height="497" srcset="https://forum.rebol.info/uploads/default/optimized/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0_2_690x497.png, https://forum.rebol.info/uploads/default/optimized/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0_2_1035x745.png 1.5x, https://forum.rebol.info/uploads/default/original/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">Screenshot 2021-07-29 094450</span><span class="informations">1082×780 86.2 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+            <p><small>5 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/visualizing-parse/1639">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/visualizing-parse/1639</link>
+          <pubDate>Thu, 29 Jul 2021 06:26:55 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1639</guid>
+          <source url="https://forum.rebol.info/t/visualizing-parse/1639.rss">Visualizing PARSE</source>
+        </item>
+        <item>
+          <title>Getting Hooks Into &quot;Events&quot; during PARSE</title>
+          <dc:creator><![CDATA[Brett]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>When thinking about an automated collection mechanism for parsing in Rebol 2 in the dim dark past, I thought I needed every matching/unmatching rule to be tracked for stack push and pop. I decided I couldn't achieve that without Rebol providing some sort of hook facility for it. I asked and was ignored.</p>
+<p>Nevertheless pressing on I realised a few things:</p>
+<ul>
+<li>
+<p>I could have a practically useful result by tracking success/failure for particular rules.</p>
+</li>
+<li>
+<p>Embedding some sort of bound output code in a rule, breaks the reusablity of the rule.  I didn't want to have to rewrite the same rules for the same data format, just because I wanted to extract different information for a different application.</p>
+</li>
+<li>
+<p>Theoretically, I also wanted to hook and leverage some other user's rules or Rebol2's built-in rules too.</p>
+</li>
+<li>
+<p>Some rules are used to seek for a particular pattern, or test multiple patterns at the same position, some of these are sometimes meant to fail - in order to progress the overall match. We probably don't want to collect this class of rules outside of a debugging situation.</p>
+</li>
+<li>
+<p>To solve the above I ended up with requiring rules to be tracked to be defined as words, allowing me to automatedly hook, track and emit them into a structure (<a href="http://www.rebol.org/documentation.r?script=load-parse-tree.r">load-parse-tree.r</a>). Not rocket science, nor perfect, but it was useful.</p>
+</li>
+<li>
+<p>Something of an aside, reflecting back on the usefulness of the output, <a href="https://github.com/red/REP/issues/57">it would have been nice to have had a tree type in rebol</a>, a node that was combined object (properties - its head?) and series (contents or body) as one type that could perform the role of one or other or both. So many data structures look like this.</p>
+</li>
+<li>
+<p>While definitely nice, I idly wonder now whether a collect mechanism is complete enough to achieve the things people want to use parse for, that perhaps parse should be able to emit actions to be evaluated by some sort of user specified machine.</p>
+</li>
+</ul>
+<p>Anyway, I guess I'm alluding to the point that separating some sort of user specified specifications or actions outside of the rules themselves might be useful.</p>
+            <p><small>10 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/getting-hooks-into-events-during-parse/1640">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/getting-hooks-into-events-during-parse/1640</link>
+          <pubDate>Tue, 27 Jul 2021 07:42:55 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1640</guid>
+          <source url="https://forum.rebol.info/t/getting-hooks-into-events-during-parse/1640.rss">Getting Hooks Into &quot;Events&quot; during PARSE</source>
+        </item>
+  </channel>
+</rss>

@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>YIELDER and GENERATOR (and thinking about Coroutines)</title>
+    <link>https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311</link>
+    <description>The stackless model so far has been built on a generic and comprehensible building block called a **YIELDER**.  I thought I&#39;d walk through it a little.
+
+# To understand YIELDER, first look at GENERATOR
+
+I think a generator is pretty easy to understand.  It is like a function, but instead of RETURN it has something called YIELD.  Each time YIELD is called the generator gives back the result but is left in a suspended state, and the next call to the generator will pick up right after the YIELD:
+
+    counter: generator [
+         let n: 0
+         cycle [
+              n: n + 1
+              yield n
+         ]
+    ]
+
+    &gt;&gt; counter
+    == 1
+
+    &gt;&gt; counter
+    == 2
+
+## Generators are building blocks, meant to be used with functions
+
+Generators don&#39;t take parameters.  So if you want to parameterize them, you should combine them with a function.  Imagine you wanted to be able to specify a bump amount for your counter:
+
+    make-counter: func [bump] [
+         return generator [
+             let n: 0
+             cycle [yield n: n + 1]
+         ]
+    ]
+
+    &gt;&gt; counter: make-counter 5
+
+    &gt;&gt; counter
+    == 1
+
+    &gt;&gt; counter
+    == 6
+
+    &gt;&gt; counter
+    == 11
+
+## But functions aren&#39;t limited to being just &quot;generator makers&quot;...
+
+For instance: functions can be generator wrappers, that actually delegate to the generator...or perhaps even destroy it and make new ones.  Consider making a resettable counter, as @giuliolunati has in his GENERATE usermode generator:
+
+     counter: func [/reset &lt;static&gt; n (0) gen (null)] [
+         if reset [n: 0, return]
+         return reeval gen: default [
+             generator [
+                 cycle [yield n: n + 1]
+             ]
+         ]
+     ]
+
+     &gt;&gt; counter
+     == 1
+
+     &gt;&gt; counter
+     == 2
+
+     &gt;&gt; counter/reset
+
+     &gt;&gt; counter
+     == 1
+
+     &gt;&gt; counter
+     == 2
+
+This gives a lot of flexibility in the design of generator interfaces.  Considering the above example alone: what if you are in a situation where you think the **counter/reset** should have returned 1 instead of being a separate step that had no return result?  Or maybe you think it should have returned what the last generator value was.
+
+By making generators a &quot;simplistic&quot; building block, you&#39;re in control of these interface choices.
+
+## The YIELDER hybridizes with functions for efficiency
+
+I said that generators don&#39;t have parameters or a function spec, but that is because they are a specialization of a version that does have a spec... called a YIELDER.
+
+    weird-print: yielder [x] [
+        cycle [
+            print [&quot;Odd print:&quot; x]
+            yield none
+            print [&quot;Even print:&quot; x]
+            yield none
+        ]
+    ]
+
+    &gt;&gt; weird-print &quot;Hello&quot;
+    Odd print: Hello
+
+    &gt;&gt; weird-print &quot;Weird&quot;
+    Even print: Weird
+
+    &gt;&gt; weird-print &quot;World&quot;
+    Odd print: World
+
+This isn&#39;t anything you couldn&#39;t have achieved with a function that wrapped a generator, that held that generator statically and then sub-dispatched to it.  It&#39;s just cleaner and more efficient.  *(Since GENERATOR is implemented as `yielder [] [...generator body...]` it&#39;s kind of like the DOES analogue to FUNC.)*
+
+But this kind of gives you a sense of the parts box you have for building relatively efficient generator-type things.</description>
+    
+    <lastBuildDate>Thu, 30 Jul 2020 19:34:16 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>YIELDER and GENERATOR (and thinking about Coroutines)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1311">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>That author's conclusion seems like mine and maybe others which is that Go's channels and "goroutines" are probably a better answer than trying to emulate these other more bizarre coroutine examples.</p>
+</blockquote>
+</aside>
+<p>I took a day to tinker and see what I could manage to mock up Goroutines, standing on the shoulders of the stackless work.</p>
+<p>Based on that, here's a reimagining of this sample in the style of Go...that works!</p>
+<pre><code>producer: func [sentence [text!]] [ 
+    let out: make-chan
+    let tokens: split sentence space 
+
+    go (func [] [
+        for-next t tokens [  ; FOR-EACH is not stackless (yet), so...
+            send-chan out t/1  ; ...FOR-EACH can't unwind when this blocks
+        ]
+        close-chan out
+    ])
+
+    return out
+]
+  
+pattern_filter: func [in "channel" /pattern [text!]] [
+    pattern: default ["ing"]
+    print ["Searching for" mold pattern]
+
+    let out: make-chan
+
+    go (func [&lt;local&gt; token] [
+        while [token: receive-chan in] [
+            if find token pattern [
+                send-chan out token
+            ]
+        ]
+        close-chan out
+        print "Done with filtering!!"
+    ])
+
+    return out
+]
+
+print_token: func [in] [
+    print ["I'm sink, i'll print tokens"]
+
+    let done: make-chan
+    go (func [&lt;local&gt; token] [
+        while [token: receive-chan in] [
+            print [token]
+        ]
+        close-chan done
+
+        print "Done with printing!"
+    ])
+
+    return done
+]
+
+  
+let sentence: "Bob is running behind a fast moving car"
+
+unfiltered: producer sentence
+filtered: pattern_filter unfiltered
+done: print_token filtered
+
+receive-chan done
+</code></pre>
+<p>This replaces the idea of coroutines speaking to each other directly with the idea that they synchronize and communicate through "channels".</p>
+<ul>
+<li>The producer isn't itself a "coroutine" but <em>an ordinary function that instantiates a goroutine</em>, and returns a channel object that represents its stream of produced tokens.</li>
+<li>The filter also isn't a coroutine... again an ordinary function, but one that takes a channel as an input parameter...returns a filtered channel as an output.  To get the filtered channel, it instantiates a goroutine whose job it is to take items from <code>in</code> and decide which ones to send to <code>out</code>.</li>
+<li>The printer once again is an ordinary function that creates a goroutine to dump out a channel that it receives.</li>
+</ul>
+<p>You get the desired output:</p>
+<pre><code>Searching for "ing"
+I'm sink, i'll print tokens
+running
+moving
+Done with filtering!!
+Done with printing!
+</code></pre>
+<p>This seems a much smarter path than trying to deal with a contortion of generators like "special yielding syntax"!  Does it look clear?</p>
+<p>Note: I didn't have to write it as functions that run goroutines and return channels... in fact, most examples you see in Go aren't styled this way.  Instead the main code makes the channel and then calls <strong>go</strong> on a goroutine that is parameterized with the channels.  But I thought it made responsibility clearer who was doing what, e.g. to have the producer both make the channel and close it--vs being given a pre-made channel to fill.</p>
+          <p><a href="https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311/3</link>
+        <pubDate>Thu, 30 Jul 2020 16:57:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1311-3</guid>
+        <source url="https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311.rss">YIELDER and GENERATOR (and thinking about Coroutines)</source>
+      </item>
+      <item>
+        <title>YIELDER and GENERATOR (and thinking about Coroutines)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Comparing with Python2 Coroutines</h2>
+<p>Generators are related to coroutines...and I <em>thought</em> I knew what they were <img src="https://forum.rebol.info/images/emoji/twitter/face_with_raised_eyebrow.png?v=9" title=":face_with_raised_eyebrow:" class="emoji" alt=":face_with_raised_eyebrow:">.  But looking at examples of Python coroutines made me wonder exactly what the difference was, and what they could do that yielders + wrapping functions could not.</p>
+<p>So I thought I'd try translating a coroutine example.  A top hit for Python coroutines is apparently <a href="https://www.geeksforgeeks.org/coroutine-in-python/" rel="nofollow noopener">https://www.geeksforgeeks.org/coroutine-in-python/</a>.  I now take it this is out of date, and Python3 looks to have a much more JavaScript/C# async/await type feel to it.</p>
+<p>But just for the heck of it I went ahead and thought I'd convert what was there to see how much of it YIELDER could handle.  Look over their example, and then what I put together...without changing names (just adding a couple of comments):</p>
+<pre><code>producer: func [sentence [text!] next_coroutine [action!]] [ 
+    ; 
+    ; Producer which just split strings and 
+    ; feed it to pattern_filter coroutine 
+    ;
+    let tokens: split sentence space 
+    for-each token tokens [ 
+        next_coroutine token  ; Python says `next_coroutine.send(token)`
+    ] 
+    next_coroutine null  ; Python says `next_coroutine.close()`
+]
+  
+pattern_filter: func [next_coroutine [action!] /pattern [text!]] [
+    pattern: default ["ing"]
+    print ["Searching for" mold pattern]
+
+    ; Search for pattern in received token  
+    ; and if pattern got matched, send it to 
+    ; print_token() coroutine for printing 
+    ;
+    return yielder [token [&lt;opt&gt; text!]] [
+        while [token] [  ; Python does a blocking `token = (yield)`
+            if find token pattern [
+                next_coroutine token
+            ]
+            yield void 
+        ]
+        next_coroutine null  ; Python throws when `token = (yield)` exhausted
+        print "Done with filtering!!"  
+    ]
+]
+
+print_token: func [] [
+    ; 
+    ; Act as a sink, simply print the 
+    ; received tokens 
+    ;
+    print ["I'm sink, i'll print tokens"]
+
+    return yielder [token [&lt;opt&gt; text!]] [
+        while [token] [  ; Python does a blocking `token = (yield)`
+            print [token]
+            yield void
+        ]
+        print "Done with printing!"
+    ] 
+]
+
+let pt: print_token
+let pf: pattern_filter :pt
+  
+let sentence: "Bob is running behind a fast moving car"
+producer sentence :pf
+</code></pre>
+<p>The output matches the example.</p>
+<p>They're similar...the key difference is that there's a bizarre overloading of the <code>(yield)</code> syntax in these routines which is about suspending to block and take in a value, instead of returning one.  It provides a blocking call that gives a kind of inversion of control.  It's a subtle difference but it allows there to be a kind of "listener" model where a single "I'm done" publication by the producer manages to cause a chain reaction of done-ness.</p>
+<p>This does look like it's leading toward async/await, which as I mentioned is what the <a href="https://docs.python.org/3/library/asyncio-task.html" rel="nofollow noopener">Python3 stuff looks like</a>.  As I shuffle around how this kind of producer/consumer pattern might be managed more legibly, I feel a resonance with the writeup of <a href="http://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/" rel="nofollow noopener">"What Color is Your Function"</a>.  That author's conclusion seems like mine and maybe others which is that Go's channels and "goroutines" are probably a better answer than trying to emulate these other more bizarre coroutine examples.</p>
+          <p><a href="https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311/2</link>
+        <pubDate>Tue, 28 Jul 2020 03:52:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1311-2</guid>
+        <source url="https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311.rss">YIELDER and GENERATOR (and thinking about Coroutines)</source>
+      </item>
+      <item>
+        <title>YIELDER and GENERATOR (and thinking about Coroutines)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The stackless model so far has been built on a generic and comprehensible building block called a <strong>YIELDER</strong>.  I thought I'd walk through it a little.</p>
+<h1>To understand YIELDER, first look at GENERATOR</h1>
+<p>I think a generator is pretty easy to understand.  It is like a function, but instead of RETURN it has something called YIELD.  Each time YIELD is called the generator gives back the result but is left in a suspended state, and the next call to the generator will pick up right after the YIELD:</p>
+<pre><code>counter: generator [
+     let n: 0
+     cycle [
+          n: n + 1
+          yield n
+     ]
+]
+
+&gt;&gt; counter
+== 1
+
+&gt;&gt; counter
+== 2
+</code></pre>
+<h2>Generators are building blocks, meant to be used with functions</h2>
+<p>Generators don't take parameters.  So if you want to parameterize them, you should combine them with a function.  Imagine you wanted to be able to specify a bump amount for your counter:</p>
+<pre><code>make-counter: func [bump] [
+     return generator [
+         let n: 0
+         cycle [yield n: n + 1]
+     ]
+]
+
+&gt;&gt; counter: make-counter 5
+
+&gt;&gt; counter
+== 1
+
+&gt;&gt; counter
+== 6
+
+&gt;&gt; counter
+== 11
+</code></pre>
+<h2>But functions aren't limited to being just "generator makers"...</h2>
+<p>For instance: functions can be generator wrappers, that actually delegate to the generator...or perhaps even destroy it and make new ones.  Consider making a resettable counter, as <a class="mention" href="/u/giuliolunati">@giuliolunati</a> has in his GENERATE usermode generator:</p>
+<pre><code> counter: func [/reset &lt;static&gt; n (0) gen (null)] [
+     if reset [n: 0, return]
+     return reeval gen: default [
+         generator [
+             cycle [yield n: n + 1]
+         ]
+     ]
+ ]
+
+ &gt;&gt; counter
+ == 1
+
+ &gt;&gt; counter
+ == 2
+
+ &gt;&gt; counter/reset
+
+ &gt;&gt; counter
+ == 1
+
+ &gt;&gt; counter
+ == 2
+</code></pre>
+<p>This gives a lot of flexibility in the design of generator interfaces.  Considering the above example alone: what if you are in a situation where you think the <strong>counter/reset</strong> should have returned 1 instead of being a separate step that had no return result?  Or maybe you think it should have returned what the last generator value was.</p>
+<p>By making generators a "simplistic" building block, you're in control of these interface choices.</p>
+<h2>The YIELDER hybridizes with functions for efficiency</h2>
+<p>I said that generators don't have parameters or a function spec, but that is because they are a specialization of a version that does have a spec... called a YIELDER.</p>
+<pre><code>weird-print: yielder [x] [
+    cycle [
+        print ["Odd print:" x]
+        yield none
+        print ["Even print:" x]
+        yield none
+    ]
+]
+
+&gt;&gt; weird-print "Hello"
+Odd print: Hello
+
+&gt;&gt; weird-print "Weird"
+Even print: Weird
+
+&gt;&gt; weird-print "World"
+Odd print: World
+</code></pre>
+<p>This isn't anything you couldn't have achieved with a function that wrapped a generator, that held that generator statically and then sub-dispatched to it.  It's just cleaner and more efficient.  <em>(Since GENERATOR is implemented as <code>yielder [] [...generator body...]</code> it's kind of like the DOES analogue to FUNC.)</em></p>
+<p>But this kind of gives you a sense of the parts box you have for building relatively efficient generator-type things.</p>
+          <p><a href="https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311/1</link>
+        <pubDate>Tue, 28 Jul 2020 03:52:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1311-1</guid>
+        <source url="https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311.rss">YIELDER and GENERATOR (and thinking about Coroutines)</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Stylistic Questions and Soft-Quoted Branching</title>
+    <link>https://forum.rebol.info/t/stylistic-questions-and-soft-quoted-branching/1220</link>
+    <description>Here is a small implementation of SIGN-OF to look at:
+
+    sign-of: func [
+        &quot;Returns sign of number as 1, 0, or -1 (to use as multiplier).&quot;
+        number [any-number! money! time!]
+    ][
+        case [
+            positive? number [1]
+            negative? number [-1]
+            default [0]
+        ]
+    ]
+
+You could do this with an ELSE if you wished (I&#39;ve mentioned they are *nearly* the same, but not quite... a SWITCH/ALL will always run the default, but only run the ELSE if at least one branch runs):
+
+    case [
+        positive? number [1]
+        negative? number [-1]
+    ] else [0]
+
+Moving in another direction: if we accept [soft-quoted branching](https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020) you could write the body as:
+
+    case [
+        positive? number &#39;1
+        negative? number &#39;-1
+        default &#39;0
+    ]
+
+It can get even briefer if you understand the premise of [fallout](https://forum.rebol.info/t/the-fallout-from-the-switch-fallout-feature/312) (which is why [DEFAULT can work here at all](https://forum.rebol.info/t/default-now-usable-in-case-switch/739)).  You can omit the default.
+
+    case [
+        positive? number &#39;1
+        negative? number &#39;-1
+        &#39;0
+    ]
+
+We&#39;re not really set up for performance analysis at this moment.  But if we talk about what ultimately will cost the least, that&#39;s the cheapest.  It&#39;s two series, one with 3 cells that will round up to a 4 cell pool (CASE, BLOCK!, terminator)...and one with 8 cells (WORD! WORD! QUOTED! WORD! WORD! QUOTED! QUOTED! terminator).  During CASE the evaluator creates basically one frame, which is reused.
+
+By contrast, if you look at the original code at the top of the post with the 3 blocks for the branches, the evaluator does much more work.  Each block as a branch sets up a new frame and iteration.  This is not to mention the storage--which is more optimal in Ren-C (which can pack single element blocks into a series node vs. needing a dynamic allocation in addition to the series node...because it uses the space that *would* be tracking information for a dynamic allocation to store the cell itself).  But even so, each series node is still the size of two cells...and you need the cell to refer to it...and you&#39;re taxing the GC a bit more and losing locality.
+
+## The Moral of the Story
+
+**I think the moral of the story is that soft-quoted branching should probably be here to stay.**  It&#39;s an unusual idea, and you don&#39;t have to use it if you don&#39;t feel like it.  The biggest backwards compatibility issue on general use is that if you want a branch to be generated from code--or a variable--you have to put it in a GROUP! or somesuch:
+
+     if condition (branch)  ; as opposed to `if condition branch`
+     if condition :branch  ; this should probably work too
+
+We *could* make it so that a single WORD! containing a BLOCK! were used, that it would accept it too.  I don&#39;t know how wise that is.  Certainly accepting an ACTION! would be weird:
+
+     code: [&quot;Hello&quot; print]
+     if condition reverse code
+
+If that were allowed, then you&#39;d get the equivalent of:
+
+    code: [&quot;Hello&quot; print]
+    (if condition :reverse) code
+
+e.g. if condition were truthy, it would call REVERSE on the condition...and then evaluate to code.  :-/  Anyway, I don&#39;t think having to put generated branches in a GROUP! is all that terrible--people are awfully used to putting ordinary branches in BLOCK!s...is it really so oppressive if the rarer case needs delimiters too?
+
+The enhancements to COMPOSE really make this work well, I think:
+
+     compose: [  ; Ren-C won&#39;t splice unless you say (( ))
+          ...
+          data: either condition &#39;(thing1) &#39;(thing2)
+          ...
+     ]
+
+If you were to try and do that in R3-Alpha, how would you even go about it?
+
+     compose/only/deep: [
+          ...
+          data: either condition [quote (thing1)] [quote (thing2)]
+          ...
+     ]
+
+Even in the time when EITHER/ONLY was supported, you couldn&#39;t mix and match...both branches would be evaluated or both would be literal.  Soft-quoting gives you all options:
+
+     &gt;&gt; either 1 &lt; 2 [print &quot;code!&quot;] &#39;[data]
+     code!
+
+     &gt;&gt; either 1 &gt; 2 [print &quot;code!] &#39;[data]
+     == [data]
+
+So...while I&#39;ve been looking at the concept with a critical eye during its inception period, I&#39;m about to take it for granted.  If anyone who doesn&#39;t like soft-quoted branching (who hasn&#39;t drank the [Red Groupthink Kool-Aid](https://forum.rebol.info/t/quoted-arrives-formerly-known-as-lit-bit/995/2?u=hostilefork) :roll_eyes:), they should speak up now.</description>
+    
+    <lastBuildDate>Mon, 30 Sep 2019 11:32:29 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/stylistic-questions-and-soft-quoted-branching/1220.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Stylistic Questions and Soft-Quoted Branching</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Here is a small implementation of SIGN-OF to look at:</p>
+<pre><code>sign-of: func [
+    "Returns sign of number as 1, 0, or -1 (to use as multiplier)."
+    number [any-number! money! time!]
+][
+    case [
+        positive? number [1]
+        negative? number [-1]
+        default [0]
+    ]
+]
+</code></pre>
+<p>You could do this with an ELSE if you wished (I've mentioned they are <em>nearly</em> the same, but not quite... a SWITCH/ALL will always run the default, but only run the ELSE if at least one branch runs):</p>
+<pre><code>case [
+    positive? number [1]
+    negative? number [-1]
+] else [0]
+</code></pre>
+<p>Moving in another direction: if we accept <a href="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020">soft-quoted branching</a> you could write the body as:</p>
+<pre><code>case [
+    positive? number '1
+    negative? number '-1
+    default '0
+]
+</code></pre>
+<p>It can get even briefer if you understand the premise of <a href="https://forum.rebol.info/t/the-fallout-from-the-switch-fallout-feature/312">fallout</a> (which is why <a href="https://forum.rebol.info/t/default-now-usable-in-case-switch/739">DEFAULT can work here at all</a>).  You can omit the default.</p>
+<pre><code>case [
+    positive? number '1
+    negative? number '-1
+    '0
+]
+</code></pre>
+<p>We're not really set up for performance analysis at this moment.  But if we talk about what ultimately will cost the least, that's the cheapest.  It's two series, one with 3 cells that will round up to a 4 cell pool (CASE, BLOCK!, terminator)...and one with 8 cells (WORD! WORD! QUOTED! WORD! WORD! QUOTED! QUOTED! terminator).  During CASE the evaluator creates basically one frame, which is reused.</p>
+<p>By contrast, if you look at the original code at the top of the post with the 3 blocks for the branches, the evaluator does much more work.  Each block as a branch sets up a new frame and iteration.  This is not to mention the storage--which is more optimal in Ren-C (which can pack single element blocks into a series node vs. needing a dynamic allocation in addition to the series node...because it uses the space that <em>would</em> be tracking information for a dynamic allocation to store the cell itself).  But even so, each series node is still the size of two cells...and you need the cell to refer to it...and you're taxing the GC a bit more and losing locality.</p>
+<h2>The Moral of the Story</h2>
+<p><strong>I think the moral of the story is that soft-quoted branching should probably be here to stay.</strong>  It's an unusual idea, and you don't have to use it if you don't feel like it.  The biggest backwards compatibility issue on general use is that if you want a branch to be generated from code--or a variable--you have to put it in a GROUP! or somesuch:</p>
+<pre><code> if condition (branch)  ; as opposed to `if condition branch`
+ if condition :branch  ; this should probably work too
+</code></pre>
+<p>We <em>could</em> make it so that a single WORD! containing a BLOCK! were used, that it would accept it too.  I don't know how wise that is.  Certainly accepting an ACTION! would be weird:</p>
+<pre><code> code: ["Hello" print]
+ if condition reverse code
+</code></pre>
+<p>If that were allowed, then you'd get the equivalent of:</p>
+<pre><code>code: ["Hello" print]
+(if condition :reverse) code
+</code></pre>
+<p>e.g. if condition were truthy, it would call REVERSE on the condition...and then evaluate to code.  :-/  Anyway, I don't think having to put generated branches in a GROUP! is all that terrible--people are awfully used to putting ordinary branches in BLOCK!s...is it really so oppressive if the rarer case needs delimiters too?</p>
+<p>The enhancements to COMPOSE really make this work well, I think:</p>
+<pre><code> compose: [  ; Ren-C won't splice unless you say (( ))
+      ...
+      data: either condition '(thing1) '(thing2)
+      ...
+ ]
+</code></pre>
+<p>If you were to try and do that in R3-Alpha, how would you even go about it?</p>
+<pre><code> compose/only/deep: [
+      ...
+      data: either condition [quote (thing1)] [quote (thing2)]
+      ...
+ ]
+</code></pre>
+<p>Even in the time when EITHER/ONLY was supported, you couldn't mix and match...both branches would be evaluated or both would be literal.  Soft-quoting gives you all options:</p>
+<pre><code> &gt;&gt; either 1 &lt; 2 [print "code!"] '[data]
+ code!
+
+ &gt;&gt; either 1 &gt; 2 [print "code!] '[data]
+ == [data]
+</code></pre>
+<p>So...while I've been looking at the concept with a critical eye during its inception period, I'm about to take it for granted.  If anyone who doesn't like soft-quoted branching (who hasn't drank the <a href="https://forum.rebol.info/t/quoted-arrives-formerly-known-as-lit-bit/995/2">Red Groupthink Kool-Aid</a> <img src="https://forum.rebol.info/images/emoji/twitter/roll_eyes.png?v=9" title=":roll_eyes:" class="emoji" alt=":roll_eyes:">), they should speak up now.</p>
+          <p><a href="https://forum.rebol.info/t/stylistic-questions-and-soft-quoted-branching/1220/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/stylistic-questions-and-soft-quoted-branching/1220/1</link>
+        <pubDate>Mon, 30 Sep 2019 11:32:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1220-1</guid>
+        <source url="https://forum.rebol.info/t/stylistic-questions-and-soft-quoted-branching/1220.rss">Stylistic Questions and Soft-Quoted Branching</source>
+      </item>
+  </channel>
+</rss>

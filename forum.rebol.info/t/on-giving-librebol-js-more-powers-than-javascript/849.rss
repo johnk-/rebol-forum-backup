@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>On Giving libRebol JS more powers than JavaScript</title>
+    <link>https://forum.rebol.info/t/on-giving-librebol-js-more-powers-than-javascript/849</link>
+    <description>It seems modest to imagine adding a function to a browser&#39;s JavaScript, which looped through two strings, printed both, and gave you back the second to display in a browser `&lt;div&gt;`:
+
+    var second = rebSpell(
+        &quot;loop 2 [data: ask text! | print [{You typed:} data]] data&quot;
+    )
+    console.log(&quot;Second string entered was&quot; + second)
+
+*(Let&#39;s say the place it&#39;s carrying out the input and printing communication is in some kind of textedit-like control, and that is implicit.)*
+
+What could be simpler than that?!
+
+## Web browsers aren&#39;t designed to work this way :-(
+
+Nothing about *&quot;JavaScript-the-language&quot;* particularly prohibits it from doing things synchronously.  You find various synchronous APIs here and there... `console.log()` will write synchronously to the console, and `alert()` famously (and irritatingly) gives you a modal popup that will freeze everything until it&#39;s dismissed.  Historically, you could even ask that an `XMLHttpRequest` be synchronous (a feature [now disabled on the main thread](https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest/Synchronous_and_Asynchronous_Requests#Synchronous_request) and thus restricted to web workers).
+
+So it isn&#39;t JavaScript with the limit--any more than C or anything else.  It&#39;s the browser.  While a JavaScript function is running on the main thread, the painting and mouse events and who-knows-what-else won&#39;t happen.
+
+This isn&#39;t particularly new in the GUI app world...but it is particularly strict.  Even Windows offered things like [PeekMessage()](https://msdn.microsoft.com/en-us/library/ms910649.aspx) to let you sneakily look through and process mouse messages without giving up control.
+
+The tightening grip of the browser makers is speaking loud and clear:
+* **there are some things only the GUI thread will ever be able to do**
+* **none of those things will be synchronous on the GUI thread--you can ask for work to be done, but will always be called back later with any result**
+
+## So the code above is actually impossible?
+
+Well, it&#39;s *almost* impossible.  If you use [Window.prompt()](https://developer.mozilla.org/en-US/docs/Web/API/Window/prompt) you can get input in an alert-box style modal dialog.  And if you use `console.log` or `Window.alert()` for PRINT, it could &quot;work&quot;...but no one wants that.
+
+Note what the &quot;impossible&quot; part of it is--the expectation that it runs and can output the result synchronously.  If you were willing to instead write something like:
+
+    rebSpellCallback(
+        &quot;loop 2 [data: ask text! | print [{You typed:} data]] data&quot;,
+        function (second) {
+            console.log(&quot;Second string entered was&quot; + second)
+        }
+    )
+    // any residual code here happens *before* the console.log output
+        
+Then that could be made to work.  And since JavaScript programmers noticed over time that their language was a callback-reductio-ad-absurdum, they tried to address it with something called ASYNC/AWAIT:
+
+    async function whatever() {
+       var second = await rebSpellPromise(
+            &quot;loop 2 [data: ask text! | print [{You typed:} data]] data&quot;
+       )
+       console.log(&quot;Second string entered was&quot; + second)
+       // any residual code here happens *after* the console.log output
+    }
+
+In most ways this is just a syntax trick for the previous code pattern, so you don&#39;t have to write a cascading line of callbacks for every step in a sequence.
+
+It looks good.  *BUT* since it has to do some amount of &quot;unwinding&quot; to achieve its illusion, it has the unappealing property that if you ever call an async function from one that is *not* marked async (or if you leave off the AWAIT), the illusion is broken.  You will just get a return object that&#39;s a &quot;promise&quot;...and the code after the promise will run before the consequences you were &quot;awaiting&quot; happen...just as if you&#39;d had it trailing outside the place where you passed a callback function.
+
+## Wouldn&#39;t JS programmers just *accept* rebPromise()?
+
+For larger operations, they probably wouldn&#39;t blink.  They&#39;d presumably be upset if JavaScript&#39;s addition required a callback to get the sum.  But I can&#39;t honestly I say I know where their line is...and wouldn&#39;t be shocked if there was a BigNum library where they said the reason you had to wait for a callback for the sum was that it could be a potentially long operation and they didn&#39;t want to block the GUI, so it was dispatching it to a worker and would call you back when done.  (?)
+
+As an integral part of its variadic design, libRebol doesn&#39;t actually have any dedicated &quot;small&quot; operations.  There&#39;s no separate atomic &quot;give me the spelling of this REBVAL that is known to be an ANY-STRING!, and do only that&quot;, you can always throw in extra code.  Even just asking to PROBE a string before returning its spelling would count, so long as its based on a DOM-manipulating PRINT:
+
+     var sync_possible = rebSpell(some_str)
+     console.log(&quot;spelling is: &quot; + sync_possible);
+
+     var sync_impossible = rebSpell(&quot;probe&quot;, some_str)
+     // wouldn&#39;t be guaranteed that print was done by this line
+     // if probe is based on synchronous-seeming print, sequencing lost
+
+What I&#39;ve thought of as a compromise would be to add rebPromise(), but still offer all the other APIs.  Then have the other APIs trigger a failure if at runtime they discover they require synchronous operations...and point you to use rebPromise.  If you&#39;re using async functions you&#39;d say:
+
+    var value = await rebPromise(&quot;probe&quot;, str);
+    var sync_illusion = rebSpell(value);
+    rebRelease(value);
+
+Simplifyable to:
+
+    var sync_illusion = rebSpell(rebR(await rebPromise(&quot;probe&quot;, str)));
+
+While you can&#39;t abstract away the AWAIT (it&#39;s part of the language) I think we could probably get a pre-released promise result with a new API &quot;instruction&quot;:
+
+    var sync_illusion = rebSpell(await rebP(&quot;probe&quot;, str));
+
+So if you&#39;re using modern JavaScript and async functions, you could probably just inject `await rebP( )` into the existing API set of operations, if it turned out what you were doing required it.
+
+&gt; I&#39;ll quickly point out that if it seems having to do results with callbacks seems onerous, that the more modern an API in JavaScript is, the more of them they have.  If you look at something like the fetch() API, not only do they have to &quot;wait on&quot; the server to return a response, the response itself then breaks down into more pieces you have to wait on!  From [a fetch example](https://mdn.github.io/fetch-examples/fetch-array-buffer/)
+&gt;
+&gt;     fetch(&#39;viper.ogg&#39;)
+&gt;       .then(function(response) { return response.arrayBuffer(); })
+&gt;       .then(function(buffer) {
+&gt;         audioCtx.decodeAudioData(buffer, function(decodedData) {
+&gt;           source.buffer = decodedData;
+&gt;           source.connect(audioCtx.destination);
+&gt;         });
+&gt;       });
+&gt;     };
+
+## But not all cases are pathological
+
+Another angle to look at this is that trying to write an interactive REPL for a language running a synchronous script is actually a really hard example, and may make me worry more than I should.
+
+A lot of projects would probably be fine having their PROBE and DUMP operations output to `console.log`, and not need synchronous interaction with some control that&#39;s part of the DOM.  Many interactions with the DOM are fire-and-forget...expected to just update when they update...a small snippet of code runs, and there&#39;s no requirement that the updates be completed before anything else happens.
+
+There may be a number of cases where someone might want to use Rebol as part of their web app and never expect it to do any I/O at all.  I don&#39;t really know.  It&#39;s all very speculative at the moment!</description>
+    
+    <lastBuildDate>Wed, 24 Oct 2018 03:44:09 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/on-giving-librebol-js-more-powers-than-javascript/849.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>On Giving libRebol JS more powers than JavaScript</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It seems modest to imagine adding a function to a browser's JavaScript, which looped through two strings, printed both, and gave you back the second to display in a browser <code>&lt;div&gt;</code>:</p>
+<pre><code>var second = rebSpell(
+    "loop 2 [data: ask text! | print [{You typed:} data]] data"
+)
+console.log("Second string entered was" + second)
+</code></pre>
+<p><em>(Let's say the place it's carrying out the input and printing communication is in some kind of textedit-like control, and that is implicit.)</em></p>
+<p>What could be simpler than that?!</p>
+<h2>Web browsers aren't designed to work this way <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">
+</h2>
+<p>Nothing about <em>"JavaScript-the-language"</em> particularly prohibits it from doing things synchronously.  You find various synchronous APIs here and there... <code>console.log()</code> will write synchronously to the console, and <code>alert()</code> famously (and irritatingly) gives you a modal popup that will freeze everything until it's dismissed.  Historically, you could even ask that an <code>XMLHttpRequest</code> be synchronous (a feature <a href="https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest/Synchronous_and_Asynchronous_Requests#Synchronous_request" rel="nofollow noopener">now disabled on the main thread</a> and thus restricted to web workers).</p>
+<p>So it isn't JavaScript with the limit--any more than C or anything else.  It's the browser.  While a JavaScript function is running on the main thread, the painting and mouse events and who-knows-what-else won't happen.</p>
+<p>This isn't particularly new in the GUI app world...but it is particularly strict.  Even Windows offered things like <a href="https://msdn.microsoft.com/en-us/library/ms910649.aspx" rel="nofollow noopener">PeekMessage()</a> to let you sneakily look through and process mouse messages without giving up control.</p>
+<p>The tightening grip of the browser makers is speaking loud and clear:</p>
+<ul>
+<li><strong>there are some things only the GUI thread will ever be able to do</strong></li>
+<li><strong>none of those things will be synchronous on the GUI thread--you can ask for work to be done, but will always be called back later with any result</strong></li>
+</ul>
+<h2>So the code above is actually impossible?</h2>
+<p>Well, it's <em>almost</em> impossible.  If you use <a href="https://developer.mozilla.org/en-US/docs/Web/API/Window/prompt" rel="nofollow noopener">Window.prompt()</a> you can get input in an alert-box style modal dialog.  And if you use <code>console.log</code> or <code>Window.alert()</code> for PRINT, it could "work"...but no one wants that.</p>
+<p>Note what the "impossible" part of it is--the expectation that it runs and can output the result synchronously.  If you were willing to instead write something like:</p>
+<pre><code>rebSpellCallback(
+    "loop 2 [data: ask text! | print [{You typed:} data]] data",
+    function (second) {
+        console.log("Second string entered was" + second)
+    }
+)
+// any residual code here happens *before* the console.log output
+</code></pre>
+<p>Then that could be made to work.  And since JavaScript programmers noticed over time that their language was a callback-reductio-ad-absurdum, they tried to address it with something called ASYNC/AWAIT:</p>
+<pre><code>async function whatever() {
+   var second = await rebSpellPromise(
+        "loop 2 [data: ask text! | print [{You typed:} data]] data"
+   )
+   console.log("Second string entered was" + second)
+   // any residual code here happens *after* the console.log output
+}
+</code></pre>
+<p>In most ways this is just a syntax trick for the previous code pattern, so you don't have to write a cascading line of callbacks for every step in a sequence.</p>
+<p>It looks good.  <em>BUT</em> since it has to do some amount of "unwinding" to achieve its illusion, it has the unappealing property that if you ever call an async function from one that is <em>not</em> marked async (or if you leave off the AWAIT), the illusion is broken.  You will just get a return object that's a "promise"...and the code after the promise will run before the consequences you were "awaiting" happen...just as if you'd had it trailing outside the place where you passed a callback function.</p>
+<h2>Wouldn't JS programmers just <em>accept</em> rebPromise()?</h2>
+<p>For larger operations, they probably wouldn't blink.  They'd presumably be upset if JavaScript's addition required a callback to get the sum.  But I can't honestly I say I know where their line is...and wouldn't be shocked if there was a BigNum library where they said the reason you had to wait for a callback for the sum was that it could be a potentially long operation and they didn't want to block the GUI, so it was dispatching it to a worker and would call you back when done.  (?)</p>
+<p>As an integral part of its variadic design, libRebol doesn't actually have any dedicated "small" operations.  There's no separate atomic "give me the spelling of this REBVAL that is known to be an ANY-STRING!, and do only that", you can always throw in extra code.  Even just asking to PROBE a string before returning its spelling would count, so long as its based on a DOM-manipulating PRINT:</p>
+<pre><code> var sync_possible = rebSpell(some_str)
+ console.log("spelling is: " + sync_possible);
+
+ var sync_impossible = rebSpell("probe", some_str)
+ // wouldn't be guaranteed that print was done by this line
+ // if probe is based on synchronous-seeming print, sequencing lost
+</code></pre>
+<p>What I've thought of as a compromise would be to add rebPromise(), but still offer all the other APIs.  Then have the other APIs trigger a failure if at runtime they discover they require synchronous operations...and point you to use rebPromise.  If you're using async functions you'd say:</p>
+<pre><code>var value = await rebPromise("probe", str);
+var sync_illusion = rebSpell(value);
+rebRelease(value);
+</code></pre>
+<p>Simplifyable to:</p>
+<pre><code>var sync_illusion = rebSpell(rebR(await rebPromise("probe", str)));
+</code></pre>
+<p>While you can't abstract away the AWAIT (it's part of the language) I think we could probably get a pre-released promise result with a new API "instruction":</p>
+<pre><code>var sync_illusion = rebSpell(await rebP("probe", str));
+</code></pre>
+<p>So if you're using modern JavaScript and async functions, you could probably just inject <code>await rebP( )</code> into the existing API set of operations, if it turned out what you were doing required it.</p>
+<blockquote>
+<p>I'll quickly point out that if it seems having to do results with callbacks seems onerous, that the more modern an API in JavaScript is, the more of them they have.  If you look at something like the fetch() API, not only do they have to "wait on" the server to return a response, the response itself then breaks down into more pieces you have to wait on!  From <a href="https://mdn.github.io/fetch-examples/fetch-array-buffer/" rel="nofollow noopener">a fetch example</a></p>
+<pre><code>fetch('viper.ogg')
+  .then(function(response) { return response.arrayBuffer(); })
+  .then(function(buffer) {
+    audioCtx.decodeAudioData(buffer, function(decodedData) {
+      source.buffer = decodedData;
+      source.connect(audioCtx.destination);
+    });
+  });
+};
+</code></pre>
+</blockquote>
+<h2>But not all cases are pathological</h2>
+<p>Another angle to look at this is that trying to write an interactive REPL for a language running a synchronous script is actually a really hard example, and may make me worry more than I should.</p>
+<p>A lot of projects would probably be fine having their PROBE and DUMP operations output to <code>console.log</code>, and not need synchronous interaction with some control that's part of the DOM.  Many interactions with the DOM are fire-and-forget...expected to just update when they update...a small snippet of code runs, and there's no requirement that the updates be completed before anything else happens.</p>
+<p>There may be a number of cases where someone might want to use Rebol as part of their web app and never expect it to do any I/O at all.  I don't really know.  It's all very speculative at the moment!</p>
+          <p><a href="https://forum.rebol.info/t/on-giving-librebol-js-more-powers-than-javascript/849/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/on-giving-librebol-js-more-powers-than-javascript/849/1</link>
+        <pubDate>Wed, 10 Oct 2018 01:04:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-849-1</guid>
+        <source url="https://forum.rebol.info/t/on-giving-librebol-js-more-powers-than-javascript/849.rss">On Giving libRebol JS more powers than JavaScript</source>
+      </item>
+  </channel>
+</rss>

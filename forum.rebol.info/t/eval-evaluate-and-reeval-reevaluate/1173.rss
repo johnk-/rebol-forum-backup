@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>EVAL + EVALUATE and REEVAL + REEVALUATE</title>
+    <link>https://forum.rebol.info/t/eval-evaluate-and-reeval-reevaluate/1173</link>
+    <description>Internally to the Ren-C code, the term &quot;Eval_Xxx()&quot; has come to imply *one step* of evaluation, while &quot;Do_Xxx&quot; will take in something like a block and always execute it to the end.  Hence a DO is a sequence of N &quot;steps&quot; of EVAL.
+
+I mentioned in [&quot;Re-imagining DO/NEXT&quot;](https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767) why changing the interface was needed, so that DO/NEXT became a new routine called EVALUATE:
+
+     &gt;&gt; var: null
+
+     &gt;&gt; block: [1 + 2 10 + 20]
+
+     &gt;&gt; block: evaluate/set block &#39;var
+     == [10 + 20]
+
+     &gt;&gt; var
+     == 3
+
+     &gt;&gt; block: evaluate/result block &#39;var
+     == []  ; Notice it did not go directly to `null` when there was a result
+
+     &gt;&gt; var
+     == 30
+
+     &gt;&gt; block: evaluate/result block &#39;var
+     ; null  ; null is only signaled when the evaluation had no result
+
+     &gt;&gt; var
+     == 30  ; ... in which case the variable you passed in is undisturbed
+
+It has a subtle behavior of leaving a lingering &quot;empty&quot; step before returning null and leaving the variable as-is.  *This turns out to be foundational*.  It allows invisibles to remain pending and not run &quot;too soon&quot; (imagine if the last step was actually **[comment &quot;hi&quot;]** and not **[]**, e.g. not being at the end of the block isn&#39;t the only way you can wind up in a situation where there&#39;s not going to be a value coming from the next evaluation...so the steps need to be consistent).
+
+For this to work, it really does require you to pass a variable in.  Even if there was a clean implementation of multiple return values, you don&#39;t want to overwrite a previous result on a last potentially-vaporizing step.  (The mechanics of how this is done *inside* the evaluator are actually rather slick, but beyond the scope of this post.  Userspace you have to do it by passing in a variable that is potentially left as-is.)
+
+## Naming Collision: EVAL
+
+When EVALUATE came on the scene, there was already a native called EVAL which did something useful...also, exactly one step:
+
+     &gt;&gt; x: null
+
+     &gt;&gt; eval (lit x:) 1 + 2
+     == 3
+
+     &gt;&gt; x
+     == 3
+
+Hence this EVAL is a very tricky variadic that takes a first normal (hence evaluated) argument, and then *re-evaluates* it as if the expression had been there all along.  You&#39;d have quite a hard time writing such a thing yourself (!) but what it does is use some slippery code to re-feed the evaluator with a previous output cell.
+
+However, I&#39;m not very comfortable with having **eval** be anything other than a shorter name for **evaluate**.  So what if we made those two synonyms, and called this one **reevaluate** with the shorthand **reeval**?
+
+I think that cleans up some confusion, and would bring the userspace terminology more in sync with the C implementation.</description>
+    
+    <lastBuildDate>Sun, 27 Sep 2020 15:28:33 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/eval-evaluate-and-reeval-reevaluate/1173.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>EVAL + EVALUATE and REEVAL + REEVALUATE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1173">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>It has a subtle behavior of leaving a lingering "empty" step before returning null and leaving the variable as-is. <em>This turns out to be foundational</em> . It allows invisibles to remain pending and not run "too soon" (imagine if the last step was actually <strong>[comment "hi"]</strong> and not <strong>[]</strong> , e.g. not being at the end of the block isn't the only way you can wind up in a situation where there's not going to be a value coming from the next evaluation...so the steps need to be consistent).</p>
+<p>For this to work, it really does require you to pass a variable in. Even if there was a clean implementation of multiple return values, you don't want to overwrite a previous result on a last potentially-vaporizing step.</p>
+</blockquote>
+</aside>
+<p>This situation has been giving me a headache.  The problem is:</p>
+<ul>
+<li>
+<p>There is by definition <em>no single return result value</em> that can indicate an invisible evaluation occurred.  ANY-VALUE! is a legal evaluative product, and since it is an evaluation <em>NULL is also a legal evaluative product</em>.  This means we can't use the "null means nothing" trick that applies many other places.</p>
+</li>
+<li>
+<p>If EVALUATE processes invisibles and throws away their results at the <em>tail</em> of evaluations, it may run them <em>too soon</em>.  Consider a branch like <strong>case [true [print "True"] elide print "Elided"]</strong>, you don't want to see the output of the elided.  Hence you cannot merge invisible evaluations with the left side...they have to wait.</p>
+</li>
+<li>
+<p>If EVALUATE processes invisibles and throws away their results at the <em>head</em> of evaluations, it may run them <em>too late</em>.  Consider a currently topical case of <strong>print ["a" _ comment "hi" _ "b"]</strong> wanting to treat literal blank! as a space, but evaluative blank! as nulls.  The first blank can be recognized literally, but then if the comment "hi" runs and pulls in the ensuing _ with it automatically, then the second blank will seem evaluative when it was meant literally.</p>
+</li>
+</ul>
+<p>This doesn't need to be a problem inside of the evaluator.  Discerning the situations isn't a problem, because there's a cell bit (CELL_FLAG_MARKED_STALE) to track when output cells are tainted by invisibility.  The clever optimization is that they're never actually overwritten...it's a nifty stunt.</p>
+<p>But exposing this bit to usermode would seem to need a third variable to the output of EVALUATE <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<pre><code>block: ["a" _ comment "hi" _ "b"]
+
+&gt;&gt; [block value was-invisible]: evaluate block
+== [_ comment "hi" _ "b"]
+&gt;&gt; value
+== "a"
+&gt;&gt; was-invisible
+== #[false]
+
+&gt;&gt; [block value was-invisible]: evaluate block
+== [comment "hi" _ "b"]
+&gt;&gt; value
+== _
+&gt;&gt; was-invisible
+== #[false]
+
+&gt;&gt; [block value was-invisible]: evaluate block
+== [_ "b"]  ; now we get a chance to see _ literally
+&gt;&gt; value
+== #[void]  ; or null ...?  Void catches if you don't check `was-invisible`
+&gt;&gt; was-invisible
+== #[true]
+</code></pre>
+<p>That's starting to feel super wordy and all the conditionals of handling starts looking like a mess.  <img src="https://forum.rebol.info/images/emoji/twitter/books.png?v=9" title=":books:" class="emoji" alt=":books:">  But from a technical standpoint, it would would give enough information to clients so they could successfully navigate invisible evaluations in their dialect...if they wanted to support it.  (If they didn't process the was-invisible status, they'd likely error on the VOID!)</p>
+<p>Is there better?  I think so...</p>
+<h2>What if a Quoted Return Position Signaled Invisible Values?</h2>
+<p>Quoting is a cheap place to put a bit, that also fiddles the datatype in a checkable way.  So let's look at the impact:</p>
+<pre><code>block: ["a" _ comment "hi" _ "b"]
+
+&gt;&gt; [block value]: evaluate block
+== [_ comment "hi" _ "b"]  ; not quoted, result is visible
+&gt;&gt; value
+== "a"
+
+&gt;&gt; [block value]: evaluate block
+== [comment "hi" _ "b"]  ; not quoted, result is visible
+&gt;&gt; value
+== _
+
+&gt;&gt; [block value]: evaluate block
+== '[_ "b"]  ; a-ha, quoted so the void result is actually invisible...
+&gt;&gt; value
+== #[void]  ; all invisibles are voids, but not all voids are invisible
+</code></pre>
+<p>What's neat about this is that you have a condition you can test to decide if you want to discard a result that comes back on the main return result:</p>
+<pre><code> ; This is how your dialect can just skip over invisibles
+ until [not quoted? [block value]: evaluate block]
+</code></pre>
+<p>That won't be right for every application--for instance the PRINT case I'm talking about that wants to discern evaluated BLANK! from not evaluated blank.  That requires being able to say "okay, the last step was invisible so ignore it, but look ahead at what we've got in front of us literally".</p>
+<p>So that's a solution to what I used to call the "SYNC-INVISIBLES problem".  A dialect author who wants to mesh evaluation with their own secret keywords or processing needs to know what the evaluator knows, and I think this is nailing it down.</p>
+          <p><a href="https://forum.rebol.info/t/eval-evaluate-and-reeval-reevaluate/1173/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/eval-evaluate-and-reeval-reevaluate/1173/4</link>
+        <pubDate>Sun, 27 Sep 2020 15:28:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1173-4</guid>
+        <source url="https://forum.rebol.info/t/eval-evaluate-and-reeval-reevaluate/1173.rss">EVAL + EVALUATE and REEVAL + REEVALUATE</source>
+      </item>
+      <item>
+        <title>EVAL + EVALUATE and REEVAL + REEVALUATE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Internally to the Ren-C code, the term "Eval_Xxx()" has come to imply <em>one step</em> of evaluation, while "Do_Xxx" will take in something like a block and always execute it to the end.  Hence a DO is a sequence of N "steps" of EVAL.</p>
+<p>I mentioned in <a href="https://forum.rebol.info/t/re-imagining-do-next-now-called-evaluate/767">"Re-imagining DO/NEXT"</a> why changing the interface was needed, so that DO/NEXT became a new routine called EVALUATE:</p>
+<pre><code> &gt;&gt; var: null
+
+ &gt;&gt; block: [1 + 2 10 + 20]
+
+ &gt;&gt; block: evaluate/set block 'var
+ == [10 + 20]
+
+ &gt;&gt; var
+ == 3
+
+ &gt;&gt; block: evaluate/result block 'var
+ == []  ; Notice it did not go directly to `null` when there was a result
+
+ &gt;&gt; var
+ == 30
+
+ &gt;&gt; block: evaluate/result block 'var
+ ; null  ; null is only signaled when the evaluation had no result
+
+ &gt;&gt; var
+ == 30  ; ... in which case the variable you passed in is undisturbed
+</code></pre>
+<p>It has a subtle behavior of leaving a lingering "empty" step before returning null and leaving the variable as-is.  <em>This turns out to be foundational</em>.  It allows invisibles to remain pending and not run "too soon" (imagine if the last step was actually <strong>[comment "hi"]</strong> and not <strong>[]</strong>, e.g. not being at the end of the block isn't the only way you can wind up in a situation where there's not going to be a value coming from the next evaluation...so the steps need to be consistent).</p>
+<p>For this to work, it really does require you to pass a variable in.  Even if there was a clean implementation of multiple return values, you don't want to overwrite a previous result on a last potentially-vaporizing step.  (The mechanics of how this is done <em>inside</em> the evaluator are actually rather slick, but beyond the scope of this post.  Userspace you have to do it by passing in a variable that is potentially left as-is.)</p>
+<h2>Naming Collision: EVAL</h2>
+<p>When EVALUATE came on the scene, there was already a native called EVAL which did something useful...also, exactly one step:</p>
+<pre><code> &gt;&gt; x: null
+
+ &gt;&gt; eval (lit x:) 1 + 2
+ == 3
+
+ &gt;&gt; x
+ == 3
+</code></pre>
+<p>Hence this EVAL is a very tricky variadic that takes a first normal (hence evaluated) argument, and then <em>re-evaluates</em> it as if the expression had been there all along.  You'd have quite a hard time writing such a thing yourself (!) but what it does is use some slippery code to re-feed the evaluator with a previous output cell.</p>
+<p>However, I'm not very comfortable with having <strong>eval</strong> be anything other than a shorter name for <strong>evaluate</strong>.  So what if we made those two synonyms, and called this one <strong>reevaluate</strong> with the shorthand <strong>reeval</strong>?</p>
+<p>I think that cleans up some confusion, and would bring the userspace terminology more in sync with the C implementation.</p>
+          <p><a href="https://forum.rebol.info/t/eval-evaluate-and-reeval-reevaluate/1173/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/eval-evaluate-and-reeval-reevaluate/1173/1</link>
+        <pubDate>Tue, 04 Jun 2019 16:41:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1173-1</guid>
+        <source url="https://forum.rebol.info/t/eval-evaluate-and-reeval-reevaluate/1173.rss">EVAL + EVALUATE and REEVAL + REEVALUATE</source>
+      </item>
+  </channel>
+</rss>

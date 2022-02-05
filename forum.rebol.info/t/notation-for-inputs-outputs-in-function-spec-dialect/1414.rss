@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Notation for (Inputs/)Outputs in Function Spec Dialect</title>
+    <link>https://forum.rebol.info/t/notation-for-inputs-outputs-in-function-spec-dialect/1414</link>
+    <description>The first cut at multiple return values made a multi-return output look like:
+
+     func [/foo [&lt;output&gt; integer!]] [...]
+
+Which was expedient to try it out.  **But dialect-wise, I think a SET-WORD! makes more sense:**
+
+     func [foo: [integer!]] [...]
+
+This would take away SET-WORD! as a way of denoting locals in the frame.  This was to make it easier for higher-level generators to stick values in the frame without having to search for a `&lt;local&gt;` annotation and inject at the right place.  Programmatic code generating frames could stick locals anywhere they wanted in the parameter sequence, which was helpful.
+
+If we&#39;re thinking that&#39;s still a useful idea, then **func [a b: c] [...]** could be rethought e.g. as **func [a .b c] [...]**.
+
+&gt; I will point out that while this sounds convenient, any higher level generator that just splices words into specs like this can run into problems of name reuse...since locals cannot clash with parameters.
+
+## But What About The Deviant RETURN: ?
+
+The only &quot;local&quot; most users noticed in specs was RETURN:.   Strangely enough, yes, it was a frame local variable...that held the definitional RETURN function.
+
+It&#39;s a bit confusing to have RETURN: work different than other things specified by SET-WORD!.  This could be avoided by using a different convention, e.g. **`&lt;return&gt; [integer!]`** to stress the difference.
+
+Or we could just say that it&#39;s &quot;one of those things&quot; and learnable, that the act of naming a return value &quot;RETURN:&quot; implies it&#39;s the main return...and gets special conventions and handling.
+
+
+## Why Aren&#39;t Returns Written Directly To Frame Slots?
+
+Something that may seem confusing about return values is that you don&#39;t assign them with SET-WORD!s, you assign them with SET.
+
+     foo: func [return: &lt;void&gt;, multi: [integer!]] [
+         multi: 10  ; **wrong** (should be an error, assigning read-only cell)
+         set multi 10  ; **wrong** (multi is NULL if caller didn&#39;t want it)
+         if multi [cheat: get multi]  ; **wrong** (variables voided prior to call)
+         if multi [set multi 10]  ; CORRECT: detect desire for output
+     ]
+
+(Note that you can&#39;t GET a multi-return input variable, because the variables are voided prior to the call. This avoids the possibility of &quot;outputs&quot; acting as inputs.)
+
+I&#39;ve made the point that this allows us to tie in the request for an output with a difference in semantics for the function... where using `#` is a way of asking for the semantics without also needing to give a variable to store the result in.
+
+This design makes even more sense when you consider that they are made to be compatible with the passing of words that you can do historically.  *Without this, there&#39;d have to be some kind of parallel-universe of interacting with them in things like APPLY.*
+
+    apply :foo [/multi &#39;var]  ; what would the syntax be otherwise?
+
+Really...as weird as all this is, it&#39;s at the same time familiar.
+
+We could imagine a different setup which tried to let you just do **multi: 10** directly, and then when the operation was over would proxy that value into the target variable.  And it could use some similar rules about how when the frame started, it could be either NULL if it wasn&#39;t wanted or `#` if it was wanted.  But that seems a lot more error-prone.  And the variable exists anyway to make the request...so why not go ahead and set it where it is, instead of going through a middleman anyway?
+
+## What To Do About Input/Output Name Collisions?
+
+To **[bring an end to voidification](https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/2?u=hostilefork)**, I need a channel of communication set up between branching constructs and subsequent enfix operators...so they know if the branch was taken or not.
+
+I&#39;ve rigged up something very hacky, but good enough to get me to the next big question: **what happens when the subsequent enfix operation is treated as a branching operation itself**.
+
+Could a parameter be converted into an &quot;in-out&quot; form?  **/branched:** perhaps?  :thinking:
+
+     else: enfixed func [
+         return: [&lt;opt&gt; any-value!]
+         /branched: [logic!]  ; hypothetical syntax
+         value [&lt;opt&gt; any-value!]
+     ][
+         ...
+     ]
+
+But this is a bit of a can of worms.  You could have a situation where branched wasn&#39;t passed as an input -nor- requested as an output...where it was only one of the two...or where it was both.  How are these states conveyed, and how do you react to them?
+
+It&#39;s difficult not to think that this kind of parameter would best be handled as being set to the value on input (or NULL if no input), and then whatever value it holds at the end of the frame is its final result.  That&#39;s either proxied to an output variable if requested, or not if it isn&#39;t.  *But now you&#39;ve lost the ability to tell if the output was requested or not...because that NULL state is taken for no input provided.*
+
+Could it be that there are two frame variables tied together, with the left giving the canon name for both the input and the output parameter, and the right as an internal alias for the output parameter?
+
+     else: enfixed func [
+         return: [&lt;opt&gt; any-value!]
+         /branched.branched-out: [logic!]  ; hypothetical syntax
+         value [&lt;opt&gt; any-value!]
+     ][
+         ...
+     ]
+
+This overlaps a bit with something I&#39;ve spoken about, which are cases where you&#39;d rather the name you use on the interface be distinct from the name you use for something inside the frame.  Like if you named a refinement /ALL but you plan on using ALL [...] in your code, it would be nice to havae a notation to say you wanted a different name:
+
+[&quot;Different Internal Names For Parameters In Function Spec&quot;](https://forum.rebol.info/t/different-internal-names-for-parameters-in-function-spec/1335)
+
+So one might think it could be solved in that way; you&#39;d rename one (or both) of the /BRANCHEDs out of the way
+
+     else: enfixed func [
+         return: [&lt;opt&gt; any-value!]
+         branched.branched-out: [logic!]  ; want output renamed
+         value [&lt;opt&gt; any-value!]
+         /branched [logic!]  ; just use same name for input
+     ][
+         ...
+     ]
+
+Seems nice, but this problem is fundamentally different.  Because a function like APPLY still has two possibilities for what /BRANCHED is fulfilling.  Our problem isn&#39;t just with internal naming, it&#39;s at the level of the interface itself not being able to call an input and an output the same thing.
+
+Although... APPLY could have syntax for that.  :frowning:
+
+     apply :foo [
+         /branched true  ; input form, no colon
+         /branched: &#39;var  ; output form, colon
+     ]
+
+That feels like it sucks and it&#39;s making things feel more painful than they already are.  And while it might work for APPLY, there&#39;s no such syntax for calling in a normal path invocation.
+
+## So The Names Have To Be Distinguished On The Interface?
+
+If the input and output aren&#39;t somehow fused into one argument, then yes.  Distinct frame slots would need different names:
+
+     else: enfixed func [
+         return: [&lt;opt&gt; any-value!]
+         branched-out: [logic!]
+         value [&lt;opt&gt; any-value!]
+         /branched-in [logic!]
+     ][
+         ...
+     ]
+
+But that just gives the question of what would motivate the evaluator to automatically tie together an input to an output with a distinct name.
+
+**Sigh.**
+
+Maybe there&#39;s a positional thing that could be done with it, the way modal parameters do it.  If you mark a parameter in a certain way, it will assume a relationship to an adjacent declaration
+
+     else: enfixed func [
+         return: [&lt;opt&gt; any-value!]
+         /branched: [logic!]  ; or some syntax marking &quot;output has input too&quot;
+         /branched-in [logic!]  ; since it follows a `/x:`, assumed linked
+         value [&lt;opt&gt; any-value!]
+     ][
+         ...
+     ]
+
+## That&#39;s About The Best I&#39;ve Got
+
+I&#39;ve satisfied myself that the input and the output should not wind up stuffed into the same frame slot.  The input should be a normal refinement, and have either its value or NULL.  The output should be through a level of a WORD! indirection (or NULL if not requested).
+
+I think I&#39;ve made a pretty good case that since both slots appear on the public interface, it&#39;s not a good idea for them to have the same name.  You wouldn&#39;t be able to address them individually.
+
+**Most constructs will not have to worry about this.**
+
+It&#39;s a very rare category of function that would have to use this technique.  Take note that things like FIND and SELECT are designed to work within the framework where NULL is not a &quot;meaningful value&quot;...all they need to do is return NULL and they interoperate with ELSE.
+
+If you write a normal non-enfix control structure, all you need to do is have a normal `branched:` output that you set in a straightforward way.
+
+It&#39;s only enfix tools that are branching structures in their own right that have to pay this complexity tax.  But what we&#39;re saying is that it&#39;s better for them to pay it, so that we aren&#39;t having to contort every IF or CASE or SWITCH statement just to appease them.  It&#39;s localizing the concern into the place where the complexity belongs, vs making the whole rest of the system pay for it just so ELSE and THEN can be expressed simply.</description>
+    
+    <lastBuildDate>Sun, 22 Nov 2020 20:21:29 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/notation-for-inputs-outputs-in-function-spec-dialect/1414.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Notation for (Inputs/)Outputs in Function Spec Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The first cut at multiple return values made a multi-return output look like:</p>
+<pre><code> func [/foo [&lt;output&gt; integer!]] [...]
+</code></pre>
+<p>Which was expedient to try it out.  <strong>But dialect-wise, I think a SET-WORD! makes more sense:</strong></p>
+<pre><code> func [foo: [integer!]] [...]
+</code></pre>
+<p>This would take away SET-WORD! as a way of denoting locals in the frame.  This was to make it easier for higher-level generators to stick values in the frame without having to search for a <code>&lt;local&gt;</code> annotation and inject at the right place.  Programmatic code generating frames could stick locals anywhere they wanted in the parameter sequence, which was helpful.</p>
+<p>If we're thinking that's still a useful idea, then <strong>func [a b: c] [...]</strong> could be rethought e.g. as <strong>func [a .b c] [...]</strong>.</p>
+<blockquote>
+<p>I will point out that while this sounds convenient, any higher level generator that just splices words into specs like this can run into problems of name reuse...since locals cannot clash with parameters.</p>
+</blockquote>
+<h2>But What About The Deviant RETURN: ?</h2>
+<p>The only "local" most users noticed in specs was RETURN:.   Strangely enough, yes, it was a frame local variable...that held the definitional RETURN function.</p>
+<p>It's a bit confusing to have RETURN: work different than other things specified by SET-WORD!.  This could be avoided by using a different convention, e.g. <strong><code>&lt;return&gt; [integer!]</code></strong> to stress the difference.</p>
+<p>Or we could just say that it's "one of those things" and learnable, that the act of naming a return value "RETURN:" implies it's the main return...and gets special conventions and handling.</p>
+<h2>Why Aren't Returns Written Directly To Frame Slots?</h2>
+<p>Something that may seem confusing about return values is that you don't assign them with SET-WORD!s, you assign them with SET.</p>
+<pre><code> foo: func [return: &lt;void&gt;, multi: [integer!]] [
+     multi: 10  ; **wrong** (should be an error, assigning read-only cell)
+     set multi 10  ; **wrong** (multi is NULL if caller didn't want it)
+     if multi [cheat: get multi]  ; **wrong** (variables voided prior to call)
+     if multi [set multi 10]  ; CORRECT: detect desire for output
+ ]
+</code></pre>
+<p>(Note that you can't GET a multi-return input variable, because the variables are voided prior to the call. This avoids the possibility of "outputs" acting as inputs.)</p>
+<p>I've made the point that this allows us to tie in the request for an output with a difference in semantics for the function... where using <code>#</code> is a way of asking for the semantics without also needing to give a variable to store the result in.</p>
+<p>This design makes even more sense when you consider that they are made to be compatible with the passing of words that you can do historically.  <em>Without this, there'd have to be some kind of parallel-universe of interacting with them in things like APPLY.</em></p>
+<pre><code>apply :foo [/multi 'var]  ; what would the syntax be otherwise?
+</code></pre>
+<p>Really...as weird as all this is, it's at the same time familiar.</p>
+<p>We could imagine a different setup which tried to let you just do <strong>multi: 10</strong> directly, and then when the operation was over would proxy that value into the target variable.  And it could use some similar rules about how when the frame started, it could be either NULL if it wasn't wanted or <code>#</code> if it was wanted.  But that seems a lot more error-prone.  And the variable exists anyway to make the request...so why not go ahead and set it where it is, instead of going through a middleman anyway?</p>
+<h2>What To Do About Input/Output Name Collisions?</h2>
+<p>To <strong><a href="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/2">bring an end to voidification</a></strong>, I need a channel of communication set up between branching constructs and subsequent enfix operators...so they know if the branch was taken or not.</p>
+<p>I've rigged up something very hacky, but good enough to get me to the next big question: <strong>what happens when the subsequent enfix operation is treated as a branching operation itself</strong>.</p>
+<p>Could a parameter be converted into an "in-out" form?  <strong>/branched:</strong> perhaps?  <img src="https://forum.rebol.info/images/emoji/twitter/thinking.png?v=9" title=":thinking:" class="emoji" alt=":thinking:"></p>
+<pre><code> else: enfixed func [
+     return: [&lt;opt&gt; any-value!]
+     /branched: [logic!]  ; hypothetical syntax
+     value [&lt;opt&gt; any-value!]
+ ][
+     ...
+ ]
+</code></pre>
+<p>But this is a bit of a can of worms.  You could have a situation where branched wasn't passed as an input -nor- requested as an output...where it was only one of the two...or where it was both.  How are these states conveyed, and how do you react to them?</p>
+<p>It's difficult not to think that this kind of parameter would best be handled as being set to the value on input (or NULL if no input), and then whatever value it holds at the end of the frame is its final result.  That's either proxied to an output variable if requested, or not if it isn't.  <em>But now you've lost the ability to tell if the output was requested or not...because that NULL state is taken for no input provided.</em></p>
+<p>Could it be that there are two frame variables tied together, with the left giving the canon name for both the input and the output parameter, and the right as an internal alias for the output parameter?</p>
+<pre><code> else: enfixed func [
+     return: [&lt;opt&gt; any-value!]
+     /branched.branched-out: [logic!]  ; hypothetical syntax
+     value [&lt;opt&gt; any-value!]
+ ][
+     ...
+ ]
+</code></pre>
+<p>This overlaps a bit with something I've spoken about, which are cases where you'd rather the name you use on the interface be distinct from the name you use for something inside the frame.  Like if you named a refinement /ALL but you plan on using ALL [...] in your code, it would be nice to havae a notation to say you wanted a different name:</p>
+<p><a href="https://forum.rebol.info/t/different-internal-names-for-parameters-in-function-spec/1335">"Different Internal Names For Parameters In Function Spec"</a></p>
+<p>So one might think it could be solved in that way; you'd rename one (or both) of the /BRANCHEDs out of the way</p>
+<pre><code> else: enfixed func [
+     return: [&lt;opt&gt; any-value!]
+     branched.branched-out: [logic!]  ; want output renamed
+     value [&lt;opt&gt; any-value!]
+     /branched [logic!]  ; just use same name for input
+ ][
+     ...
+ ]
+</code></pre>
+<p>Seems nice, but this problem is fundamentally different.  Because a function like APPLY still has two possibilities for what /BRANCHED is fulfilling.  Our problem isn't just with internal naming, it's at the level of the interface itself not being able to call an input and an output the same thing.</p>
+<p>Although... APPLY could have syntax for that.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<pre><code> apply :foo [
+     /branched true  ; input form, no colon
+     /branched: 'var  ; output form, colon
+ ]
+</code></pre>
+<p>That feels like it sucks and it's making things feel more painful than they already are.  And while it might work for APPLY, there's no such syntax for calling in a normal path invocation.</p>
+<h2>So The Names Have To Be Distinguished On The Interface?</h2>
+<p>If the input and output aren't somehow fused into one argument, then yes.  Distinct frame slots would need different names:</p>
+<pre><code> else: enfixed func [
+     return: [&lt;opt&gt; any-value!]
+     branched-out: [logic!]
+     value [&lt;opt&gt; any-value!]
+     /branched-in [logic!]
+ ][
+     ...
+ ]
+</code></pre>
+<p>But that just gives the question of what would motivate the evaluator to automatically tie together an input to an output with a distinct name.</p>
+<p><strong>Sigh.</strong></p>
+<p>Maybe there's a positional thing that could be done with it, the way modal parameters do it.  If you mark a parameter in a certain way, it will assume a relationship to an adjacent declaration</p>
+<pre><code> else: enfixed func [
+     return: [&lt;opt&gt; any-value!]
+     /branched: [logic!]  ; or some syntax marking "output has input too"
+     /branched-in [logic!]  ; since it follows a `/x:`, assumed linked
+     value [&lt;opt&gt; any-value!]
+ ][
+     ...
+ ]
+</code></pre>
+<h2>That's About The Best I've Got</h2>
+<p>I've satisfied myself that the input and the output should not wind up stuffed into the same frame slot.  The input should be a normal refinement, and have either its value or NULL.  The output should be through a level of a WORD! indirection (or NULL if not requested).</p>
+<p>I think I've made a pretty good case that since both slots appear on the public interface, it's not a good idea for them to have the same name.  You wouldn't be able to address them individually.</p>
+<p><strong>Most constructs will not have to worry about this.</strong></p>
+<p>It's a very rare category of function that would have to use this technique.  Take note that things like FIND and SELECT are designed to work within the framework where NULL is not a "meaningful value"...all they need to do is return NULL and they interoperate with ELSE.</p>
+<p>If you write a normal non-enfix control structure, all you need to do is have a normal <code>branched:</code> output that you set in a straightforward way.</p>
+<p>It's only enfix tools that are branching structures in their own right that have to pay this complexity tax.  But what we're saying is that it's better for them to pay it, so that we aren't having to contort every IF or CASE or SWITCH statement just to appease them.  It's localizing the concern into the place where the complexity belongs, vs making the whole rest of the system pay for it just so ELSE and THEN can be expressed simply.</p>
+          <p><a href="https://forum.rebol.info/t/notation-for-inputs-outputs-in-function-spec-dialect/1414/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/notation-for-inputs-outputs-in-function-spec-dialect/1414/1</link>
+        <pubDate>Sun, 22 Nov 2020 19:21:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1414-1</guid>
+        <source url="https://forum.rebol.info/t/notation-for-inputs-outputs-in-function-spec-dialect/1414.rss">Notation for (Inputs/)Outputs in Function Spec Dialect</source>
+      </item>
+  </channel>
+</rss>

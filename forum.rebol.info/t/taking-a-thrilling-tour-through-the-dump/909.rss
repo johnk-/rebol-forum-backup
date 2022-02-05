@@ -1,0 +1,492 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Taking a Thrilling Tour Through the DUMP</title>
+    <link>https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909</link>
+    <description>DUMP is a vastly enhanced variation of the **`??`** operator in R3-Alpha.  If you weren&#39;t familiar with that, it was a simple spin on PROBE that quoted its argument and would GET it.  Like PROBE, it would return that same result for chaining.  [There&#39;s not much to it](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/base-debug.r#L27), and its only &quot;power user&quot; feature was the ability to take a BLOCK!, and for some reason return that block unevaluated:
+
+    r3-alpha&gt;&gt; x: 10 y: 20
+
+    r3-alpha&gt;&gt; ?? x
+    x: 10
+    == 10
+
+    r3-alpha&gt;&gt; ?? [x y] 
+    x: 10  y: 20  
+    == [x y]
+
+Now before you keep reading, you better sit down... **&#39;cause Ren-C&#39;s gonna knock you off your feet.**  :mans_shoe: :mans_shoe:
+
+## English Name, and a Convenient Symbol Name
+
+The DUMP service routine is also exposed as **`--`**, as part of the [&quot;repurposing of jarring symbols&quot;](https://forum.rebol.info/t/theory-of-symbols-and-repurposing-and/834/4).  This makes it even easier to type than `??`, yet still easy to see once typed in.  But ?? isn&#39;t going to waste...it&#39;s now a shorter way to say PROBE.
+
+*(And you&#39;re going to want to use DUMP a lot, so not having to hit shift to get those ?-marks is going to be ideal.)*
+
+As the forum post linked above explains, the shorthands are for use when what you&#39;re doing is not supposed to be checked in with the code.  They&#39;re standing out for a reason, to help you notice temporary stuff you threw in to help you debug.  So hopefully you won&#39;t accidentally commit them.  If you are writing test code which intends to leave the operations in for the long term, then use the full words.
+
+Note that there&#39;s no reason to shed a tear over the loss of `--` as a decrement operator!  It&#39;s been leapfrogged by the super cool [ME and MY operators](https://trello.com/c/8Bmwvwya/), which are more general.  *(They&#39;re slated to get even cooler, once the mechanisms they use are rethought as fully userspace)*
+
+### Doesn&#39;t Interfere with Surrounding Logic
+
+DUMP in Ren-C is a *hard-quoting variadic invisible*.  It has no return result whatsoever, meaning you can use it anywhere...like in the middle of an ANY or ALL statement, and not disrupt them:
+
+    &gt;&gt; x: 10
+    &gt;&gt; any [
+           -- &quot;string literals just print labels!&quot;
+           false
+           -- variable
+           30
+       ]
+
+That gives:
+
+&gt;     -- &quot;string literals just print labels!&quot;
+&gt;     -- variable: 10
+&gt;     == 30
+
+While running, the output actually includes the `--` at the beginning of the line, to help connect the dumped output to the statements in your code.  This prefix is customizable, so when you make a dump specialization you can change it to whatever you like.
+
+So it works in ANY, but it also works in ALL...and supports BLOCK! (in a fancier way, explained later):
+
+    &gt;&gt; variable: 10 x: &lt;foo&gt; y: &lt;bar&gt;
+    &gt;&gt; all [
+           true
+           -- variable
+           20
+           -- [x y]
+       ]
+
+&gt;     -- variable: 10
+&gt;     -- x: &lt;foo&gt;
+&gt;     -- y: &lt;bar&gt;
+&gt;     == 20
+
+If it erred on the side of being either truthy or falsey, you&#39;d have to worry about how your debugging was disrupting matters.
+
+## It Quotes, *but* Can Run an Assignment!
+
+Though DUMP quotes the first thing it sees on its right hand side, it has a special behavior for SET-WORD!s.  If it sees a SET-WORD! it will go ahead and let the evaluator process one unit of work before dumping the symbol.
+
+    &gt;&gt; -- summation: 100 + 200
+    -- summation: 300
+
+This means that you don&#39;t have to repeat yourself the way you would have to in R3-Alpha, e.g.
+
+    r3-alpha&gt;&gt; summation: 100 + 200
+    r3-alpha&gt;&gt; ?? summation
+    summation: 300
+    == 300
+
+While specializing variadics can be irritating, this is actually easy, because DUMP always knows it&#39;s going to want at least one quoted parameter.  So you can specialize that, and leave the variadic part unspecialized:
+
+    &gt;&gt; --setx: specialize &#39;-- [value: quote x:]
+
+    &gt;&gt; --setx 1 + 2
+    -- x: 3
+
+    &gt;&gt; --setx 3 + 4
+    -- x: 7
+
+You&#39;d have to understand how hard it is to make it all &quot;just work&quot; to appreciate it.  :-)
+
+## Also Supports GROUP!, PATH!, REFINEMENT!...
+
+You can use expressions in a group:
+
+    &gt;&gt; -- (1 + 2 + 3)
+    -- (1 + 2 + 3): 6
+
+Plus, you can mix and match...things you can use individually will work in a block!  Might as well demo a PATH! and SET-PATH! in there too, huh?
+
+    &gt;&gt; x: 10 y: 20 obj: make object! [z: _]
+
+    &gt;&gt; -- [&quot;some things&quot; x y obj/z (x + y) obj/z: x * y]
+    -- &quot;some things&quot;
+    -- x: 10
+    -- y: 20
+    -- obj/z: _
+    -- (x + y): 30
+    -- obj/z: 200
+
+This shows a test of the idea that if you have a SET-WORD! or SET-PATH! it will carry over behavior as if it was variadic.  It breaks the pattern in the block and maybe makes it harder to grok, but it&#39;s at least consistent with the quirk.
+
+Also, since [@IngoHohmann wanted a quick way to type &quot;I got here&quot;](https://github.com/metaeducation/ren-c/issues/882) solution, REFINEMENT! is supported:
+
+    &gt;&gt; all [(-- /a) true (-- /b) false (-- /c)] print &quot;^ didn&#39;t make it to /c&quot;
+    -- /a
+    -- /b
+    ^ didn&#39;t make it to /c
+
+It doesn&#39;t get too much more expedient than that... no SHIFTing and full invisibility.  (INTEGER! is for the moment reserved, for a possible verbosity application, but for better or worse, /1 and /2 are legal refinements also.)
+
+## Make Your Own Dumpers With DUMPS
+
+This is a &quot;just invented today&quot; idea, but it&#39;s still fairly cool.  Let&#39;s say you have a subsystem and want to make something with DUMP&#39;s functionality, but just for it:
+
+    --net: dumps #on
+
+You pass it a refinement to say whether it is on or off by default, but you can call it with #on or #off later:
+
+    &gt;&gt; --net [&quot;testing...&quot; /1 /2]
+    --net &quot;testing&quot;
+    --net /1
+    --net /2
+
+    &gt;&gt; --net #off
+
+    &gt;&gt; --net [&quot;testing&quot; /1 /2]
+
+Note that it picked up the name from the SET-WORD! on the left it was assigned to, and uses that to mark its output.  Also, if your block runs any code *it will run regardless* of the enablement.  (So we might want better names like #silent and #loud?)
+
+In any case, as it happens, plain old `--` will respond to #off and #on too... but raw DUMP will not, it cannot be disabled (except by hijacking or similar).
+
+## DUMPS Lets You Make Full Specializations As Well
+
+Whether you have a block with a bunch of variables you want to repeatedly examine, or just one variable with a really long name, DUMPS specializes with it:
+
+    &gt;&gt; variable-one: 10 variable-two: 20
+    &gt;&gt; --dv: dumps [variable-one variable-two]
+
+    &gt;&gt; --dv (variable-one: variable-two: &lt;overwrite&gt; 1000) --dv
+    --dv variable-one: 10
+    --dv variable-two: 20
+    --dv variable-one: &lt;overwrite&gt;
+    --dv variable-two: &lt;overwrite&gt;
+    == 1000
+
+DUMPS even goes one better on this, by letting you declare a dumper and assign a variable in one step:
+
+    &gt;&gt; --v: dumps long-variable-name: 10 * 20
+
+    &gt;&gt; --v
+    --v long-variable-name: 200
+
+    &gt;&gt; long-variable-name: 80
+    == 80
+
+    &gt;&gt; --v
+    --v long-variable-name: 80
+
+If you contrast this with SPECIALIZE w.r.t. a SET-WORD! shown earlier, this doesn&#39;t actually specialize with a SET-WORD! or SET-PATH!.  If it did, each call would try and get more arguments.  Instead, it uses its own variadic information, and then wordifies or pathifies the argument for the specialization.  Tres cool, huh?
+
+*(Note: One problem here is that since you specialized out the parameter, you have no way to turn **`--dv`** #on or #off any more!  There&#39;s actually a fair number of complex issues involved with this, but they&#39;re being looked at...in the meantime, if you need to turn off a full specialization, do it in two steps...make a non-fully specialized version, then specialize it, and disable it through the non-specialized one.)*
+
+## Glad You Sat Down, Aren&#39;t You?  :-)
+
+This is a great missing piece for anyone who is upset that PRINT has gotten more picky and [only takes TEXT! and BLOCK!](https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855).  If you wanted easy debugging of values, you can&#39;t get much easier than `-- foo`...giving you what you&#39;d otherwise have to do as `elide print [&quot;foo is&quot; mold foo]`.  The kinds of casual scenarios that would have wanted an &quot;easy&quot; print almost always fit this pattern, while the more rigorous ones that produce output are going to prefer the new PRINT.
+
+But the real punch line is how accessible it is getting to write and design these features in userspace.  [%mezz-dump.r](https://github.com/metaeducation/ren-c/blob/master/src/mezz/mezz-dump.r) is relatively easy to understand, and is a work in progress.  Most of the weird code is DUMP-OBJ from R3-Alpha (it&#39;s used by HELP).  I think DUMP itself is pretty obvious.
+
+There&#39;s no shortage of open questions; I&#39;ve run up against a bunch tonight, but when you start tallying things like the FizzBuzz success with the cleverness of these designs, it&#39;s looking pretty upbeat.</description>
+    
+    <lastBuildDate>Wed, 25 Aug 2021 04:21:14 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Taking a Thrilling Tour Through the DUMP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="IngoHohmann" data-post="4" data-topic="909">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>I like the idea of -- going to end of line. I try to put debug output on a line all by itself, anyway.</p>
+</blockquote>
+</aside>
+<p>So the <strong><code>--</code></strong> to end of line seems like the most generally useful case.  If you don't want that you can put it in a GROUP!.</p>
+<p>But with Sea of Words, I'm wondering if we should take it to where we actually treat the words literally, by default.  Basically a fast ECHO that takes the word ECHO out of the equation:</p>
+<pre><code>-- i got here and value is @x
+</code></pre>
+<p>So we start with that...the invisible generic echoer, that prepends the output with "--" so you know it's debug output.  But then have it kick over into shorthand if it recognizes patterns.</p>
+<p>Today there's even opportunistic invisibility.  So it can switch out of invisibility mode if it sees something like:</p>
+<pre><code>-- x: 1 + 2
+</code></pre>
+<p>That could also take away the end of line behavior.  It would switch to running the evaluation, and then getting the evaluated variable and dumping it for you.</p>
+<p>You could ask for a variable to be dumped with a GET-WORD!</p>
+<pre><code>-- :x
+</code></pre>
+<p>Or maybe it just notices when there's only one thing after it, and assumes if you had more to say as a sentence you wouldn't have written one word.</p>
+<pre><code>-- x  ; dumps variable x
+-- this looks more like a sentence  ; dumps the text
+</code></pre>
+<p>We could use COMMA! to keep it in dumping mode:</p>
+<pre><code>-- x, y, z  ; dump three individual variables
+</code></pre>
+<p>Or even weirder, look and see if the last thing ends in a period and assume it's a sentence <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<pre><code>-- ends in a period, must be a sentence.  ; dumps the text
+</code></pre>
+<p>GROUP! could be evaluated, and if you use an @ that could be the "circling" of the value:</p>
+<pre><code>&gt;&gt; var: "hello"
+
+&gt;&gt; 1 + 2 -- the variable value is (var)
+-- the variable value is "hello"
+== 3
+
+&gt;&gt; 1 + 2 -- the variable value is @var
+-- the variable value is "hello"
+== "hello"
+</code></pre>
+<h2>Sky's The Limit...</h2>
+<p>...and of course whatever we pick, someone else could come up with something they like better.</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/hammer_and_wrench.png?v=9" title=":hammer_and_wrench:" class="emoji only-emoji" alt=":hammer_and_wrench:"></p>
+          <p><a href="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/6</link>
+        <pubDate>Wed, 25 Aug 2021 04:12:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-909-6</guid>
+        <source url="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909.rss">Taking a Thrilling Tour Through the DUMP</source>
+      </item>
+      <item>
+        <title>Taking a Thrilling Tour Through the DUMP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="4" data-topic="909">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>I like the idea of – going to end of line. I try to put debug output on a line all by itself, anyway.</p>
+</blockquote>
+</aside>
+<p>Had to fix a few things to get that working, but... done!  It seems like a good idea not necessarily so much from a typing perspective (-- isn't so hard to type) but just in terms of taking up less screen space.</p>
+<aside class="quote no-group" data-post="4" data-topic="909">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>if the first parameter is a literal block, it could just take the block not read to end of line.</p>
+</blockquote>
+</aside>
+<p>I think it's better to put the whole thing in a group, looks nicer and coheres what should be together:</p>
+<pre><code> any [... -- [/label1 var var] ... -- [/label2] ...]
+
+ any [... (-- /label1 var var) ... (-- /label2) ...]
+</code></pre>
+<p>Beyond looking better, it parallels how <code>**</code> as to-end-of-line comment works.  Means less quirks to remember.</p>
+<p>The cool just keeps getting cooler!</p>
+          <p><a href="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/5</link>
+        <pubDate>Thu, 22 Nov 2018 15:43:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-909-5</guid>
+        <source url="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909.rss">Taking a Thrilling Tour Through the DUMP</source>
+      </item>
+      <item>
+        <title>Taking a Thrilling Tour Through the DUMP</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I like the idea of -- going to end of line. I try to put debug output on a line all by itself, anyway.<br>
+It could read until end of line or bar!<br>
+or if the first parameter is a literal block, it could just take the block not read to end of line.<br>
+This would help for the case where you want to use it inside of a line or expression.</p>
+          <p><a href="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/4</link>
+        <pubDate>Mon, 19 Nov 2018 19:29:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-909-4</guid>
+        <source url="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909.rss">Taking a Thrilling Tour Through the DUMP</source>
+      </item>
+      <item>
+        <title>Taking a Thrilling Tour Through the DUMP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="909" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>Wow, that looks incredible.<br>
++++</p>
+</blockquote>
+</aside>
+<p>Glad you like it, but hopefully it's just a start.</p>
+<p>One question that I've been wondering about is if <strong><code>--</code></strong> should be variadic and pay attention to end of line markers...and group things on the same line if you do, e.g.</p>
+<pre><code>x: 10 y: 20
+-- "values are" x y
+</code></pre>
+<p>Having that output:</p>
+<pre><code>-- "values are" x: 10 y: 20
+</code></pre>
+<p>Might be interesting.  Note the concept of a "line" can be fluid, e.g. it might be a div in a browser output.</p>
+<p>This would break things like the <strong>all [-- /a true -- /b false -- /c]</strong> cases, so if you didn't want the "reads until end of line behavior" that might call for another construct.  Perhaps <code>++</code> or <code>**</code> would be the alternative if you didn't want to go to the end of the line?  Or maybe special exceptions could be made if the argument were a REFINEMENT! or a BLOCK! and it would assume that ended it.</p>
+<p>I don't think DUMP itself should be reading end of line markers, this would be something specific to the <code>--</code> family of dumpers.  e.g. what they would do is MAKE BLOCK! by collecting the varargs to the newline marker, and pass the block to DUMP.</p>
+<p>What do you think?</p>
+          <p><a href="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/3</link>
+        <pubDate>Mon, 19 Nov 2018 03:50:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-909-3</guid>
+        <source url="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909.rss">Taking a Thrilling Tour Through the DUMP</source>
+      </item>
+      <item>
+        <title>Taking a Thrilling Tour Through the DUMP</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>Wow, that looks incredible.<br>
++++</p>
+          <p><a href="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/2</link>
+        <pubDate>Fri, 16 Nov 2018 17:29:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-909-2</guid>
+        <source url="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909.rss">Taking a Thrilling Tour Through the DUMP</source>
+      </item>
+      <item>
+        <title>Taking a Thrilling Tour Through the DUMP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>DUMP is a vastly enhanced variation of the <strong><code>??</code></strong> operator in R3-Alpha.  If you weren't familiar with that, it was a simple spin on PROBE that quoted its argument and would GET it.  Like PROBE, it would return that same result for chaining.  <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/base-debug.r#L27" rel="nofollow noopener">There's not much to it</a>, and its only "power user" feature was the ability to take a BLOCK!, and for some reason return that block unevaluated:</p>
+<pre><code>r3-alpha&gt;&gt; x: 10 y: 20
+
+r3-alpha&gt;&gt; ?? x
+x: 10
+== 10
+
+r3-alpha&gt;&gt; ?? [x y] 
+x: 10  y: 20  
+== [x y]
+</code></pre>
+<p>Now before you keep reading, you better sit down... <strong>'cause Ren-C's gonna knock you off your feet.</strong>  <img src="//forum.rebol.info/images/emoji/twitter/mans_shoe.png?v=7" title=":mans_shoe:" class="emoji" alt=":mans_shoe:"> <img src="//forum.rebol.info/images/emoji/twitter/mans_shoe.png?v=7" title=":mans_shoe:" class="emoji" alt=":mans_shoe:"></p>
+<h2>English Name, and a Convenient Symbol Name</h2>
+<p>The DUMP service routine is also exposed as <strong><code>--</code></strong>, as part of the <a href="https://forum.rebol.info/t/theory-of-symbols-and-repurposing-and/834/4">"repurposing of jarring symbols"</a>.  This makes it even easier to type than <code>??</code>, yet still easy to see once typed in.  But ?? isn't going to waste...it's now a shorter way to say PROBE.</p>
+<p><em>(And you're going to want to use DUMP a lot, so not having to hit shift to get those ?-marks is going to be ideal.)</em></p>
+<p>As the forum post linked above explains, the shorthands are for use when what you're doing is not supposed to be checked in with the code.  They're standing out for a reason, to help you notice temporary stuff you threw in to help you debug.  So hopefully you won't accidentally commit them.  If you are writing test code which intends to leave the operations in for the long term, then use the full words.</p>
+<p>Note that there's no reason to shed a tear over the loss of <code>--</code> as a decrement operator!  It's been leapfrogged by the super cool <a href="https://trello.com/c/8Bmwvwya/" rel="nofollow noopener">ME and MY operators</a>, which are more general.  <em>(They're slated to get even cooler, once the mechanisms they use are rethought as fully userspace)</em></p>
+<h3>Doesn't Interfere with Surrounding Logic</h3>
+<p>DUMP in Ren-C is a <em>hard-quoting variadic invisible</em>.  It has no return result whatsoever, meaning you can use it anywhere...like in the middle of an ANY or ALL statement, and not disrupt them:</p>
+<pre><code>&gt;&gt; x: 10
+&gt;&gt; any [
+       -- "string literals just print labels!"
+       false
+       -- variable
+       30
+   ]
+</code></pre>
+<p>That gives:</p>
+<blockquote>
+<pre><code>-- "string literals just print labels!"
+-- variable: 10
+== 30
+</code></pre>
+</blockquote>
+<p>While running, the output actually includes the <code>--</code> at the beginning of the line, to help connect the dumped output to the statements in your code.  This prefix is customizable, so when you make a dump specialization you can change it to whatever you like.</p>
+<p>So it works in ANY, but it also works in ALL...and supports BLOCK! (in a fancier way, explained later):</p>
+<pre><code>&gt;&gt; variable: 10 x: &lt;foo&gt; y: &lt;bar&gt;
+&gt;&gt; all [
+       true
+       -- variable
+       20
+       -- [x y]
+   ]
+</code></pre>
+<blockquote>
+<pre><code>-- variable: 10
+-- x: &lt;foo&gt;
+-- y: &lt;bar&gt;
+== 20
+</code></pre>
+</blockquote>
+<p>If it erred on the side of being either truthy or falsey, you'd have to worry about how your debugging was disrupting matters.</p>
+<h2>It Quotes, <em>but</em> Can Run an Assignment!</h2>
+<p>Though DUMP quotes the first thing it sees on its right hand side, it has a special behavior for SET-WORD!s.  If it sees a SET-WORD! it will go ahead and let the evaluator process one unit of work before dumping the symbol.</p>
+<pre><code>&gt;&gt; -- summation: 100 + 200
+-- summation: 300
+</code></pre>
+<p>This means that you don't have to repeat yourself the way you would have to in R3-Alpha, e.g.</p>
+<pre><code>r3-alpha&gt;&gt; summation: 100 + 200
+r3-alpha&gt;&gt; ?? summation
+summation: 300
+== 300
+</code></pre>
+<p>While specializing variadics can be irritating, this is actually easy, because DUMP always knows it's going to want at least one quoted parameter.  So you can specialize that, and leave the variadic part unspecialized:</p>
+<pre><code>&gt;&gt; --setx: specialize '-- [value: quote x:]
+
+&gt;&gt; --setx 1 + 2
+-- x: 3
+
+&gt;&gt; --setx 3 + 4
+-- x: 7
+</code></pre>
+<p>You'd have to understand how hard it is to make it all "just work" to appreciate it.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<h2>Also Supports GROUP!, PATH!, REFINEMENT!...</h2>
+<p>You can use expressions in a group:</p>
+<pre><code>&gt;&gt; -- (1 + 2 + 3)
+-- (1 + 2 + 3): 6
+</code></pre>
+<p>Plus, you can mix and match...things you can use individually will work in a block!  Might as well demo a PATH! and SET-PATH! in there too, huh?</p>
+<pre><code>&gt;&gt; x: 10 y: 20 obj: make object! [z: _]
+
+&gt;&gt; -- ["some things" x y obj/z (x + y) obj/z: x * y]
+-- "some things"
+-- x: 10
+-- y: 20
+-- obj/z: _
+-- (x + y): 30
+-- obj/z: 200
+</code></pre>
+<p>This shows a test of the idea that if you have a SET-WORD! or SET-PATH! it will carry over behavior as if it was variadic.  It breaks the pattern in the block and maybe makes it harder to grok, but it's at least consistent with the quirk.</p>
+<p>Also, since <a href="https://github.com/metaeducation/ren-c/issues/882" rel="nofollow noopener">@IngoHohmann wanted a quick way to type "I got here"</a> solution, REFINEMENT! is supported:</p>
+<pre><code>&gt;&gt; all [(-- /a) true (-- /b) false (-- /c)] print "^ didn't make it to /c"
+-- /a
+-- /b
+^ didn't make it to /c
+</code></pre>
+<p>It doesn't get too much more expedient than that... no SHIFTing and full invisibility.  (INTEGER! is for the moment reserved, for a possible verbosity application, but for better or worse, /1 and /2 are legal refinements also.)</p>
+<h2>Make Your Own Dumpers With DUMPS</h2>
+<p>This is a "just invented today" idea, but it's still fairly cool.  Let's say you have a subsystem and want to make something with DUMP's functionality, but just for it:</p>
+<pre><code>--net: dumps #on
+</code></pre>
+<p>You pass it a refinement to say whether it is on or off by default, but you can call it with <span class="hashtag">#on</span> or <span class="hashtag">#off</span> later:</p>
+<pre><code>&gt;&gt; --net ["testing..." /1 /2]
+--net "testing"
+--net /1
+--net /2
+
+&gt;&gt; --net #off
+
+&gt;&gt; --net ["testing" /1 /2]
+</code></pre>
+<p>Note that it picked up the name from the SET-WORD! on the left it was assigned to, and uses that to mark its output.  Also, if your block runs any code <em>it will run regardless</em> of the enablement.  (So we might want better names like <span class="hashtag">#silent</span> and <span class="hashtag">#loud</span>?)</p>
+<p>In any case, as it happens, plain old <code>--</code> will respond to <span class="hashtag">#off</span> and <span class="hashtag">#on</span> too... but raw DUMP will not, it cannot be disabled (except by hijacking or similar).</p>
+<h2>DUMPS Lets You Make Full Specializations As Well</h2>
+<p>Whether you have a block with a bunch of variables you want to repeatedly examine, or just one variable with a really long name, DUMPS specializes with it:</p>
+<pre><code>&gt;&gt; variable-one: 10 variable-two: 20
+&gt;&gt; --dv: dumps [variable-one variable-two]
+
+&gt;&gt; --dv (variable-one: variable-two: &lt;overwrite&gt; 1000) --dv
+--dv variable-one: 10
+--dv variable-two: 20
+--dv variable-one: &lt;overwrite&gt;
+--dv variable-two: &lt;overwrite&gt;
+== 1000
+</code></pre>
+<p>DUMPS even goes one better on this, by letting you declare a dumper and assign a variable in one step:</p>
+<pre><code>&gt;&gt; --v: dumps long-variable-name: 10 * 20
+
+&gt;&gt; --v
+--v long-variable-name: 200
+
+&gt;&gt; long-variable-name: 80
+== 80
+
+&gt;&gt; --v
+--v long-variable-name: 80
+</code></pre>
+<p>If you contrast this with SPECIALIZE w.r.t. a SET-WORD! shown earlier, this doesn't actually specialize with a SET-WORD! or SET-PATH!.  If it did, each call would try and get more arguments.  Instead, it uses its own variadic information, and then wordifies or pathifies the argument for the specialization.  Tres cool, huh?</p>
+<p><em>(Note: One problem here is that since you specialized out the parameter, you have no way to turn <strong><code>--dv</code></strong> <span class="hashtag">#on</span> or <span class="hashtag">#off</span> any more!  There's actually a fair number of complex issues involved with this, but they're being looked at...in the meantime, if you need to turn off a full specialization, do it in two steps...make a non-fully specialized version, then specialize it, and disable it through the non-specialized one.)</em></p>
+<h2>Glad You Sat Down, Aren't You?  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:">
+</h2>
+<p>This is a great missing piece for anyone who is upset that PRINT has gotten more picky and <a href="https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855">only takes TEXT! and BLOCK!</a>.  If you wanted easy debugging of values, you can't get much easier than <code>-- foo</code>...giving you what you'd otherwise have to do as <code>elide print ["foo is" mold foo]</code>.  The kinds of casual scenarios that would have wanted an "easy" print almost always fit this pattern, while the more rigorous ones that produce output are going to prefer the new PRINT.</p>
+<p>But the real punch line is how accessible it is getting to write and design these features in userspace.  <a href="https://github.com/metaeducation/ren-c/blob/master/src/mezz/mezz-dump.r" rel="nofollow noopener">%mezz-dump.r</a> is relatively easy to understand, and is a work in progress.  Most of the weird code is DUMP-OBJ from R3-Alpha (it's used by HELP).  I think DUMP itself is pretty obvious.</p>
+<p>There's no shortage of open questions; I've run up against a bunch tonight, but when you start tallying things like the FizzBuzz success with the cleverness of these designs, it's looking pretty upbeat.</p>
+          <p><a href="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909/1</link>
+        <pubDate>Fri, 16 Nov 2018 13:57:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-909-1</guid>
+        <source url="https://forum.rebol.info/t/taking-a-thrilling-tour-through-the-dump/909.rss">Taking a Thrilling Tour Through the DUMP</source>
+      </item>
+  </channel>
+</rss>

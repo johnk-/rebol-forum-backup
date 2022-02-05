@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Multiple Returns and Branching: Could It Unseat Voidification?</title>
+    <link>https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408</link>
+    <description>Imagine that IF had multiple return values, and one of those values allowed it to indicate if it took a branch:
+
+    &gt;&gt; [value branched]: if true [null]
+    ; null
+
+    &gt;&gt; value
+    ; null
+
+    &gt;&gt; branched
+    == #[true]  ; it could theoretically even return which branch, e.g. `== [null]`
+
+If somehow this piece of &quot;/BRANCHED&quot; (or /SUCCESS, or whatever) could make it through to ELSE, it could be used as the trigger.
+
+For something like this to work, a finished function&#39;s frame would stick around long enough to see if a following function needed it...instead of just having the function&#39;s output cell.  It would not be particularly easy to rig up...but not impossible. 
+
+The main design point would be how to know this is what you wanted.  Is it just a matter of ELSE taking an argument /BRANCHED, and IF having an output /BRANCHED...so the names line up and it assumes you want them connected?
+
+ELSE could still be willing to run if the /BRANCHED refinement was not provided by the left-hand side, in which case it would be purely NULL-reactive.
+
+I&#39;m not exactly sure what you&#39;d do with:
+
+    if true [null] else [2] then [3]
+
+The ELSE would get the first as having /BRANCHED, but then it didn&#39;t run...so it&#39;s saying /BRANCHED is false.  It would mean a THEN after an ELSE would only run if the ELSE ran.  So:
+ 
+    &gt;&gt; if true [print &quot;A&quot;, 1] else [print &quot;B&quot;, 2] then [print &quot;C&quot;, 3]  ; yay comma!
+    A
+    == 1
+
+    &gt;&gt; if false [print &quot;A&quot;, 1] else [print &quot;B&quot;, 2] then [print &quot;C&quot;, 3]
+    B
+    C
+    == 3
+
+That&#39;s different from today&#39;s value-driven (as opposed to branch-taken-driven) logic.  It means there&#39;s a bit more invisibility to it, but it&#39;s explainable...probably more explainable than voidification.
+
+**This seems promising enough to try out, despite the likely implementation difficulty.**  Like I say, it doesn&#39;t mean NULL-reactivity can&#39;t stick around for ELSE in general...it just would give conditional structures a new way to solve a frustrating problem.</description>
+    
+    <lastBuildDate>Wed, 25 Nov 2020 15:27:34 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Multiple Returns and Branching: Could It Unseat Voidification?</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Wild. I'm trying to wrap my head around the isotype approach. Very cool that you're able to get a prototype isotype system working. <img src="https://forum.rebol.info/images/emoji/twitter/wink.png?v=9" title=":wink:" class="emoji" alt=":wink:"><br>
+<a href="https://youtu.be/gp_Du6uO9V4">https://youtu.be/gp_Du6uO9V4</a></p>
+          <p><a href="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/5</link>
+        <pubDate>Wed, 25 Nov 2020 15:27:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1408-5</guid>
+        <source url="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408.rss">Multiple Returns and Branching: Could It Unseat Voidification?</source>
+      </item>
+      <item>
+        <title>Multiple Returns and Branching: Could It Unseat Voidification?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1408">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>No matter how you look at it, this is fairly daunting stuff.</p>
+</blockquote>
+</aside>
+<p>I've hacked up sort of a prototype to look at which managed to do:</p>
+<pre><code>&gt;&gt; if true [null] else [&lt;woo&gt;]
+; null
+
+&gt;&gt; if false [null] else [&lt;woo&gt;]
+== &lt;woo&gt;
+</code></pre>
+<p>(Although the code is disastrous, getting it to work at all required cleaning up some other stuff to be better.  So that aspect was good at least.)</p>
+<p>It operated on the basic premise I suggested.  IF has a named additional output called <em><code>branched:</code></em>:</p>
+<pre><code>&gt;&gt; [value branched]: if true [null]
+; null
+
+&gt;&gt; value
+; null
+
+&gt;&gt; branched
+== #[true]
+</code></pre>
+<p>The system does some implicit wiring to connect that to an input that ELSE can read...in addition to the ordinary value that comes through.</p>
+<p><strong>The biggest thing that bothers me about the technique is how easily it is disrupted when the parts aren't fit together in exactly this way.</strong></p>
+<p>For instance, right now you'd break it the moment you put the IF into a GROUP!.</p>
+<pre><code>&gt;&gt; (if true [null]) else [&lt;woo&gt;]
+== &lt;woo&gt;
+</code></pre>
+<p>Though this points to an issue of brittleness with the current concept of multi-returns in general.  A SET-BLOCK! wouldn't work with a GROUP! either, since it has to know what function to inject the output requests into, and it doesn't look deeply into groups to find that:</p>
+<pre><code>&gt;&gt; [value branched]: (if true [&lt;a&gt;])
+** Error
+</code></pre>
+<p><em>(I don't consider this aspect of multi-returns a deal-breaker.  The failure mode is a clear error...and you can always use plain refinements or APPLY to get what you're looking for.  The SET-BLOCK! is just a convenience.)</em></p>
+<p>There are other combinations that would be weak; such as how <code>&gt;-</code> is used to invoke enfix from PATH!.  That operator doesn't have a mechanism to propagate these requests for additional information:</p>
+<pre><code>&gt;&gt; (if true [null]) &gt;- lib/else [&lt;woo&gt;]
+== &lt;woo&gt;  ; not involved in the multi-return trick
+</code></pre>
+<p><strong>Without another mechanism, there is too much brittleness to accept.</strong></p>
+<p>I think we need to avoid any solution where these act differently:</p>
+<pre><code>if condition [...] else [...]
+
+if condition [...] comment "Hi" else [...]
+
+(if condition [...]) else [...]
+
+(if condition [...] comment "Hi!") &gt;- else [...]
+
+(if condition [...]) &gt;- else [...]
+</code></pre>
+<p><strong>Voidification May Be Ugly, But At Least It Does That...</strong></p>
+<p>Exchanging a single concrete value with known properties works.  And we do have the ability to do this now:</p>
+<pre><code>&gt;&gt; if true @[null]
+; null
+</code></pre>
+<p>You just can't use null producing branches with ELSE, or when they produce NULL they'll run both branches (which may be what you want, in which case, great).</p>
+<pre><code>&gt;&gt; if true @[print "A", null] else [print "B"]
+A
+B
+</code></pre>
+<p><strong>A Targeted Solution For JUST THIS PROBLEM May Be Worth It</strong></p>
+<p>I was trying to conceive an answer with multiple returns to try and avoid making something that applied only to IF / ELSE.  But it got pretty weird pretty fast.</p>
+<p>Given the importance of the issue, perhaps some answer that isn't really good for anything besides this conditional situation would be worth it.</p>
+<p>Perhaps NULL has an "isotope" that shares its not-able-to-be-put-in-blocks property, but that certain functions treat distinctly.  And perhaps it decays, so you can't end up transferring the property into variables besides where the state originates.</p>
+<p>That would run into substitutability problems, such as these cases acting differently:</p>
+<pre><code>(if condition [...]) else [...]  ; isotope NULL passed to ELSE
+
+(x: if condition [...]), (x) else [...]  ; isotope "decay" leading to difference
+</code></pre>
+<p>That's a little bit unsettling, but you'd have gotten the same kind of behavior out of the multiple return solution, without the ability to work across GROUP!.  It's probably learnable that if you didn't use an ELSE in a direct chain from something conditional, then you get the effect.</p>
+<p><em>I'm worried about any of this being hidden...</em>  In the spirit of the named voids, the console should show you <em>something</em> to help discern.  One question to answer would be which was the "real null"...I say that should be the thing the most functions return that don't have to worry about this issue.</p>
+<pre><code>&gt;&gt; if true [null]
+; null (branched)
+
+&gt;&gt; if false [&lt;a&gt;]
+; null
+</code></pre>
+<p>Or we could just go all in and say there's just negative and positively charged NULL, and you learn that they get corrupted from one to the other here and there when conditionals are involved.  It's a bit like voidification, but not crossing the more obvious datatype barrier to do it:</p>
+<pre><code>&gt;&gt; if true [null]
+; null+
+
+&gt;&gt; if false [&lt;a&gt;]
+; null-
+
+&gt;&gt; null
+; null-
+
+&gt;&gt; null else [print "Negatively charged nulls run ELSE."]
+Negatively charged nulls run ELSE.
+
+&gt;&gt; x: if true [null]
+; null+
+
+&gt;&gt; x then [print "Positively charged nulls run THEN."]
+Positively charged nulls run THEN.
+</code></pre>
+<p>That seems insane, and it really makes me long for the comfort of voidification.</p>
+<p><strong>All Answers Must Be Balanced Against Voidification</strong></p>
+<p>The concreteness of voidification is still a strong asset, and the @ branches can get those cases where NULL is actually intended covered.  So really everything needs to be weighed, here.</p>
+<p>I think that naming the voids so you understood why they were voided was a big step in making voidification more accessible and learnable.</p>
+<p>Just going to have to keep balancing the equations here as what's possible gets explored.  Stay tuned...</p>
+          <p><a href="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/4</link>
+        <pubDate>Wed, 25 Nov 2020 02:28:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1408-4</guid>
+        <source url="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408.rss">Multiple Returns and Branching: Could It Unseat Voidification?</source>
+      </item>
+      <item>
+        <title>Multiple Returns and Branching: Could It Unseat Voidification?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1408">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If somehow this piece of "/BRANCHED" (or /SUCCESS, or whatever) could make it through to ELSE, it could be used as the trigger.</p>
+</blockquote>
+</aside>
+<p><em>So here are some technical issues that come up from further thinking about this promising-seeming idea.</em>  <img src="https://forum.rebol.info/images/emoji/twitter/hammer_and_wrench.png?v=9" title=":hammer_and_wrench:" class="emoji" alt=":hammer_and_wrench:"></p>
+<hr>
+<p>Currently, multiple return values must be requested by the caller.  <strong>A value that is not requested might not be calculated...and the semantics of the function can be different based on how many values you request.</strong></p>
+<p><em>This is good.</em>  Because changing the semantics and getting additional outputs usually go hand-in-hand.  You don't need separate named input parameters to instruct that you want an output, that you already have to name anyway.</p>
+<p>Example: consider how PARSE now expects to go to the end by default:</p>
+<pre><code>&gt;&gt; parse "aaab" [some "a"]
+; null  (e.g. didn't make it to the end)
+</code></pre>
+<p>But if you ask for /PROGRESS, then it knows partial matches are of interest to you.  <em>Requesting the output implicitly indicates you are going to look at the amount of progress</em></p>
+<pre><code>&gt;&gt; [value pos]: parse "aaab" [some "a"]
+== "aaab"
+
+&gt;&gt; value
+== "aaab"  ; this could be NULL if end not reached, if we thought that better...
+
+&gt;&gt; pos
+== "b"
+</code></pre>
+<p>There would be shorthands for this, and adjusting the return value:</p>
+<pre><code>&gt;&gt; [_ #]: parse "aaab" [some "a"]  ; opt-out value (_), opt-in progress (#)
+== "b"
+</code></pre>
+<p>You should have less terse options than that if you want more literacy, though this all requires design work:</p>
+<pre><code>&gt;&gt; [/progress]: parse "aaab" [some "a"]
+== "b"
+</code></pre>
+<p><strong>Long Story Short: I don't think the design should sacrifice this ability to do semantic control of behavior of functions with requested returns.</strong></p>
+<h2>But How Does IF Know ELSE Wanted The /BRANCHED Output?</h2>
+<p>ELSE runs <em>after</em> IF.  So it would need to be able to connect its need for a branched output up to IF's parameterization <em>before IF runs</em>.  <img src="https://forum.rebol.info/images/emoji/twitter/pleading_face.png?v=9" title=":pleading_face:" class="emoji" alt=":pleading_face:"></p>
+<p>Not only that, but in the current formulation IF would needs a place to write the /BRANCHED output to.  It doesn't write to its output cell directly (the BRANCHED frame local), because that holds the WORD! or PATH! or NULL or <code>#</code> which signals what to do.  So it needs a bound word location to write... and if that's in the ELSE frame, <em>else's frame has to be built, and IF needs to have its /BRANCHED parameter hold a WORD! bound into that pending frame before it has run.</em></p>
+<p><strong>This also raises the question of what to do if there's competing demands for the branched flag.</strong></p>
+<pre><code>[value branched]: if false ["A"] else ["B"]
+</code></pre>
+<p>The current design puts a WORD! in the frame slot of IF corresponding to /BRANCHED.  Right now, when the evaluator sees SET-BLOCK!, the function to the right is partially specialized with that word and then retriggered.</p>
+<p>But <code>value</code> needs to be set from the result of the <em>overall</em> expression.  So might the branch come from the ELSE, instead?</p>
+<p><strong>What about take an input branch signal AND making an output signal</strong></p>
+<p>If we think of ELSE and THEN as things that chain, then what happens if we want to know if <em>they</em> branched?  We certainly do, e.g.</p>
+<pre><code>all [...] then [...] else [...]
+</code></pre>
+<p>The ELSE needs to know if the THEN branched or not.</p>
+<p>But if /BRANCHED is an <em>output</em> of ALL, and an <em>input</em> to THEN...how does ELSE receive it too as an <em>output</em> from THEN?  Quite a pickle.  <img src="https://forum.rebol.info/images/emoji/twitter/cucumber.png?v=9" title=":cucumber:" class="emoji" alt=":cucumber:"></p>
+<p><strong>No matter how you look at it, this is fairly daunting stuff.</strong></p>
+<p>However, the incentive is high to try to work it out.</p>
+          <p><a href="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/2</link>
+        <pubDate>Fri, 20 Nov 2020 15:54:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1408-2</guid>
+        <source url="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408.rss">Multiple Returns and Branching: Could It Unseat Voidification?</source>
+      </item>
+      <item>
+        <title>Multiple Returns and Branching: Could It Unseat Voidification?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Imagine that IF had multiple return values, and one of those values allowed it to indicate if it took a branch:</p>
+<pre><code>&gt;&gt; [value branched]: if true [null]
+; null
+
+&gt;&gt; value
+; null
+
+&gt;&gt; branched
+== #[true]  ; it could theoretically even return which branch, e.g. `== [null]`
+</code></pre>
+<p>If somehow this piece of "/BRANCHED" (or /SUCCESS, or whatever) could make it through to ELSE, it could be used as the trigger.</p>
+<p>For something like this to work, a finished function's frame would stick around long enough to see if a following function needed it...instead of just having the function's output cell.  It would not be particularly easy to rig up...but not impossible.</p>
+<p>The main design point would be how to know this is what you wanted.  Is it just a matter of ELSE taking an argument /BRANCHED, and IF having an output /BRANCHED...so the names line up and it assumes you want them connected?</p>
+<p>ELSE could still be willing to run if the /BRANCHED refinement was not provided by the left-hand side, in which case it would be purely NULL-reactive.</p>
+<p>I'm not exactly sure what you'd do with:</p>
+<pre><code>if true [null] else [2] then [3]
+</code></pre>
+<p>The ELSE would get the first as having /BRANCHED, but then it didn't run...so it's saying /BRANCHED is false.  It would mean a THEN after an ELSE would only run if the ELSE ran.  So:</p>
+<pre><code>&gt;&gt; if true [print "A", 1] else [print "B", 2] then [print "C", 3]  ; yay comma!
+A
+== 1
+
+&gt;&gt; if false [print "A", 1] else [print "B", 2] then [print "C", 3]
+B
+C
+== 3
+</code></pre>
+<p>That's different from today's value-driven (as opposed to branch-taken-driven) logic.  It means there's a bit more invisibility to it, but it's explainable...probably more explainable than voidification.</p>
+<p><strong>This seems promising enough to try out, despite the likely implementation difficulty.</strong>  Like I say, it doesn't mean NULL-reactivity can't stick around for ELSE in general...it just would give conditional structures a new way to solve a frustrating problem.</p>
+          <p><a href="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408/1</link>
+        <pubDate>Thu, 19 Nov 2020 19:30:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1408-1</guid>
+        <source url="https://forum.rebol.info/t/multiple-returns-and-branching-could-it-unseat-voidification/1408.rss">Multiple Returns and Branching: Could It Unseat Voidification?</source>
+      </item>
+  </channel>
+</rss>

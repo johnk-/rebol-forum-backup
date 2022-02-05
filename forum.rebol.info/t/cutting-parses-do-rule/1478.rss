@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Cutting PARSE&#39;s &quot;DO&quot; Rule</title>
+    <link>https://forum.rebol.info/t/cutting-parses-do-rule/1478</link>
+    <description>R3-Alpha PARSE had a partially-implemented feature that Red did not carry forward...and I don&#39;t think that anyone uses...which is the **do** keyword.
+
+What it does is perform a &quot;DO/NEXT&quot; step on the *input* as a code block, and matches the following rule against the evaluative result.
+
+    r3-alpha&gt;&gt; parse [reverse copy &quot;aab&quot;] [do &quot;baa&quot;]
+    == true
+
+I gather that things like the following were likely *intended* to work, but don&#39;t seem to:
+
+    r3-alpha&gt;&gt; parse [reverse copy &quot;aab&quot;] [do [&quot;b&quot; some &quot;a&quot;]]
+    == false
+
+It seems this feature was added to make it easier to do dialect processing where the dialect had code inline in the block you were processing...but not in a block or group.  This means only the evaluator knows how much to advance to do one step of processing.
+
+It can be a little hard to get one&#39;s head around, because it says `do [...]` and yet the `...` is a parse rule and not the code to be executed.  But PARSE has this odd aspect in other operations like COPY, so it&#39;s something you&#39;re supposed to be used to.
+
+## Raises Complex Questions
+
+The way this feature was implemented in R3-Alpha isolates it from participating in iteration or as the target of an outer rule, e.g.
+
+    r3-alpha&gt;&gt; parse [1 + 2] [set var do [quote 3]]
+    == true
+
+    r3-alpha&gt;&gt; var
+    == 1  ; not 3, which you might expect
+
+Other problems of the naive implementation expose just how non-integrated it is, like not working with THRU:
+
+    r3-alpha&gt;&gt; parse [1 + 2] [thru do integer!]
+    == false
+
+This is partially a problem with the code for DO, and partially a problem of PARSE being a somewhat organically evolved and ad-hoc codebase...where adding new operations that work coherently is just not that feasible.  There was no &quot;right way&quot; to plug in such a primitive, so it was just hacked in however.
+
+## Interesting Feature To Keep In Mind.  But Cutting It.
+
+It took me a while when I first looked at PARSE&#39;s code to even figure out what it was *supposed* to do.
+
+The broken implementation has hung around as a &quot;thing to think about&quot;.  But I think this forum post describing it serves that purpose better.
+
+I&#39;ve kept in mind the idea of being able to extend PARSE with new operations...and this is a good example of what could be a fairly simple test of that extensibility model.</description>
+    
+    <lastBuildDate>Tue, 02 Mar 2021 09:56:24 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/cutting-parses-do-rule/1478.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Cutting PARSE&#39;s &quot;DO&quot; Rule</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1478">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>R3-Alpha PARSE had a partially-implemented feature that Red did not carry forward...and I don't think that anyone uses...which is the <strong>do</strong> keyword.</p>
+</blockquote>
+</aside>
+<p>I had a new concept for what DO should do in the parse dialect:</p>
+<p><strong>Run code, and yield the result as a value to any value-consuming rules, but do not match against the input.</strong></p>
+<p>And because DO of a QUOTED! gives you the thing unquoted, this gives us a syntax for doing things like KEEP'ing literal material.</p>
+<pre><code>&gt;&gt; uparse [1 2 3] [data: collect [some [keep do 'demo keep integer!]]]
+== [1 2 3]
+
+&gt;&gt; data
+== [demo 1 demo 2 demo 3]
+</code></pre>
+<p>This is better than a more belabored syntax like <strong>keep :[...]</strong> to try and convolute into meaning that the block is interpreted as raw material.</p>
+<h2>So, Why Again Do We Not Let GROUP! Do This?</h2>
+<p>The appearance of COMMA! has softened my stance on the readability issue of passing GROUP!s as value-bearing, to combinators that want values.</p>
+<pre><code>uparse [1 2 3] [data: collect [some [keep ('demo), keep integer!]]]
+</code></pre>
+<p>So I thought "well, what's the harm in letting the GROUP! combinator be used in argument slots?"</p>
+<p>On the one hand, this brings us to the question of what exactly would be stopping <strong>[some (print [1 + 2])]</strong>.  That's not a deal breaker, but it would be possible to write...and presumably an infinite loop.</p>
+<p>More troubling is what to do when a GROUP! looks "just like any other value-bearing entity".  What happens if you say:</p>
+<pre><code>parse [1] [x: [(print "testing for integer") integer! | text!]]
+</code></pre>
+<p>What would be the property that differentiates GROUP!s from INTEGER! and TEXT! as value-bearing?  Why shouldn't the X get the result of the group, instead of the integer?  If GROUP!s simply say they never generate results, you can solve the problem.</p>
+<p>I'm really a bit puzzled about the SET feature and BLOCK! just in general.  Blocks are a potentially very amorphous set of alternates, and SET has tried to cover the case of setting a single item among alternates.  Right now I've set up blocks to error if there's more than one value production per alternate, and so we'd be excluding GROUP!s from that.</p>
+<p>In any case, the bigger point here is that if we allow the likes of <strong>x: (1 + 2)</strong> to work, we'd have to explain why <strong>x: [(1 + 2) | (3 + 4)]</strong> should or shouldn't work, which is a slippery slope.</p>
+<p>Like I say, one possibility is to let DO take over the value-bearing role.  Or fill in your answer about how SET interacts with BLOCK! here.</p>
+          <p><a href="https://forum.rebol.info/t/cutting-parses-do-rule/1478/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/cutting-parses-do-rule/1478/2</link>
+        <pubDate>Tue, 02 Mar 2021 09:56:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1478-2</guid>
+        <source url="https://forum.rebol.info/t/cutting-parses-do-rule/1478.rss">Cutting PARSE&#39;s &quot;DO&quot; Rule</source>
+      </item>
+      <item>
+        <title>Cutting PARSE&#39;s &quot;DO&quot; Rule</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>R3-Alpha PARSE had a partially-implemented feature that Red did not carry forward...and I don't think that anyone uses...which is the <strong>do</strong> keyword.</p>
+<p>What it does is perform a "DO/NEXT" step on the <em>input</em> as a code block, and matches the following rule against the evaluative result.</p>
+<pre><code>r3-alpha&gt;&gt; parse [reverse copy "aab"] [do "baa"]
+== true
+</code></pre>
+<p>I gather that things like the following were likely <em>intended</em> to work, but don't seem to:</p>
+<pre><code>r3-alpha&gt;&gt; parse [reverse copy "aab"] [do ["b" some "a"]]
+== false
+</code></pre>
+<p>It seems this feature was added to make it easier to do dialect processing where the dialect had code inline in the block you were processing...but not in a block or group.  This means only the evaluator knows how much to advance to do one step of processing.</p>
+<p>It can be a little hard to get one's head around, because it says <code>do [...]</code> and yet the <code>...</code> is a parse rule and not the code to be executed.  But PARSE has this odd aspect in other operations like COPY, so it's something you're supposed to be used to.</p>
+<h2>Raises Complex Questions</h2>
+<p>The way this feature was implemented in R3-Alpha isolates it from participating in iteration or as the target of an outer rule, e.g.</p>
+<pre><code>r3-alpha&gt;&gt; parse [1 + 2] [set var do [quote 3]]
+== true
+
+r3-alpha&gt;&gt; var
+== 1  ; not 3, which you might expect
+</code></pre>
+<p>Other problems of the naive implementation expose just how non-integrated it is, like not working with THRU:</p>
+<pre><code>r3-alpha&gt;&gt; parse [1 + 2] [thru do integer!]
+== false
+</code></pre>
+<p>This is partially a problem with the code for DO, and partially a problem of PARSE being a somewhat organically evolved and ad-hoc codebase...where adding new operations that work coherently is just not that feasible.  There was no "right way" to plug in such a primitive, so it was just hacked in however.</p>
+<h2>Interesting Feature To Keep In Mind.  But Cutting It.</h2>
+<p>It took me a while when I first looked at PARSE's code to even figure out what it was <em>supposed</em> to do.</p>
+<p>The broken implementation has hung around as a "thing to think about".  But I think this forum post describing it serves that purpose better.</p>
+<p>I've kept in mind the idea of being able to extend PARSE with new operations...and this is a good example of what could be a fairly simple test of that extensibility model.</p>
+          <p><a href="https://forum.rebol.info/t/cutting-parses-do-rule/1478/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/cutting-parses-do-rule/1478/1</link>
+        <pubDate>Wed, 27 Jan 2021 09:11:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1478-1</guid>
+        <source url="https://forum.rebol.info/t/cutting-parses-do-rule/1478.rss">Cutting PARSE&#39;s &quot;DO&quot; Rule</source>
+      </item>
+  </channel>
+</rss>

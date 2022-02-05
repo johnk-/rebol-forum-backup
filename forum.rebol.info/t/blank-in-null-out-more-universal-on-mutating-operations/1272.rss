@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>BLANK!-in, NULL-out, more universal (on mutating operations...)?</title>
+    <link>https://forum.rebol.info/t/blank-in-null-out-more-universal-on-mutating-operations/1272</link>
+    <description>Today I hit something that was a bit of an annoyance.  I couldn&#39;t use our fun &quot;BLANK!-in-NULL-out convention&quot; with SET.
+
+So instead of:
+
+    set try my-variable-that-may-be-null value
+
+I had to write:
+
+    if my-variable-that-may-be-null [
+        set my-variable-that-may-be-null value
+    ]
+
+How irritating this is depends on the length of the variable name.  Though it&#39;s irritating even if it&#39;s one letter.
+
+The reason we have this situation is because we are honoring a concept that was put forth early in the days of so-called &quot;none propagation&quot;, where BrianH and others believed that mutating operations should not let you &quot;opt out&quot;.  There was too much potential for confusion if you wrote **append block [1 2 3]** and it silently didn&#39;t append, because block was a NONE!:
+
+    r3-alpha&gt;&gt; block: none
+    r3-alpha&gt;&gt; append block [1 2 3]
+    ** Script error: append does not allow none! for its series argument
+
+    red&gt;&gt; block: none
+    red&gt;&gt; append block [1 2 3]
+    *** Script Error: append does not allow none! for its series argument
+
+Operations without side effects were deemed to be harmless by comparison:
+
+    r3-alpha&gt;&gt; block: none
+    r3-alpha&gt;&gt; select block &#39;a
+    == none
+
+    red&gt;&gt; block: none
+    red&gt;&gt; select block &#39;a
+    == none
+
+But even that had a kind of nasty property.  You could write a long chain of non-mutating operations, and at the end of the pipe you could get a NONE! without knowing where in that pipe the error occurred.  *(All of this compounded on the fact that a NONE! could have even literally been something that was selected, so your opt-out value could have been an actual selection result!)*
+
+## NULL as &quot;Soft Failure&quot; Provided Error Locality
+
+[**This gave rise to Ren-C&#39;s BLANK!-in, NULL out philosophy.**](https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249)  It offers better error locality, by making opt-out tolerant constructs give back something that they themselves wouldn&#39;t take as a valid input.  Then, TRY could be used to convert those &quot;soft failure&quot; NULLs into BLANK!s...putting documentation and intent on where tolerance was desired:
+
+    &gt;&gt; block: blank
+    == _
+
+    &gt;&gt; select block &#39;a
+    ; null
+
+    &gt;&gt; select (select block &#39;a) &#39;b
+    ** Script Error: select requires series argument to not be null
+
+    &gt;&gt; try select block &#39;a
+    == _
+
+    &gt;&gt; select (try select block &#39;a) &#39;b
+    ; null
+
+The convention was considered to possibly be a way of dealing with soft failures in arithmetic, [in places where &quot;Not-a-Number&quot;](https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954) had propagated before.
+
+This created a fairly significant paradigm shift, where it didn&#39;t make sense to use BLANK!s in common places...such as unused refinements.  *They could carry meaning,* a conscious desire to opt-out.  This was different from a NULL.
+
+## Does &quot;friendly&quot; NULL reframe things by making BLANK! rarer?
+
+If BLANK!s are relatively rare, and not used by people willy-nilly where NULL should be used...then what are we saving by not letting operations like SET and APPEND opt-out with BLANK!?
+
+One thing is that if we consider the concrete issue of working with BLOCK!s, you can&#39;t put a NULL in that block, only a BLANK!
+
+     obj: make object! [x: 10 y: null z: &#39;word]
+     data: [x: 10 y: _ z: word]
+
+It&#39;s all fine and well to imagine saying **append obj/y [a b c]** and getting an error.  But the block doesn&#39;t have that luxury.  So it&#39;s sketchy to imagine saying **append data/y [a b c]** and having it silently keep running without warning you.
+
+But when I talk about issues like [parity in object and path picking](https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086), it might be that parity comes from &quot;scant&quot; evaluation.  e.g. everything is processed at one quote level, unless it has no quotes.
+
+     obj: make object! [x: 10 y: null z: &#39;word]
+     data: [x: 10 y: &#39; z: &#39;word]
+
+So when you ask for **data/y** you get null back, and **data/z** you get `word` back but **data/x** gives 10.
+
+*But that single apostrophe looks pretty odd.*  Note that we could decide that single-apostrophe renders differently... it likely shouldn&#39;t be #[null] as that is misleading (you can&#39;t have a null in a block).  But it could be #[nullify] or something of that sort to say that if it gets *evaluated* it will become a null.
+
+But we could spin this around and say that *it is BLANK! itself that evaluates to null, but a variable that is blank evaluates to blank*.
+
+    &gt;&gt; x: _
+    ; null
+
+    &gt;&gt; x
+    ; null
+
+    &gt;&gt; x: &#39;_
+    == _
+
+    &gt;&gt; x
+    == _
+
+    &gt;&gt; x: blank
+    == _
+
+    &gt;&gt; x
+    == _
+
+That would make `_` a shorthand for a single tick `&#39;` when used in evaluative contexts.  This might make the &quot;scant evaluation&quot; I describe more appealing, which may help with the OBJECT! &lt;=&gt; BLOCK! parity initiative.
+
+(This proposal should not be mistaken for a previously panned &quot;wacky&quot; proposal: that [looking up a variable that was BLANK! evaluated to NULL](https://forum.rebol.info/t/should-append-null-fail-append-blank-add-nothing-unless-only/635/5?u=hostilefork).  We don&#39;t believe in &quot;decay&quot; of this form, e.g. the infamous &quot;lit-word decay&quot; from Rebol2 and R3-Alpha that Red also got rid of.)
+
+## Just Thinking Aloud...
+
+As I said at the top of the post, I think it would be nice if we could opt-out of APPEND or SET in a chain of operations...as we do with non-mutating operations.  I just want to look at it from all the angles, as this jigsaw puzzle comes together.
+
+Note I did not originate the term &quot;scant&quot; evaluation--that was a term that originated in CONSTRUCT:
+
+    r3-alpha&gt;&gt; help construct
+    USAGE:
+        CONSTRUCT block /with object /only
+
+    DESCRIPTION:
+        Creates an object with scant (safe) evaluation.
+        CONSTRUCT is a native value.
+
+    ARGUMENTS:
+        block -- Specification (modified) (block! string! binary!)
+
+    REFINEMENTS:
+         /with -- Default object
+             object (object!)
+         /only -- Values are kept as-is</description>
+    
+    <lastBuildDate>Thu, 09 Apr 2020 14:58:39 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/blank-in-null-out-more-universal-on-mutating-operations/1272.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>BLANK!-in, NULL-out, more universal (on mutating operations...)?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Today I hit something that was a bit of an annoyance.  I couldn't use our fun "BLANK!-in-NULL-out convention" with SET.</p>
+<p>So instead of:</p>
+<pre><code>set try my-variable-that-may-be-null value
+</code></pre>
+<p>I had to write:</p>
+<pre><code>if my-variable-that-may-be-null [
+    set my-variable-that-may-be-null value
+]
+</code></pre>
+<p>How irritating this is depends on the length of the variable name.  Though it's irritating even if it's one letter.</p>
+<p>The reason we have this situation is because we are honoring a concept that was put forth early in the days of so-called "none propagation", where BrianH and others believed that mutating operations should not let you "opt out".  There was too much potential for confusion if you wrote <strong>append block [1 2 3]</strong> and it silently didn't append, because block was a NONE!:</p>
+<pre><code>r3-alpha&gt;&gt; block: none
+r3-alpha&gt;&gt; append block [1 2 3]
+** Script error: append does not allow none! for its series argument
+
+red&gt;&gt; block: none
+red&gt;&gt; append block [1 2 3]
+*** Script Error: append does not allow none! for its series argument
+</code></pre>
+<p>Operations without side effects were deemed to be harmless by comparison:</p>
+<pre><code>r3-alpha&gt;&gt; block: none
+r3-alpha&gt;&gt; select block 'a
+== none
+
+red&gt;&gt; block: none
+red&gt;&gt; select block 'a
+== none
+</code></pre>
+<p>But even that had a kind of nasty property.  You could write a long chain of non-mutating operations, and at the end of the pipe you could get a NONE! without knowing where in that pipe the error occurred.  <em>(All of this compounded on the fact that a NONE! could have even literally been something that was selected, so your opt-out value could have been an actual selection result!)</em></p>
+<h2>NULL as "Soft Failure" Provided Error Locality</h2>
+<p><a href="https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249"><strong>This gave rise to Ren-C's BLANK!-in, NULL out philosophy.</strong></a>  It offers better error locality, by making opt-out tolerant constructs give back something that they themselves wouldn't take as a valid input.  Then, TRY could be used to convert those "soft failure" NULLs into BLANK!s...putting documentation and intent on where tolerance was desired:</p>
+<pre><code>&gt;&gt; block: blank
+== _
+
+&gt;&gt; select block 'a
+; null
+
+&gt;&gt; select (select block 'a) 'b
+** Script Error: select requires series argument to not be null
+
+&gt;&gt; try select block 'a
+== _
+
+&gt;&gt; select (try select block 'a) 'b
+; null
+</code></pre>
+<p>The convention was considered to possibly be a way of dealing with soft failures in arithmetic, <a href="https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954">in places where "Not-a-Number"</a> had propagated before.</p>
+<p>This created a fairly significant paradigm shift, where it didn't make sense to use BLANK!s in common places...such as unused refinements.  <em>They could carry meaning,</em> a conscious desire to opt-out.  This was different from a NULL.</p>
+<h2>Does "friendly" NULL reframe things by making BLANK! rarer?</h2>
+<p>If BLANK!s are relatively rare, and not used by people willy-nilly where NULL should be used...then what are we saving by not letting operations like SET and APPEND opt-out with BLANK!?</p>
+<p>One thing is that if we consider the concrete issue of working with BLOCK!s, you can't put a NULL in that block, only a BLANK!</p>
+<pre><code> obj: make object! [x: 10 y: null z: 'word]
+ data: [x: 10 y: _ z: word]
+</code></pre>
+<p>It's all fine and well to imagine saying <strong>append obj/y [a b c]</strong> and getting an error.  But the block doesn't have that luxury.  So it's sketchy to imagine saying <strong>append data/y [a b c]</strong> and having it silently keep running without warning you.</p>
+<p>But when I talk about issues like <a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086">parity in object and path picking</a>, it might be that parity comes from "scant" evaluation.  e.g. everything is processed at one quote level, unless it has no quotes.</p>
+<pre><code> obj: make object! [x: 10 y: null z: 'word]
+ data: [x: 10 y: ' z: 'word]
+</code></pre>
+<p>So when you ask for <strong>data/y</strong> you get null back, and <strong>data/z</strong> you get <code>word</code> back but <strong>data/x</strong> gives 10.</p>
+<p><em>But that single apostrophe looks pretty odd.</em>  Note that we could decide that single-apostrophe renders differently... it likely shouldn't be #[null] as that is misleading (you can't have a null in a block).  But it could be #[nullify] or something of that sort to say that if it gets <em>evaluated</em> it will become a null.</p>
+<p>But we could spin this around and say that <em>it is BLANK! itself that evaluates to null, but a variable that is blank evaluates to blank</em>.</p>
+<pre><code>&gt;&gt; x: _
+; null
+
+&gt;&gt; x
+; null
+
+&gt;&gt; x: '_
+== _
+
+&gt;&gt; x
+== _
+
+&gt;&gt; x: blank
+== _
+
+&gt;&gt; x
+== _
+</code></pre>
+<p>That would make <code>_</code> a shorthand for a single tick <code>'</code> when used in evaluative contexts.  This might make the "scant evaluation" I describe more appealing, which may help with the OBJECT! &lt;=&gt; BLOCK! parity initiative.</p>
+<p>(This proposal should not be mistaken for a previously panned "wacky" proposal: that <a href="https://forum.rebol.info/t/should-append-null-fail-append-blank-add-nothing-unless-only/635/5">looking up a variable that was BLANK! evaluated to NULL</a>.  We don't believe in "decay" of this form, e.g. the infamous "lit-word decay" from Rebol2 and R3-Alpha that Red also got rid of.)</p>
+<h2>Just Thinking Aloud...</h2>
+<p>As I said at the top of the post, I think it would be nice if we could opt-out of APPEND or SET in a chain of operations...as we do with non-mutating operations.  I just want to look at it from all the angles, as this jigsaw puzzle comes together.</p>
+<p>Note I did not originate the term "scant" evaluation--that was a term that originated in CONSTRUCT:</p>
+<pre><code>r3-alpha&gt;&gt; help construct
+USAGE:
+    CONSTRUCT block /with object /only
+
+DESCRIPTION:
+    Creates an object with scant (safe) evaluation.
+    CONSTRUCT is a native value.
+
+ARGUMENTS:
+    block -- Specification (modified) (block! string! binary!)
+
+REFINEMENTS:
+     /with -- Default object
+         object (object!)
+     /only -- Values are kept as-is</code></pre>
+          <p><a href="https://forum.rebol.info/t/blank-in-null-out-more-universal-on-mutating-operations/1272/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blank-in-null-out-more-universal-on-mutating-operations/1272/1</link>
+        <pubDate>Thu, 09 Apr 2020 14:46:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1272-1</guid>
+        <source url="https://forum.rebol.info/t/blank-in-null-out-more-universal-on-mutating-operations/1272.rss">BLANK!-in, NULL-out, more universal (on mutating operations...)?</source>
+      </item>
+  </channel>
+</rss>

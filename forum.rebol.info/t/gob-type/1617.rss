@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>GOB! type</title>
+    <link>https://forum.rebol.info/t/gob-type/1617</link>
+    <description>When creating a GOB! you can specify some values for it, or leave this empty and go for the default values like so:
+
+    &gt;&gt; gb: make gob! []
+    == make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+
+And this results in
+
+    &gt;&gt; gb
+    == make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+
+Where 
+
+    &gt;&gt; gb/offset
+    == 100.0x100.0
+
+    &gt;&gt; gb/size
+    == 0.0x0.0
+
+    &gt;&gt; gb/alpha
+    == 255
+
+Now when taking a closer look at the GOB! code in `t-gob.c` you can remark that there should be more to this standard GOB! than meets the eye. There could be a `pane`, `content`, `data` as well as a `type` and an `OLD-OFFSET` too.
+
+Let us test this out:
+
+    &gt;&gt; gb: make gob! [data: [my data here]]
+    == make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+
+Now remarkable enough gb on its own looks still the same
+
+    &gt;&gt; gb
+    == make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+
+Yet, now this is the case:
+
+    &gt;&gt; gb/data
+    == [my data here]
+
+So what about some of the other attributes?
+
+    &gt;&gt; gb/pane  
+    == []
+
+
+    &gt;&gt; gb/flags
+    == []
+
+But not
+
+    &gt;&gt; gb/content
+    ** Script Error: cannot pick content in path
+    ** Where: console
+    ** Near: [gb/content **]
+    ** Line: 1
+
+    &gt;&gt; gb/parent
+    (i) Info: use WHY for error information
+    ** Script Error: cannot pick parent in path
+    ** Where: console
+    ** Near: [gb/parent **]
+    ** Line: 1
+
+    &gt;&gt; gb/type
+    ** Script Error: cannot pick type in path
+    ** Where: console
+    ** Near: [gb/type **]
+    ** Line: 1
+
+But on line 93 of `t-gob.c` there is an initialization of TYPE going on:
+
+    GOB_TYPE(a) = GOBT_NONE;
+
+Be it initialized as 0 (enum from `reb-gob.h` line 125), imo that should mean it could have been picked up.
+
+* What is the difference between the init of TYPE here and the other more successful inits?
+
+* Why is the content of the extra `data` information not shown when the GOB! gb is queried?
+
+*  It would be very neat to have some kind of dictionary of functions and terminology that in the first place will point to the place where the function is defined. (This for many `MACRO`&#39;s, the `REB***` structures, the `reb********` functions).</description>
+    
+    <lastBuildDate>Wed, 02 Jun 2021 00:28:12 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/gob-type/1617.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>GOB! type</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Looks like you might be gathering that that when it comes to GOB!, there's not too much to get excited about.</p>
+<p>It was an attempt to make a less expensive form of OBJECT!, by fixing the fields it could carry.  Very few tests were written for it, and anything that isn't tested likely does not work.</p>
+<p>GOB! isn't central to the questions I find interesting about the language.  But it seems reasonable to want to have the ability to develop such optimized data types as extensions.</p>
+<p>So it has not been deleted because it is an example of that.  The pressure of wanting to keep it working but not "build it in" has influenced the way the extensibility of cells and series nodes work, e.g. <a href="https://github.com/metaeducation/ren-c/blob/92171dcfd52954e543793afe027fb7de7ea11d64/src/include/structs/sys-rebnod.h#L447">NODE_FLAG_GC_ONE and NODE_FLAG_GC_TWO</a>.</p>
+<p><em>(Note that EVENT! is similar; but it tried to make the objects <em>really</em> small, e.g. the size of a cell.  That's a bit more interesting of an optimization, and there is code that tests their use.  So they are in better working condition, we assume.)</em></p>
+<h3>The GOB_TYPE() Is Internal And Part Of The Optimization</h3>
+<blockquote>
+<p>But on line 93 of <code>t-gob.c</code> there is an initialization of TYPE going on:</p>
+<pre><code class="lang-auto">GOB_TYPE(a) = GOBT_NONE;
+</code></pre>
+<p>Be it initialized as 0 (enum from <code>reb-gob.h</code> line 125), imo that should mean it could have been picked up.</p>
+</blockquote>
+<p>When you put different values into a GOB!, the type is set as part of that process.</p>
+<pre><code>&gt;&gt; g: make gob! []
+
+&gt;&gt; g.text: "hello"
+== "hello"
+
+&gt;&gt; g
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255 text: "Hello"]
+</code></pre>
+<p>Now, behind the scenes, the GOB_TYPE() is GOBT_STRING.</p>
+<p>The idea is that because GOB!s were trying to be economical, they only wanted to use one platform pointer to store the data.  The GOB_TYPE() is just a few bits chewed out of the header that were picked to help know how to interpret that pointer.</p>
+<p>You can think of it like a <a href="https://en.wikipedia.org/wiki/Tagged_union">tagged union</a>.</p>
+<h3>Parent/Child Relationships Are Automatic</h3>
+<p>The idea behind the parent/child relationship is that GOB!s maintain that automatically, when you append/remove things:</p>
+<pre><code>&gt;&gt; gp: make gob! []
+
+&gt;&gt; gc: make gob! []
+
+&gt;&gt; append gp gc
+
+&gt;&gt; gc.parent = gp
+== true
+
+&gt;&gt; gp.parent
+; null
+</code></pre>
+<p>This wasn't working in Ren-C (parent access was erroring instead of returning NULL when there was no parent).  But I've added that as a a test and fixed a couple of issues:</p>
+<ul>
+<li><a href="https://github.com/metaeducation/ren-c/commit/f70f64f30591958b183f6f29eabfc13f22646e08">GOB! comparisons fixed</a></li>
+<li><a href="https://github.com/metaeducation/ren-c/commit/a0fdccb44d8c4d166cc42e96022a50eae2c559ab">Path access of known fields returns NULL on path access vs. error</a></li>
+</ul>
+<h2>However, GOB! is Not A Priority...</h2>
+<p>I'll take a neutral stance on your research of GOB!.  You can continue to delve into it to satisfy yourself with whether they represent magic or a distraction from more central work.</p>
+<p>I'm settled in for a bit after a couple weeks of travel and hoping to get back to the issues I was previously in the middle of...</p>
+          <p><a href="https://forum.rebol.info/t/gob-type/1617/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/gob-type/1617/2</link>
+        <pubDate>Wed, 02 Jun 2021 00:17:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1617-2</guid>
+        <source url="https://forum.rebol.info/t/gob-type/1617.rss">GOB! type</source>
+      </item>
+      <item>
+        <title>GOB! type</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>When creating a GOB! you can specify some values for it, or leave this empty and go for the default values like so:</p>
+<pre><code>&gt;&gt; gb: make gob! []
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+</code></pre>
+<p>And this results in</p>
+<pre><code>&gt;&gt; gb
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+</code></pre>
+<p>Where</p>
+<pre><code>&gt;&gt; gb/offset
+== 100.0x100.0
+
+&gt;&gt; gb/size
+== 0.0x0.0
+
+&gt;&gt; gb/alpha
+== 255
+</code></pre>
+<p>Now when taking a closer look at the GOB! code in <code>t-gob.c</code> you can remark that there should be more to this standard GOB! than meets the eye. There could be a <code>pane</code>, <code>content</code>, <code>data</code> as well as a <code>type</code> and an <code>OLD-OFFSET</code> too.</p>
+<p>Let us test this out:</p>
+<pre><code>&gt;&gt; gb: make gob! [data: [my data here]]
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+</code></pre>
+<p>Now remarkable enough gb on its own looks still the same</p>
+<pre><code>&gt;&gt; gb
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+</code></pre>
+<p>Yet, now this is the case:</p>
+<pre><code>&gt;&gt; gb/data
+== [my data here]
+</code></pre>
+<p>So what about some of the other attributes?</p>
+<pre><code>&gt;&gt; gb/pane  
+== []
+
+
+&gt;&gt; gb/flags
+== []
+</code></pre>
+<p>But not</p>
+<pre><code>&gt;&gt; gb/content
+** Script Error: cannot pick content in path
+** Where: console
+** Near: [gb/content **]
+** Line: 1
+
+&gt;&gt; gb/parent
+(i) Info: use WHY for error information
+** Script Error: cannot pick parent in path
+** Where: console
+** Near: [gb/parent **]
+** Line: 1
+
+&gt;&gt; gb/type
+** Script Error: cannot pick type in path
+** Where: console
+** Near: [gb/type **]
+** Line: 1
+</code></pre>
+<p>But on line 93 of <code>t-gob.c</code> there is an initialization of TYPE going on:</p>
+<pre><code>GOB_TYPE(a) = GOBT_NONE;
+</code></pre>
+<p>Be it initialized as 0 (enum from <code>reb-gob.h</code> line 125), imo that should mean it could have been picked up.</p>
+<ul>
+<li>
+<p>What is the difference between the init of TYPE here and the other more successful inits?</p>
+</li>
+<li>
+<p>Why is the content of the extra <code>data</code> information not shown when the GOB! gb is queried?</p>
+</li>
+<li>
+<p>It would be very neat to have some kind of dictionary of functions and terminology that in the first place will point to the place where the function is defined. (This for many <code>MACRO</code>'s, the <code>REB***</code> structures, the <code>reb********</code> functions).</p>
+</li>
+</ul>
+          <p><a href="https://forum.rebol.info/t/gob-type/1617/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/gob-type/1617/1</link>
+        <pubDate>Mon, 31 May 2021 08:02:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1617-1</guid>
+        <source url="https://forum.rebol.info/t/gob-type/1617.rss">GOB! type</source>
+      </item>
+  </channel>
+</rss>

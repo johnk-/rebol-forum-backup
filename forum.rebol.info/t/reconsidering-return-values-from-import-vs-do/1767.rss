@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Reconsidering Return Values From IMPORT vs. DO</title>
+    <link>https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767</link>
+    <description>The state of things **right now** is:
+
+* DO returns the evaluative result of running a script, which can be any datatype.  It can return an INTEGER!, an ACTION!, an OBJECT!, or nothing at all *(e.g. a ~none~/~unset~/~void~ isotope)*.  If it wanted, it could also return a MODULE!...but this module could be unrelated to the context the script you are DO-ing is running in.
+
+* IMPORT will return the MODULE! of the script, *if you use an assignment form on its left*. 
+
+      module: import %some-library.r
+
+  This module is a way of accessing any of the EXPORTed things from the module, as **module.exportedthing** ... but you can&#39;t access definitions inside the module that are not exported in this way.  *(Or at least you shouldn&#39;t be able to.)*
+
+    If you don&#39;t have a SET-WORD! on the left, it assumes you want to make all the exports of that module available in your current...uh, let&#39;s say &quot;binding environment&quot;...
+
+      import %some-library.r
+
+I&#39;m deliberately vague about what this is actually doing, because historical Rebol doesn&#39;t have answers to binding that demonstrate reasonable composability...and I&#39;m dabbling in trying to make solutions that will work for bigger projects.
+
+## IMPORT&#39;s SET-WORD! Lookback Is Probably A Bad Idea
+
+What if you wanted:
+
+    func-that-takes-module (import %some-library.r)
+
+You don&#39;t want to have to write:
+
+    func-that-takes-module (dummy: import %some-library.r)
+
+Or:
+
+    func-that-takes-module ([@]: import %some-library.r)
+
+
+The thing I&#39;ve been leaning toward is a generalized operator which lets you pull an object&#39;s fields into the ensuing scope.  A prototype exists right now, it&#39;s called USING:
+
+    obj: make object! [x: 10 y: 20]
+    using obj
+    print [x + y]  ; would print 30
+
+So if you didn&#39;t want to get a module as a value but rather &quot;use&quot; that, you could say something more like:
+
+    using import %some-library.r
+
+And then we could offer a shorthand when USING received a file, like:
+
+    using %some-library.r
+
+In fact, I think this could be popular enough to warrant overtaking the name USE.
+
+    use parse [10 &quot;twenty&quot;] [
+        emit x: integer!
+        emit y: text!
+    ] else [
+        fail &quot;Expected integer followed by text&quot;
+    ]
+
+    print [&quot;Integer was&quot; x &quot;and text was&quot; mold y]
+
+Though from an overloading standpoint, it&#39;s a bit shaky when you leverage the same name for both running already loaded code in your environment as pulling something off a network.    (Today&#39;s DO has this problem, that someone can wedge in a little bit of code to trick you into running arbitrary code off a network instead of a local BLOCK!)  So maybe having the FILE!-and-HTTP capable USING be distinct from USE would be a smart distinction.
+
+That would mean that:
+
+    using %some-library.r  &lt;=&gt;  use import %some-library.r
+
+## How To Get More Granularity?
+
+I&#39;ve pointed out the [variations of import syntaxes in JavaScript before](https://forum.rebol.info/t/design-for-import/1570) when talking about a design for IMPORT:
+
+    import defaultExport from &quot;module-name&quot;;
+    import * as name from &quot;module-name&quot;;
+    import { export1 } from &quot;module-name&quot;;
+    import { export1 as alias1 } from &quot;module-name&quot;;
+    import { export1 , export2 } from &quot;module-name&quot;;
+    import { foo , bar } from &quot;module-name/path/to/specific/un-exported/file&quot;;
+    import { export1 , export2 as alias2 , [...] } from &quot;module-name&quot;;
+    import defaultExport, { export1 [ , [...] ] } from &quot;module-name&quot;;
+    import defaultExport, * as name from &quot;module-name&quot;;
+    import &quot;module-name&quot;;
+    var promise = import(&quot;module-name&quot;);
+
+Their **import defaultExport from &quot;module-name&quot;;** case acts like what I&#39;m proposing for **using %module-name.r** above.
+
+In my other post I bring up these issues.  It seems like USE would want this too.  But as my other post argues, the dialecting is difficult to make look good.
+
+## Extra Return Results
+
+The core routine that is behind both IMPORT and DO actually has two return results... it gives back both the context the code was run in and the final by-product of evaluating the script.  IMPORT only returns the module, and DO only returns the product.
+
+It doesn&#39;t make a lot of sense to ask IMPORT for the evaluation product, because import caches the module.  So it may not run the code in response to the IMPORT, and wouldn&#39;t have the result available (unless it saved it somewhere?)  Right now you can ask it, but it might just give you back the BAD-WORD! of ~cached~ to tell you that no script code ran.  This indicates to me that you probably shouldn&#39;t be able to ask.
+
+Perhaps there are more instances where asking DO for the module would make sense.  I don&#39;t know--and there is some friction with the question of this separation.  Should all DO be guaranteed to not contaminate the environment they are called from...forcing you to use an IMPORT if you want the contamination?  (This would mean Redbol&#39;s DO would have to be rigged up to actually be an IMPORT underneath.)</description>
+    
+    <lastBuildDate>Sat, 04 Dec 2021 21:39:33 +0000</lastBuildDate>
+    <category>Modules</category>
+    <atom:link href="https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Reconsidering Return Values From IMPORT vs. DO</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The state of things <strong>right now</strong> is:</p>
+<ul>
+<li>
+<p>DO returns the evaluative result of running a script, which can be any datatype.  It can return an INTEGER!, an ACTION!, an OBJECT!, or nothing at all <em>(e.g. a ~none~/~unset~/~void~ isotope)</em>.  If it wanted, it could also return a MODULE!...but this module could be unrelated to the context the script you are DO-ing is running in.</p>
+</li>
+<li>
+<p>IMPORT will return the MODULE! of the script, <em>if you use an assignment form on its left</em>.</p>
+<pre><code>module: import %some-library.r
+</code></pre>
+<p>This module is a way of accessing any of the EXPORTed things from the module, as <strong>module.exportedthing</strong> ... but you can't access definitions inside the module that are not exported in this way.  <em>(Or at least you shouldn't be able to.)</em></p>
+<p>If you don't have a SET-WORD! on the left, it assumes you want to make all the exports of that module available in your current...uh, let's say "binding environment"...</p>
+<pre><code>import %some-library.r
+</code></pre>
+</li>
+</ul>
+<p>I'm deliberately vague about what this is actually doing, because historical Rebol doesn't have answers to binding that demonstrate reasonable composability...and I'm dabbling in trying to make solutions that will work for bigger projects.</p>
+<h2>IMPORT's SET-WORD! Lookback Is Probably A Bad Idea</h2>
+<p>What if you wanted:</p>
+<pre><code>func-that-takes-module (import %some-library.r)
+</code></pre>
+<p>You don't want to have to write:</p>
+<pre><code>func-that-takes-module (dummy: import %some-library.r)
+</code></pre>
+<p>Or:</p>
+<pre><code>func-that-takes-module ([@]: import %some-library.r)
+</code></pre>
+<p>The thing I've been leaning toward is a generalized operator which lets you pull an object's fields into the ensuing scope.  A prototype exists right now, it's called USING:</p>
+<pre><code>obj: make object! [x: 10 y: 20]
+using obj
+print [x + y]  ; would print 30
+</code></pre>
+<p>So if you didn't want to get a module as a value but rather "use" that, you could say something more like:</p>
+<pre><code>using import %some-library.r
+</code></pre>
+<p>And then we could offer a shorthand when USING received a file, like:</p>
+<pre><code>using %some-library.r
+</code></pre>
+<p>In fact, I think this could be popular enough to warrant overtaking the name USE.</p>
+<pre><code>use parse [10 "twenty"] [
+    emit x: integer!
+    emit y: text!
+] else [
+    fail "Expected integer followed by text"
+]
+
+print ["Integer was" x "and text was" mold y]
+</code></pre>
+<p>Though from an overloading standpoint, it's a bit shaky when you leverage the same name for both running already loaded code in your environment as pulling something off a network.    (Today's DO has this problem, that someone can wedge in a little bit of code to trick you into running arbitrary code off a network instead of a local BLOCK!)  So maybe having the FILE!-and-HTTP capable USING be distinct from USE would be a smart distinction.</p>
+<p>That would mean that:</p>
+<pre><code>using %some-library.r  &lt;=&gt;  use import %some-library.r
+</code></pre>
+<h2>How To Get More Granularity?</h2>
+<p>I've pointed out the <a href="https://forum.rebol.info/t/design-for-import/1570">variations of import syntaxes in JavaScript before</a> when talking about a design for IMPORT:</p>
+<pre><code>import defaultExport from "module-name";
+import * as name from "module-name";
+import { export1 } from "module-name";
+import { export1 as alias1 } from "module-name";
+import { export1 , export2 } from "module-name";
+import { foo , bar } from "module-name/path/to/specific/un-exported/file";
+import { export1 , export2 as alias2 , [...] } from "module-name";
+import defaultExport, { export1 [ , [...] ] } from "module-name";
+import defaultExport, * as name from "module-name";
+import "module-name";
+var promise = import("module-name");
+</code></pre>
+<p>Their <strong>import defaultExport from "module-name";</strong> case acts like what I'm proposing for <strong>using %module-name.r</strong> above.</p>
+<p>In my other post I bring up these issues.  It seems like USE would want this too.  But as my other post argues, the dialecting is difficult to make look good.</p>
+<h2>Extra Return Results</h2>
+<p>The core routine that is behind both IMPORT and DO actually has two return results... it gives back both the context the code was run in and the final by-product of evaluating the script.  IMPORT only returns the module, and DO only returns the product.</p>
+<p>It doesn't make a lot of sense to ask IMPORT for the evaluation product, because import caches the module.  So it may not run the code in response to the IMPORT, and wouldn't have the result available (unless it saved it somewhere?)  Right now you can ask it, but it might just give you back the BAD-WORD! of ~cached~ to tell you that no script code ran.  This indicates to me that you probably shouldn't be able to ask.</p>
+<p>Perhaps there are more instances where asking DO for the module would make sense.  I don't know--and there is some friction with the question of this separation.  Should all DO be guaranteed to not contaminate the environment they are called from...forcing you to use an IMPORT if you want the contamination?  (This would mean Redbol's DO would have to be rigged up to actually be an IMPORT underneath.)</p>
+          <p><a href="https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767/1</link>
+        <pubDate>Sat, 04 Dec 2021 20:38:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1767-1</guid>
+        <source url="https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767.rss">Reconsidering Return Values From IMPORT vs. DO</source>
+      </item>
+  </channel>
+</rss>

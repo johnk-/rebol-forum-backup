@@ -1,0 +1,510 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Behavior of TO STRING!, AS STRING!, MOLD</title>
+    <link>https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630</link>
+    <description>One big and unanswered question has been regarding the conversion of things to strings.  I think that **SPACED** has come along as a pretty good name for what was &quot;reform&quot;, and as a specialization of DELIMIT which also has UNSPACED for [much of what was REJOIN](https://forum.rebol.info/t/spaced-unspaced-and-the-form-ing-of-blank/190), that territory is pretty well covered these days.  They handle nulls and blanks nicely and are good words for what they do.
+
+But though I haven&#39;t said it in a while, I used to mention a few times a week that **I never liked the term MOLD**.  (Supposedly it originated from when Rebol was going to be called &quot;Clay&quot; and so you wold &quot;mold&quot; your output, but it&#39;s an eyesore and makes people think they&#39;re looking at *moldy old code*.)
+
+And TO STRING! historically has been pretty bananas:
+
+In Rebol2 and Red:
+
+    &gt;&gt; to string! quote foo:
+    == &quot;foo&quot;
+
+    &gt;&gt; to string! #foo
+    == &quot;foo&quot;
+
+    &gt;&gt; to string! &lt;foo&gt;
+    == &quot;foo&quot; ;-- well, at least it&#39;s consistent...
+
+    &gt;&gt; to string! [foo: #foo &lt;foo&gt;]
+    == &quot;foofoo&lt;foo&gt;&quot; ;-- oh, no, of course it isn&#39;t
+
+In R3-Alpha:
+
+    &gt;&gt; to string! quote foo:
+    == &quot;foo:&quot;
+
+    &gt;&gt; to string! #foo
+    == &quot;#foo&quot;
+
+    &gt;&gt; to string! &lt;foo&gt;
+    == &quot;foo&quot; ;-- seems to break the pattern?
+
+    &gt;&gt; to string! [foo: #foo &lt;foo&gt;]
+    == &quot;foo:#foo&lt;foo&gt;&quot; ;-- errr...
+
+With the advent of ANY-STRING! unification I believe we have an option which may cut through yet another design epic.  Here it is:
+
+### Proposal: TO TEXT! for mold(-ish), AS TEXT! for (copyable) spelling
+
+Ren-C has AS.  It aliases types without making a copy.  For instance:
+
+    &gt;&gt; block: copy [1 2 3]
+    == [1 2 3]
+
+    &gt;&gt; group: as group! block
+    == (1 2 3)
+
+    &gt;&gt; append group [4 5 6]
+    == (1 2 3 4 5 6)
+
+    &gt;&gt; block
+    == [1 2 3 4 5 6]
+
+It is related to the function of AS-STRING and AS-BINARY in Rebol2, which could be used to view a byte sequence through the lens of being a STRING! or being a BINARY!, depending on which you needed.  When the internal string format got complicated with unicode there couldn&#39;t be a guarantee of the byte format underlying, so it was removed.
+
+But Ren-C is going to let you AS any string types between each other (including words).  It will even be bringing back AS BINARY! on ANY-STRING.  (In the UTF-8 Everywhere branch, the idea is to keep aliased series marked as having to stay valid as UTF-8.  You&#39;d get errors if you tried to put a bad byte sequence into a BINARY! which was elsewhere UTF8.)
+
+So if all ANY-STRING! types can be aliased between each other, including words, why not use that for getting the spelling?  It might be read-only, but you can copy it if you need to.
+
+    &gt;&gt; as text! quote foo:
+    == &quot;foo&quot;
+
+    &gt;&gt; as text! #foo
+    == &quot;foo&quot;
+
+    &gt;&gt; as text! &lt;foo&gt;
+    == &quot;foo&quot;
+
+You can switch any string type over to any other:
+
+    &gt;&gt; as tag! #foo
+    == &lt;foo&gt;
+
+It lets you make the copying decision--often you probably don&#39;t need it.  And it&#39;s really only two more characters than today&#39;s copying &quot;spelling of&quot; operation, on the off chance you need to copy:
+
+    copy as text! x
+    spelling-of x
+
+So with TO freed up, the concept is that the TO-TEXT conversions can act MOLD-like, and giving you whatever delimiters you &quot;expect&quot; to see:
+
+    &gt;&gt; to text! quote #foo
+    == &quot;#foo&quot;
+
+    &gt;&gt; to text! quote &lt;foo&gt;
+    == &quot;&lt;foo&gt;&quot;
+
+Since TO makes copies, it&#39;s a good fit.  Those delimiters/sigils need to actually be in there, visited by series traversals.
+
+It may not be *exactly* MOLD, the needs for TO TEXT! of a CHAR! might not want to put the delimiters on.  Maybe feeding it a BLOCK! would be invalid, even, just because there&#39;s so many potential ways to make strings out of blocks (evaluative, unevaluative, spaced, unspaced, with brackets, without brackets...)
+
+But it would be moldish-enough that you would get the delimiters on your strings:
+
+    &gt;&gt; to text! &quot;foo&quot;
+    == {&quot;foo&quot;}
+
+I guess the same would be true for the other ANY-STRING!s.
+
+    &gt;&gt; to tag! #foo
+    == &lt;#foo&gt;
+
+    &gt;&gt; to issue! &lt;foo&gt;
+    == #&lt;foo&gt; ;-- or however this construction-syntax-es
+
+It raises more questions for what things like blocks should do, though:
+
+    &gt;&gt; to tag! [a b c]
+    == &lt;[a b c]&gt; ;-- hmmm.
+
+### How would AS EMAIL! (AS IDENTITY!) work?
+
+I&#39;ve spoken recently about the importance of being able to be able to &quot;namespace&quot; things by their string type.  e.g. if you have an ACTION! defined via FUNCTION in TLS named CLIENT-HELLO, but also want to talk about the CLIENT-HELLO being a state you are in, why use a WORD! both times?
+
+     instructions: [... client-hello ...]
+     ...
+     parse instructions [
+         some [... &#39;client-hello (client-hello arg1 arg2...) ...]
+     ]
+
+It&#39;s lame to have to come up with new words each time you want to talk about a different *aspect* of things, or put things in namespaces.  Why not use a different datatype?
+
+     instructions: [... &lt;client-hello&gt; ...]
+     ...
+     parse instructions [
+         some [... &lt;client-hello&gt; (client-hello arg1 arg2...) ...]
+     ]
+
+It makes it easier to keep track of things.  And being able to flip easily back and forth with AS...especially when it doesn&#39;t mean you&#39;re making series copies each time...is useful.
+
+But here&#39;s a puzzle.  That means you want this:
+
+    &gt;&gt; as tag! @foo
+    == &lt;foo&gt;
+
+    &gt;&gt; as identity! quote foo:
+    == @foo
+
+But if **foo@bar** for EMAIL! and **@foo** are the same data type (as Red has made them), what does the AS conversion mean there?  The sigil is not always at the beginning.
+
+Here&#39;s an idea: we could say that a leading @ is just the &quot;construction syntax&quot; for an email/identity that doesn&#39;t carry an internal sigil:
+
+     &gt;&gt; id: copy f@oo
+
+     &gt;&gt; length of id
+     == 4
+
+     &gt;&gt; take next id
+     == #&quot;@&quot;
+
+     &gt;&gt; id
+     == @foo
+
+     &gt;&gt; length of id
+     == 3
+
+     &gt;&gt; first id
+     #&quot;f&quot;
+
+Then you&#39;d wind up with:
+
+     &gt;&gt; as tag! @foo
+     == &lt;foo&gt;
+
+     &gt;&gt; as tag f@oo
+     == &lt;f@oo&gt;
+
+Slightly confusing, but at least it&#39;s explainable.  And I think it points to an answer for what would happen with URL! and such, too.  If you say **`as word! http://example.com`** you&#39;ll get a word with a colon in its spelling, which will require some kind of construction syntax to show you it&#39;s not an ordinary loadable word.
+
+Something would have to be done for series with @ in the first position, and I guess it&#39;s just one of those things that would send it into construction syntax rendering.  Also rendering when you&#39;re not at the head.  I guess the question is if something can be done that&#39;s sane enough to work for most purposes--when you allow delimiters/sigils in the material itself it will cause problems (spaces in words, colons in set-words, etc.) but I do think these things have to be legal...and escaped in rendering somehow.</description>
+    
+    <lastBuildDate>Thu, 24 May 2018 13:48:51 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Behavior of TO STRING!, AS STRING!, MOLD</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The AS and TO distinction feels very clarifying, and I think it's a winner.  But there are some inconvenient truths, and a question of how to mitigate potential problems.</p>
+<p>Under this system, we understand that AS aliasing doesn't make a copy by default:</p>
+<pre><code>&gt;&gt; text: copy "foo"
+
+&gt;&gt; file: as file! "foo"
+== %foo
+
+&gt;&gt; append file "bar"
+== %foobar
+
+&gt;&gt; text
+== foobar
+</code></pre>
+<p>So you need to be sensitive about whether you need to make a COPY or not.  Seem fair enough--and COPY AS TEXT! reads fairly light and literately.</p>
+<p>But now remember the angle is that <strong>if you're not using AS, then the TO conversion will assume you meant the delimiters were part of the deal</strong>.  This is why TO TEXT! on a tag will give you the angle brackets in the series.  And it's also why TO FILE! on TEXT! will assume you meant you wanted the quotes, however that winds up presented:</p>
+<pre><code>&gt;&gt; file: to file! "foo"
+== %^"foo^"
+
+&gt;&gt; first file
+== #"^""
+
+&gt;&gt; second file
+== #"f"
+</code></pre>
+<p>This is not completely outlandish...especially when you consider that quotes are <a href="https://stackoverflow.com/q/1976007/211160" rel="nofollow noopener">legal in filenames in linux</a>.</p>
+<p>But there's been an idiom in practice something like this:</p>
+<pre><code> foo: func [
+     item [file! word! path!]
+         "Will be converted to file!
+][
+    file: to file! item
+    ...
+]
+</code></pre>
+<p>Under the new rules you can't write this with AS FILE!, because a PATH! is an array.  So in that case, cannot be aliased as a string, you really do need a conversion.  But if you use TO FILE! under these rules you'll end up getting the <code>%</code> character in it, if it was a file to start with!</p>
+<pre><code>&gt;&gt; to file! %foo
+== %^%foo
+</code></pre>
+<p>So you'll end up writing:</p>
+<pre><code> if match [word! path!] file [
+     file: to file! file
+ ]
+</code></pre>
+<p>Though that gives you a situation where it's a unique copy only if it was a WORD! or PATH!.  To get a new copy in all situations:</p>
+<pre><code> file: either match [word! path!] file [
+     to file! file
+ ][
+     copy file
+ ]
+</code></pre>
+<p>In a way, I think that what this is doing is "weird" enough that it should take responsibility for its weirdness.  Think of the following list--which is similar to the motivating example in Rebol's make process:</p>
+<pre><code>source-files [
+   %foo.reb
+   bar.reb
+   mumble/foo.reb
+   mumble/"bar with spaces.reb"
+   %mumble/frotz.reb
+   "stuff.reb"
+]
+</code></pre>
+<p>There you've got a FILE!, a WORD!, a PATH! with two words, a PATH! with a word and a string, a FILE!, and a STRING!.  It's hard to argue that you get much closer to a solution when TO FILE! of something that is already a FILE! is a no-op, especially when it breaks the other advantages.</p>
+<h3>What if MAKE of a type to itself was always a COPY?</h3>
+<p>There's a third place we might look to, which is the infamous MAKE.  Where TO is similar to casting/conversion in other languages, MAKE's concept is more like construction from a loosely defined "spec".  The difference between TO and MAKE has been debated (it seemed rather ad-hoc), but it's known that <strong>to string! 10</strong> would give you "10", while <strong>make string! 10</strong> could give an empty string with 10 units of data in it.</p>
+<p>Given MAKE's nebulous nature, might it be the missing link here, so that MAKE FILE! on something that was already a FILE! would leave it as-is...and could it be creative with the interpretation of PATH!s, STRING!s, and WORD!s?  We might even force that MAKE SOME-TYPE! of a value of type SOME-TYPE! would just copy it.  It may not be a ton of terra firma, but it means you'd only have to worry about the way MAKE would be interpreting types other than what you gave it.</p>
+<p><em>(Note: This would be giving MAKE a rule similar to C++ handling of static_cast conversions.  You can't write a cast operator of a type to itself, just to any other type.  Just interesting to look at parallels in other systems.)</em></p>
+<p>And there's an advantage to going this route.  It's compatible with R3-Alpha, Rebol2, and Red:</p>
+<pre><code>&gt;&gt; make file! %foo
+== %foo
+
+&gt;&gt; make file! %foo/bar
+== %foo/bar
+
+&gt;&gt; make file! "foo"
+== %foo
+</code></pre>
+<p>Given that this option exists, it seems there's no good reason to undermine the initiative for <strong>to text! "abc"</strong> to be <strong>{"abc"}</strong>.  All it means is people would have to use MAKE in places they previously expected to use TO, sometimes.</p>
+          <p><a href="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/6</link>
+        <pubDate>Tue, 22 May 2018 03:31:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-630-6</guid>
+        <source url="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630.rss">Behavior of TO STRING!, AS STRING!, MOLD</source>
+      </item>
+      <item>
+        <title>Behavior of TO STRING!, AS STRING!, MOLD</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="630">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>sorry, running with HANDLE! for now</p>
+</blockquote>
+</aside>
+<p>Works for me, I'd been thinking that the HANDLE! type might be changed to C-DATA! and C-FUNCTION! (they're distinct pointer types, size of a function pointer can be different from the size of a C data pointer).</p>
+<aside class="quote no-group" data-post="4" data-topic="630">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>the @ is part of the content, where in a handle, it may not be (especially in this usage where you emphasise the wordiness properties of the value</p>
+</blockquote>
+</aside>
+<p>Well, that's what I talk about.  The workaround I suggest is that prefixing with @ be a "rendering tic" which "HANDLE!"s have when they do not have an internal @ at a non-head position (and that "unnatural" HANDLE! which you make by putting @ at the head position have something of the same problem that an "unnatural" WORD! would have if you put a : at the beginning of it, and need some kind of escaping render to let you know what's going on).</p>
+<p>Does that sound like an avenue of solution, to help avoid making "too many datatypes"?</p>
+          <p><a href="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/5</link>
+        <pubDate>Fri, 18 May 2018 19:32:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-630-5</guid>
+        <source url="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630.rss">Behavior of TO STRING!, AS STRING!, MOLD</source>
+      </item>
+      <item>
+        <title>Behavior of TO STRING!, AS STRING!, MOLD</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>One possible count against a unified EMAIL!/HANDLE! (sorry, running with HANDLE! for now) type is that in an email, the @ is part of the content, where in a handle, it may not be (especially in this usage where you emphasise the wordiness properties of the value).</p>
+<p>Note also that in Rebol 2, you could access the two parts of an EMAIL! value with USER/HOST path notation:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; fb: foo@bar
+== foo@bar
+
+&gt;&gt; fb/user
+== foo
+
+&gt;&gt; fb/host
+== bar
+</code></pre>
+          <p><a href="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/4</link>
+        <pubDate>Fri, 18 May 2018 19:27:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-630-4</guid>
+        <source url="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630.rss">Behavior of TO STRING!, AS STRING!, MOLD</source>
+      </item>
+      <item>
+        <title>Behavior of TO STRING!, AS STRING!, MOLD</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="630" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/gchiu/40/22_2.png" class="avatar"> gchiu:</div>
+<blockquote>
+<p>Sounds as though you are solving some thorny issues here.</p>
+</blockquote>
+</aside>
+<p>Longstanding things, for sure.</p>
+<p>One big change is seeing all the "word" classes as peer string types, and believing that to be a <em>good thing</em>.  The separation into very different categories made that not so clear.</p>
+<p>For instance, if you were an R3-Alpha programmer, was this a "good" thing or a "bad" thing?</p>
+<pre><code>&gt;&gt; label: quote foo:
+== foo:
+
+&gt;&gt; print [label "stuff"]
+foo: stuff
+</code></pre>
+<p>Rebol2 would say <code>foo stuff</code>.  The behavior throughout the system wasn't consistent enough for you to know if you were using the language correctly, or on some broken fringe that would be scuttled away at some point.  (Red didn't adopt the change, for instance and note that in R3-Alpha TO STRING! of a tag didn't preserve delimiters, even when TO STRING! of a SET-WORD! would...)</p>
+<p>Yet as pieces sort of slide into place, I think it makes sense to say that usages like the above are right, and you can count on it and build upon it.  <em>Words will be ANY-STRING!</em> ... and using them as you would use any other string type historically is natural and appropriate.</p>
+<p>Another stake driven into the ground, and the design focuses a little more each time...</p>
+          <p><a href="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/3</link>
+        <pubDate>Fri, 18 May 2018 03:59:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-630-3</guid>
+        <source url="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630.rss">Behavior of TO STRING!, AS STRING!, MOLD</source>
+      </item>
+      <item>
+        <title>Behavior of TO STRING!, AS STRING!, MOLD</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>Sounds as though you are solving some thorny issues here.</p>
+          <p><a href="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/2</link>
+        <pubDate>Fri, 18 May 2018 03:42:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-630-2</guid>
+        <source url="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630.rss">Behavior of TO STRING!, AS STRING!, MOLD</source>
+      </item>
+      <item>
+        <title>Behavior of TO STRING!, AS STRING!, MOLD</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>One big and unanswered question has been regarding the conversion of things to strings.  I think that <strong>SPACED</strong> has come along as a pretty good name for what was "reform", and as a specialization of DELIMIT which also has UNSPACED for <a href="https://forum.rebol.info/t/spaced-unspaced-and-the-form-ing-of-blank/190">much of what was REJOIN</a>, that territory is pretty well covered these days.  They handle nulls and blanks nicely and are good words for what they do.</p>
+<p>But though I haven't said it in a while, I used to mention a few times a week that <strong>I never liked the term MOLD</strong>.  (Supposedly it originated from when Rebol was going to be called "Clay" and so you wold "mold" your output, but it's an eyesore and makes people think they're looking at <em>moldy old code</em>.)</p>
+<p>And TO STRING! historically has been pretty bananas:</p>
+<p>In Rebol2 and Red:</p>
+<pre><code>&gt;&gt; to string! quote foo:
+== "foo"
+
+&gt;&gt; to string! #foo
+== "foo"
+
+&gt;&gt; to string! &lt;foo&gt;
+== "foo" ;-- well, at least it's consistent...
+
+&gt;&gt; to string! [foo: #foo &lt;foo&gt;]
+== "foofoo&lt;foo&gt;" ;-- oh, no, of course it isn't
+</code></pre>
+<p>In R3-Alpha:</p>
+<pre><code>&gt;&gt; to string! quote foo:
+== "foo:"
+
+&gt;&gt; to string! #foo
+== "#foo"
+
+&gt;&gt; to string! &lt;foo&gt;
+== "foo" ;-- seems to break the pattern?
+
+&gt;&gt; to string! [foo: #foo &lt;foo&gt;]
+== "foo:#foo&lt;foo&gt;" ;-- errr...
+</code></pre>
+<p>With the advent of ANY-STRING! unification I believe we have an option which may cut through yet another design epic.  Here it is:</p>
+<h3>Proposal: TO TEXT! for mold(-ish), AS TEXT! for (copyable) spelling</h3>
+<p>Ren-C has AS.  It aliases types without making a copy.  For instance:</p>
+<pre><code>&gt;&gt; block: copy [1 2 3]
+== [1 2 3]
+
+&gt;&gt; group: as group! block
+== (1 2 3)
+
+&gt;&gt; append group [4 5 6]
+== (1 2 3 4 5 6)
+
+&gt;&gt; block
+== [1 2 3 4 5 6]
+</code></pre>
+<p>It is related to the function of AS-STRING and AS-BINARY in Rebol2, which could be used to view a byte sequence through the lens of being a STRING! or being a BINARY!, depending on which you needed.  When the internal string format got complicated with unicode there couldn't be a guarantee of the byte format underlying, so it was removed.</p>
+<p>But Ren-C is going to let you AS any string types between each other (including words).  It will even be bringing back AS BINARY! on ANY-STRING.  (In the UTF-8 Everywhere branch, the idea is to keep aliased series marked as having to stay valid as UTF-8.  You'd get errors if you tried to put a bad byte sequence into a BINARY! which was elsewhere UTF8.)</p>
+<p>So if all ANY-STRING! types can be aliased between each other, including words, why not use that for getting the spelling?  It might be read-only, but you can copy it if you need to.</p>
+<pre><code>&gt;&gt; as text! quote foo:
+== "foo"
+
+&gt;&gt; as text! #foo
+== "foo"
+
+&gt;&gt; as text! &lt;foo&gt;
+== "foo"
+</code></pre>
+<p>You can switch any string type over to any other:</p>
+<pre><code>&gt;&gt; as tag! #foo
+== &lt;foo&gt;
+</code></pre>
+<p>It lets you make the copying decision--often you probably don't need it.  And it's really only two more characters than today's copying "spelling of" operation, on the off chance you need to copy:</p>
+<pre><code>copy as text! x
+spelling-of x
+</code></pre>
+<p>So with TO freed up, the concept is that the TO-TEXT conversions can act MOLD-like, and giving you whatever delimiters you "expect" to see:</p>
+<pre><code>&gt;&gt; to text! quote #foo
+== "#foo"
+
+&gt;&gt; to text! quote &lt;foo&gt;
+== "&lt;foo&gt;"
+</code></pre>
+<p>Since TO makes copies, it's a good fit.  Those delimiters/sigils need to actually be in there, visited by series traversals.</p>
+<p>It may not be <em>exactly</em> MOLD, the needs for TO TEXT! of a CHAR! might not want to put the delimiters on.  Maybe feeding it a BLOCK! would be invalid, even, just because there's so many potential ways to make strings out of blocks (evaluative, unevaluative, spaced, unspaced, with brackets, without brackets...)</p>
+<p>But it would be moldish-enough that you would get the delimiters on your strings:</p>
+<pre><code>&gt;&gt; to text! "foo"
+== {"foo"}
+</code></pre>
+<p>I guess the same would be true for the other ANY-STRING!s.</p>
+<pre><code>&gt;&gt; to tag! #foo
+== &lt;#foo&gt;
+
+&gt;&gt; to issue! &lt;foo&gt;
+== #&lt;foo&gt; ;-- or however this construction-syntax-es
+</code></pre>
+<p>It raises more questions for what things like blocks should do, though:</p>
+<pre><code>&gt;&gt; to tag! [a b c]
+== &lt;[a b c]&gt; ;-- hmmm.
+</code></pre>
+<h3>How would AS EMAIL! (AS IDENTITY!) work?</h3>
+<p>I've spoken recently about the importance of being able to be able to "namespace" things by their string type.  e.g. if you have an ACTION! defined via FUNCTION in TLS named CLIENT-HELLO, but also want to talk about the CLIENT-HELLO being a state you are in, why use a WORD! both times?</p>
+<pre><code> instructions: [... client-hello ...]
+ ...
+ parse instructions [
+     some [... 'client-hello (client-hello arg1 arg2...) ...]
+ ]
+</code></pre>
+<p>It's lame to have to come up with new words each time you want to talk about a different <em>aspect</em> of things, or put things in namespaces.  Why not use a different datatype?</p>
+<pre><code> instructions: [... &lt;client-hello&gt; ...]
+ ...
+ parse instructions [
+     some [... &lt;client-hello&gt; (client-hello arg1 arg2...) ...]
+ ]
+</code></pre>
+<p>It makes it easier to keep track of things.  And being able to flip easily back and forth with AS...especially when it doesn't mean you're making series copies each time...is useful.</p>
+<p>But here's a puzzle.  That means you want this:</p>
+<pre><code>&gt;&gt; as tag! @foo
+== &lt;foo&gt;
+
+&gt;&gt; as identity! quote foo:
+== @foo
+</code></pre>
+<p>But if <strong>foo@bar</strong> for EMAIL! and <strong><span class="mention">@foo</span></strong> are the same data type (as Red has made them), what does the AS conversion mean there?  The sigil is not always at the beginning.</p>
+<p>Here's an idea: we could say that a leading @ is just the "construction syntax" for an email/identity that doesn't carry an internal sigil:</p>
+<pre><code> &gt;&gt; id: copy f@oo
+
+ &gt;&gt; length of id
+ == 4
+
+ &gt;&gt; take next id
+ == #"@"
+
+ &gt;&gt; id
+ == @foo
+
+ &gt;&gt; length of id
+ == 3
+
+ &gt;&gt; first id
+ #"f"
+</code></pre>
+<p>Then you'd wind up with:</p>
+<pre><code> &gt;&gt; as tag! @foo
+ == &lt;foo&gt;
+
+ &gt;&gt; as tag f@oo
+ == &lt;f@oo&gt;
+</code></pre>
+<p>Slightly confusing, but at least it's explainable.  And I think it points to an answer for what would happen with URL! and such, too.  If you say <strong><code>as word! http://example.com</code></strong> you'll get a word with a colon in its spelling, which will require some kind of construction syntax to show you it's not an ordinary loadable word.</p>
+<p>Something would have to be done for series with @ in the first position, and I guess it's just one of those things that would send it into construction syntax rendering.  Also rendering when you're not at the head.  I guess the question is if something can be done that's sane enough to work for most purposes--when you allow delimiters/sigils in the material itself it will cause problems (spaces in words, colons in set-words, etc.) but I do think these things have to be legal...and escaped in rendering somehow.</p>
+          <p><a href="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630/1</link>
+        <pubDate>Fri, 18 May 2018 02:15:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-630-1</guid>
+        <source url="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630.rss">Behavior of TO STRING!, AS STRING!, MOLD</source>
+      </item>
+  </channel>
+</rss>

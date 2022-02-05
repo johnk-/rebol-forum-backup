@@ -1,0 +1,295 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Portable Bridge Notation (PBN) Parser</title>
+    <link>https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306</link>
+    <description>I decided I would do a small task in the web Ren-C build, which is to take the [&quot;Portable Bridge Notation&quot;](https://www.tistis.nl/pbn/) for representing a deal of a hand of cards, and turn it into blocks of symbolic data representing each player&#39;s hand.
+
+The notation is pretty straightforward, e.g.
+
+    N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3
+
+Separated by spaces are the cards for each of 4 hands.  The suits are separated by dots, and the order is **`clubs.diamonds.hearts.spades`**.  T is used for 10, while J/Q/K/A are the typical Jack/Queen/King/Ace.  The first letter is a direction (N=North, E=East, S=South, W=West) of which player the first hand represented is for.
+
+This case decodes like so:
+
+![pbn-converter|690x458](upload://oZ9erLwEVhI0IGIYxhS9X9InLRY.jpeg) 
+
+*([console escaping is now done by Rebol code](https://github.com/hostilefork/replpad-js/blob/d7af14eea92d23d50c2bd25d5dfca20a11929a8a/replpad.reb#L173), so this shows some colorization and live hyperlink as an example of what we might do with that)*.
+
+I wanted the PBN conversion to be accessible and demonstrate &quot;best practices&quot;.  Here&#39;s what I came up with:
+
+    pbn-to-hands: func [
+        {Convert portable bridge notation to BLOCK!-structured hands}
+
+        return: [object!]
+        pbn [text!]
+    ][
+        let rank-rule: [
+            &#39;A | &#39;K | &#39;Q | &#39;J | &#39;T | &#39;9 | &#39;8 | &#39;7 | &#39;6 | &#39;5 | &#39;4 | &#39;3 | &#39;2
+        ]
+
+        let suit-order: [♣ ♦ ♥ ♠]
+        let suit: void
+
+        let one-hand: void
+        let one-hand-rule: [
+            (suit: &#39;♣)
+            [
+                collect one-hand [4 [
+                    any [
+                        set rank rank-rule
+                        keep :[
+                            as word! unspaced [suit either rank = #&quot;T&quot; [10] [rank]]
+                        ]
+                    ]
+                    :(
+                        suit: select suit-order suit
+                        if suit [&quot;.&quot;] else &#39;[ahead [space | end]]
+                    )
+                ]]
+            ]
+            |
+            (fail &quot;Invalid Hand information in PBN&quot;)
+        ]
+
+        let hands: make object! [N: E: S: W: void]
+        let direction-order: [N E S W]
+
+        let start: void
+        let direction: void
+
+        parse pbn [
+            any space  ; We allow leading whitespace, good idea?
+
+            [
+                set start [&#39;N | &#39;E | &#39;S | &#39;W] (
+                    start: to word! start
+                    direction: start
+                )
+                |
+                (fail &quot;PBN must start with N, E, S, or W&quot;)
+            ]
+
+            [&quot;:&quot; | (fail &quot;PBN second character must be `:`&quot;)]
+
+            [
+                [4 [
+                    one-hand-rule (  ; Should set `one-hand` if rule succeeds.
+                        hands/(direction): one-hand
+                        one-hand: void
+                        direction: (select direction-order direction) else [
+                            first direction-order
+                        ]
+                    )
+                    any space  ; Should more than one space between hands be ok?
+                ]]
+                |
+                (fail &quot;PBN must have 4 hand definitions&quot;)
+            ]
+            end
+        ]
+
+        assert [direction = start]  ; skipping around should have cycled
+        return hands
+    ]</description>
+    
+    <lastBuildDate>Sun, 19 Jul 2020 16:24:57 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Portable Bridge Notation (PBN) Parser</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1306">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Cards usually are written the other way, as <strong>4♠</strong> and not <strong><img src="https://forum.rebol.info/images/emoji/twitter/spades.png?v=9" title=":spades:" class="emoji" alt=":spades:">4</strong> (something about rendering in Discourse seems to think the latter notation is worthy of a much bigger spade...no idea why, might be worth finding out). But that would not be legal as a Rebol WORD!. The impedance match of such things is not a unique problem of Rebol, and there are more options like <strong>&lt;4♠&gt;</strong> while most languages would just have one string type. But it was a bit disappointing nonetheless to have to make the concession.</p>
+</blockquote>
+</aside>
+<p>Tag! doesn't seem all that bad an option, nor does reversing as <strong><img src="https://forum.rebol.info/images/emoji/twitter/spades.png?v=9" title=":spades:" class="emoji" alt=":spades:">4</strong> either (epecially if as a word you set it to <strong>"4♠"</strong>).</p>
+<aside class="quote no-group" data-post="2" data-topic="1306">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Returning OBJECT! still makes me uncomfortable, as I feel there's a real inelegance to the single OBJECT! coming back as MAKE OBJECT! [...], and it goes out of the domain of concrete parts fast. I'm worried about adding methods and having that look ugly. I've written about wanting to maybe find some grand unifying theory where <a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086">OBJECT! is just some constrained optimized BLOCK!</a>. But that feels distant. In short, I'm just a bit torn over the return format here... I want to feel like we made it better than the PBN, not worse.</p>
+</blockquote>
+</aside>
+<p>What about <em>Map!</em> ?—seems that is positioned as the more structured <em>Block!</em> within data structures where <em>Object!</em> is more for carrying class-like logic.</p>
+          <p><a href="https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306/3</link>
+        <pubDate>Sun, 19 Jul 2020 16:24:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1306-3</guid>
+        <source url="https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306.rss">Portable Bridge Notation (PBN) Parser</source>
+      </item>
+      <item>
+        <title>Portable Bridge Notation (PBN) Parser</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Conceptual Problems Encountered While Writing This</h2>
+<p>This is pretty straightforward as tasks go.  And certainly the PARSE-based code is more pleasing to look at than many versions.  But I'll list a few gripes.</p>
+<ul>
+<li>
+<p>The C code I looked at to model from <a href="https://github.com/dds-bridge/dds/blob/9c554cc966d341958df45de2790e7737d57406e8/src/PBN.cpp#L35" rel="nofollow noopener">used a variable called <code>first</code></a> for the starting "direction".  I used the same name and obliviously overwrote FIRST the Rebol operation.  This made later code not work.  It's certainly a cautionary tale for the casual overwriting of standard library functions...which makes you wonder if there's anything we could do to warn you about doing this accidentally, and then have an override notation.  Something in the function header?  Something on the LET itself?  What would cause these warnings and why?</p>
+</li>
+<li>
+<p>I've explained my <a href="https://forum.rebol.info/t/rethinking-auto-gathered-set-word-locals/1150">reluctance to embrace locals-gathering via SET-WORD!</a> as a built-in idea.  It may be good for some things, but I think it needs more control.  The solution I've proposed which co-opts a single word vs. all possible set words is <strong>LET</strong>, but I'm m <a href="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215">still in a gray area about how LET is going to work</a>.  This continues to be a heavy concern, but I'm exploring what code in the LET-world would look like here.</p>
+</li>
+<li>
+<p>Cards usually are written the other way, as <strong>4♠</strong> and not <strong><img src="https://forum.rebol.info/images/emoji/twitter/spades.png?v=9" title=":spades:" class="emoji" alt=":spades:">4</strong> (something about rendering in Discourse seems to think the latter notation is worthy of a much bigger spade...no idea why, might be worth finding out).  But that would not be legal as a Rebol WORD!.  The impedance match of such things is not a unique problem of Rebol, and there are more options like <strong>&lt;4♠&gt;</strong> while most languages would just have one string type.  But it was a bit disappointing nonetheless to have to make the concession.</p>
+</li>
+<li>
+<p>Returning OBJECT! still makes me uncomfortable, as I feel there's a real inelegance to the single OBJECT! coming back as MAKE OBJECT! [...], and it goes out of the domain of concrete parts fast.  I'm worried about adding methods and having that look ugly.  I've written about wanting to maybe find some grand unifying theory where <a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086">OBJECT! is just some constrained optimized BLOCK!</a>.  But that feels distant.  In short, I'm just a bit torn over the return format here... I want to feel like we made it better than the PBN, not worse.</p>
+</li>
+</ul>
+<h2>Technical Issues Encountered While Writing This</h2>
+<p>I deliberately chose to use the UTF-8 characters for card suits in the code.  Partially to make it look "cool", but also to exercise the code paths.</p>
+<p>One of the big problem areas with doing so was the Windows Console.  If I tried to paste any code containing the card suits, they'd be invisible.  This is because the console layer has no idea what a PASTE is, so what Windows does is it simulates key-down and key-up events for every character as if you were typing them.  They must have gotten something wrong, because the card suits were not getting key downs... only key ups.  <a href="https://github.com/judah/haskeline/issues/54" rel="nofollow noopener">Others have faced this problem and worked around it.</a>, so I incorporated their workaround.</p>
+<p>Next is that I got it in my head that I wanted to use the lighter notation of <strong>'N</strong> to match a letter in the input rather than <strong>"N"</strong> or <strong>#"N"</strong>.  It's 3 fewer apostrophe-style marks than a string, and it seems there's no harm in allowing you to match WORD!s against strings.  After all, Rebol2/Red/R3-Alpha allow you to FIND that way:</p>
+<pre><code>&gt;&gt; find "abchellodef" 'hello
+== "hellodef"
+</code></pre>
+<p>So I went ahead and added that ability, for both WORD!s and INTEGER!s in strings.  This kind of opens a can of worms--as we might ask why looking for an INTEGER! in a string wouldn't be searching for the codepoint.  But you can do that with <strong>find some-string to char! some-int</strong>.  BINARY! is another story, and with doors open for searching binaries for strings it's the case that searching for integers finds the byte value and not the string-ized representation of that integer as ASCII.  It's something to think about.</p>
+<p>I decided to use COLLECT, but when I did I realized the thing I was collecting was not KEEPing material from the input, but a synthesized card symbol.  The KEEP we had has the default interpretation of assuming you mean a pattern:</p>
+<pre><code>&gt;&gt; parse "aaa" [collect data [some [keep "a"]]]
+== ""
+
+&gt;&gt; data
+== ["a" "a" "a"]
+</code></pre>
+<p>But what if each time I see an "a", I want to keep a "b"?  That's not coming from the input.</p>
+<p><a class="mention" href="/u/rgchris">@rgchris</a> and I have been discussing the three things you might want to do with DO-style code embedded into a parse:</p>
+<ul>
+<li>
+<p><strong>vaporize the result</strong> (currently <strong>()</strong>) - this is usually the traditional behavior of GROUP! in PARSE.  But when used as a parameter to a rule, this could vary.  e.g. <strong>change [some parse rule] (some code)</strong> will use the code to generate what to change to.</p>
+</li>
+<li>
+<p><strong>treat the result as a rule</strong> (currently <strong>:()</strong>) - this has become a favorite of mine, as it frees us from the oddity of PARSE's IF and trying to map control structures into PARSE.  You don't have to pre-COMPOSE a PARSE rule, but every time the code is visited it effectively re-runs a composition.</p>
+</li>
+<li>
+<p><strong>fabricate material unavailable in input</strong> (currently <strong>:[]</strong>) - when you look at things like CHANGE or the particular need to KEEP something that isn't in the input series, you have to be able to run code to make that new data.</p>
+</li>
+</ul>
+<p>So the answer with this setup of "match a but keep b" would look like:</p>
+<pre><code>&gt;&gt; parse "aaa" [collect data [some ["a" keep :["b"]]]]
+== ""
+
+&gt;&gt; data
+== ["b" "b" "b"]
+</code></pre>
+<p>Whatever our beliefs about notation, these are desires you can have.  In this case I made <strong>:[]</strong> work as described so I could keep my synthesized data.</p>
+<p>I wanted to make the KEEP rule look like:</p>
+<pre><code>keep :[join suit (either rank = 'T [10] [rank)]
+</code></pre>
+<p>Because I had the idea that if you matched a WORD! in your text input, that the SET would come back as the WORD! for the character... not the character itself.  This is a concept that needs to be thought out more, because I'm not sure we completely understand the rationale discerning SET and COPY and what their behavior should be.</p>
+<hr>
+<p>As usual, Rebol-ish code can be nice to look at once it's written...but the path to getting there can be pretty hard.  As usual: a debugger would really help.</p>
+          <p><a href="https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306/2</link>
+        <pubDate>Sun, 19 Jul 2020 02:53:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1306-2</guid>
+        <source url="https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306.rss">Portable Bridge Notation (PBN) Parser</source>
+      </item>
+      <item>
+        <title>Portable Bridge Notation (PBN) Parser</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I decided I would do a small task in the web Ren-C build, which is to take the <a href="https://www.tistis.nl/pbn/" rel="nofollow noopener">"Portable Bridge Notation"</a> for representing a deal of a hand of cards, and turn it into blocks of symbolic data representing each player's hand.</p>
+<p>The notation is pretty straightforward, e.g.</p>
+<pre><code>N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3
+</code></pre>
+<p>Separated by spaces are the cards for each of 4 hands.  The suits are separated by dots, and the order is <strong><code>clubs.diamonds.hearts.spades</code></strong>.  T is used for 10, while J/Q/K/A are the typical Jack/Queen/King/Ace.  The first letter is a direction (N=North, E=East, S=South, W=West) of which player the first hand represented is for.</p>
+<p>This case decodes like so:</p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/af1db86d4b17341751b69cbc3cba816ca16b2af6.jpeg" data-download-href="https://forum.rebol.info/uploads/default/af1db86d4b17341751b69cbc3cba816ca16b2af6" title="pbn-converter.jpg"><img src="https://forum.rebol.info/uploads/default/optimized/1X/af1db86d4b17341751b69cbc3cba816ca16b2af6_2_690x458.jpeg" alt="pbn-converter" data-base62-sha1="oZ9erLwEVhI0IGIYxhS9X9InLRY" width="690" height="458" srcset="https://forum.rebol.info/uploads/default/optimized/1X/af1db86d4b17341751b69cbc3cba816ca16b2af6_2_690x458.jpeg, https://forum.rebol.info/uploads/default/optimized/1X/af1db86d4b17341751b69cbc3cba816ca16b2af6_2_1035x687.jpeg 1.5x, https://forum.rebol.info/uploads/default/optimized/1X/af1db86d4b17341751b69cbc3cba816ca16b2af6_2_1380x916.jpeg 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/af1db86d4b17341751b69cbc3cba816ca16b2af6_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">pbn-converter.jpg</span><span class="informations">1502×997 204 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<p><em>(<a href="https://github.com/hostilefork/replpad-js/blob/d7af14eea92d23d50c2bd25d5dfca20a11929a8a/replpad.reb#L173" rel="nofollow noopener">console escaping is now done by Rebol code</a>, so this shows some colorization and live hyperlink as an example of what we might do with that)</em>.</p>
+<p>I wanted the PBN conversion to be accessible and demonstrate "best practices".  Here's what I came up with:</p>
+<pre><code>pbn-to-hands: func [
+    {Convert portable bridge notation to BLOCK!-structured hands}
+
+    return: [object!]
+    pbn [text!]
+][
+    let rank-rule: [
+        'A | 'K | 'Q | 'J | 'T | '9 | '8 | '7 | '6 | '5 | '4 | '3 | '2
+    ]
+
+    let suit-order: [♣ ♦ ♥ ♠]
+    let suit: void
+
+    let one-hand: void
+    let one-hand-rule: [
+        (suit: '♣)
+        [
+            collect one-hand [4 [
+                any [
+                    set rank rank-rule
+                    keep :[
+                        as word! unspaced [suit either rank = #"T" [10] [rank]]
+                    ]
+                ]
+                :(
+                    suit: select suit-order suit
+                    if suit ["."] else '[ahead [space | end]]
+                )
+            ]]
+        ]
+        |
+        (fail "Invalid Hand information in PBN")
+    ]
+
+    let hands: make object! [N: E: S: W: void]
+    let direction-order: [N E S W]
+
+    let start: void
+    let direction: void
+
+    parse pbn [
+        any space  ; We allow leading whitespace, good idea?
+
+        [
+            set start ['N | 'E | 'S | 'W] (
+                start: to word! start
+                direction: start
+            )
+            |
+            (fail "PBN must start with N, E, S, or W")
+        ]
+
+        [":" | (fail "PBN second character must be `:`")]
+
+        [
+            [4 [
+                one-hand-rule (  ; Should set `one-hand` if rule succeeds.
+                    hands/(direction): one-hand
+                    one-hand: void
+                    direction: (select direction-order direction) else [
+                        first direction-order
+                    ]
+                )
+                any space  ; Should more than one space between hands be ok?
+            ]]
+            |
+            (fail "PBN must have 4 hand definitions")
+        ]
+        end
+    ]
+
+    assert [direction = start]  ; skipping around should have cycled
+    return hands
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306/1</link>
+        <pubDate>Sun, 19 Jul 2020 01:58:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1306-1</guid>
+        <source url="https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306.rss">Portable Bridge Notation (PBN) Parser</source>
+      </item>
+  </channel>
+</rss>

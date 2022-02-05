@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>BLANK!-in, NULL-out convention vs. LOGIC!-returning actions</title>
+    <link>https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954</link>
+    <description>We&#39;re now in a situation where NULL is rejected by *most* routines as input.  Notable exceptions being the thing-to-APPEND, or the thing-to-KEEP...anything where a BLANK! acts legally as a &quot;thing&quot; you might want to be talking about--and NULL is the only way to opt out.
+
+In this world, **&quot;BLANK!-in, NULL out&quot;** has been showing off excellently as the replacement for what was long discussed under the title *none propagation*.  [I summarize the theory of the benefits here](https://github.com/rebol/rebol-issues/issues/1611#issuecomment-385719133), and why routines taking &quot;NONE!-in, NONE!-out&quot; were a dangerous idea.
+
+But it can&#39;t be followed blindly.  Just as **append copy [] _** returns `[_]` and not NULL, some judgment has to be applied.  As an obvious-if-you-think-about-it case, LOGIC!-returning routines have to handle blanks a different way.
+
+## Getting Tricked By Inverse LOGIC!
+
+I wanted to write the following;
+
+    if exists? try some-dir: get-env &#39;SOME-DIRECTORY [
+         ...
+    ]
+
+If GET-ENV returns null, the TRY blanks it for EXISTS? to process.  But...**what if the routine were called DOESN&#39;T-EXIST?**, and it followed BLANK!-in, NULL-out?  It would make it look like blank inputs *did* exist, if you were just checking the result for truthiness or falseyness.  :-(
+
+This seems like a pretty solid proof that functions returning LOGIC! should not conflate their answers with NULL.  *(Note: I know `exists?` is currently conflated with FILETYPE OF, so it doesn&#39;t actually return a LOGIC!, but that&#39;s just a bug that hasn&#39;t been tended to.  The point stands.)*
+
+## But what what about NaN handling?
+
+I had a theory that BLANK!s and NULLs could act as the *quiet NaN* and *signaling NaN* forms of  [&quot;not-a-number&quot; (NaN)](https://en.wikipedia.org/wiki/NaN).  The goal of this is to allow math handling to be more graceful, without needing to set up TRAPs and such--you can be selective about which operations you are willing to have fail, and supply code to fill in such cases.
+
+Wikipedia has a little table about how NaNs work with comparisons:
+
+&gt; Comparison between NaN and any floating-point value  *x*  (including NaN and ±∞)
+&gt;
+&gt; * **NaN ≥ x** =&gt; *Always False*
+&gt; * **NaN ≤  x** =&gt; *Always False*
+&gt; * **NaN &gt; x** =&gt; *Always False*
+&gt; * **NaN &lt; x** =&gt; *Always False*
+&gt; * **NaN = x** =&gt; *Always False*
+&gt; * **NaN ≠ x** =&gt; *Always True*
+
+Look at that last case.  If BLANK! is the quiet NaN, you can&#39;t have that comparison returning NULL, because it would be falsey instead of truthy.
+
+When these routines get BLANK! they have to decide whether to return true or false depending.  It&#39;s a close analogy to how &quot;exists?&quot; and &quot;doesn&#39;t-exist?&quot; must use their discretion on blank input.
+
+However, the math operations that normally return numbers, and feed into these situations *DO* follow blank-in-null out.  This is the proposed behavior:
+
+    &gt;&gt; square-root -1 // Note: `square-root _` is also null
+    // null
+
+    &gt;&gt; try square-root -1
+    == _
+
+    &gt;&gt; 1 + square-root -1
+    ** Error: + doesn&#39;t accept NULL for its value2 argument
+
+    &gt;&gt; 1 + (square-root -1 else [10]) // selective handling
+    == 11
+
+    &gt;&gt; 1 + try square-root -1 // propagation
+    // null
+
+    &gt;&gt; 10 != (1 + try square-root -1)
+    ** Error: != doesn&#39;t accept NULL for its value2 argument
+
+    &gt;&gt; 10 != (try 1 + try square-root -1)
+    == #[true]
+
+So that demonstrates a bit of nuance involved in the &quot;BLANK!-in, null out&quot; rule.  *LOGIC!-bearing routines should still only return LOGIC!*, and if for some reason they can&#39;t make a reasonable call one way or another, they need to error vs. ever returning NULL.</description>
+    
+    <lastBuildDate>Fri, 06 Dec 2019 11:54:11 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>BLANK!-in, NULL-out convention vs. LOGIC!-returning actions</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="954">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I had a theory that BLANK!s and NULLs could act as the <em>quiet NaN</em> and <em>signaling NaN</em> forms of <a href="https://en.wikipedia.org/wiki/NaN" rel="nofollow noopener">"not-a-number" (NaN) </a>.</p>
+</blockquote>
+</aside>
+<p>Using NULL for refinements brings a somewhat unfortunate take on the idea of NULL being the signaling form.</p>
+<pre><code> some-operation: [... /parameter [decimal!]] [...]
+</code></pre>
+<p>Now imagine you write <strong>some-operation/parameter ... square-root -1</strong>.  While math operations don't take NULL, refinements are revoked by it.  You actually get the opposite of what you want... the parameter acts as if it wasn't supplied at all, whereas if you used TRY you would get an error because the parameter does not take BLANK!.</p>
+<p>One angle of reasoning might be that with NULL becoming so widely tolerated, that "BLANK! in, NULL out" needs to become "BLANK! in, VOID! out"...and that TRY actually defuses VOID!s.  I'm not sure I like that.</p>
+<p>I've asked for <a href="https://github.com/metaeducation/ren-c/pull/1029" rel="nofollow noopener">review by anyone who can throw in thoughts on these matters</a>.</p>
+<ul>
+<li>
+<p>I <em>know</em> I like failed conditionals being NULL, e.g. fully non-valued.  <strong>if false [...]</strong> =&gt; NULL, not BLANK!</p>
+</li>
+<li>
+<p>I'm <em>fairly confident</em> I like the non-valued state for revoking refinements.  That is to say <strong>append/dup [a b c] [d e] if false-condition [5]</strong> and not <strong>append/dup [a b c] [d e] try if false-condition [5]</strong>. The alternative would be to treat NULL as an error.  This frees up BLANK! to be an actual refinement argument.</p>
+</li>
+<li>
+<p>NULL out for operations that pick items feels rigorous.  If you write <strong>select [a 10 b 20] 'c</strong> and get NULL back you know it didn't succeed.  But if you said <strong>select series 'c</strong> and series is blank, and you get a VOID! out, that is ambiguous...while the NULL can have no other meaning besides "did not select successfully".</p>
+</li>
+</ul>
+<p>I've been conflicted because it's just counter to my intuitions to have NULL be so darn friendly that you can get it out of variables without error, and pass it to any refinement to take that refinement away, etc.  But it seems that's what it needs to do, and it's like a more rigorous way of getting at what NONE! was going for initially...giving you the choice to decide when you care about value-ness or not.</p>
+<p>Whatever the other implications--my proposal of using NULL for a signaling NaN pretty much won't work here... <strong>square-root -1</strong> needs to be at least as unfriendly as a VOID! if it's not going to raise an error in the operation itself.  Because there are more places that you pass bad numbers to than other math operations.</p>
+<p>(Random brainstorm is how I was wondering if VOID! might be an ANY-STRING! class, or even a form of "mean" object akin to a Rebol2 ERROR! that wasn't disarmed...to carry more information for any signaling class you needed.)</p>
+          <p><a href="https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954/2</link>
+        <pubDate>Fri, 06 Dec 2019 11:54:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-954-2</guid>
+        <source url="https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954.rss">BLANK!-in, NULL-out convention vs. LOGIC!-returning actions</source>
+      </item>
+      <item>
+        <title>BLANK!-in, NULL-out convention vs. LOGIC!-returning actions</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>We're now in a situation where NULL is rejected by <em>most</em> routines as input.  Notable exceptions being the thing-to-APPEND, or the thing-to-KEEP...anything where a BLANK! acts legally as a "thing" you might want to be talking about--and NULL is the only way to opt out.</p>
+<p>In this world, <strong>"BLANK!-in, NULL out"</strong> has been showing off excellently as the replacement for what was long discussed under the title <em>none propagation</em>.  <a href="https://github.com/rebol/rebol-issues/issues/1611#issuecomment-385719133" rel="nofollow noopener">I summarize the theory of the benefits here</a>, and why routines taking "NONE!-in, NONE!-out" were a dangerous idea.</p>
+<p>But it can't be followed blindly.  Just as <strong>append copy [] _</strong> returns <code>[_]</code> and not NULL, some judgment has to be applied.  As an obvious-if-you-think-about-it case, LOGIC!-returning routines have to handle blanks a different way.</p>
+<h2>Getting Tricked By Inverse LOGIC!</h2>
+<p>I wanted to write the following;</p>
+<pre><code>if exists? try some-dir: get-env 'SOME-DIRECTORY [
+     ...
+]
+</code></pre>
+<p>If GET-ENV returns null, the TRY blanks it for EXISTS? to process.  But...<strong>what if the routine were called DOESN'T-EXIST?</strong>, and it followed BLANK!-in, NULL-out?  It would make it look like blank inputs <em>did</em> exist, if you were just checking the result for truthiness or falseyness.  <img src="//forum.rebol.info/images/emoji/twitter/frowning.png?v=7" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>This seems like a pretty solid proof that functions returning LOGIC! should not conflate their answers with NULL.  <em>(Note: I know <code>exists?</code> is currently conflated with FILETYPE OF, so it doesn't actually return a LOGIC!, but that's just a bug that hasn't been tended to.  The point stands.)</em></p>
+<h2>But what what about NaN handling?</h2>
+<p>I had a theory that BLANK!s and NULLs could act as the <em>quiet NaN</em> and <em>signaling NaN</em> forms of  <a href="https://en.wikipedia.org/wiki/NaN" rel="nofollow noopener">"not-a-number" (NaN)</a>.  The goal of this is to allow math handling to be more graceful, without needing to set up TRAPs and such--you can be selective about which operations you are willing to have fail, and supply code to fill in such cases.</p>
+<p>Wikipedia has a little table about how NaNs work with comparisons:</p>
+<blockquote>
+<p>Comparison between NaN and any floating-point value  <em>x</em>  (including NaN and ±∞)</p>
+<ul>
+<li>
+<strong>NaN ≥ x</strong> =&gt; <em>Always False</em>
+</li>
+<li>
+<strong>NaN ≤  x</strong> =&gt; <em>Always False</em>
+</li>
+<li>
+<strong>NaN &gt; x</strong> =&gt; <em>Always False</em>
+</li>
+<li>
+<strong>NaN &lt; x</strong> =&gt; <em>Always False</em>
+</li>
+<li>
+<strong>NaN = x</strong> =&gt; <em>Always False</em>
+</li>
+<li>
+<strong>NaN ≠ x</strong> =&gt; <em>Always True</em>
+</li>
+</ul>
+</blockquote>
+<p>Look at that last case.  If BLANK! is the quiet NaN, you can't have that comparison returning NULL, because it would be falsey instead of truthy.</p>
+<p>When these routines get BLANK! they have to decide whether to return true or false depending.  It's a close analogy to how "exists?" and "doesn't-exist?" must use their discretion on blank input.</p>
+<p>However, the math operations that normally return numbers, and feed into these situations <em>DO</em> follow blank-in-null out.  This is the proposed behavior:</p>
+<pre><code>&gt;&gt; square-root -1 // Note: `square-root _` is also null
+// null
+
+&gt;&gt; try square-root -1
+== _
+
+&gt;&gt; 1 + square-root -1
+** Error: + doesn't accept NULL for its value2 argument
+
+&gt;&gt; 1 + (square-root -1 else [10]) // selective handling
+== 11
+
+&gt;&gt; 1 + try square-root -1 // propagation
+// null
+
+&gt;&gt; 10 != (1 + try square-root -1)
+** Error: != doesn't accept NULL for its value2 argument
+
+&gt;&gt; 10 != (try 1 + try square-root -1)
+== #[true]
+</code></pre>
+<p>So that demonstrates a bit of nuance involved in the "BLANK!-in, null out" rule.  <em>LOGIC!-bearing routines should still only return LOGIC!</em>, and if for some reason they can't make a reasonable call one way or another, they need to error vs. ever returning NULL.</p>
+          <p><a href="https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954/1</link>
+        <pubDate>Mon, 10 Dec 2018 14:21:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-954-1</guid>
+        <source url="https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954.rss">BLANK!-in, NULL-out convention vs. LOGIC!-returning actions</source>
+      </item>
+  </channel>
+</rss>

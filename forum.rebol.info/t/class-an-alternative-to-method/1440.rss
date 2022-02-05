@@ -1,0 +1,330 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>CLASS: An Alternative to METHOD</title>
+    <link>https://forum.rebol.info/t/class-an-alternative-to-method/1440</link>
+    <description>A basic spitball proposal to have some type structured datatype that functions like object but for large datasets.
+
+# Problem
+
+Representing a large quantity of items, e.g. records using the Active Record pattern, or individual elements in a UI. OBJECT! has been cited as being inefficient for this task on account of copying context for each instance. Indeed METHOD was introduced as a workaround for the heft involved making copies of FUNCTIONs withing OBJECTs.
+
+I&#39;ve long argued that this solution addresses the wrong problem—that METHOD is the preferred behaviour of functions within objects and that we need a better solution of replicating the logic without duplicating the context every time.
+
+# Proposal
+
+Having spent some time recently swimming in JavaScript&#39;s object-based waters, I&#39;d like to propose a superstructure CLASS that incorporates an OBJECT with appropriate logic, and a container component—primarily thinking BLOCKs/MAPs where a clone of the CLASS retains the same object.
+
+I&#39;ll use the Active Record pattern as an example here where FULLNAME(-OF) is a function that concatenates NAME and SURNAME fields for a given record.
+
+## Workarounds
+
+There are four conventional approaches of note here. First, our query:
+
+    users: select db [* from users]
+
+1. Take the hit: create 1,000 objects, each with clones of the record logic in addition to the data containers:
+
+        for-each user users [
+            probe user/fullname 
+        ]
+
+    This draws on the intuition of receiving *things* that have individual attributes.
+
+2. Create a sub-object containing record logic that is not cloned with the rest of the object:
+
+        for-each user users [
+            probe user/actors/fullname user
+        ]
+
+    This is somewhat more fudgy and requires two invocations of the object in one expression, at which point it may be better to use...
+
+3. Create a single object that represents the table and use primitive containers for the records:
+
+        for-each user users [
+            probe users-actor/fullname-of user
+        ]
+
+    One drawback is that the object actors can&#39;t share the same name as the result set which would be a likely clash. There&#39;s no certainty the primitives are items within the collection
+
+4. Create a single object that represents a result set with per-table logic:
+
+        users/each [
+            ; let&#39;s assume that there&#39;s some way to establish &#39;user as
+            ; the singular and that loop bodies are bound to the object
+            probe fullname-of user
+        ]
+
+    There may be merit to this approach, though some of the more generic methods would have be contextualized to be intuitive
+
+Given those approaches, I&#39;d suggest 1. is the more desirable and is worth exploring remedies to the inefficiencies.
+
+## Classes
+
+As alluded to, a class would have a logic component (OBJECT) and a data component (BLOCK/MAP, though I suppose it could be any value):
+
+    ; shorthand for: make class! [spec body]
+    users-record: class [record [map!]][
+        fullname: does [
+            spaced [record/name record/surname]
+        ]
+    ]
+
+    users: select db [* from users]
+
+    for-each user users [
+        probe user/fullname
+    ]
+
+To manually create an instance, you would do:
+
+    me: make users-record &lt;MAP!&gt;
+    ; parameter dictated by CLASS spec, would be restricted to one value
+
+### Imprecise Mechanics
+
+The question then becomes, how does USER/FULLNAME bind to RECORD, RECORD/NAME and RECORD/SURNAME in the class? I don&#39;t have all the answers here—this is something of a spitball.
+
+I could see CLASS adapting generated functions to have an implied RECORD parameter. Path evaluation (the primary interface) on encountering a \&lt;CLASS&gt;/\&lt;WORD&gt; would—if \&lt;WORD&gt; resolved to \&lt;FUNCTION&gt;—pass \&lt;CLASS/RECORD&gt; as the first parameter to \&lt;FUNCTION&gt;. Of course, within the object, that&#39;d make referencing other functions a bit tricky, but instead of binding in-object, you could do:
+
+    users-record: class [record [map!]][
+        fullname: does [
+            spaced [record/name record/surname]
+        ]
+
+        hello: does [
+            unspaced [&quot;Hello, &quot; record/fullname &quot;!&quot;]
+        ]
+    ]
+
+This may be a better purpose for the METHOD name where only METHODs are transformed for such a purpose:
+
+    users-record: class [record [map!]][
+        fullname: method [] [
+            spaced [record/name record/surname]
+        ]
+
+        random-emoji: does [
+            first random [&quot;😎&quot; &quot;🙂&quot; &quot;😜&quot; &quot;😊&quot;]
+        ]
+
+        hello: method [] [
+            unspaced [&quot;Hello, &quot; record/fullname &quot;! &quot; random-emoji]
+        ]
+    ]
+
+I genuinely don&#39;t know if this would more efficient overall, but I suspect as binding would only occur on an as-needed function-invocation basis, it would be.
+
+# Whither Objects?
+
+The main quibble I have here is what is the actual point of an Object? Modules have replaced Objects as isolated contexts for consolidating domain-specific code; Maps are perhaps better containers for settings (such as the SYSTEM and sub-objects). That just leaves their role as representatives of items of a collection, which as has been stated they are inefficient for this purpose. What other purpose do they serve?</description>
+    
+    <lastBuildDate>Thu, 24 Dec 2020 10:04:19 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/class-an-alternative-to-method/1440.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>CLASS: An Alternative to METHOD</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Gad you are giving attention to the topic...</p>
+<p>I've been spending the last couple weeks working on "virtual binding".  I'm not certain what the impacts will be if my idea does work.  But there will be ramifications on this, so there might be points to revisit.  I'm going to stick to it until I drive it to some conclusion or another: this is virtual binding's last stand...or I give up on the idea and we accept whatever we've got as the likely endpoint of binding.  Fingers crossed that it bears fruit.</p>
+<p>I'll try and address just this part for now:</p>
+<blockquote>
+<p>The main quibble I have here is what is the actual point of an Object?</p>
+</blockquote>
+<p>When you follow "why" too far it bottoms out with: <a href="https://youtu.be/Tf17rFDjMZw?t=95">"Because some things are, and some things are not."</a>.</p>
+<p>But binding is the point.  By applying the constraint in objects that keys can only be WORD!s, and that the position of a key in an object doesn't change, it's possible to efficiently connect a word to an object (bind it) and look it up later very quickly.  Having that position line up in multiple corresponding objects means the index can translate across them...leveraging those performance gains at multiple levels.</p>
+<p>We get into slippery territory if you say <em>"but it's a high-level language, so why care about efficiency, can't we assume CPUs will get faster and memory will be infinite and you can just use MAP! for everything if it simplifies matters."</em>  That's not really how we want to think.</p>
+<p>But also, not having a separate type means you've got something with--say, INTEGER! in the key values.  Yet if you use it in a binding operation it wouldn't bind those integer keys to the integers in a block.  So it would be "semantically unclean" at that level, even when performance is not in the consideration...some keys would bind, others wouldn't, it feels messy.</p>
+<p>Note that JavaScript isn't unified on this... they have <a href="https://javascript.info/map-set">distinct Map and Set datatypes</a>.  Their object ("dictionary") only allows strings as keys.</p>
+<h2>So OBJECT! and MAP! are intrinsically different...</h2>
+<ul>
+<li>
+<p>OBJECT! is a relative of a traditional "low-level" C or C++ struct/class, with a fixed layout to accomplish certain foundational language features efficiently (or at all).</p>
+</li>
+<li>
+<p>MAP! is a higher-level generalized key/value store...anything can be a key, including objects or other maps.  While there are methods to accelerate looking things up in a map over linear search...those methods involve side-structures that cost space and there's a time cost on each lookup that can't be optimized out.</p>
+</li>
+</ul>
+<p>JavaScript dictionaries seem more freeform by letting you build them more dynamically and mutate them more freely...deleting keys/etc.  Though they actually do some behind-the-scenes work on what are called <a href="https://medium.com/javascript-in-plain-english/exploration-of-javascript-object-for-performance-optimization-70b20246ab9e">"hidden classes"</a>.  So if you run code that makes similar looking objects, it notices that similarity even if you didn't create the object through an inheritance mechanism.  Deleting keys interferes with this efficiency, but they likely assume your access patterns are different for "code bearing" and "data bearing" objects...with code objects being modified more rarely.</p>
+<p>With what I'm looking at with virtual binding, we may need the system to notice when keylists are common...in a similar way.  <em>But I think it's risky to be trying to go for parity with their optimizations, when fundamental selling points of the homoiconic system have not been sifted out.</em></p>
+<p>The big questions are about what the killer language features are that make dynamic code construction and homoiconicity stand out...defining your own operators and syntax.  By hook or by crook, Turing Completeness means we're going to be able to do ordinary boring calls.  So the focus needs to stay on making sure the design is facilitating the "magic"...while hopefully staying somewhat concrete and brick-like.</p>
+          <p><a href="https://forum.rebol.info/t/class-an-alternative-to-method/1440/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/class-an-alternative-to-method/1440/4</link>
+        <pubDate>Thu, 24 Dec 2020 08:56:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1440-4</guid>
+        <source url="https://forum.rebol.info/t/class-an-alternative-to-method/1440.rss">CLASS: An Alternative to METHOD</source>
+      </item>
+      <item>
+        <title>CLASS: An Alternative to METHOD</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>A few more thoughts:</p>
+<h2>Metadata</h2>
+<p>As much as I like the simplicity of the SPEC block, it could be a bit more informative:</p>
+<pre><code class="lang-nohighlight">users-record: class [
+    "User Active Record"
+    name: users
+    record [map!] "Map mirroring table field names"
+][...]
+
+name of users-record =&gt; 'users
+title of users-record =&gt; "User Active Record"
+body of users-record =&gt; [...]
+
+face: class [
+    "User Interface Element"
+    name: face
+    face [map!]
+][...]
+
+...etc...
+</code></pre>
+<h2>Objects</h2>
+<p>Perhaps a little hasty with my final comment—obviously this proposal is built on existing OBJECT! with no actual change. They do serve as scheme prototypes, etc.</p>
+<h2>Duality</h2>
+<p>Much depends on how seamless access is to the <em>logic</em> and <em>container</em> values, including: path evaluation, series functions (<code>first thing</code> might operate on a block-container based class as if it were a block—this idea may get complex).</p>
+          <p><a href="https://forum.rebol.info/t/class-an-alternative-to-method/1440/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/class-an-alternative-to-method/1440/3</link>
+        <pubDate>Thu, 24 Dec 2020 04:54:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1440-3</guid>
+        <source url="https://forum.rebol.info/t/class-an-alternative-to-method/1440.rss">CLASS: An Alternative to METHOD</source>
+      </item>
+      <item>
+        <title>CLASS: An Alternative to METHOD</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>I realise in that description that in suggesting that &lt;CLASS/RECORD&gt; would be passed to &lt;FUNCTION&gt; that you wouldn't then be able to do <strong>record/fullname</strong> in the <strong>'hello</strong> function. It would indeed pass just the &lt;CLASS&gt; and that path evaluation would instead have to discern whether <strong>record/name</strong>, <strong>record/surname</strong> or <strong>record/fullname</strong> resolved via the <em>container</em> value or the <em>logic</em> value. I would opt for the <em>logic</em> value first.</p>
+<p>Having a literate, non-path way to do the following may be desirable too. Instead of:</p>
+<pre><code>fn: get in user 'fullname
+fn user
+</code></pre>
+<p>You could say:</p>
+<pre><code>invoke user fullname
+</code></pre>
+<p>Or some such</p>
+<p>As to METHOD, I would see its use in regular objects as obsolete as any remaining role for objects would not require performance at scale and thus could revert to deep copying FUNCTIONs</p>
+<p>Prototypes:</p>
+<pre><code>class [...][...]
+</code></pre>
+<p>Would create a CLASS! type without a <em>container</em> value, thus would error out if invoked as being a prototype as opposed to an item.</p>
+          <p><a href="https://forum.rebol.info/t/class-an-alternative-to-method/1440/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/class-an-alternative-to-method/1440/2</link>
+        <pubDate>Wed, 23 Dec 2020 17:45:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1440-2</guid>
+        <source url="https://forum.rebol.info/t/class-an-alternative-to-method/1440.rss">CLASS: An Alternative to METHOD</source>
+      </item>
+      <item>
+        <title>CLASS: An Alternative to METHOD</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>A basic spitball proposal to have some type structured datatype that functions like object but for large datasets.</p>
+<h1>Problem</h1>
+<p>Representing a large quantity of items, e.g. records using the Active Record pattern, or individual elements in a UI. OBJECT! has been cited as being inefficient for this task on account of copying context for each instance. Indeed METHOD was introduced as a workaround for the heft involved making copies of FUNCTIONs withing OBJECTs.</p>
+<p>I've long argued that this solution addresses the wrong problem—that METHOD is the preferred behaviour of functions within objects and that we need a better solution of replicating the logic without duplicating the context every time.</p>
+<h1>Proposal</h1>
+<p>Having spent some time recently swimming in JavaScript's object-based waters, I'd like to propose a superstructure CLASS that incorporates an OBJECT with appropriate logic, and a container component—primarily thinking BLOCKs/MAPs where a clone of the CLASS retains the same object.</p>
+<p>I'll use the Active Record pattern as an example here where FULLNAME(-OF) is a function that concatenates NAME and SURNAME fields for a given record.</p>
+<h2>Workarounds</h2>
+<p>There are four conventional approaches of note here. First, our query:</p>
+<pre><code>users: select db [* from users]
+</code></pre>
+<ol>
+<li>
+<p>Take the hit: create 1,000 objects, each with clones of the record logic in addition to the data containers:</p>
+<pre><code> for-each user users [
+     probe user/fullname 
+ ]
+</code></pre>
+<p>This draws on the intuition of receiving <em>things</em> that have individual attributes.</p>
+</li>
+<li>
+<p>Create a sub-object containing record logic that is not cloned with the rest of the object:</p>
+<pre><code> for-each user users [
+     probe user/actors/fullname user
+ ]
+</code></pre>
+<p>This is somewhat more fudgy and requires two invocations of the object in one expression, at which point it may be better to use...</p>
+</li>
+<li>
+<p>Create a single object that represents the table and use primitive containers for the records:</p>
+<pre><code> for-each user users [
+     probe users-actor/fullname-of user
+ ]
+</code></pre>
+<p>One drawback is that the object actors can't share the same name as the result set which would be a likely clash. There's no certainty the primitives are items within the collection</p>
+</li>
+<li>
+<p>Create a single object that represents a result set with per-table logic:</p>
+<pre><code> users/each [
+     ; let's assume that there's some way to establish 'user as
+     ; the singular and that loop bodies are bound to the object
+     probe fullname-of user
+ ]
+</code></pre>
+<p>There may be merit to this approach, though some of the more generic methods would have be contextualized to be intuitive</p>
+</li>
+</ol>
+<p>Given those approaches, I'd suggest 1. is the more desirable and is worth exploring remedies to the inefficiencies.</p>
+<h2>Classes</h2>
+<p>As alluded to, a class would have a logic component (OBJECT) and a data component (BLOCK/MAP, though I suppose it could be any value):</p>
+<pre><code>; shorthand for: make class! [spec body]
+users-record: class [record [map!]][
+    fullname: does [
+        spaced [record/name record/surname]
+    ]
+]
+
+users: select db [* from users]
+
+for-each user users [
+    probe user/fullname
+]
+</code></pre>
+<p>To manually create an instance, you would do:</p>
+<pre><code>me: make users-record &lt;MAP!&gt;
+; parameter dictated by CLASS spec, would be restricted to one value
+</code></pre>
+<h3>Imprecise Mechanics</h3>
+<p>The question then becomes, how does USER/FULLNAME bind to RECORD, RECORD/NAME and RECORD/SURNAME in the class? I don't have all the answers here—this is something of a spitball.</p>
+<p>I could see CLASS adapting generated functions to have an implied RECORD parameter. Path evaluation (the primary interface) on encountering a &lt;CLASS&gt;/&lt;WORD&gt; would—if &lt;WORD&gt; resolved to &lt;FUNCTION&gt;—pass &lt;CLASS/RECORD&gt; as the first parameter to &lt;FUNCTION&gt;. Of course, within the object, that'd make referencing other functions a bit tricky, but instead of binding in-object, you could do:</p>
+<pre><code>users-record: class [record [map!]][
+    fullname: does [
+        spaced [record/name record/surname]
+    ]
+
+    hello: does [
+        unspaced ["Hello, " record/fullname "!"]
+    ]
+]
+</code></pre>
+<p>This may be a better purpose for the METHOD name where only METHODs are transformed for such a purpose:</p>
+<pre><code>users-record: class [record [map!]][
+    fullname: method [] [
+        spaced [record/name record/surname]
+    ]
+
+    random-emoji: does [
+        first random ["😎" "🙂" "😜" "😊"]
+    ]
+
+    hello: method [] [
+        unspaced ["Hello, " record/fullname "! " random-emoji]
+    ]
+]
+</code></pre>
+<p>I genuinely don't know if this would more efficient overall, but I suspect as binding would only occur on an as-needed function-invocation basis, it would be.</p>
+<h1>Whither Objects?</h1>
+<p>The main quibble I have here is what is the actual point of an Object? Modules have replaced Objects as isolated contexts for consolidating domain-specific code; Maps are perhaps better containers for settings (such as the SYSTEM and sub-objects). That just leaves their role as representatives of items of a collection, which as has been stated they are inefficient for this purpose. What other purpose do they serve?</p>
+          <p><a href="https://forum.rebol.info/t/class-an-alternative-to-method/1440/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/class-an-alternative-to-method/1440/1</link>
+        <pubDate>Wed, 23 Dec 2020 17:28:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1440-1</guid>
+        <source url="https://forum.rebol.info/t/class-an-alternative-to-method/1440.rss">CLASS: An Alternative to METHOD</source>
+      </item>
+  </channel>
+</rss>

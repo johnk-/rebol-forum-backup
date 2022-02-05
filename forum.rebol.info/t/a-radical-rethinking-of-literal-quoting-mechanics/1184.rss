@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>A Radical Rethinking of Literal/Quoting Mechanics</title>
+    <link>https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184</link>
+    <description>&gt; **EDIT:** This idea led to a proposal of something that can actually work, see [@-arguments](https://forum.rebol.info/t/new-parameter-convention-concept-modal-arguments-or-the-arg/1187).
+&gt;
+&gt; If you&#39;re curious about why the original idea wouldn&#39;t work, generic evaluative composition really makes it nebulous what kind of code would be putting the bits on and taking them off.  More generally if you say:
+&gt;
+&gt;     &gt;&gt; item: [a b]
+&gt;     == [a b]
+&gt;
+&gt;     &gt;&gt; item
+&gt;     == &#39;[a b]
+&gt;
+&gt;     &gt;&gt; quoted? item
+&gt;     == #[false]
+&gt;
+&gt; That&#39;s not going to make sense to people.  It&#39;s very much like the infamous &quot;lit-word decay&quot; from historical Rebol, where you&#39;d have to explain that you needed to say **quoted? :item**, which no one ever understood.
+&gt;
+&gt; But as I say further down...thinking about what won&#39;t work, might lead you to what will.
+
+I&#39;ve written a bit today about a weird idea that kind of turns the concept of quoting on its head a little, and I think it warrants its own thread.
+
+Historically, the idea is that a evaluation of a quoted thing would drop a quote level, even if you just ran a DO on it:
+
+    rebol2&gt;&gt; do [&#39;x/y/z]
+    == x/y/z
+
+But the new idea is that &quot;evaluation&quot; of a QUOTED! *isn&#39;t the moment it happens*...the evaluator leaves quoted things as they are.
+
+    radical&gt;&gt; do [&#39;x/y/z]
+    == &#39;x/y/z
+
+Rather, the dropping happens when the quoted thing does something like get stored via a SET-WORD!, or fulfilled as an argument.
+
+    radical&gt;&gt; do [var: &#39;x/y/z]
+    == &#39;x/y/z  ; BUT var is storing *plain* x/y/z... NOT quoted x/y/z
+
+A further odd notion here is that fetching things that aren&#39;t quoted will inject in a quote by default:
+
+    radical&gt;&gt; var
+    == &#39;x/y/z  ; meaning that var held non-quoted x/y/z
+
+    radical&gt;&gt; foo: function [p [path!]] [print &quot;got a PATH! not a quoted path...!&quot;]
+    radical&gt;&gt; foo var
+    got a PATH! not a quoted path...!
+
+This may seem a rather circuitous way of achieving the same results.  But a potential benefit would be that since all evaluations *except* literals return a quote level, **the absence of a quote level can signal use of a literal to those who are interested**:
+
+    radical&gt;&gt; item: [a b]
+    == [a b]
+
+    radical&gt;&gt; item
+    == &#39;[a b]
+    
+    radical&gt;&gt; [a b]
+    == [a b]
+
+This may (?) imply the possibility of routines that ask to know about the quote level *but aren&#39;t themselves quoters*.  So you could still pass an evaluated expression like **append block second items**, but tell the difference from **append block &#39;[a]** and **append block [a]**.  APPEND would mark its value parameter as a new argument type and use the information:
+
+     radical&gt;&gt; bar: function [@x] [if quoted? x [print &quot;quoted&quot;] else [print &quot;not&quot;]]
+
+     radical&gt;&gt; bar [a b]
+     not
+
+     radical&gt;&gt; bar &#39;[a b]
+     quoted  ; ordinary evaluated parameter would see not
+
+     radical&gt;&gt; bar second [a [b c] d]
+     quoted  ; ordinary evaluative parameter would see not
+
+To flesh this out completely you&#39;d need some convention which mean &quot;fetch without quoting&quot;, otherwise you couldn&#39;t get splicing/multi behavior for a block once it was in a variable.  This isn&#39;t what I&#39;d wanted @xxx for, but it could be important enough to do vs. trying to have some blessed function for it:
+
+    radical&gt;&gt; item: [a b]
+    == [a b]
+
+    radical&gt;&gt; item
+    == &#39;[a b]
+
+    radical&gt;&gt; @item
+    == [a b]
+
+    radical&gt;&gt; first item
+    == &#39;a
+
+    radical&gt;&gt; @(first item)
+    == a
+
+While introducing a new parameter class is never a particularly fun idea, this looks like it could be a potential game changer.  The console feedback would be such that you could see when expressions were giving back quoted things or not, and then have the same experience if you typed that literal thing in.</description>
+    
+    <lastBuildDate>Wed, 24 Jul 2019 10:31:42 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>A Radical Rethinking of Literal/Quoting Mechanics</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="1184">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>I'm interested to hear what others think.</p>
+</blockquote>
+</aside>
+<p>First I'm interested to see if it's technically possible and not internally contradictory (!)</p>
+<p>I'm bumping through an initial experiment to start running mezzanine code, and am looking at:</p>
+<pre><code>&gt;&gt; if true [[a]]
+== '[a]  ; product of an evaluation, gets marked
+
+&gt;&gt; item: [a]
+== [a]
+
+&gt;&gt; item
+== '[a]
+
+&gt;&gt; if true [item]
+== ''[a]  ; don't want doubled product of evaluation signal!  :-(
+</code></pre>
+<p>It may be that branching constructs, since they perform evaluations themselves, are exempt from adding quote levels on their return values.</p>
+<p>But this points to a potential bottleneck.  The examples I gave were when you were doing evaluations by passing arguments, and the evaluator was in control so it could take the marks off of things when appropriate (passing parameters, doing SET-WORD!s...).  But when using the evaluator to implement a construct anything other than "as-is" can accrue if there's not a reason it won't.</p>
+<p>It may not be able to work.  But this is one of those no-stone-unturned things before just rolling over and accepting /ONLY.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:">  And sometimes explaining why the first thing you thought of won't work can point you to in the direction of what can.</p>
+          <p><a href="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/5</link>
+        <pubDate>Mon, 22 Jul 2019 22:04:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1184-5</guid>
+        <source url="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184.rss">A Radical Rethinking of Literal/Quoting Mechanics</source>
+      </item>
+      <item>
+        <title>A Radical Rethinking of Literal/Quoting Mechanics</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Gotcha, thanks. I'm interested to hear what others think. Per this approach I prefer to append a quoted block instead of relying on an /only refinement.</p>
+          <p><a href="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/4</link>
+        <pubDate>Mon, 22 Jul 2019 20:44:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1184-4</guid>
+        <source url="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184.rss">A Radical Rethinking of Literal/Quoting Mechanics</source>
+      </item>
+      <item>
+        <title>A Radical Rethinking of Literal/Quoting Mechanics</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>A parameter convention allowing discernment between:</p>
+<pre><code>append data [a b c]  ; splicing because block is at callsite
+</code></pre>
+<p>and:</p>
+<pre><code>item: get-item from-somewhere  ; happens to be [a b c]
+
+;... bunch of code where you aren't thinking what item is
+
+append data item  ; no block at callsite, so acts as /ONLY
+</code></pre>
+<p>The reason it would not splice would be because <strong>item</strong> would come back as <strong>'[a b c]</strong>.  This could also be done literally if you'd wanted the /ONLY style and no splicing:</p>
+<pre><code>append data '[a b c]
+</code></pre>
+<p>Because of how the evaluator worked in the past, there was no way to notice whether something had a quote level on it or not unless an argument itself was fully quoted.</p>
+<p>This alternative means evaluative parameters can choose to know about the literal status of an argument.  It is based on the idea that products of evaluation are more indirect than immediate ones, and that having them carry a quoting level to convey that to some routines for certain parameters is useful.</p>
+<p>I'm testing this out to see if it can work right now, but it looks promising.</p>
+          <p><a href="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/3</link>
+        <pubDate>Mon, 22 Jul 2019 20:18:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1184-3</guid>
+        <source url="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184.rss">A Radical Rethinking of Literal/Quoting Mechanics</source>
+      </item>
+      <item>
+        <title>A Radical Rethinking of Literal/Quoting Mechanics</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>It's not clicking for me yet. What are the key benefits of this proposed approach?</p>
+          <p><a href="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/2</link>
+        <pubDate>Mon, 22 Jul 2019 20:08:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1184-2</guid>
+        <source url="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184.rss">A Radical Rethinking of Literal/Quoting Mechanics</source>
+      </item>
+      <item>
+        <title>A Radical Rethinking of Literal/Quoting Mechanics</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><strong>EDIT:</strong> This idea led to a proposal of something that can actually work, see <a href="https://forum.rebol.info/t/new-parameter-convention-concept-modal-arguments-or-the-arg/1187">@-arguments</a>.</p>
+<p>If you're curious about why the original idea wouldn't work, generic evaluative composition really makes it nebulous what kind of code would be putting the bits on and taking them off.  More generally if you say:</p>
+<pre><code>&gt;&gt; item: [a b]
+== [a b]
+
+&gt;&gt; item
+== '[a b]
+
+&gt;&gt; quoted? item
+== #[false]
+</code></pre>
+<p>That's not going to make sense to people.  It's very much like the infamous "lit-word decay" from historical Rebol, where you'd have to explain that you needed to say <strong>quoted? :item</strong>, which no one ever understood.</p>
+<p>But as I say further down...thinking about what won't work, might lead you to what will.</p>
+</blockquote>
+<p>I've written a bit today about a weird idea that kind of turns the concept of quoting on its head a little, and I think it warrants its own thread.</p>
+<p>Historically, the idea is that a evaluation of a quoted thing would drop a quote level, even if you just ran a DO on it:</p>
+<pre><code>rebol2&gt;&gt; do ['x/y/z]
+== x/y/z
+</code></pre>
+<p>But the new idea is that "evaluation" of a QUOTED! <em>isn't the moment it happens</em>...the evaluator leaves quoted things as they are.</p>
+<pre><code>radical&gt;&gt; do ['x/y/z]
+== 'x/y/z
+</code></pre>
+<p>Rather, the dropping happens when the quoted thing does something like get stored via a SET-WORD!, or fulfilled as an argument.</p>
+<pre><code>radical&gt;&gt; do [var: 'x/y/z]
+== 'x/y/z  ; BUT var is storing *plain* x/y/z... NOT quoted x/y/z
+</code></pre>
+<p>A further odd notion here is that fetching things that aren't quoted will inject in a quote by default:</p>
+<pre><code>radical&gt;&gt; var
+== 'x/y/z  ; meaning that var held non-quoted x/y/z
+
+radical&gt;&gt; foo: function [p [path!]] [print "got a PATH! not a quoted path...!"]
+radical&gt;&gt; foo var
+got a PATH! not a quoted path...!
+</code></pre>
+<p>This may seem a rather circuitous way of achieving the same results.  But a potential benefit would be that since all evaluations <em>except</em> literals return a quote level, <strong>the absence of a quote level can signal use of a literal to those who are interested</strong>:</p>
+<pre><code>radical&gt;&gt; item: [a b]
+== [a b]
+
+radical&gt;&gt; item
+== '[a b]
+
+radical&gt;&gt; [a b]
+== [a b]
+</code></pre>
+<p>This may (?) imply the possibility of routines that ask to know about the quote level <em>but aren't themselves quoters</em>.  So you could still pass an evaluated expression like <strong>append block second items</strong>, but tell the difference from <strong>append block '[a]</strong> and <strong>append block [a]</strong>.  APPEND would mark its value parameter as a new argument type and use the information:</p>
+<pre><code> radical&gt;&gt; bar: function [@x] [if quoted? x [print "quoted"] else [print "not"]]
+
+ radical&gt;&gt; bar [a b]
+ not
+
+ radical&gt;&gt; bar '[a b]
+ quoted  ; ordinary evaluated parameter would see not
+
+ radical&gt;&gt; bar second [a [b c] d]
+ quoted  ; ordinary evaluative parameter would see not
+</code></pre>
+<p>To flesh this out completely you'd need some convention which mean "fetch without quoting", otherwise you couldn't get splicing/multi behavior for a block once it was in a variable.  This isn't what I'd wanted <span class="mention">@xxx</span> for, but it could be important enough to do vs. trying to have some blessed function for it:</p>
+<pre><code>radical&gt;&gt; item: [a b]
+== [a b]
+
+radical&gt;&gt; item
+== '[a b]
+
+radical&gt;&gt; @item
+== [a b]
+
+radical&gt;&gt; first item
+== 'a
+
+radical&gt;&gt; @(first item)
+== a
+</code></pre>
+<p>While introducing a new parameter class is never a particularly fun idea, this looks like it could be a potential game changer.  The console feedback would be such that you could see when expressions were giving back quoted things or not, and then have the same experience if you typed that literal thing in.</p>
+          <p><a href="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184/1</link>
+        <pubDate>Mon, 22 Jul 2019 19:09:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1184-1</guid>
+        <source url="https://forum.rebol.info/t/a-radical-rethinking-of-literal-quoting-mechanics/1184.rss">A Radical Rethinking of Literal/Quoting Mechanics</source>
+      </item>
+  </channel>
+</rss>

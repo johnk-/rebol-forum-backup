@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Introducing REFRAMER: Close Cousin to ENCLOSE</title>
+    <link>https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395</link>
+    <description>This is a very cool tool that might help concretize some of the [abstract-sounding arguments I was making about frames](https://forum.rebol.info/t/seeing-all-action-s-as-variadic-frame-makers/1002/2?u=hostilefork)...
+
+**Reframers build a frame from whatever follows them at a callsite, and can operate on it before running it (*if* it runs it).**
+
+Defining a reframer involves giving it a function that will act as the &quot;shim&quot;.  Here is a reframer using a very simple shim, that just takes in the frame and returns it.
+
+    get-frame-of: reframer (func [f [frame!]] [f])
+
+Here is what happens if the thing that followed that reframer&#39;s execution was a call to APPEND:
+
+    &gt;&gt; get-frame-of append [a b c] &lt;d&gt;
+    == make frame! [
+        series: [a b c]
+        value: &lt;d&gt;
+        part: &#39;
+        only: &#39;
+        dup: &#39;
+        line: &#39;
+    ]
+
+As we can see, it gathered the arguments for the APPEND and put together a FRAME! to represent the call.
+
+**The reframing process did not automatically execute the frame.  But the &quot;shim&quot; function can!**
+
+Let&#39;s try something that runs the function twice.
+
+    &gt;&gt; two-times: reframer func [f [frame!]] [do copy f, do f]
+
+    &gt;&gt; two-times append [a b c] &lt;d&gt;
+    == [a b c &lt;d&gt; &lt;d&gt;]
+
+## Whoa.
+
+**But wait, there&#39;s more.**  Besides not automatically executing the FRAME!, *it also doesn&#39;t typecheck it (yet)*.
+
+    &gt;&gt; get-frame-of append 1 &lt;d&gt;
+    == make frame! [
+        series: 1        ; !!! this wouldn&#39;t be legal to run as-is 
+        value: &lt;d&gt;
+        part: &#39;
+        only: &#39;
+        dup: &#39;
+        line: &#39;
+    ]
+
+With our &quot;shim&quot; function in the driver&#39;s seat, it can manipulate the inputs and the results.
+
+Consider how right now, functions like APPEND won&#39;t take QUOTED!
+
+    &gt;&gt; item: first [&#39;&#39;&#39;[a b c]]
+    == &#39;&#39;&#39;[a b c]
+
+    &gt;&gt; append item &lt;d&gt;
+    ** Script Error: append does not allow QUOTED! for its series argument
+
+But what if we made a REQUOTE that:
+
+* would build a frame for whatever follows it
+* counted how many quoting levels were on the first argument in that frame
+* took the quoting levels off that first argument
+* ran the function
+* added the quoting levels back to the result
+
+It should be an easier function to write than it is, but even so it&#39;s not that hard:
+
+    requote: reframer func [
+         {Remove Quoting Levels From First Argument and Re-Apply to Result}
+         f [frame!]
+         &lt;local&gt; p num-quotes result
+    ][
+        p: first words of f
+        num-quotes: quotes of f/(p)
+        f/(p): dequote f/(p)
+    
+        if null? result: do f [return null]  ; exempt NULL from requoting
+
+        return quote/depth get/any &#39;result num-quotes
+    ]
+
+And behold:
+
+    &gt;&gt; item: first [&#39;&#39;&#39;[a b c]]
+    == &#39;&#39;&#39;[a b c]
+
+    &gt;&gt; requote append item &lt;d&gt;
+    == &#39;&#39;&#39;[a b c &lt;d&gt;]
+
+## The Shim Can Take Arguments
+
+The last argument of the shim needs to be a frame, but it could also have its own arguments.
+
+Just to demonstrate this point without any frame-fiddling to obscure the point, how about a message that prints before and after just executing the frame:
+
+    &gt;&gt; bracketer: reframer func [msg [text!] f [frame!]] [
+           print msg
+           do f
+           print msg
+       ]
+
+    &gt;&gt; bracketer &quot;Aloha!&quot; print &quot;I&#39;m being framed!&quot;
+    Aloha!
+    I&#39;m being framed!
+    Aloha!
+    == ~void~
+
+## Things To Think About
+
+This is very cool, and it pins down a number of questions about evaluation.
+
+Hopefully now you can see why type errors shouldn&#39;t happen during argument fulfillment, but only once the function actually gets to the point of running.  e.g. a reframer that just does the function after it shouldn&#39;t act any different than that function would running normally.
+
+One tough problem is what to do when you get multiple reframer functions in a row.  I give the example of:
+
+    &gt;&gt; item: first [&#39;&#39;&#39;[a b c]]
+    == &#39;&#39;&#39;[a b c]
+
+    &gt;&gt; item: my requote append &lt;d&gt;
+     ; ... how can this work?
+
+MY is also a reframer.  But if it gets a FRAME! for REQUOTE, that will not be what it expects.  Because REQUOTE has a single argument in its frame...which is a frame, not a callsite argument.  :-/
+
+What MY really wants is a FRAME! for the aggregate function of &quot;REQUOTE APPEND&quot;.  Such aggregate frames aren&#39;t impossible to conceive of, but are beyond what we have today.
+
+That&#39;s probably the biggest issue I can see right now with this.  But it&#39;s a step ahead of having to reinvent the technique on every function that wants to do something like it.  And it means that when an answer for one such functions is made, all of them will get it.</description>
+    
+    <lastBuildDate>Wed, 11 Aug 2021 15:38:42 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Introducing REFRAMER: Close Cousin to ENCLOSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1395">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>MY is also a reframer. But if it gets a FRAME! for REQUOTE, that will not be what it expects. Because REQUOTE has a single argument in its frame...which is a frame, not a callsite argument. :-/</p>
+<p>What MY really wants is a FRAME! for the aggregate function of "REQUOTE APPEND". Such aggregate frames aren't impossible to conceive of, but are beyond what we have today.</p>
+</blockquote>
+</aside>
+<p>I've realized that with <a href="https://forum.rebol.info/t/can-functions-you-now-reorder/1458">the ability to reorder parameters</a>, we can have a solution for these aggregate frames (!).</p>
+<p>The reframer simply adds arguments to the end of the frame (like an AUGMENT) so the frame can be subsetted and still compatible with the reframed function.  But then it adds the reordering information so its arguments go first.</p>
+<p>Not only is it not far out of reach, this makes it seem like there is no such thing as REFRAMER...it's just ENCLOSE which doesn't do type checking until you actually DO the embedded frame.  Basically it just becomes ENCLOSE/NOTYPECHECK!</p>
+<p>This is pleasing.  You aren't getting these "second class citizen reframer functions" which are limited in how you can work with them.  It's pleasing in the same way that being able to add parameters to the interface of functions which have locals of the same name is pleasing.  Once you put something in the domain of ACTION!, it has the properties of any other action with the same interface.  Shades of monads.  <img src="https://forum.rebol.info/images/emoji/twitter/stuck_out_tongue.png?v=9" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+<p>I'm tempted to attack this right now, but I'm in the middle of something else that is also really cool.</p>
+          <p><a href="https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395/3</link>
+        <pubDate>Wed, 11 Aug 2021 15:38:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1395-3</guid>
+        <source url="https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395.rss">Introducing REFRAMER: Close Cousin to ENCLOSE</source>
+      </item>
+      <item>
+        <title>Introducing REFRAMER: Close Cousin to ENCLOSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1395">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Reframers build a frame from whatever follows them at a callsite, and can operate on it before running it (<em>if</em> it runs it).</p>
+</blockquote>
+</aside>
+<p>The ideas behind REFRAMER had percolated around the codebase as experiments.  For instance in the implementation of DOES it would specialize by example--without needing a block:</p>
+<pre><code>&gt;&gt; foo: does [catch [throw &lt;with block&gt;]]
+&gt;&gt; foo
+== &lt;with block&gt;
+
+&gt;&gt; foo: does catch [throw &lt;without block&gt;]
+&gt;&gt; foo
+== &lt;without block&gt;
+</code></pre>
+<p>While it's neat, it opens a can of worms.  <strong>does reverse block</strong> and <strong>does (reverse block)</strong> then mean entirely different things.  The first makes a function that reverses a block on each call and returns that block (as if you'd written DOES [REVERSE BLOCK]).  The second reverses a block once at creation time to get some backwards code, and the function runs that backwards code on each call.</p>
+<p>The worm-can doesn't end there!  <strong>does reverse block</strong> and <strong>does [reverse block]</strong> are still <em>subtly different</em>.  The former won't react to changes in the BLOCK variable while the second one will.  That's because the first is actually a fast form of specialization of REVERSE, where the fetched BLOCK! value has been slotted into the frame.</p>
+<p>The weirdness of frame-making-based-on-callsites spread around the codebase in other places that wanted to try similar tricks...such as MATCH.</p>
+<h2>REFRAMER Isolates The Weirdness</h2>
+<p>With a reframer, you can implement the weird DOES feature easily if you want it, by saying:</p>
+<pre><code>&gt;&gt; does+: reframer func [f [frame!]] [print "Reframing", does [do copy f]]
+
+&gt;&gt; foo: does+ catch [print "Calling", throw &lt;like this&gt;]
+Reframing
+
+&gt;&gt; foo
+Calling
+== &lt;like this&gt;
+
+&gt;&gt; foo
+Calling
+== &lt;like this&gt;
+</code></pre>
+<p>I think this is a smarter direction; to build these capabilities in userspace, and to consolidate the functionality for implementing them in REFRAMER.  So I'm culling it from the default DOES and MATCH.</p>
+<p>(To state the maybe-not-obvious (?): the code for REFRAMER came from unifying the needs of these experiments, and noticing what they have in common.  So while it may seem these things "change a lot and then change back", the process produces net benefits...)</p>
+          <p><a href="https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395/2</link>
+        <pubDate>Sat, 16 Jan 2021 20:02:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1395-2</guid>
+        <source url="https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395.rss">Introducing REFRAMER: Close Cousin to ENCLOSE</source>
+      </item>
+      <item>
+        <title>Introducing REFRAMER: Close Cousin to ENCLOSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>This is a very cool tool that might help concretize some of the <a href="https://forum.rebol.info/t/seeing-all-action-s-as-variadic-frame-makers/1002/2">abstract-sounding arguments I was making about frames</a>...</p>
+<p><strong>Reframers build a frame from whatever follows them at a callsite, and can operate on it before running it (<em>if</em> it runs it).</strong></p>
+<p>Defining a reframer involves giving it a function that will act as the "shim".  Here is a reframer using a very simple shim, that just takes in the frame and returns it.</p>
+<pre><code>get-frame-of: reframer (func [f [frame!]] [f])
+</code></pre>
+<p>Here is what happens if the thing that followed that reframer's execution was a call to APPEND:</p>
+<pre><code>&gt;&gt; get-frame-of append [a b c] &lt;d&gt;
+== make frame! [
+    series: [a b c]
+    value: &lt;d&gt;
+    part: '
+    only: '
+    dup: '
+    line: '
+]
+</code></pre>
+<p>As we can see, it gathered the arguments for the APPEND and put together a FRAME! to represent the call.</p>
+<p><strong>The reframing process did not automatically execute the frame.  But the "shim" function can!</strong></p>
+<p>Let's try something that runs the function twice.</p>
+<pre><code>&gt;&gt; two-times: reframer func [f [frame!]] [do copy f, do f]
+
+&gt;&gt; two-times append [a b c] &lt;d&gt;
+== [a b c &lt;d&gt; &lt;d&gt;]
+</code></pre>
+<h2>Whoa.</h2>
+<p><strong>But wait, there's more.</strong>  Besides not automatically executing the FRAME!, <em>it also doesn't typecheck it (yet)</em>.</p>
+<pre><code>&gt;&gt; get-frame-of append 1 &lt;d&gt;
+== make frame! [
+    series: 1        ; !!! this wouldn't be legal to run as-is 
+    value: &lt;d&gt;
+    part: '
+    only: '
+    dup: '
+    line: '
+]
+</code></pre>
+<p>With our "shim" function in the driver's seat, it can manipulate the inputs and the results.</p>
+<p>Consider how right now, functions like APPEND won't take QUOTED!</p>
+<pre><code>&gt;&gt; item: first ['''[a b c]]
+== '''[a b c]
+
+&gt;&gt; append item &lt;d&gt;
+** Script Error: append does not allow QUOTED! for its series argument
+</code></pre>
+<p>But what if we made a REQUOTE that:</p>
+<ul>
+<li>would build a frame for whatever follows it</li>
+<li>counted how many quoting levels were on the first argument in that frame</li>
+<li>took the quoting levels off that first argument</li>
+<li>ran the function</li>
+<li>added the quoting levels back to the result</li>
+</ul>
+<p>It should be an easier function to write than it is, but even so it's not that hard:</p>
+<pre><code>requote: reframer func [
+     {Remove Quoting Levels From First Argument and Re-Apply to Result}
+     f [frame!]
+     &lt;local&gt; p num-quotes result
+][
+    p: first words of f
+    num-quotes: quotes of f/(p)
+    f/(p): dequote f/(p)
+
+    if null? result: do f [return null]  ; exempt NULL from requoting
+
+    return quote/depth get/any 'result num-quotes
+]
+</code></pre>
+<p>And behold:</p>
+<pre><code>&gt;&gt; item: first ['''[a b c]]
+== '''[a b c]
+
+&gt;&gt; requote append item &lt;d&gt;
+== '''[a b c &lt;d&gt;]
+</code></pre>
+<h2>The Shim Can Take Arguments</h2>
+<p>The last argument of the shim needs to be a frame, but it could also have its own arguments.</p>
+<p>Just to demonstrate this point without any frame-fiddling to obscure the point, how about a message that prints before and after just executing the frame:</p>
+<pre><code>&gt;&gt; bracketer: reframer func [msg [text!] f [frame!]] [
+       print msg
+       do f
+       print msg
+   ]
+
+&gt;&gt; bracketer "Aloha!" print "I'm being framed!"
+Aloha!
+I'm being framed!
+Aloha!
+== ~void~
+</code></pre>
+<h2>Things To Think About</h2>
+<p>This is very cool, and it pins down a number of questions about evaluation.</p>
+<p>Hopefully now you can see why type errors shouldn't happen during argument fulfillment, but only once the function actually gets to the point of running.  e.g. a reframer that just does the function after it shouldn't act any different than that function would running normally.</p>
+<p>One tough problem is what to do when you get multiple reframer functions in a row.  I give the example of:</p>
+<pre><code>&gt;&gt; item: first ['''[a b c]]
+== '''[a b c]
+
+&gt;&gt; item: my requote append &lt;d&gt;
+ ; ... how can this work?
+</code></pre>
+<p>MY is also a reframer.  But if it gets a FRAME! for REQUOTE, that will not be what it expects.  Because REQUOTE has a single argument in its frame...which is a frame, not a callsite argument.  :-/</p>
+<p>What MY really wants is a FRAME! for the aggregate function of "REQUOTE APPEND".  Such aggregate frames aren't impossible to conceive of, but are beyond what we have today.</p>
+<p>That's probably the biggest issue I can see right now with this.  But it's a step ahead of having to reinvent the technique on every function that wants to do something like it.  And it means that when an answer for one such functions is made, all of them will get it.</p>
+          <p><a href="https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395/1</link>
+        <pubDate>Mon, 09 Nov 2020 03:15:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1395-1</guid>
+        <source url="https://forum.rebol.info/t/introducing-reframer-close-cousin-to-enclose/1395.rss">Introducing REFRAMER: Close Cousin to ENCLOSE</source>
+      </item>
+  </channel>
+</rss>

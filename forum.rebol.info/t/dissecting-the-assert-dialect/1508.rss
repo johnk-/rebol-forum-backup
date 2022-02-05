@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Dissecting the ASSERT Dialect</title>
+    <link>https://forum.rebol.info/t/dissecting-the-assert-dialect/1508</link>
+    <description>Another dialect to talk about while discussing the question of [whether the evaluator can accrue state across evaluation steps](https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496) is ASSERT.
+
+The idea of ASSERT is to let you put one expression after the other, and have it tested for &quot;truthiness&quot;. 
+
+**ASSERT needs to do stepwise evaluation, test the result, and ideally report the expression that failed.**
+
+## Historical Brittleness
+
+Since assert accepts multiple expressions, clipping it in the error makes sense so that you only see the expression that failed.
+
+    &gt;&gt; assert [1 = 1 2 = 3 4 = 4]
+    ** Script error: assertion failed for: [2 = 3]
+
+So it has to copy the expression out to put in the error.  But for some reason, it only copies an arbitrary three items from the expression:
+
+    r3-alpha&gt;&gt; assert [empty? first first [[[a]]]]  
+    ** Script error: assertion failed for: [empty? first first]
+
+This raises a number of questions about error reporting...as to whether this kind of copying makes sense in the first place, or if there should be some common services to help be more informative when providing the &quot;near&quot; information...to implicate the start of an expression instead of the end.
+
+But as it&#39;s referring to the block, what if the block is modified?
+
+    r3-alpha&gt;&gt; block: [not empty? clear block]
+
+    r3-alpha&gt;&gt; assert block
+    ** Script error: assertion failed for: []
+
+This is something Ren-C helps with, by locking the array during evaluation:
+
+    ren-c &gt;&gt; block: [not empty? clear block]
+    == [not empty? clear block]
+
+    ren-c&gt;&gt; assert block
+    ** Access Error: series has temporary read-only hold for iteration
+    ** Where: clear evaluate while _ assert console
+    ** Near: [*** empty? clear block **]
+    ** Line: 1
+
+## Invisibility in Ren-C
+
+A difference with Ren-C is that you can put an assert anywhere and it won&#39;t count against the evaluation:
+
+     ren-c&gt;&gt; all [1 = 1, assert [2 = 2], 10 + 20]
+     == 30
+
+     ren-c&gt;&gt; any [1 = 2, assert [2 = 2], 10 + 20]
+     == 30
+
+R3-Alpha can&#39;t have it both ways...the behavior has to fall on the side of making assert return something either truthy or falsey:
+
+    r3-alpha&gt;&gt; all [1 = 1 assert [2 = 2] 10 + 20] 
+    == 30  ; because the assert returned true
+
+    r3-alpha&gt;&gt; any [1 = 2 assert [2 = 2] 10 + 20]
+    == true  ; because the assert returned true
+
+## Implementation Needs
+
+This gives an example of an abstraction that wants to be able to:
+
+* record a position
+* perform an evaluation step
+* decide it doesn&#39;t like the evaluation result, and implicate the position it previously recorded
+
+I started the discussion about &quot;state accumulation&quot; with LET.  But let&#39;s talk about something like MACRO, which throws a more obvious wrench into this situation.
+
+For instance, let&#39;s imagine:
+
+    macroA: enfix macro [] [return [+ 2 =]]
+    macroB: macro [] [return [3 10 =]]
+
+    assert [1 macroA macroB 20]
+
+The full expression being processed in practice would be **assert [1 + 2 = 3 10 = 20]** which should fail on the 10 = 20.
+
+Here we have not just a desire to take single steps across a virtualized block, but also a desire to produce meaningful error messages.
+
+**How to deal with this kind of situation?**  We&#39;re in a position where we can probably get the evaluator to make the code work for a plain DO.  But when it comes to giving errors and single stepping, what parts are involved is not clear.  Is this something that should be forbidden, because the evaluator state is not entirely capturable in terms of the input block&#39;s positions?  If not forbidden, what sort of interface and mitigation would it need?</description>
+    
+    <lastBuildDate>Sun, 14 Feb 2021 22:19:38 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/dissecting-the-assert-dialect/1508.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Dissecting the ASSERT Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p>Note: Rebol2 and R3-Alpha also <a href="http://www.rebol.com/r3/docs/functions/assert.html">had a /TYPE refinement for alternating words and types</a>:</p>
+<pre><code>r3-alpha&gt;&gt; age: 37
+r3-alpha&gt;&gt; name: "Bob"
+
+r3-alpha&gt;&gt; assert/type [age integer! name string!]
+== true
+</code></pre>
+<p>That's not really all that interesting, as Ren-C has ensure, which also passes through the value if you want it to:</p>
+<pre><code>ren-c&gt;&gt; ensure integer! age
+== 37
+
+ren-c&gt;&gt; ensure string! name
+== "Bob"
+</code></pre>
+<p>So the /TYPE refinement was omitted from Ren-C's assert.</p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/dissecting-the-assert-dialect/1508/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dissecting-the-assert-dialect/1508/2</link>
+        <pubDate>Sun, 14 Feb 2021 22:19:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1508-2</guid>
+        <source url="https://forum.rebol.info/t/dissecting-the-assert-dialect/1508.rss">Dissecting the ASSERT Dialect</source>
+      </item>
+      <item>
+        <title>Dissecting the ASSERT Dialect</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Another dialect to talk about while discussing the question of <a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496">whether the evaluator can accrue state across evaluation steps</a> is ASSERT.</p>
+<p>The idea of ASSERT is to let you put one expression after the other, and have it tested for "truthiness".</p>
+<p><strong>ASSERT needs to do stepwise evaluation, test the result, and ideally report the expression that failed.</strong></p>
+<h2>Historical Brittleness</h2>
+<p>Since assert accepts multiple expressions, clipping it in the error makes sense so that you only see the expression that failed.</p>
+<pre><code>&gt;&gt; assert [1 = 1 2 = 3 4 = 4]
+** Script error: assertion failed for: [2 = 3]
+</code></pre>
+<p>So it has to copy the expression out to put in the error.  But for some reason, it only copies an arbitrary three items from the expression:</p>
+<pre><code>r3-alpha&gt;&gt; assert [empty? first first [[[a]]]]  
+** Script error: assertion failed for: [empty? first first]
+</code></pre>
+<p>This raises a number of questions about error reporting...as to whether this kind of copying makes sense in the first place, or if there should be some common services to help be more informative when providing the "near" information...to implicate the start of an expression instead of the end.</p>
+<p>But as it's referring to the block, what if the block is modified?</p>
+<pre><code>r3-alpha&gt;&gt; block: [not empty? clear block]
+
+r3-alpha&gt;&gt; assert block
+** Script error: assertion failed for: []
+</code></pre>
+<p>This is something Ren-C helps with, by locking the array during evaluation:</p>
+<pre><code>ren-c &gt;&gt; block: [not empty? clear block]
+== [not empty? clear block]
+
+ren-c&gt;&gt; assert block
+** Access Error: series has temporary read-only hold for iteration
+** Where: clear evaluate while _ assert console
+** Near: [*** empty? clear block **]
+** Line: 1
+</code></pre>
+<h2>Invisibility in Ren-C</h2>
+<p>A difference with Ren-C is that you can put an assert anywhere and it won't count against the evaluation:</p>
+<pre><code> ren-c&gt;&gt; all [1 = 1, assert [2 = 2], 10 + 20]
+ == 30
+
+ ren-c&gt;&gt; any [1 = 2, assert [2 = 2], 10 + 20]
+ == 30
+</code></pre>
+<p>R3-Alpha can't have it both ways...the behavior has to fall on the side of making assert return something either truthy or falsey:</p>
+<pre><code>r3-alpha&gt;&gt; all [1 = 1 assert [2 = 2] 10 + 20] 
+== 30  ; because the assert returned true
+
+r3-alpha&gt;&gt; any [1 = 2 assert [2 = 2] 10 + 20]
+== true  ; because the assert returned true
+</code></pre>
+<h2>Implementation Needs</h2>
+<p>This gives an example of an abstraction that wants to be able to:</p>
+<ul>
+<li>record a position</li>
+<li>perform an evaluation step</li>
+<li>decide it doesn't like the evaluation result, and implicate the position it previously recorded</li>
+</ul>
+<p>I started the discussion about "state accumulation" with LET.  But let's talk about something like MACRO, which throws a more obvious wrench into this situation.</p>
+<p>For instance, let's imagine:</p>
+<pre><code>macroA: enfix macro [] [return [+ 2 =]]
+macroB: macro [] [return [3 10 =]]
+
+assert [1 macroA macroB 20]
+</code></pre>
+<p>The full expression being processed in practice would be <strong>assert [1 + 2 = 3 10 = 20]</strong> which should fail on the 10 = 20.</p>
+<p>Here we have not just a desire to take single steps across a virtualized block, but also a desire to produce meaningful error messages.</p>
+<p><strong>How to deal with this kind of situation?</strong>  We're in a position where we can probably get the evaluator to make the code work for a plain DO.  But when it comes to giving errors and single stepping, what parts are involved is not clear.  Is this something that should be forbidden, because the evaluator state is not entirely capturable in terms of the input block's positions?  If not forbidden, what sort of interface and mitigation would it need?</p>
+          <p><a href="https://forum.rebol.info/t/dissecting-the-assert-dialect/1508/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dissecting-the-assert-dialect/1508/1</link>
+        <pubDate>Sun, 14 Feb 2021 21:28:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1508-1</guid>
+        <source url="https://forum.rebol.info/t/dissecting-the-assert-dialect/1508.rss">Dissecting the ASSERT Dialect</source>
+      </item>
+  </channel>
+</rss>

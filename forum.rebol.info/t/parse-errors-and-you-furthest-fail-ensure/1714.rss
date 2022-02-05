@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>PARSE Errors And You: FURTHEST, FAIL, ENSURE?</title>
+    <link>https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714</link>
+    <description>So far there&#39;s only a little bit of UPARSE featuring related to errors.  One is the FURTHEST return result:
+
+    &gt;&gt; [v furthest]: uparse &quot;abbbabbabcabab&quot; [some [&quot;a&quot; | &quot;b&quot;]]
+    ; null
+ 
+    &gt;&gt; furthest
+    == &quot;cabab&quot;
+
+What it&#39;s doing is it&#39;s recording the high water mark of whatever a combinator called success.
+
+It&#39;s better than nothing, I guess.  But for parsers that scan ahead it might be worthless.  (I&#39;ll point this out to @Brett, since he suggested the feature...)
+
+    &gt;&gt; [v furthest]: uparse &quot;[ababbbcabbab]&quot; [
+           &quot;[&quot; ahead to &quot;]&quot;  ; this pushes the high water mark to the ]
+           some [&quot;a&quot; | &quot;b&quot;]
+           &quot;]&quot;
+       ]
+    ; null
+
+    &gt;&gt; furthest
+    == &quot;]&quot;
+
+So here we are not implicating the &quot;c&quot;, which people would think of as the actual culprit.  But it&#39;s harder than one might think to figure out who that is.
+
+## Recap of the New FAIL Feature
+
+With the new FAIL in UPARSE, you have a little bit of support on implicating the point of the input to complain about.
+
+The idea is that you make sure the parse position is where you want to implicate, by making the FAIL an alternate to that position:
+
+    &gt;&gt; uparse &quot;{ababcababa}&quot; [
+           into between &quot;{&quot; &quot;}&quot; [
+               some [&quot;a&quot; | &quot;b&quot;] &lt;end&gt;
+               | fail @[&quot;Between braces should be just a and b&quot;]
+           ]
+       ]
+    ** User Error: Between braces should be just a and b
+    ** Near: &quot;ababcababa&quot;
+
+*(If you&#39;ve forgotten why FAIL&#39;s argument needs the @, it&#39;s because the PARSE dialect has a meaning for BLOCK! already...and for the purposes of &quot;regularity&quot; in the dialect this tries not to override that.  But this is an open issue if FAIL wants to break the rules.)*
+
+For demonstration purposes here, I didn&#39;t implicate the &quot;c&quot;, but actually wrote it so the alternate is set to backtrack to when it started matching b.  You get a different result to make the fail an alternate to the end:
+
+    &gt;&gt; uparse &quot;{ababcababa}&quot; [
+           into between &quot;{&quot; &quot;}&quot; [
+               some [&quot;a&quot; | &quot;b&quot;]
+               [&lt;end&gt; | fail @[&quot;Between braces should be just a and b&quot;]]
+           ]
+       ]
+    ** User Error: Between braces should be just a and b
+    ** Near: &quot;cababa&quot;
+
+## A New Fuzzy Concept: ENSURE
+
+We have ENSURE for values outside of PARSE.  It runs a test and passes through the result if it matches, or stops and errors:
+
+    &gt;&gt; x: 10
+
+    &gt;&gt; ensure integer! x
+    == 10
+
+    &gt;&gt; ensure tag! x
+    ** Error: ENSURE failed with argument of type integer!
+
+It seems appealing to make PARSE able to do that too:
+
+    &gt;&gt; uparse [&lt;x&gt; 10 #y 20] [collect [while [
+           keep ensure tag!
+           keep ensure integer!
+       ]]
+    ** Error: ENSURE failed with argument of type ISSUE!
+    ** Near: [... 10 \\ #y \\ 20]
+
+So a similar idea to FAIL, where you get some feedback on the input location causing the problem.
+
+But also similar to FAIL, this doesn&#39;t work within the model of having alternates.  It sees something it doesn&#39;t like and errors in the moment, without giving any **|** options in the rest of the rules a chance.  That&#39;s a bit harsh, but maybe still would fit a lot of scenarios.
+
+The historical ENSURE only works on datatypes.  Could this work on values, or alternate values?
+
+Far-out idea:
+
+     &gt;&gt; uparse &quot;abbbcababa&quot; [some ensure [&quot;a&quot; | b&quot;]]
+     ** Error: ENSURE would have expected:
+           &quot;a&quot;
+           &quot;b&quot;
+       But it received &quot;c&quot;
+
+The idea would be that once ENSURE started, it might have some way of collecting the &quot;leaf nodes&quot; of failed rules.  But I have no idea how such a thing could actually work.
+
+More generally I wonder how alternates figure into *any* system of error delivery.
+
+
+## Random Weird Dialect Idea: BAD-WORD!
+
+Just wanted to write down a strange idea I had, to use BAD-WORD! to indicate a shorthand for FAIL with a message.  The idea was to make it come after a complete rule and imply a message to give if the rule to its left didn&#39;t match:
+
+    &gt;&gt; uparse &quot;[ababbbcabbab]&quot; [
+           &quot;[&quot; ahead to &quot;]&quot;
+           some [&quot;a&quot; | &quot;b&quot;] ~a-or-b-expected~
+           &quot;]&quot;
+       ]
+    ** Error: a-or-b-expected
+    ** At parse input location: &quot;cabbbab]&quot;
+
+It sucks, but it was just a brainstorming idea as a shorthand for:
+
+    &gt;&gt; uparse &quot;[ababbbcabbab]&quot; [
+           &quot;[&quot; ahead to &quot;]&quot;
+           [some [&quot;a&quot; | &quot;b&quot;] | fail ~a-or-b-expected~]
+           &quot;]&quot;
+       ]
+
+Maybe this points to the need for an ELSE construct, as it might be a bit smoother than having to enclose everything in blocks:
+
+    &gt;&gt; uparse &quot;[ababbbcabbab]&quot; [
+           &quot;[&quot; ahead to &quot;]&quot;
+           some [&quot;a&quot; | &quot;b&quot;] else fail ~a-or-b-expected~
+           &quot;]&quot;
+       ]</description>
+    
+    <lastBuildDate>Tue, 14 Sep 2021 06:04:37 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>PARSE Errors And You: FURTHEST, FAIL, ENSURE?</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1714">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>It's better than nothing, I guess. But for parsers that scan ahead it might be worthless. (I'll point this out to <a class="mention" href="/u/brett">@Brett</a>, since he suggested the feature...)</p>
+</blockquote>
+</aside>
+<p>Good stuff on providing FURTHEST. Yep better than nothing and what it provides has been quite useful to me.</p>
+<p>Not sure about the worthless comment. Rules that scan ahead are not arbitrary in my experience, they tend to a specific function.  Someone writing a rule that skips ahead to "]" has declared they're not interested in validating the stuff before that bracket.  I've done that for performance where I trust the data format. There's likely to be something before or after than yields useful information to FURTHEST.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1714">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>More generally I wonder how alternates figure into <em>any</em> system of error delivery</p>
+</blockquote>
+</aside>
+<p>Yes. How can we decide when the data or rules diverged...</p>
+<p>I've suggested the FURTHEST behavior as one heuristic for finding an error.  It was something I could achieve in Rebol 2.  But with access to the backtracking mechanism, could another event be when the parse completely backtracks out to overall failure without further successful match (other than END)?  It may not be exactly where things initially went wrong, but we can say that this is the moment in the progression through the input and the rules that the parse has been abandoned. Hopefully an interesting place.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1714">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>The idea would be that once ENSURE started, it might have some way of collecting the "leaf nodes" of failed rules. But I have no idea how such a thing could actually work</p>
+</blockquote>
+</aside>
+<p>I'm not sure that adding ENSURE to this example achieves anything, but I really like the idea of collecting the leaf nodes.</p>
+<p>It's the failure of the last failed basic match test (leaf test) that precedes overall failure. If parse can track that leaf and it's parent operation (NOT, SOME, basic-alternatives, charset), maybe something descriptive can be the message.</p>
+<p>And for verbosity, if it's tracking that much, maybe it can not clear the stack of active rules if it backtracks all the way out to failure (I haven't read the code). Perhaps some of these identified by name, to be able to identify where in the parse tree it's talking about.</p>
+          <p><a href="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714/2</link>
+        <pubDate>Tue, 14 Sep 2021 06:04:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1714-2</guid>
+        <source url="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714.rss">PARSE Errors And You: FURTHEST, FAIL, ENSURE?</source>
+      </item>
+      <item>
+        <title>PARSE Errors And You: FURTHEST, FAIL, ENSURE?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So far there's only a little bit of UPARSE featuring related to errors.  One is the FURTHEST return result:</p>
+<pre><code>&gt;&gt; [v furthest]: uparse "abbbabbabcabab" [some ["a" | "b"]]
+; null
+
+&gt;&gt; furthest
+== "cabab"
+</code></pre>
+<p>What it's doing is it's recording the high water mark of whatever a combinator called success.</p>
+<p>It's better than nothing, I guess.  But for parsers that scan ahead it might be worthless.  (I'll point this out to <a class="mention" href="/u/brett">@Brett</a>, since he suggested the feature...)</p>
+<pre><code>&gt;&gt; [v furthest]: uparse "[ababbbcabbab]" [
+       "[" ahead to "]"  ; this pushes the high water mark to the ]
+       some ["a" | "b"]
+       "]"
+   ]
+; null
+
+&gt;&gt; furthest
+== "]"
+</code></pre>
+<p>So here we are not implicating the "c", which people would think of as the actual culprit.  But it's harder than one might think to figure out who that is.</p>
+<h2>Recap of the New FAIL Feature</h2>
+<p>With the new FAIL in UPARSE, you have a little bit of support on implicating the point of the input to complain about.</p>
+<p>The idea is that you make sure the parse position is where you want to implicate, by making the FAIL an alternate to that position:</p>
+<pre><code>&gt;&gt; uparse "{ababcababa}" [
+       into between "{" "}" [
+           some ["a" | "b"] &lt;end&gt;
+           | fail @["Between braces should be just a and b"]
+       ]
+   ]
+** User Error: Between braces should be just a and b
+** Near: "ababcababa"
+</code></pre>
+<p><em>(If you've forgotten why FAIL's argument needs the @, it's because the PARSE dialect has a meaning for BLOCK! already...and for the purposes of "regularity" in the dialect this tries not to override that.  But this is an open issue if FAIL wants to break the rules.)</em></p>
+<p>For demonstration purposes here, I didn't implicate the "c", but actually wrote it so the alternate is set to backtrack to when it started matching b.  You get a different result to make the fail an alternate to the end:</p>
+<pre><code>&gt;&gt; uparse "{ababcababa}" [
+       into between "{" "}" [
+           some ["a" | "b"]
+           [&lt;end&gt; | fail @["Between braces should be just a and b"]]
+       ]
+   ]
+** User Error: Between braces should be just a and b
+** Near: "cababa"
+</code></pre>
+<h2>A New Fuzzy Concept: ENSURE</h2>
+<p>We have ENSURE for values outside of PARSE.  It runs a test and passes through the result if it matches, or stops and errors:</p>
+<pre><code>&gt;&gt; x: 10
+
+&gt;&gt; ensure integer! x
+== 10
+
+&gt;&gt; ensure tag! x
+** Error: ENSURE failed with argument of type integer!
+</code></pre>
+<p>It seems appealing to make PARSE able to do that too:</p>
+<pre><code>&gt;&gt; uparse [&lt;x&gt; 10 #y 20] [collect [while [
+       keep ensure tag!
+       keep ensure integer!
+   ]]
+** Error: ENSURE failed with argument of type ISSUE!
+** Near: [... 10 \\ #y \\ 20]
+</code></pre>
+<p>So a similar idea to FAIL, where you get some feedback on the input location causing the problem.</p>
+<p>But also similar to FAIL, this doesn't work within the model of having alternates.  It sees something it doesn't like and errors in the moment, without giving any <strong>|</strong> options in the rest of the rules a chance.  That's a bit harsh, but maybe still would fit a lot of scenarios.</p>
+<p>The historical ENSURE only works on datatypes.  Could this work on values, or alternate values?</p>
+<p>Far-out idea:</p>
+<pre><code> &gt;&gt; uparse "abbbcababa" [some ensure ["a" | b"]]
+ ** Error: ENSURE would have expected:
+       "a"
+       "b"
+   But it received "c"
+</code></pre>
+<p>The idea would be that once ENSURE started, it might have some way of collecting the "leaf nodes" of failed rules.  But I have no idea how such a thing could actually work.</p>
+<p>More generally I wonder how alternates figure into <em>any</em> system of error delivery.</p>
+<h2>Random Weird Dialect Idea: BAD-WORD!</h2>
+<p>Just wanted to write down a strange idea I had, to use BAD-WORD! to indicate a shorthand for FAIL with a message.  The idea was to make it come after a complete rule and imply a message to give if the rule to its left didn't match:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       some ["a" | "b"] ~a-or-b-expected~
+       "]"
+   ]
+** Error: a-or-b-expected
+** At parse input location: "cabbbab]"
+</code></pre>
+<p>It sucks, but it was just a brainstorming idea as a shorthand for:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       [some ["a" | "b"] | fail ~a-or-b-expected~]
+       "]"
+   ]
+</code></pre>
+<p>Maybe this points to the need for an ELSE construct, as it might be a bit smoother than having to enclose everything in blocks:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       some ["a" | "b"] else fail ~a-or-b-expected~
+       "]"
+   ]</code></pre>
+          <p><a href="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714/1</link>
+        <pubDate>Mon, 13 Sep 2021 02:05:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1714-1</guid>
+        <source url="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714.rss">PARSE Errors And You: FURTHEST, FAIL, ENSURE?</source>
+      </item>
+  </channel>
+</rss>

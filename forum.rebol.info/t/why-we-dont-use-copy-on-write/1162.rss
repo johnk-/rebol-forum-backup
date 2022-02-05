@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Why We Don&#39;t Use Copy-on-Write</title>
+    <link>https://forum.rebol.info/t/why-we-dont-use-copy-on-write/1162</link>
+    <description>I plugged in an old computer I hadn&#39;t used for a while, which had a file on it with a heading that said: &quot;HOW COPY ON WRITE IN REN/C WORKS&quot;.
+
+*&quot;But Ren-C doesn&#39;t use copy on write!&quot;* - you might point out.  (You might also point out that we haven&#39;t typed it with a slash for a long time.)  No, it doesn&#39;t use copy-on-write...and this piece of old unfinished writing was part of the patchwork of reasoning for why it was ultimately not pursued.
+
+Long story short: what we&#39;ve ended up with are the much better [CONST and MUTABLE](https://forum.rebol.info/t/source-mutability-const-and-mutable/976).  It addresses the motivation with a *relatively* simple mechanic, and provides means for Redbol to run under &quot;traditional&quot; rules.  But as long as I&#39;m deleting this file I might as well archive some notes on it and the issue...
+
+### Reminder of What the Problem Was
+
+With series being mutable by default, everyone would get bitten by forgetting to COPY a series.
+
+    rebol2&gt;&gt; loop 3 [x: &quot;&quot; append x &quot;a&quot;]
+    rebol2&gt;&gt; x
+    == &quot;aaa&quot;
+
+It can be counter-intuitive to realize **you are writing self-modifying code**.  It&#39;s easier to see if you make a function out of it:
+
+    rebol2&gt;&gt; foo: func [] [
+        x: &quot;&quot;
+        append x &quot;a&quot;
+        return x
+    ]
+
+    rebol2&gt;&gt; loop 3 [foo]
+    == &quot;aaa&quot;
+
+    rebol2&gt;&gt; source foo
+    foo: func [][x: &quot;aaa&quot; append x &quot;a&quot; return x]
+
+For people who like puzzles, this can be an intriguing mechanic to understand.  For people who dislike bugs, it&#39;s kind of horrifying.
+
+### What if SET-WORD! Assignments Copied Literal Arguments Implicitly?
+
+After the open-sourcing of R3-Alpha, people could try out whatever pet theories they had.  An early thing that Andreas (@earl) looked into was how to make the REB_SET_WORD case notice it had a literal series argument, and COPY it.  So **x: &quot;abc&quot;** would make a copy, but **x: some-string** would not.
+
+He did some performance analysis on typical cases and said it didn&#39;t seem to be that bad.  But I pointed out that it wasn&#39;t COPY/DEEP.  It seeme kind of arbitrary to have this give you a fresh block every time:
+
+    loop 2 [
+        x: [a b c]
+        append x &#39;d
+        probe x
+    ]
+    [a b c d]
+    [a b c d]
+    
+But as soon as you go a level deep it doesn&#39;t:
+
+    loop 2 [
+        x: [a [b] c]
+        append x/2 &#39;d
+        probe x
+     ]
+     [a [b d] c]
+     [a [b d d] c]
+
+This made me wonder if there could be some kind of system-wide mechanic, where any COPY/DEEP you did (implicit or explicit) wouldn&#39;t actually make the copy until there was a change.  That&#39;s what [copy-on-write](https://en.wikipedia.org/wiki/Copy-on-write) is.
+
+### Here&#39;s what the file said
+
+The file was starting to outline some of the work that was tried:
+&gt; Rebol has historically maintained the &quot;backing store&quot; of data behind a STRING! or BLOCK! or other SERIES! type inside of a data structure that is a dynamically growable array, called a REBSER.
+&gt;
+&gt; (Note: Saying that a REBSER is a &quot;REBol SERies&quot; is a little misleading in terminology, because if something is a SERIES! as the user experiences it then it also has an index position.   There is no index inside of a REBSER itself; that is established in a REBVAL which is of series type that has a REBSER plus an index.  Whether we want to call it &quot;REBSER_DATA&quot; or &quot;The Series! Payload&quot; or the series&#39;s &quot;Tape&quot; is up for debate,  but we&#39;ll just call it a REBSER for the time being.)
+&gt;
+&gt; In Rebol there are frequently cases where data is copied or even COPY/DEEP &quot;just to be safe&quot;.  This includes things like function bodies or specs... for fear that a user might unknowingly modify something they intended to reflect.  These copies can be expensive in terms of memory consumed as well as in the time spent making them; and it might turn out that they are never modified at all.
+&gt;
+&gt;There is already a hook point established that can trap requests for modification.  This is used to implement the PROTECT feature.  Ren/C adapts this hook point to implement a Copy-on-Write strategy.
+&gt;
+&gt; (Note: Ren/C is more aggressive in its application of language features like C&#39;s `const` to make sure that operations like PROTECT cannot be subverted.  This gives more confidence to PROTECT as well as that the Copy-on-Write will work.)
+&gt;
+&gt; At first glance the implementation of Copy-on-Write seems simple.  Add a pointer into each REBSER to the next REBSER that is a member of its &quot;clone set&quot;...circularly linked.  Should a modifying operation be requested on a clone, the copy is made of the data at that time.  The modified series is removed from the list...and once the last clone vanishes, the pointer on the final remaining copy is set to NULL.
+&gt;
+&gt; If it seems so easy, one might wonder &quot;why didn&#39;t someone already do this.&quot;  Reasonable question.  However, the real benefit comes when you can do Copy-on-Write on COPY/DEEP.  That&#39;s trickier, because if you are navigating a series and descend into it, you need to remember *which point of view* you had in order to decide whether to copy or not.
+&gt;
+&gt; Imagine a series like [a [b [c [d]]]] that you were to COPY/DEEP.  To some clients you give your version...the source of the copy, which they should mutate freely and affect the source reference you have.  To other clients you give the copy... and if they tinker in the middle it should not mess with your source.  It should only be affecting other clients who got the COPY/DEEP version.
+&gt;
+&gt; This means that *series values themselves* need to somehow carry along the knowledge of which clone they are traversing.   If you expected the REBSER* that is poked into a series value (along with index as mentioned) to be enough information, it means that REBSER* exists... so you already did the Copy/Deep.  At the outset of a Copy/Deep of a REBSER that contains 10,000 REBSERs inside it, you only want one cloned REBSER.  Otherwise &quot;you paid too much&quot; and it&#39;s hard to really understand what the benefit was; only terminal series with no sub-series in them will have the Copy-on-Write advantage.
+&gt;
+&gt; Inside a Series_Ref there is enough room for a pointer.  That pointer is used to say which clone a series reference is in.  If you extract a REBSER from a series reference the default is to get a const pointer which cannot be modified.  If you extract using a mutable access, then the deep copy will happen at that time.
+&gt;
+&gt; The cloning status has to be checked each time to see if it is still in effect for that value.  A REBVAL which is writable can be adjusted by the mutating accessor.
+
+...and it stopped there.  Rebol&#39;s series model (with cycles, even) does not make it easy to synchronize and &quot;detach&quot; COPY/DEEP structures coherently.  And the tracking structures for doing so are on the same order of magnitude of size as the structures themselves.  Then, it&#39;s more code, too.
+
+## It did too much behind your back...CONST is better
+
+Although the idea would have applied to any COPY or COPY/DEEP, it was geared toward this notion of helping avoid the bugs cheaply.  But the SET-WORD! on literals was a red herring.  Is there anything you can really say is different between:
+
+     x: &quot;abc&quot;
+     append x &quot;d&quot;
+
+...and...
+
+     x: (&quot;abc&quot;)
+     append x &quot;d&quot;
+
+It&#39;s problems waiting to happen.  I think that when you read through the examples of how CONST is working, it&#39;s much more in the right spirit.
+
+So an interesting retrospective on ideas from then, vs now.</description>
+    
+    <lastBuildDate>Tue, 14 May 2019 06:34:23 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/why-we-dont-use-copy-on-write/1162.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Why We Don&#39;t Use Copy-on-Write</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I plugged in an old computer I hadn't used for a while, which had a file on it with a heading that said: "HOW COPY ON WRITE IN REN/C WORKS".</p>
+<p><em>"But Ren-C doesn't use copy on write!"</em> - you might point out.  (You might also point out that we haven't typed it with a slash for a long time.)  No, it doesn't use copy-on-write...and this piece of old unfinished writing was part of the patchwork of reasoning for why it was ultimately not pursued.</p>
+<p>Long story short: what we've ended up with are the much better <a href="https://forum.rebol.info/t/source-mutability-const-and-mutable/976">CONST and MUTABLE</a>.  It addresses the motivation with a <em>relatively</em> simple mechanic, and provides means for Redbol to run under "traditional" rules.  But as long as I'm deleting this file I might as well archive some notes on it and the issue...</p>
+<h3>Reminder of What the Problem Was</h3>
+<p>With series being mutable by default, everyone would get bitten by forgetting to COPY a series.</p>
+<pre><code>rebol2&gt;&gt; loop 3 [x: "" append x "a"]
+rebol2&gt;&gt; x
+== "aaa"
+</code></pre>
+<p>It can be counter-intuitive to realize <strong>you are writing self-modifying code</strong>.  It's easier to see if you make a function out of it:</p>
+<pre><code>rebol2&gt;&gt; foo: func [] [
+    x: ""
+    append x "a"
+    return x
+]
+
+rebol2&gt;&gt; loop 3 [foo]
+== "aaa"
+
+rebol2&gt;&gt; source foo
+foo: func [][x: "aaa" append x "a" return x]
+</code></pre>
+<p>For people who like puzzles, this can be an intriguing mechanic to understand.  For people who dislike bugs, it's kind of horrifying.</p>
+<h3>What if SET-WORD! Assignments Copied Literal Arguments Implicitly?</h3>
+<p>After the open-sourcing of R3-Alpha, people could try out whatever pet theories they had.  An early thing that Andreas (<span class="mention">@earl</span>) looked into was how to make the REB_SET_WORD case notice it had a literal series argument, and COPY it.  So <strong>x: "abc"</strong> would make a copy, but <strong>x: some-string</strong> would not.</p>
+<p>He did some performance analysis on typical cases and said it didn't seem to be that bad.  But I pointed out that it wasn't COPY/DEEP.  It seeme kind of arbitrary to have this give you a fresh block every time:</p>
+<pre><code>loop 2 [
+    x: [a b c]
+    append x 'd
+    probe x
+]
+[a b c d]
+[a b c d]
+</code></pre>
+<p>But as soon as you go a level deep it doesn't:</p>
+<pre><code>loop 2 [
+    x: [a [b] c]
+    append x/2 'd
+    probe x
+ ]
+ [a [b d] c]
+ [a [b d d] c]
+</code></pre>
+<p>This made me wonder if there could be some kind of system-wide mechanic, where any COPY/DEEP you did (implicit or explicit) wouldn't actually make the copy until there was a change.  That's what <a href="https://en.wikipedia.org/wiki/Copy-on-write" rel="nofollow noopener">copy-on-write</a> is.</p>
+<h3>Here's what the file said</h3>
+<p>The file was starting to outline some of the work that was tried:</p>
+<blockquote>
+<p>Rebol has historically maintained the "backing store" of data behind a STRING! or BLOCK! or other SERIES! type inside of a data structure that is a dynamically growable array, called a REBSER.</p>
+<p>(Note: Saying that a REBSER is a "REBol SERies" is a little misleading in terminology, because if something is a SERIES! as the user experiences it then it also has an index position.   There is no index inside of a REBSER itself; that is established in a REBVAL which is of series type that has a REBSER plus an index.  Whether we want to call it "REBSER_DATA" or "The Series! Payload" or the series's "Tape" is up for debate,  but we'll just call it a REBSER for the time being.)</p>
+<p>In Rebol there are frequently cases where data is copied or even COPY/DEEP "just to be safe".  This includes things like function bodies or specs... for fear that a user might unknowingly modify something they intended to reflect.  These copies can be expensive in terms of memory consumed as well as in the time spent making them; and it might turn out that they are never modified at all.</p>
+<p>There is already a hook point established that can trap requests for modification.  This is used to implement the PROTECT feature.  Ren/C adapts this hook point to implement a Copy-on-Write strategy.</p>
+<p>(Note: Ren/C is more aggressive in its application of language features like C's <code>const</code> to make sure that operations like PROTECT cannot be subverted.  This gives more confidence to PROTECT as well as that the Copy-on-Write will work.)</p>
+<p>At first glance the implementation of Copy-on-Write seems simple.  Add a pointer into each REBSER to the next REBSER that is a member of its "clone set"...circularly linked.  Should a modifying operation be requested on a clone, the copy is made of the data at that time.  The modified series is removed from the list...and once the last clone vanishes, the pointer on the final remaining copy is set to NULL.</p>
+<p>If it seems so easy, one might wonder "why didn't someone already do this."  Reasonable question.  However, the real benefit comes when you can do Copy-on-Write on COPY/DEEP.  That's trickier, because if you are navigating a series and descend into it, you need to remember <em>which point of view</em> you had in order to decide whether to copy or not.</p>
+<p>Imagine a series like [a [b [c [d]]]] that you were to COPY/DEEP.  To some clients you give your version...the source of the copy, which they should mutate freely and affect the source reference you have.  To other clients you give the copy... and if they tinker in the middle it should not mess with your source.  It should only be affecting other clients who got the COPY/DEEP version.</p>
+<p>This means that <em>series values themselves</em> need to somehow carry along the knowledge of which clone they are traversing.   If you expected the REBSER* that is poked into a series value (along with index as mentioned) to be enough information, it means that REBSER* exists... so you already did the Copy/Deep.  At the outset of a Copy/Deep of a REBSER that contains 10,000 REBSERs inside it, you only want one cloned REBSER.  Otherwise "you paid too much" and it's hard to really understand what the benefit was; only terminal series with no sub-series in them will have the Copy-on-Write advantage.</p>
+<p>Inside a Series_Ref there is enough room for a pointer.  That pointer is used to say which clone a series reference is in.  If you extract a REBSER from a series reference the default is to get a const pointer which cannot be modified.  If you extract using a mutable access, then the deep copy will happen at that time.</p>
+<p>The cloning status has to be checked each time to see if it is still in effect for that value.  A REBVAL which is writable can be adjusted by the mutating accessor.</p>
+</blockquote>
+<p>...and it stopped there.  Rebol's series model (with cycles, even) does not make it easy to synchronize and "detach" COPY/DEEP structures coherently.  And the tracking structures for doing so are on the same order of magnitude of size as the structures themselves.  Then, it's more code, too.</p>
+<h2>It did too much behind your back...CONST is better</h2>
+<p>Although the idea would have applied to any COPY or COPY/DEEP, it was geared toward this notion of helping avoid the bugs cheaply.  But the SET-WORD! on literals was a red herring.  Is there anything you can really say is different between:</p>
+<pre><code> x: "abc"
+ append x "d"
+</code></pre>
+<p>...and...</p>
+<pre><code> x: ("abc")
+ append x "d"
+</code></pre>
+<p>It's problems waiting to happen.  I think that when you read through the examples of how CONST is working, it's much more in the right spirit.</p>
+<p>So an interesting retrospective on ideas from then, vs now.</p>
+          <p><a href="https://forum.rebol.info/t/why-we-dont-use-copy-on-write/1162/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/why-we-dont-use-copy-on-write/1162/1</link>
+        <pubDate>Sun, 05 May 2019 17:25:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1162-1</guid>
+        <source url="https://forum.rebol.info/t/why-we-dont-use-copy-on-write/1162.rss">Why We Don&#39;t Use Copy-on-Write</source>
+      </item>
+  </channel>
+</rss>

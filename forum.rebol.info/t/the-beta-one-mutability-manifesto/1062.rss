@@ -1,0 +1,336 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Beta/One Mutability Manifesto</title>
+    <link>https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062</link>
+    <description>**We know that having it be too easy to create self-modifying code in Rebol is a bug-riddled trap.**  Locking source has shown a hint at what the system can do to help.
+
+**Yet we also know it&#39;s very inconvenient to not be able to modify series in the console.**  Beyond convenience, certainly a lot of historical code hinges on it.
+
+Without further ado, the solution...
+
+## Best of Both Worlds: Mutable Default, Case-by-Case Constness
+
+You can now mark the arguments to functions as `&lt;const&gt;` (as well as apply it manually using CONST).  Then if you DO something that&#39;s const, it will propagate that wave of constness down through any literal values it sees when it executes them.
+
+    &gt;&gt; do [b: [] append b 10]  ; DO doesn&#39;t have its parameter marked &lt;const&gt;
+    &gt;&gt; b
+    == [10]
+
+    &gt;&gt; do const [b: [] append b 20]  ; but you can add CONST explicitly
+    ** Access Error: CONST or iterative value (see MUTABLE): []
+
+    &gt;&gt; loop 2 [b: [] append b 30]  ; LOOP has its `body` parameter marked &lt;const&gt;
+    ** Access Error: CONST or iterative value (see MUTABLE): []
+
+    &gt;&gt; loop 2 [do [b: [] append b 40]]  ; LOOP&#39;s const view propagates into the DO
+    ** Access Error: CONST or iterative value (see MUTABLE): []
+
+    &gt;&gt; block: [b: [] append b 50]
+    &gt;&gt; loop 2 [do block]  ; LOOP&#39;s &quot;wave&quot; of constness only affects inline literals
+    == [50 50]
+
+    &gt;&gt; loop 2 [b: mutable [] append b 60]
+    &gt;&gt; b
+    == [60 60]  ; MUTABLE can take in const &quot;literals&quot; in and un-consts them
+
+What are the implications for the console?  Well, the console just runs the code you give it with DO, so...
+
+    &gt;&gt; b: [] 
+    &gt;&gt; append b 70
+    &gt;&gt; b
+    == [70]
+
+In addition to looping constructs, FUNC and FUNCTION have their `body` argument marked `&lt;const&gt;`.
+
+## It cures what ails ya
+
+Remember that *super-nasty* problem I talked about, where you could accidentally return literals from a function body and callers could mutate them?
+
+    rebol2&gt;&gt; symbol-to-string: function [s] [
+           switch s [
+               + [&quot;plus&quot;]
+               - [&quot;minus&quot;]
+           ]
+       ]
+
+    rebol2&gt;&gt; p: symbol-to-string &#39;+
+    == &quot;plus&quot;
+    
+    rebol2&gt;&gt; insert p &quot;double-&quot; append p &quot;-ungood&quot;
+    == &quot;double-plus-ungood&quot;
+
+    rebol2&gt;&gt; symbol-to-string &#39;+
+    == &quot;double-plus-ungood&quot;  ; Oh noes
+
+That&#39;s not a theoretical thing.  A situation of that nature bit me once and took hours to find.  I&#39;m not the only one--and of course newbies (and experts alike) are bit by simpler variations of this *all the time*.
+
+But now...
+
+    &gt;&gt; symbol-to-string: function [s] [
+           switch s [
+               &#39;+ [&quot;plus&quot;]
+               &#39;- [&quot;minus&quot;]
+           ]
+       ]
+
+    &gt;&gt; p: symbol-to-string &#39;+
+    == &quot;plus&quot;
+    
+    &gt;&gt; insert p &quot;double-&quot; append p &quot;-good&quot;
+    ** Access Error: CONST or iterative value (see MUTABLE): &quot;plus&quot;
+
+    &gt;&gt; p: symbol-to-string &#39;+
+    == &quot;plus&quot;
+
+    &gt;&gt; p: mutable p
+
+    &gt;&gt; insert p &quot;you-&quot; append p &quot;-asked-for-it&quot;
+    == &quot;you-plus-asked-for-it&quot;
+
+    &gt;&gt; symbol-to-string &#39;+
+    == &quot;you-plus-asked-for-it&quot;
+
+**That is COOL.**  Don&#39;t let anyone tell you it isn&#39;t.  :slight_smile:  There may be hope for mechanisms to implicate where const was added on things--or at least a debug mode where it favors storing that information over remembering the file and line.  It&#39;s a balance of cost for such things, though.
+
+## Easy to Make Rebol2-Compatible FUNC/WHILE/etc. Variations 
+
+We haven&#39;t pinned down the dialect exactly, but it&#39;s possible to make tweaked versions of functions that have differing parameter conventions.  Ignore the gnarly syntax for this (it will improve), but:
+
+    &gt;&gt; func-r2: reskinned [body [block!]] adapt :func []  ; no &lt;const&gt; on skinned body
+
+    &gt;&gt; aggregator: func-r2 [x] [data: [] append data x]
+
+    &gt;&gt; aggregator 10
+    == [10]
+
+    &gt;&gt; aggregator 20
+    == [10 20]
+
+Really, when you consider the possibility for error (again think of the &quot;plus&quot; example above), it seems a lot more prudent to have to say `data: mutable []` to get this behavior.
+
+## It&#39;s Good...but It&#39;s Still New...so TEST IT!
+
+As I keep saying about these things, I&#39;d love to sit around writing test cases and reasoning about them.  But I sort of have to pick at a few tricky cases where I think there may be a fundamental flaw...and if I feel like it&#39;s covered, I have to go on to the next big thing.
+
+There&#39;s little things to wonder about.  For instance, it only applies this const rule to *inert* values.  This means you can subvert it with quoting, because the quote causes an evaluation...like how getting a block out of a WORD!-evaluated variable works:
+
+    &gt;&gt; loop 2 [append &#39;[] 10]
+    == [10 10]
+
+Bug, or feature?  From the perspective of implementing the API, this is a feature--it means that when you say:
+
+    REBVAL *block = rebValue(&quot;[1 2 3]&quot;);
+    rebElide(&quot;loop 2 [append&quot;, block, &quot;10]&quot;);
+
+The [implicit quote put on the block during the course of the execution](https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050?u=hostilefork) is enough to make appending to it legal.  It didn&#39;t go through a WORD!-fetch...it went through a C-variable-fetch, so it would look like an inert without that quote.
+
+Anyway... PLEASE revisit your source and any calls to MUTABLE you may have...or superfluous COPYs, and let me know of any problems with this model as soon as possible.  Because this is looking good for Beta/One and if we can call it pinned down, that solves one of the largest outstanding questions.</description>
+    
+    <lastBuildDate>Thu, 31 Dec 2020 11:44:47 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Beta/One Mutability Manifesto</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Overall I think CONST and MUTABLE have been a huge success...catching potential problems, while still letting those who really want to force mutability get their wish.</p>
+<p>But just now in writing tests for what I suggested about <a href="https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765/2">Virtual Binds being CONST by default</a>, I was confronted again by a behavior I call out above.  When you quote things, the quoting makes them subvert the const wave...it's true for loops, and it's true for virtual binds too:</p>
+<pre><code>&gt;&gt; loop 2 [data: [], append data 10, append data 20, print mold data]
+** Error: ...data is `const` because it is in the "wave" of the loop body
+
+&gt;&gt; loop 2 [data: '(), append data 10, append data 20, print mold data]
+(10 20)
+(10 20 10 20)
+</code></pre>
+<p>On the other hand, you would be protected if you'd not used quoting, which looks more palatable <a href="https://forum.rebol.info/t/cutting-out-only-could-we-make-append-find-etc-only-accept-blocks/1182/15">if we picked the word <strong>just</strong> instead of <strong>lit</strong></a></p>
+<pre><code>&gt;&gt; loop 2 [data: just (), append data 10, append data 20, print mold data]
+** Error: ...data is `const` because it is in the "wave" of the loop body
+</code></pre>
+<p>That may seem unfortunate.  But if quoting couldn't accomplish this, then every API that wanted to splice mutable values would have to use MUTABLE.</p>
+<pre><code>REBVAL *block = rebValue("[1 2 3]");
+rebElide("loop 2 [append mutable", block, "10]");
+</code></pre>
+<p>...and if you had to do that for <em>every</em> block, it would undermine any cases where the block itself was actually const.</p>
+<p><strong>I think it's now inevitable that an evaluated QUOTED! will have the same semantics as if you had fetched the value out of a word, not the same semantics as if you'd gotten it as a parameter to a function like LIT (JUST?).</strong>   So a good guideline is that you should either use <strong>var: copy '(...)</strong> or <strong>var: just (...)</strong> when declaring GROUP!s as variables.  Because <strong>var: '(...)</strong> won't offer protections for constness to inform you about whether you likely intended a COPY.</p>
+<p>This is a fuzzy medium, and so the checks aren't going to be foolproof.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+          <p><a href="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/4</link>
+        <pubDate>Thu, 31 Dec 2020 11:44:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1062-4</guid>
+        <source url="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062.rss">The Beta/One Mutability Manifesto</source>
+      </item>
+      <item>
+        <title>The Beta/One Mutability Manifesto</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="2" data-topic="1062" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p>Cool, but it seems to me not so immediate to “see” if something is const vs mutable.</p>
+</blockquote>
+</aside>
+<p>Well, very little in Rebol is obvious to see if you don't make an effort to make the code clear.  You don't know where function calls begin or end, you don't know if something is being quoted at the callsite by the function you are calling or not... you don't know that a SET-WORD! is assigning or just a dialect part (...etc. etc. etc...)</p>
+<p>If you want to be explicit you can put CONST or MUTABLE in as an annotation where you think it adds clarity, even if it's not strictly needed.  For instance, when you have:</p>
+<pre><code>&gt;&gt; block: [append d: [] &lt;item&gt;]
+&gt;&gt; loop 2 [do block]
+== [&lt;item&gt; &lt;item&gt;]
+
+&gt;&gt; loop 2 [do [append d: [] &lt;item&gt;]]
+** Access Error: CONST or iterative value (see MUTABLE): []
+</code></pre>
+<p>One usage of CONST and MUTABLE would be to <em>change</em> the policy:</p>
+<pre><code>&gt;&gt; block: [append d: [] &lt;item&gt;]
+&gt;&gt; loop 2 [do const block]
+** Access Error: CONST or iterative value (see MUTABLE): []
+
+&gt;&gt; loop 2 [do [append d: mutable [] &lt;item&gt;]]
+== [&lt;item&gt; &lt;item&gt;]
+</code></pre>
+<p>Or you can use them to <em>reinforce</em> the policy:</p>
+<pre><code>&gt;&gt; block: [append d: [] &lt;item&gt;]
+&gt;&gt; loop 2 [do mutable block]
+== [&lt;item&gt; &lt;item&gt;]
+
+&gt;&gt; loop 2 [do const [append d: [] &lt;item&gt;]]
+** Access Error: CONST or iterative value (see MUTABLE): []
+</code></pre>
+<p>But an underlying great thing about this solution is that it's not about putting locking into LOAD or somehow building it into the evaluator in a way you can't turn off.  I've shown the Rebol2 compatibility, and it can be pushed around as people like.  Truly flexible, and the plus example shows how this is desperately needed.</p>
+          <p><a href="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/3</link>
+        <pubDate>Sat, 09 Feb 2019 12:34:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1062-3</guid>
+        <source url="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062.rss">The Beta/One Mutability Manifesto</source>
+      </item>
+      <item>
+        <title>The Beta/One Mutability Manifesto</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>Cool, but it seems to me not so immediate to "see" if something is const vs mutable.</p>
+          <p><a href="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/2</link>
+        <pubDate>Sat, 09 Feb 2019 12:19:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1062-2</guid>
+        <source url="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062.rss">The Beta/One Mutability Manifesto</source>
+      </item>
+      <item>
+        <title>The Beta/One Mutability Manifesto</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>We know that having it be too easy to create self-modifying code in Rebol is a bug-riddled trap.</strong>  Locking source has shown a hint at what the system can do to help.</p>
+<p><strong>Yet we also know it's very inconvenient to not be able to modify series in the console.</strong>  Beyond convenience, certainly a lot of historical code hinges on it.</p>
+<p>Without further ado, the solution...</p>
+<h2>Best of Both Worlds: Mutable Default, Case-by-Case Constness</h2>
+<p>You can now mark the arguments to functions as <code>&lt;const&gt;</code> (as well as apply it manually using CONST).  Then if you DO something that's const, it will propagate that wave of constness down through any literal values it sees when it executes them.</p>
+<pre><code>&gt;&gt; do [b: [] append b 10]  ; DO doesn't have its parameter marked &lt;const&gt;
+&gt;&gt; b
+== [10]
+
+&gt;&gt; do const [b: [] append b 20]  ; but you can add CONST explicitly
+** Access Error: CONST or iterative value (see MUTABLE): []
+
+&gt;&gt; loop 2 [b: [] append b 30]  ; LOOP has its `body` parameter marked &lt;const&gt;
+** Access Error: CONST or iterative value (see MUTABLE): []
+
+&gt;&gt; loop 2 [do [b: [] append b 40]]  ; LOOP's const view propagates into the DO
+** Access Error: CONST or iterative value (see MUTABLE): []
+
+&gt;&gt; block: [b: [] append b 50]
+&gt;&gt; loop 2 [do block]  ; LOOP's "wave" of constness only affects inline literals
+== [50 50]
+
+&gt;&gt; loop 2 [b: mutable [] append b 60]
+&gt;&gt; b
+== [60 60]  ; MUTABLE can take in const "literals" in and un-consts them
+</code></pre>
+<p>What are the implications for the console?  Well, the console just runs the code you give it with DO, so...</p>
+<pre><code>&gt;&gt; b: [] 
+&gt;&gt; append b 70
+&gt;&gt; b
+== [70]
+</code></pre>
+<p>In addition to looping constructs, FUNC and FUNCTION have their <code>body</code> argument marked <code>&lt;const&gt;</code>.</p>
+<h2>It cures what ails ya</h2>
+<p>Remember that <em>super-nasty</em> problem I talked about, where you could accidentally return literals from a function body and callers could mutate them?</p>
+<pre><code>rebol2&gt;&gt; symbol-to-string: function [s] [
+       switch s [
+           + ["plus"]
+           - ["minus"]
+       ]
+   ]
+
+rebol2&gt;&gt; p: symbol-to-string '+
+== "plus"
+
+rebol2&gt;&gt; insert p "double-" append p "-ungood"
+== "double-plus-ungood"
+
+rebol2&gt;&gt; symbol-to-string '+
+== "double-plus-ungood"  ; Oh noes
+</code></pre>
+<p>That's not a theoretical thing.  A situation of that nature bit me once and took hours to find.  I'm not the only one--and of course newbies (and experts alike) are bit by simpler variations of this <em>all the time</em>.</p>
+<p>But now...</p>
+<pre><code>&gt;&gt; symbol-to-string: function [s] [
+       switch s [
+           '+ ["plus"]
+           '- ["minus"]
+       ]
+   ]
+
+&gt;&gt; p: symbol-to-string '+
+== "plus"
+
+&gt;&gt; insert p "double-" append p "-good"
+** Access Error: CONST or iterative value (see MUTABLE): "plus"
+
+&gt;&gt; p: symbol-to-string '+
+== "plus"
+
+&gt;&gt; p: mutable p
+
+&gt;&gt; insert p "you-" append p "-asked-for-it"
+== "you-plus-asked-for-it"
+
+&gt;&gt; symbol-to-string '+
+== "you-plus-asked-for-it"
+</code></pre>
+<p><strong>That is COOL.</strong>  Don't let anyone tell you it isn't.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:">  There may be hope for mechanisms to implicate where const was added on things--or at least a debug mode where it favors storing that information over remembering the file and line.  It's a balance of cost for such things, though.</p>
+<h2>Easy to Make Rebol2-Compatible FUNC/WHILE/etc. Variations</h2>
+<p>We haven't pinned down the dialect exactly, but it's possible to make tweaked versions of functions that have differing parameter conventions.  Ignore the gnarly syntax for this (it will improve), but:</p>
+<pre><code>&gt;&gt; func-r2: reskinned [body [block!]] adapt :func []  ; no &lt;const&gt; on skinned body
+
+&gt;&gt; aggregator: func-r2 [x] [data: [] append data x]
+
+&gt;&gt; aggregator 10
+== [10]
+
+&gt;&gt; aggregator 20
+== [10 20]
+</code></pre>
+<p>Really, when you consider the possibility for error (again think of the "plus" example above), it seems a lot more prudent to have to say <code>data: mutable []</code> to get this behavior.</p>
+<h2>It's Good...but It's Still New...so TEST IT!</h2>
+<p>As I keep saying about these things, I'd love to sit around writing test cases and reasoning about them.  But I sort of have to pick at a few tricky cases where I think there may be a fundamental flaw...and if I feel like it's covered, I have to go on to the next big thing.</p>
+<p>There's little things to wonder about.  For instance, it only applies this const rule to <em>inert</em> values.  This means you can subvert it with quoting, because the quote causes an evaluation...like how getting a block out of a WORD!-evaluated variable works:</p>
+<pre><code>&gt;&gt; loop 2 [append '[] 10]
+== [10 10]
+</code></pre>
+<p>Bug, or feature?  From the perspective of implementing the API, this is a feature--it means that when you say:</p>
+<pre><code>REBVAL *block = rebValue("[1 2 3]");
+rebElide("loop 2 [append", block, "10]");
+</code></pre>
+<p>The <a href="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050">implicit quote put on the block during the course of the execution</a> is enough to make appending to it legal.  It didn't go through a WORD!-fetch...it went through a C-variable-fetch, so it would look like an inert without that quote.</p>
+<p>Anyway... PLEASE revisit your source and any calls to MUTABLE you may have...or superfluous COPYs, and let me know of any problems with this model as soon as possible.  Because this is looking good for Beta/One and if we can call it pinned down, that solves one of the largest outstanding questions.</p>
+          <p><a href="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/1</link>
+        <pubDate>Sat, 09 Feb 2019 07:55:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1062-1</guid>
+        <source url="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062.rss">The Beta/One Mutability Manifesto</source>
+      </item>
+  </channel>
+</rss>

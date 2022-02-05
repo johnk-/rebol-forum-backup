@@ -1,0 +1,1401 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Naming - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/naming/32</link>
+    <description>Topics in the &#39;Naming&#39; category Suggestions on naming new functions, and guidance on choosing names.</description>
+    
+      <lastBuildDate>Sun, 12 Dec 2021 05:02:41 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/naming/32.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>WHILE [Cold Feet]</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p><strong>I'm really certain that ANY should not be a looping construct in PARSE.</strong>  Rebol's use of ANY everywhere else means "any one of", not "any number of".  That applies to the ANY short-circuit-OR operation, to the ANY-XXX! types, and it can come up in PARSE such as:</p>
+<pre><code>parse block [some any-value!]
+</code></pre>
+<p>I like the shorthand for this this that works across series types with the TAG! combinator:</p>
+<pre><code>uparse block [some &lt;any&gt;]
+</code></pre>
+<p>This meaning <em>any one element</em>.  It gets at that English concept that operators like <strong><code>*</code></strong> (or <strong><code>&lt;*&gt;</code></strong>) just don't have.</p>
+<p>Plus, the "zero-or-more matches of a rule" interpretation doesn't jibe with how we use ANY in English:</p>
+<ul>
+<li>"Do you have ANY bananas?"</li>
+<li>"Yes."</li>
+<li>"Cool.  Can I have one, then?"</li>
+<li>"No, sorry.  I don't have ANY."</li>
+</ul>
+<h2>But I'm Not Happy With Bending WHILE For This</h2>
+<p>It seemed appealing at first to say that WHILE would be standardized in the language as arity-1, both in PARSE and in ordinary code loops.  This would make UNTIL and WHILE line up, and LOOP could take the arity-2 role that WHILE used to have.</p>
+<p>But I've been lamenting <strong><a href="https://en.wikipedia.org/wiki/While_loop">just how universally WHILE is arity-2 in pretty much every language</a></strong> and that LOOP doesn't really quite cut it while reading.  :-/</p>
+<p>Sorry for the flux, but I want to move back to <strong>while [condition] [body]</strong> as it was.  However going through the process has spurred thought...</p>
+<h2>An Observation: OPT SOME &lt;=&gt; WHILE</h2>
+<p>It has in the past occurred to me that PARSE's WHILE (or ANY) was really OPT SOME.  It's three more characters to say it:</p>
+<pre><code>while pattern
+opt some pattern
+</code></pre>
+<p><em>(Note: This is only true in modern Ren-C, as previously the progress requirement differentiated these...that is now broken out into FURTHER.)</em></p>
+<p>...but although it's more characters, "optionally some number of occurrences of the pattern" is pretty literally what you are talking about.  In the UPARSE model of synthesized values it's kind of less confusing, because it's clearer what it returns in the case of nothing...the same thing OPT always returns when a rule doesn't match: NULL.</p>
+<p>Anyway, I'm feeling remorse and a wish to go back to WHILE for arity-2 loops in the language.  But I don't want to go back to ANY in PARSE.</p>
+<h2>Is OPT SOME really so bad?</h2>
+<p><strong>I've gotten to wondering if there is a reason we don't have a separate word for "zero or more" in English.  You actually have to write out "zero or more" to convey that intent... <em>maybe because the intent is too weird for a single word</em>.</strong></p>
+<p>When you just write WHILE it may be that you have a case that's actually supposed to be a SOME but it hasn't really bit you yet.  If you're willing to tolerate between 1 and a million of something, the case of no things being there is distinguished...and calling attention to the fact that the rule you have may not match at all can be an asset.</p>
+<p>I actually think OPT SOME offers an advantage, because it encourages you to look at it and decide if the OPT belongs there or not.  It may feel kind of like a wart, but maybe it's a helpful wart.</p>
+<p>(It reminds me a bit of the UNLESS vs. IF NOT situation.  Many people felt UNLESS is actually obfuscating nearly everywhere it's used, and that it's better to break it apart even if that means two words instead of one.)</p>
+<h2>Trying Out The Change, I Noticed...</h2>
+<p>I actually did find a difference how I read the code.  "This entire next section may not be relevant... <em>none</em> of it could match and it would go on."  That weight of the OPT is felt more heavily when the word is there than the WHILE...which if you <em>frequently</em> expect the thing to be there, you may assume it will <em>always</em> be there for at least one instance.</p>
+<p>You also can see redundancy in OPT more clearly.  Things like:</p>
+<pre><code>opt [
+    while [...]
+]
+</code></pre>
+<p>Stand out more if they look like:</p>
+<pre><code>opt [
+   opt some [...]
+]
+</code></pre>
+<p>I think some things really do read more clearly.  You can look at this as removing 0 or more newlines at the head of a series via a WHILE:</p>
+<pre><code>parse series [
+    remove [while newline]
+    ...
+]
+</code></pre>
+<p>Or rephrase that with OPT SOME:</p>
+<pre><code>parse series [
+    remove [opt some newline]
+    ...
+]
+</code></pre>
+<p>But I think it reads clearest when you bring the OPT outside, to say you're <em>optionally removing some newlines</em>:</p>
+<pre><code>parse series [
+    opt remove [some newline]
+    ...
+]
+</code></pre>
+<h2>More Distinct</h2>
+<p>ANY and WHILE both had the problem that they had analogues in imperative code.  But if SOME remains a PARSE keyword, then this helps better intuit the difference...so the code looks more differentiable.</p>
+<h2>Compression Is Possible By Other Avenues</h2>
+<p>I noticed a particularly laborious substitution in %make-zlib.r which extracts the headers and code for zlib using parse, because it often was parsing C code and looking for the pattern <strong><code>while whitespace</code></strong>.  This would happen multiple lines in a row and multiple times on a line.  When it became <strong><code>opt some whitespace</code></strong> it got more annoying.</p>
+<p>But this is kind of a problem anytime you repeat something over and over.  Maybe that pattern should have been <strong><code>ws*: [opt some whitespace]</code></strong> and then it would just be <strong><code>ws*</code></strong> to mean "any number of whitespace characters here, including zero".</p>
+<h2>A Motivated Individual Can Overrule It</h2>
+<p>Remember, UPARSE is going to let you be the judge.  If you want your own keywords, you can have them.  Maybe you like MANY (some parser combinators seem to think that 0...N is "many" and 1...N is "some").  Maybe you don't care if WHILE is different.  Maybe you don't want to use the ANY parse abstraction that I think is more interesting.</p>
+<h2>I'm Trying It Out</h2>
+<p>One can argue there's a bit of a 1984-newspeak to it ("you don't need words like better or worse, use plus-good and un-good and double-plus-ungood").  But we're sort of asking a programming language to be more "nuanced" in its wording than English, which has evolved to be pretty much where the brain is at.  I've shown some concrete benefits here to breaking out the OPT so you can see its relationship to the other OPTs you have and move it around.</p>
+<p>I do know I'm getting cold feet on the WHILE &lt;=&gt; LOOP change.  And I don't think the arity of WHILE in PARSE should be different from the arity of WHILE in the language, it's jarring.</p>
+<p>I'm giving it a shot in the bootstrap and rebmake to see what kind of thoughts it inspires.  So far it seems to be around equally good and bad...and since the bad is just largely unfamiliarity which should wear off...that points to a win, especially since it means retaking WHILE.</p>
+            <p><small>5 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/while-cold-feet/1772">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/while-cold-feet/1772</link>
+          <pubDate>Sun, 12 Dec 2021 05:02:41 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1772</guid>
+          <source url="https://forum.rebol.info/t/while-cold-feet/1772.rss">WHILE [Cold Feet]</source>
+        </item>
+        <item>
+          <title>GET+SET vs PICK+POKE - What&#39;s The Difference?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>Historically, GET could not get a path:</p>
+<pre><code>rebol2&gt;&gt; obj: make object! [x: 10]
+
+rebol2&gt;&gt; get 'obj/x
+** Script Error: get expected word argument of type: any-word object none
+</code></pre>
+<p>That changed in R3-Alpha.  Red followed suit:</p>
+<pre><code>r3-alpha/red&gt;&gt; get 'obj/x
+== 10
+</code></pre>
+<p>Which seems like an improvement...but opened the door to something I've complained about: GET having side-effects, such as:</p>
+<pre><code>red&gt;&gt; path: 'obj/(print "Boo!" 'x)
+== obj/(print "Boo!" 'x)
+
+red&gt;&gt; get path
+Boo!
+== 10
+</code></pre>
+<p>When you say that two sequential GETs can get something completely different even when nothing has changed, that really pulls the rug out from under any generic code that wants to build upon what a GET is.  Similar issues apply to SET.</p>
+<h2>How Do Pick and Poke Compare?</h2>
+<p>PICK and POKE add an extra parameter of a location to pick or poke from.  But then they still have a "picker" of some kind.</p>
+<p>This leads one to wonder if this would work, but it doesn't:</p>
+<pre><code>r3-alpha&gt;&gt; outer: make object! [inner: make object! [x: 10]]
+
+r3-alpha&gt;&gt; pick outer 'inner/x
+** Script error: pick does not allow object! for its aggregate argument
+</code></pre>
+<p>But there are two possible interpretations.  If OUTER is something like a MAP, it could be looking up the PATH! <strong>inner/x</strong> as the key in the map.  Or it could be looking up the key <strong>inner</strong>, fetching the thing in the map, and then picking <strong>x</strong> out of that.</p>
+<p>MAP!s don't allow PATH! in R3-Alpha or Red, but if they did...we'd assume it would interpret <strong>inner/x</strong> as the key.</p>
+<h2>So Historical PICK and POKE are Strictly Less Powerful?</h2>
+<p>This makes it seem like GET and SET have the ability to do anything that a PATH! or SET-PATH! can do.  But PICK and POKE can only go the last mile and ask one container about its response to one key.</p>
+<p>Could we make a synonym for PICK, if we just GET a PATH! that we make up?  Let's try that in Red:</p>
+<pre><code>red&gt;&gt; pick2: func [series index] [
+          get make path! reduce ['series to paren! reduce ['quote index]]
+      ]
+
+red&gt;&gt; m: make map! [a 10 b 20]
+
+red&gt;&gt; pick2 m 'a
+== 10
+
+red&gt;&gt; b: [x 30 y 40]
+
+red&gt;&gt; pick2 b 'y
+== 40
+</code></pre>
+<p><strong>It appears to work, but the issue is that I'm sure these are completely different code paths.</strong>  So you'll see subtly different behaviors for PICK vs. pathing where they'll be the same <em>most</em> of the time, but then not.</p>
+<p>It would only make sense to have two codebases if someone could articulate what's different about "picking" and "pathing".  Outside of function call dispatch with refinements I can't think of a good argument for a difference.  And Ren-C uses TUPLE! instead of PATH! for conventional picks, so the tuple-based picking could truly be the same.</p>
+<h2>Not Easy To Reason About</h2>
+<p>This is all made-up stuff with really imaginary semantics.  And I've come up against the hard questions like trying to make this work:</p>
+<pre><code> item.(expression): default [...]
+</code></pre>
+<p>If you GET that SET-PATH! on the left to check to see if there's a value in it or not, and there isn't, then you decide to run the right hand side.  Then you want to SET the SET-PATH! on the left...but without some alternate mechanism, you'll be evaluating the expression twice.</p>
+<p>Being able to turn that <code>item.(expression)</code> into some sort of reusable currency that you can GET and SET multiple times without side effects is ideal.  Once this was done by COMPOSE'ing that PATH!, but paths are now more restrictive in what they can have as members...so it would have to be turned into a block.</p>
+            <p><small>3 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719</link>
+          <pubDate>Thu, 16 Sep 2021 18:51:50 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1719</guid>
+          <source url="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719.rss">GET+SET vs PICK+POKE - What&#39;s The Difference?</source>
+        </item>
+        <item>
+          <title>&quot;DEBUG&quot; builds vs &quot;CHECKED&quot; builds</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>Since this is a language project, the term "Debug" winds up having a bit of an overloaded meaning.</p>
+<p>In an ideal world--and this ideal world will hopefully come to pass--the system will have a debugger in the interpreter for helping people diagnose their code.</p>
+<p>But then, there is instrumentation added to the system itself--for its own debugging.  Today we call that "a debug build" of the interpreter.</p>
+<p>This is pretty standard--when you ask for a debug build of something, that means it has symbols and asserts in it.  It's a known term in the development culture.  Julia or Python or whoever calls their instrumented version <em>"The Debug Build"</em></p>
+<p><a href="https://pythonextensionpatterns.readthedocs.io/en/latest/debugging/debug_python.html" class="inline-onebox">10.2. Building and Using a Debug Version of Python — Python Extension Patterns 0.1.0 documentation</a></p>
+<p>But there is another term used in the kernel and OS world called a "checked build".</p>
+<h2>Would Calling It A "Checked Build" Be Clarifying or Confusing?</h2>
+<p>I feel like reserving the term "debug" to use for features related to what the user would call debugging of <em>their</em> code may make more sense--even though this may be a bit odd for a language project vs. an OS one.</p>
+<p>Plus the flag names make more sense.  Take a flag with a name like DEBUG_UTF8_EVERYWHERE... if it were CHECK_UTF8_EVERYWHERE that sort of gives a better impression of what's going on.  <em>You're asking for instrumentation</em> that runs independent of whether you actually are debugging anything.  In fact, you can add these checks while not having any "debug symbols" in your build.</p>
+<p>I happen to be doing some tweaks that make this a good time for such changes if they are to be made.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/debug-builds-vs-checked-builds/1708">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/debug-builds-vs-checked-builds/1708</link>
+          <pubDate>Thu, 09 Sep 2021 14:53:10 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1708</guid>
+          <source url="https://forum.rebol.info/t/debug-builds-vs-checked-builds/1708.rss">&quot;DEBUG&quot; builds vs &quot;CHECKED&quot; builds</source>
+        </item>
+        <item>
+          <title>Casting vs. SPELL</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>With my bolstered confidence that FILE! best serves as a non-string, I feel like it gives a certain amount of irresistable power.</p>
+<pre><code>&gt;&gt; size of %foo.dat
+== 143983  ; size of the foo.dat file on disk
+</code></pre>
+<p><em>(Note: My thinking on SIZE with strings is that it gives you a count in bytes, whereas LENGTH gives you a count in codepoints.  This distinction of "length is logical units" and "size is a byte count" has precedent in other systems...but I'd like to go through and make sure that it's being used consistently everywhere.  A BINARY! can use either since its logical size is 1, but I'd prefer to speak in terms of the size where possible...e.g. when the binary is not being discussed in the context of a generic length that would apply to any series)</em></p>
+<p>Somewhat extremely, this would suggest I'd be saying that <strong>length of %foo.dat</strong> would be something that would delegate to whatever the port type was for that file...and give back the logical length of the contents.</p>
+<pre><code>; contents of %foo.myformat
+[record 1 "foo" #bar]
+[record 2 "baz" #mumble]
+
+&gt;&gt; length of %foo.myformat
+== 2
+</code></pre>
+<p>We're imagining here that you're living in a world where a "myformat" port would act something like:</p>
+<pre><code>&gt;&gt; p: open %foo.myformat
+
+&gt;&gt; read/part p 1
+== make object! [
+    x: "foo"
+    y: #bar
+]
+
+&gt;&gt; read/part p 1
+== make object! [
+    x: "baz"
+    y: #mumble
+]
+
+&gt;&gt; read/part p 1
+; null
+</code></pre>
+<p><strong>Of course I am making this all up.</strong>  But what I'm trying to get at is that when you want to talk about the attributes of something that is a representation of some grand thing, the number of characters in its name is potentially much less interesting than all the logical things you can ask about it.</p>
+<p>That said...it should be easy to ask how long the name is.  And this is a little bit ugly:</p>
+<pre><code>&gt;&gt; length of as text! %foo.dat
+== 7
+</code></pre>
+<p>In the API I've used the word "spell" to talk about string extraction.  Might that look nicer?</p>
+<pre><code>&gt;&gt; spell %foo.dat
+== "foo.dat"
+
+&gt;&gt; length of spell %foo.dat
+== 7
+</code></pre>
+<p>I guess it could also be FORM.  Though FORM never quite sat right with me, I don't think of it so much as a verb in computer programming as a noun for "form you fill out".</p>
+<p>Anyway, this is just to throw out there the idea of SPELL as a way to ask for the underlying string of something that may look a bit better than AS TEXT!.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/casting-vs-spell/1693">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/casting-vs-spell/1693</link>
+          <pubDate>Mon, 30 Aug 2021 12:50:47 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1693</guid>
+          <source url="https://forum.rebol.info/t/casting-vs-spell/1693.rss">Casting vs. SPELL</source>
+        </item>
+        <item>
+          <title>Revisiting The Riddle of the .r</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>When Rebol was thinking about coming out of the shadows and participating in the greater programming community, it seemed like trying to own the <strong><code>.r</code></strong> file extension was a bit misguided.</p>
+<p>After all: a well established and much more popular statistical language was using it.  It was also out first--it came out in 1993, 4 years before Rebol's 1997.</p>
+<p>...aaand the name of the language <em>actually was "R"</em>.  Which isn't a name to get very excited about, so it's not like there was going to be some argument like <em>"no, WE want to call our language R!"</em></p>
+<p>It seemed syntax highlighters on programming sites were not going to be allocating <strong>.r</strong> to Rebol.</p>
+<p>Hence it seemed no problem to just go with changing to <strong><code>.reb</code></strong> - an improvement, even.  Communicated more.</p>
+<h2>...But In The Timeless World...</h2>
+<p>Since that time, things have changed:</p>
+<ul>
+<li>
+<p>I've become more partial to the lack of "noise" when listing files in a directory when they end in <strong>.r</strong> ... it makes the important part of the filename pop more.</p>
+</li>
+<li>
+<p>I had to help someone with their school project a couple years ago written in R.  I was not impressed with it.  While it has had growth lately, I think that growth just has more to do with the importance of data science... and does not reflect on the language itself (syntax/paradigm) having any particular merit.  It's just been around a long time and people are looking at data more.</p>
+</li>
+<li>
+<p>Collisions in file extensions have led syntax highlighters to use more heuristics, driven by the file content as well as the overall content of a source repository.  It looks like this will only become more the way things work in the future.</p>
+</li>
+<li>
+<p>Ren-C is renaming, to another name, which starts with R...  <img src="https://forum.rebol.info/images/emoji/twitter/rabbit.png?v=9" title=":rabbit:" class="emoji" alt=":rabbit:"> <img src="https://forum.rebol.info/images/emoji/twitter/raccoon.png?v=9" title=":raccoon:" class="emoji" alt=":raccoon:"> <img src="https://forum.rebol.info/images/emoji/twitter/recycle.png?v=9" title=":recycle:" class="emoji" alt=":recycle:"> <img src="https://forum.rebol.info/images/emoji/twitter/rocket.png?v=9" title=":rocket:" class="emoji" alt=":rocket:"> <img src="https://forum.rebol.info/images/emoji/twitter/robot.png?v=9" title=":robot:" class="emoji" alt=":robot:"></p>
+</li>
+<li>
+<p>The strength of Ren-C's hand has been growing, and I think if it keeps going it might have strength to impose some aspect of its will.  Sharing the .r file extension may be something people are ready to just accept.  <em>(With a much weaker hand, Red managed to push along a claim on the choice of "red"...though it does seem to screw them a bit on searchability.)</em></p>
+</li>
+</ul>
+<h2>So What Do People Think?</h2>
+<p>Is rolling back to the historical <strong><code>.r</code></strong> a good way to detach a little more from the "Rebol" brand name, while still fitting into the ecology?</p>
+<p>It's a thought.  No rush, just wanted to put the question out there.</p>
+            <p><small>4 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/revisiting-the-riddle-of-the-r/1664">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/revisiting-the-riddle-of-the-r/1664</link>
+          <pubDate>Sun, 15 Aug 2021 10:23:27 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1664</guid>
+          <source url="https://forum.rebol.info/t/revisiting-the-riddle-of-the-r/1664.rss">Revisiting The Riddle of the .r</source>
+        </item>
+        <item>
+          <title>Revisiting `&lt;opt&gt;` in the Func Spec Dialect</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <h2>First, Let's Look Briefly At The History Of <code>&lt;opt&gt;</code>
+</h2>
+<p>It was many years ago when <code>&lt;opt&gt;</code> first came on the scene as a way to say that a function argument would allow "NULL" as a possibility.</p>
+<p>The reasoning was that there was a certain "state" which can be synthesized that represents a <em>non-value</em>.</p>
+<blockquote>
+<p>Note: Back then, the state was the result of excising reified UNSET! from the system--and it was called VOID--a term that means something rather different today.  <strong>To make things clearer I'm going to sanitize history here a bit and pretend like it was always called NULL.</strong></p>
+</blockquote>
+<p><strong>Meanness Level Alpha: You Can't Even ASK What Type a NULL Is</strong></p>
+<p>In the earliest days, not only did NULL "not have a type"...it was not truthy or falsey...it generated errors when you tried to access it through words.  It went through several iterations of meanness.</p>
+<p>This is basically where things started:</p>
+<pre><code>&gt;&gt; select [a 10 b 20] 'c
+; null
+
+&gt;&gt; type of select [a 10 b 20] 'c
+** Error: NULL Values Do Not Have Types
+</code></pre>
+<p>But that was a pain.</p>
+<p><strong>Meanness Level Beta: You Can Ask, But The Answer Is Still A Mean NULL</strong></p>
+<p><em>I was steadfast that there wasn't going to be a NULL! "datatype".</em>  But since NULL was the "non-answer" given back for a "non-valued" state...what if the TYPE OF a NULL was just... NULL?</p>
+<pre><code>&gt;&gt; select [a 10 b 20] 'c
+; null
+
+&gt;&gt; type of select [a 10 b 20] 'c
+; null
+</code></pre>
+<p>While it was pleasing at some level, it didn't change the fact that NULL was still mean, and not accepted a lot of places...much like an UNSET! had been in Rebol2:</p>
+<pre><code>rebol2&gt;&gt; switch print "Rebol2" [10 [print "Disliked UNSET!s"]]
+Rebol2
+** Script Error: switch is missing its value argument
+</code></pre>
+<p>So the same problem would hit you all around the system if you were trying to do something with that NULL answer you got for types:</p>
+<pre><code>&gt;&gt; switch type of select [a 10 b 20] 'c [
+     integer! [...]
+     block! [...]
+]
+** Error: SWITCH does not allow NULL as its VALUE argument
+</code></pre>
+<p><strong>Meanness Level Gamma: NULL Becomes Friendly</strong></p>
+<p>Today we've gotten to a situation where NULL is generally pretty friendly and accepted a lot of places.  WORD!s can look up to NULL without erroring, so NULL doesn't need to be a "function that returns NULL".</p>
+<pre><code>&gt;&gt; switch type of select [a 10 b 20] 'c [
+     null [print "Everything works just fine!"]
+     integer! [...]
+     block! [...]
+]
+Everything works just fine!
+</code></pre>
+<p>The whole paradigm surrounding unsetness has gone through a great rethinking with BAD-WORD!s and isotopes that I'm still discovering the interesting nuances of, but it's light-years ahead of old methods.</p>
+<h2>So...Back To TYPESET! Representation</h2>
+<p>From the beginning I knew there was not going to be a NULL! "datatype".  And using NULL itself in a type block would be a bad idea.  It was too easy to wind up with NULL values on accident...they were used to represent unset values!</p>
+<p>In those days, imagine if this had been the way to say "the typeset can include NULL":</p>
+<pre><code>foo: func [arg [null integer! block!]] [...]
+</code></pre>
+<p>All right, but what if you had just some typo and a variable was <em>incidentally</em> null?</p>
+<pre><code>foo: func [arg [intteger! block!]] [...]
+</code></pre>
+<p>Would you want that function to now accepts nulls and blocks?  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>Even though NULL no longer corresponds to "typo" states, it still is a state that values can be in for all kinds of reasons.  I think <strong>null = type of null</strong> is the right answer, but that doesn't mean that the way to indicate a function is willing to accept null as an argument is if any variable that happens to be NULL appears in the type spec.</p>
+<p><strong>And NULL couldn't be in TYPESET! because you would have no way to FIND it -- FIND won't look for "NULL" in <em>anything</em>...and if it ever returns NULL that means the thing wasn't found.</strong></p>
+<h2>So Why Exactly Have I Been So Opposed to a NULL! Datatype?</h2>
+<p><em>I feel like I've always had a good reason.</em>  If a TYPE OF operation can make a reified thing spring into existence out of the absence of a thing, I feel like something is out of whack.</p>
+<p>There's a clear advantage if you're going to be chaining things.</p>
+<pre><code>x: (type of select data item) else [
+    fail "A reified NULL! datatype doesn't permit this kind of handling"
+]
+</code></pre>
+<p>Though that's a more modern intuition about it; I wasn't thinking about that when <code>&lt;opt&gt;</code> was made.</p>
+<p>I think one angle is that I felt like the optionalness was somehow a "big deal" and needed to jump off the page for the spec more.  NULL! just blended in.</p>
+<pre><code>foo: func [arg [null! integer! block!]] [...]
+bar: func [arg [integer! block! group! path! null! word!]] [...]
+</code></pre>
+<h2>Modern Thought: <code>&lt;opt&gt;</code> =&gt; <code>[&lt;null&gt; any-value!]</code>
+</h2>
+<p>With the introduction of <a href="https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656">new rules surrounding RETURN</a>, I've made it more painful to get the "default" return behavior of being able to RETURN whatever you want.</p>
+<p>This made me think it might be nice to build on the PARSE meaning of <code>&lt;any&gt;</code> as a replacement for "SKIP" (e.g. match one ANY-VALUE!) to get an easy RETURN spec:</p>
+<pre><code>foo: func [return: &lt;any&gt; ...] [...]
+</code></pre>
+<p>Then, <code>&lt;opt&gt;</code> could be shorthand for <code>[&lt;null&gt; any-value!]</code></p>
+<pre><code>bar: func [return: &lt;opt&gt; ...] [...]
+</code></pre>
+<blockquote>
+<p>I can also imagine <code>&lt;opt&gt;</code> being a UPARSE tag as a shorthand for <strong><code>opt &lt;any&gt;</code></strong>.</p>
+<pre><code>&gt;&gt; uparse? [x: (stuff)] [sw: set-word!, g: group!, x: &lt;opt&gt;]
+== #[true]
+
+&gt;&gt; x
+; null
+
+&gt;&gt; uparse? [x: (stuff) "extra"] [sw: set-word!, g: group!, x: &lt;opt&gt;]
+== #[true]
+
+&gt;&gt; x
+== "extra"
+</code></pre>
+</blockquote>
+<p>In any case, <code>&lt;any&gt;</code> and <code>&lt;opt&gt;</code> would thus join the other "top-level" shorthands <code>&lt;none&gt;</code> and <code>&lt;void&gt;</code> for function typeset specs.  <strong>Such a shorthand feels pressing given my new strict rule regarding returns, I don't like having to type <code>[return: [&lt;null&gt; any-value!]]</code> just to be able to use RETURN.  I can put up with <code>[return: &lt;opt&gt;]</code> and <code>[return: &lt;any&gt;]</code></strong></p>
+<h2>Newer, Weirder Options with More Datatypes</h2>
+<p>There are actually more wacky and crazy ideas possible these days.  <img src="https://forum.rebol.info/images/emoji/twitter/crazy_face.png?v=9" title=":crazy_face:" class="emoji" alt=":crazy_face:"></p>
+<p>We know that refinements like /ARG are optional, they may be NULL in which case that means they were not supplied.  <a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/21">I was just suggesting they might be the better branch notation for allow pure NULL to escape a branch.</a>  We could also make the type blocks build on this notation:</p>
+<pre><code>foo: func [
+    return: /[integer!]  ; alternative to today's [&lt;opt&gt; integer!]
+    arg1 [block!]
+    arg2 /[logic!]  ; alternative to today's [&lt;opt&gt; logic!]
+][
+    ...
+]
+</code></pre>
+<p>But looking at it, I don't feel it communicates as well.  The tags just seem more literate.</p>
+<p>For some reason, <code>&lt;null&gt;</code> looks oddly heavy though:</p>
+<pre><code>foo: func [
+    return: [&lt;null&gt; integer!]
+    arg1 [block!]
+    arg2 [&lt;null&gt; logic!]
+][
+    ...
+]
+</code></pre>
+<p>I guess a lot of it is what you're used to, but null is such a "vertical" word, it's like it has two !! in it:</p>
+<pre><code>foo: func [
+    return: [&lt;opt&gt; integer!]
+    arg1 [block!]
+    arg2 [&lt;opt&gt; logic!]
+][
+    ...
+]
+</code></pre>
+<p>I'm probably just being silly due to what I'm used to.  The <code>&lt;null&gt;</code> is clearer, and I kind of like my suggestion that <code>&lt;opt&gt;</code> be shorthand for <code>[&lt;null&gt; any-value!]</code>.</p>
+<h2>I Know This Is Long, Just Thinking Out Loud</h2>
+<p>I don't want to change anything until TYPESET! and DATATYPE! have more understanding.  But as it so happens, I think that the change to RETURN to make it the locus of typechecking on functions <em>is</em> a step forward in the type system conception.</p>
+<p>Design happens one step at a time, folks.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658</link>
+          <pubDate>Fri, 13 Aug 2021 02:50:56 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1658</guid>
+          <source url="https://forum.rebol.info/t/revisiting-opt-in-the-func-spec-dialect/1658.rss">Revisiting `&lt;opt&gt;` in the Func Spec Dialect</source>
+        </item>
+        <item>
+          <title>Efficient Consuming Append-Like Operator... GLOM ?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>So I'm looking at the question of how to take bits of material that may or may not be produced, that become owned by the recipient...and accumulate them.</p>
+<p>For efficiency, I'd like an operator that will be BLANK! tolerant.  Like this:</p>
+<pre><code>&gt;&gt; accumulator: _
+
+&gt;&gt; result: make-some-stuff arg1 arg2 arg3
+== _  ; let's say it produced nothing
+
+&gt;&gt; accumulator: glom accumulator result
+== _  ; okay, that's a no-op
+
+&gt;&gt; result: make-more-stuff arg4 arg5 arg6
+== [a b c]
+
+&gt;&gt; accumulator: glom accumulator result
+== [a b c]  ; since there was nothing, we take it
+
+&gt;&gt; append accumulator [d]
+== [a b c d]
+
+&gt;&gt; result
+== [a b c d]  ; it's okay to reuse result, protocol was we "own" it
+</code></pre>
+<p>This kind of operator is handy when synthesizing results up the stack.  Because it has carte-blanche to tear up the series its given, it could notice when the result array was larger than the accumulator and steal its memory to slide results into...rather than do a new allocation.</p>
+<p>So after a GLOM the thing being appended (<code>result</code> above) will either be equivalent to the accumulator or it will appear to have been FREE'd.</p>
+<p>The specific feature I'm looking to support with this is the "third result" I've been talking about for combinators, of their "pending" items...this would include collected things.  I don't want to have to be making new empty blocks with <code>copy []</code> just in case combinators want to add to the collection something...they may just come back with blanks.  So if the accumulator could start off as blank that would avoid these stray series creations most of the time.</p>
+<p>I don't think allowing you to APPEND to a BLANK! and get a new series is a good idea, and it wouldn't be able to do the other optimizations either (since APPEND does not assume you are giving it ownership of the appended data to destroy as you wish).  So this is a distinct operator, and calling it <strong>GLOM</strong> is probably fine for now.  But thought I'd describe what it did just to put that out there.</p>
+<p>Here is a usermode prototype:</p>
+<pre><code>glom: func [
+    return: "New accumulator value (may be blank or reused)"
+        [blank! block!]
+    accumulator [blank! block!]
+    result
+][
+    if accumulator [
+        append accumulator result
+        elide if block? result [free result]  ; placeholder for stealing memory
+    ] else [
+        case [
+            blank? result [_]
+            block? result [result]
+            (append copy [] :result)
+        ]
+    ]
+]
+</code></pre>
+<blockquote>
+<p>Note that I'm using CASE fallout above, where if you don't pair up the clauses in a case it will just evaluate to the last condition:</p>
+<pre><code>&gt;&gt; case [
+      1 = 2 [print "math is broken"]
+      10 + 20
+   ]
+== 30
+</code></pre>
+<p>Rebol2 and R3-Alpha report #[true] for that, while Red says #[none].  The only answers I'd consider for this would be 30 or raise an error.  I definitely like just being able to write a FAIL in that spot without having to say <strong><code>true [fail "..."]</code></strong>, and I guess that "laxness" makes me feel it's a nice place to put a default as well.  This is still an open question.</p>
+</blockquote>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647</link>
+          <pubDate>Thu, 05 Aug 2021 09:36:17 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1647</guid>
+          <source url="https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647.rss">Efficient Consuming Append-Like Operator... GLOM ?</source>
+        </item>
+        <item>
+          <title>Verbing Nouns Revisited: COMBINATOR and COMB</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>We've long lamented the unfortunate nature of "verbing" nouns like FUNCTION.</p>
+<p>And again, we have this situation where if we use COMBINATOR as the way of declaring a combinator, what do we call instances?  C?  COMB?</p>
+<p>It feels a bit sad that we can't just write something like:</p>
+<pre><code>combinator: select state.combinators group!  ; get the GROUP! combinator
+</code></pre>
+<p>If you do that, you're overwriting the function you use to make combinators.  And that's no good.</p>
+<p>So I wind up writing:</p>
+<pre><code>comb: select state.combinators group!  ; get the GROUP! combinator
+</code></pre>
+<p>But it seems that COMBINATOR rightly belongs to the <em>instance</em>, and the thing that makes combinators should be called something like MAKE-COMBINATOR.  If anything, COMB should be the shorthand for MAKE-COMBINATOR and we allow the word COMBINATOR for instances of combinators.</p>
+<p>I got to wondering why we don't like MAKE-FUNCTION or MAKE-COMBINATOR.  <em>Is it the hyphen?</em>  What if it were <strong>make function</strong> and <strong>make combinator</strong> and it dispatched to the "makers" based on quoting the words?</p>
+<p>This would create a little bit of confusion, but we've gotten used to:</p>
+<pre><code>length: length of block
+</code></pre>
+<p>Why can't we accept:</p>
+<pre><code>combinator: make combinator [...] [...]
+</code></pre>
+<p>I hate to beat this old dead horse again.  But FUNCTION is a noun.  COMBINATOR is a noun.  It still feels like something is wrong with verbing these nouns just for the sake of brevity and familiarity, and then having to contort the names of instances to avoid overwriting the verb.</p>
+<p>NEW is shorter and not contentious with the historical meaning of MAKE:</p>
+<pre><code>combinator: new combinator [...] [...]
+</code></pre>
+<p>It just seems like we're fighting against the English language to be using nouns wrong, just because other languages have done it.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/verbing-nouns-revisited-combinator-and-comb/1646">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/verbing-nouns-revisited-combinator-and-comb/1646</link>
+          <pubDate>Thu, 05 Aug 2021 09:09:03 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1646</guid>
+          <source url="https://forum.rebol.info/t/verbing-nouns-revisited-combinator-and-comb/1646.rss">Verbing Nouns Revisited: COMBINATOR and COMB</source>
+        </item>
+        <item>
+          <title>Disambiguating `META OF` and the META-XXX! (^) Types</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>An idea that emerged early on in Ren-C was that there was often a need to associate an object with another object (or action), to give more information about it.</p>
+<p>You could do this with a global MAP!.  But a built-in mechanism could be cheaper--and I foresaw the feature being foundational enough that efficiency would matter.  This would likely be needed for every ACTION!, every ERROR!, every MODULE!, and many other places...</p>
+<p>This mechanism was called the "meta" information of the object or action.</p>
+<h2>A New META in Town...</h2>
+<p>But now, the existence of the new <strong>^word</strong>, <strong>^pa/th</strong>, <strong>^tu.p.le</strong>, <strong>^(gr o up)</strong>, <strong>^[bl o ck]</strong> types give a category known as META-WORD!, META-PATH!, META-TUPLE!, etc.</p>
+<p>I'm confident that calling that META is good.  Given how foundational the technique is, I don't want to make understanding any harder by reusing the word for something completely unrelated.</p>
+<p>It is likely that the lone word META will be a synonym for <strong>^</strong>, for those who don't like symbols.  Recall that it is lightly distinguished from QUOTE, e.g. that <strong>^ null</strong> is null (not <strong>'</strong>) and it tolerates isotopes, returning the non-quoted BAD-WORD!:</p>
+<pre><code>&gt;&gt; ~asdf~
+== ~asdf~  ; isotope
+
+&gt;&gt; first [~asdf~]
+== ~asdf~
+
+&gt;&gt; meta ~asdf~
+== ~asdf~
+
+&gt;&gt; meta first [~asdf~]
+== '~asdf~
+
+&gt;&gt; meta null
+; null
+</code></pre>
+<p>So what do we call the associated object?</p>
+<ul>
+<li>
+<p><strong>auxiliary of ...</strong></p>
+</li>
+<li>
+<p><strong>linked of ...</strong></p>
+</li>
+</ul>
+<h2>Bigger Question: Is One Linked Object Enough?</h2>
+<p>Over time I've come to wonder if keyed access is more important.  For instance, in JavaScript you are able to assign arbitrary field members to a function:</p>
+<pre><code>&gt; function foo() {console.log("foo.x is " + foo.x + " and foo.y is " + foo.y)}
+&gt; foo.x = 10
+&gt; foo.y = 20
+
+&gt; foo()
+&lt;- foo.x is 10 and foo.y is 20
+</code></pre>
+<p>Now that we can discern field access (foo.x) from refinement usage (foo/x), it makes it very tempting to follow suit and say that actions have arbitrary keyed fields like this.  This could be where the help lives.</p>
+<p>If this was the case, then there's no need for a "meta" object or naming it.  You simply use dots.</p>
+<p>This would require a re-imagining of how MODULE! works, but that's already happening in "Sea of Words".  So it might mean that you can't link an arbitrary object to another object...you'd make maps...which is what every other language does instead of having a "secret" place to scribble on.</p>
+<p>In any case, it is likely that the old sense of META is going away entirely (though the mechanic it relies on would be exposed another way).  We'll see...</p>
+<p>Internally in the macros I'm thinking of calling it something like AUX_OF() to replace macros like META_OF().  You run out of these words eventually.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/disambiguating-meta-of-and-the-meta-xxx-types/1631">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/disambiguating-meta-of-and-the-meta-xxx-types/1631</link>
+          <pubDate>Thu, 01 Jul 2021 16:37:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1631</guid>
+          <source url="https://forum.rebol.info/t/disambiguating-meta-of-and-the-meta-xxx-types/1631.rss">Disambiguating `META OF` and the META-XXX! (^) Types</source>
+        </item>
+        <item>
+          <title>UNQUOTE and DEQUOTE too similar</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>I created two separate terms regarding removing quoting levels.</p>
+<p>One was unquote, e.g. it removes one level:</p>
+<pre><code> &gt;&gt; unquote first ['''a]
+ == ''a
+</code></pre>
+<p>It has a /DEPTH refinement where you can say how many levels to remove (so the default depth is 1).  If there aren't enough levels it will error.</p>
+<p>The other operation was DEQUOTE, which would remove all the quoting levels...it would not complain if something was not quoted:</p>
+<pre><code> &gt;&gt; dequote first ['''a]
+ == a
+
+ &gt;&gt; dequote first [a]
+ == a
+</code></pre>
+<p><strong>I've messed this up a lot and used the word DEQUOTE where I meant to say UNQUOTE.</strong> So those words are too close to each other.  There's really no great argument for why the meanings wouldn't be the same or swapped.  (e.g. "Why would something called UNQUOTE return a thing that still has quotes on it?")</p>
+<p>Regardless of any counter-arguments, I do feel that UNQUOTE makes sense at the end of the day as removing one level of quote.</p>
+<p>A refinement to UNQUOTE as something like UNQUOTE/FULLY (more descriptive) or UNQUOTE/ALL (shorter at the cost of clarity) might work:</p>
+<pre><code>&gt;&gt; unquote/fully first ['''a]
+== a
+</code></pre>
+<p>But it's always a bit unpleasing when you offer refinements that can't be mixed, like /DEPTH and /FULLY would be incompatible.</p>
+<p>Also I think this might be kind of a common operation, to ask for the non-quoted essence of a value.</p>
+<p>Perhaps NONQUOTED?</p>
+<pre><code>&gt;&gt; nonquoted first ['''a]
+== a
+</code></pre>
+<p>But I had aimed that QUOTED and such would be <em>type modifiers</em>, so QUOTED INTEGER! would give you a datatype representing quoted integers.</p>
+<p>While all this makes me feel a bit more like excusing DEQUOTE, I have made too many mistakes mixing them up, and if I make them then other people certainly will...</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/unquote-and-dequote-too-similar/1626">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/unquote-and-dequote-too-similar/1626</link>
+          <pubDate>Thu, 17 Jun 2021 18:57:19 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1626</guid>
+          <source url="https://forum.rebol.info/t/unquote-and-dequote-too-similar/1626.rss">UNQUOTE and DEQUOTE too similar</source>
+        </item>
+        <item>
+          <title>What To Call Missing Operator: Unevaluated and then Quoted</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="5" data-topic="1605">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"><a href="https://forum.rebol.info/t/should-we-repurpose-to-what-is-now-doing/1605/5">Should We Repurpose ^ To What @ Is Now Doing?</a>
+</div>
+<blockquote>
+<p>append data 'word<br>
+=&gt; append data [word]  ; best<br>
+=&gt; append data quote 'word<br>
+=&gt; append data ^ 'word<br>
+=&gt; append data ^(just word)</p>
+</blockquote>
+</aside>
+<p>It strikes me looking at these examples that we are missing an operator:</p>
+<pre><code>&gt;&gt; operatorX foo
+== 'foo
+
+&gt;&gt; operatorX (1 + 2)
+== '(1 + 2)
+</code></pre>
+<p>This operator is basically <strong>QUOTE UNEVALUATED</strong> (or <strong>^ UNEVALUATED</strong>).  It takes a value as-is and then adds a quote level to it.</p>
+<p>We might imagine calling this operator ONLY, even though it does something different than what /ONLY traditionally did:</p>
+<pre><code> &gt;&gt; only word
+ == 'word
+
+ &gt;&gt; append [a b c] only word
+ == [a b c word]
+</code></pre>
+<p><strong>This would be nice for is someone who is trying to avoid putting in brackets or apostrophes or other things to cloud what they're writing.</strong></p>
+<p>Although <strong>append [a b c] [word]</strong> does <em>work</em>, the extra block can get in the way a bit.  Consider:</p>
+<pre><code>if find [a b c] [word] [
+    print {Consider how "blocky" this looks.}
+]
+
+if find [a b c] ^ 'word [
+    print {This looks one step more symbol-y than with apostrophe alone.}
+]
+
+if find [a b c] only word [
+    print {This might be preferable, and (could) perform better.}
+]
+</code></pre>
+<p>Or it could be called JUST, and we could find another name for JUST.  :-/</p>
+<pre><code> &gt;&gt; just word
+ == 'word
+
+ &gt;&gt; append [a b c] just word
+ == [a b c word]
+</code></pre>
+<p>Though personally have gotten a bit attached to JUST doing what it does today, but we could consider THE for that:</p>
+<pre><code> &gt;&gt; the x
+ == x  ; not 'x
+</code></pre>
+<p>THE doesn't seem like a great fit for this operator on its own:</p>
+<pre><code> &gt;&gt; the word
+ == 'word
+
+ &gt;&gt; append [a b c] the word
+ == [a b c word]
+</code></pre>
+<p>Something about JUST makes it seem like it would be a little more subtle and sneaky than THE.  (If I asked you between JUST and THE which you'd imagine doing something more basic, you'd say THE, right?)*</p>
+<p>Could work.  It's not like you'd have to use it, but it gives an option.</p>
+<p>This also gives the option of ONLY being the way of creating a single element block, which could come in handy for something, and makes a little more sense:</p>
+<pre><code>&gt;&gt; only [a b]
+== [[a b]]
+
+&gt;&gt; only 1 + 2  ; it's evaluative
+== [3]
+
+&gt;&gt; only 'x  ; one more symbol than you want
+== [x]</code></pre>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/what-to-call-missing-operator-unevaluated-and-then-quoted/1606">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-to-call-missing-operator-unevaluated-and-then-quoted/1606</link>
+          <pubDate>Sat, 15 May 2021 07:56:05 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1606</guid>
+          <source url="https://forum.rebol.info/t/what-to-call-missing-operator-unevaluated-and-then-quoted/1606.rss">What To Call Missing Operator: Unevaluated and then Quoted</source>
+        </item>
+        <item>
+          <title>Should We Repurpose ^ To What @ Is Now Doing?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>I've been looking at the lay of the land and it is becoming extremely temping to do away with /ONLY entirely.</p>
+<p>The main complaint I have is simply the somewhat unappealing heft of the @ operator.</p>
+<pre><code>&gt;&gt; append [a b c] @[d e f]
+== [a b c [d e f]]
+
+&gt;&gt; item: first ['d]
+
+&gt;&gt; append [a b c] item  ; quoted will lose a quote level
+== [a b c d]
+
+&gt;&gt; append [a b c] @item  ; adds extra quote level to be dropped
+== [a b c 'd]
+
+&gt;&gt; append [a b c] @ first ['d]
+== [a b c 'd]
+</code></pre>
+<p><em>Mechanically</em> it's fantastic.  <em>Aesthetically</em> it's a bit grating...and <a class="mention" href="/u/rgchris">@rgchris</a> has had his eye on @ for other purposes.</p>
+<p>There aren't a ton of options on the old ASCII character set.  But... wouldn't caret seem a bit more subtle and suited to this?</p>
+<pre><code>&gt;&gt; append [a b c] ^[d e f]
+== [a b c [d e f]]
+
+&gt;&gt; item: first ['d]
+
+&gt;&gt; append [a b c] item  ; quoted will lose a quote level
+== [a b c d]
+
+&gt;&gt; append [a b c] ^item  ; adds extra quote level to be dropped
+== [a b c 'd]
+
+&gt;&gt; append [a b c] ^ first ['d]
+== [a b c 'd]
+</code></pre>
+<p>It hints a little more visually that it's associated with quoting.  Just perhaps a bit more forceful kind of quoting...</p>
+<pre><code>&gt;&gt; '[a b c]
+== [a b c]
+
+&gt;&gt; ^[a b c]
+== '[a b c]
+</code></pre>
+<p>Or maybe it's just that the standalone operator uses ^.</p>
+<pre><code>&gt;&gt; append [a b c] @[d e f]
+== [a b c [d e f]]
+
+&gt;&gt; append [a b c] ^ first ['d]
+== [a b c 'd]
+</code></pre>
+<p>Not sure.  Thoughts?  I'm feeling kind of pro about moving this feature entirely to ^</p>
+<p><strong>This does open the possibility that @-words and types remain and are used for other purposes.</strong>  Dialecting is made more powerful the more of these you have available.  Think for example what UPARSE might do with them if it wasn't matching things literally (?)</p>
+<p>The original idea was to make them inert, and involve them in DATATYPE!.  Maybe that needs to get put back on the table again.</p>
+<pre><code> &gt;&gt; type of 10
+ == @integer
+
+ &gt;&gt; @integer
+ == @integer  ; no evaluative behavior
+</code></pre>
+<p>(Other ideas of @['integer] to involve quote levels, @(...) for type constraints, etc.)</p>
+            <p><small>10 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/should-we-repurpose-to-what-is-now-doing/1605">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/should-we-repurpose-to-what-is-now-doing/1605</link>
+          <pubDate>Fri, 14 May 2021 17:50:46 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1605</guid>
+          <source url="https://forum.rebol.info/t/should-we-repurpose-to-what-is-now-doing/1605.rss">Should We Repurpose ^ To What @ Is Now Doing?</source>
+        </item>
+        <item>
+          <title>What Does &quot;Literal&quot; Mean In Rebol&#39;s Model?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>In programming, the term "literal" generally refers to when a source item expresses a fundamental value and doesn't need to be looked up in a variable.  It is essentially inert.</p>
+<p>For C:</p>
+<pre><code>int value = 10;  // 10 seen here is an "integer literal"
+printf("The value is %d", value);  // "string literal" + "integer variable"
+</code></pre>
+<p>But in Rebol's world, the notion of "what's a literal" is context-dependent, and can be very bent up.</p>
+<pre><code>is-this-literal?: func ['word [word!]] [
+    print ["The word was" word "- you tell me if that was literal!"]
+]
+
+&gt;&gt; is-this-literal? foo
+The word was foo - you tell me if that was literal!
+</code></pre>
+<p>So what do you think...is FOO a "literal word" or not?</p>
+<p>The answer is that we can't particularly answer whether a value is "literal" or not unless we know how it is being used.  <em>The term has kind of lost its meaning.</em></p>
+<p>All we can really say in a particular situation is if a value is being used in a "literal way" or not.</p>
+<p>In terms of naming, Rebol historically called quoted things "LIT" things.</p>
+<pre><code>rebol2&gt;&gt; type? first ['foo]
+== lit-word!
+</code></pre>
+<p>But the evaluator gave LIT-WORD!s a behavior...they'd drop their quote mark:</p>
+<pre><code>rebol2&gt;&gt; 'foo
+== foo
+</code></pre>
+<p>So important to notice: <strong>"inertness" wasn't implied by what was being called "literalness"</strong></p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-does-literal-mean-in-rebols-model/1598">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-does-literal-mean-in-rebols-model/1598</link>
+          <pubDate>Thu, 06 May 2021 13:53:49 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1598</guid>
+          <source url="https://forum.rebol.info/t/what-does-literal-mean-in-rebols-model/1598.rss">What Does &quot;Literal&quot; Mean In Rebol&#39;s Model?</source>
+        </item>
+        <item>
+          <title>ACROSS vs. COPY and UPARSE Synthetic Ambiguity</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>A successfully matching UPARSE combinator produces two return values.  One is the "synthesized product" of the rule.  The other is an indication of how far the rule advanced.</p>
+<p>I was a bit unsettled by things like this:</p>
+<pre><code>&gt;&gt; did uparse "abcde" ["a" test: copy (first ["Fhqwhgads"]) thru "e"]
+== #[true]
+
+&gt;&gt; test
+== ""
+</code></pre>
+<p>Because COPY does not copy the synthesized result.  It takes the span of the matched rule and copies across that span.  GROUP!s don't move the parse position at all.  So if you COPY a GROUP! you'll always get "".</p>
+<p>Compare that with putting the copy inside the GROUP! so it runs as DO code:</p>
+<pre><code>&gt;&gt; did uparse "abcde" ["a" test: (copy first ["Fhqwhgads"]) thru "e"]
+== #[true]
+
+&gt;&gt; test
+== "Fhqwhgads"
+</code></pre>
+<p>This made me skeptical of the word COPY and wanting to find a word that jumped off the page a bit distinctly from PARSE.  I thought of ACROSS.</p>
+<h2>But... Aren't All The PARSE Words Different?</h2>
+<p>You might ask if there's any point to fretting over this, when you know that basically every combinator other than SET-WORD! and KEEP doesn't care about synthesized products.  They operate on the rules.</p>
+<p>Consider what this does:</p>
+<pre><code>&gt;&gt; uparse "aaa" [not (false), some "a"]
+; null
+</code></pre>
+<p>You didn't get NOT and FALSE interacting there to make a truthy result that kept the parse going.  Instead, GROUP! rules always succeed...and NOT was testing to see if the rule didn't succeed.  Since it did, the parse failed.</p>
+<p><strong>This makes it seem like some combinators should indicate they can't be used in rule-span-checked slots.</strong>  Maybe <strong>x: copy ("a")</strong> should be illegal due to some property GROUP! combinators have that make them not want to mix with COPY.</p>
+<p>But what about this?</p>
+<pre><code> &gt;&gt; uparse "ababccc" [x: copy y: collect [some [keep "a" keep "b"]] some "c"]
+ == "c"
+
+ &gt;&gt; x
+ == "abab"
+
+ &gt;&gt; y
+ == ["a" "b" "a" b"]
+</code></pre>
+<p>Would it be better if COLLECT (or the Y SET-WORD! combinator) prevented you from capturing across the span of it, just because it synthesized a product?  Is it messing with generality to disable the GROUP!s being spanned going to come back and bite us later?</p>
+<p>Maybe this shows why I was uneasy about COPY.  I dunno.  But I'm not feeling thrilled with ACROSS.</p>
+<p>Food for thought.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/across-vs-copy-and-uparse-synthetic-ambiguity/1595">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/across-vs-copy-and-uparse-synthetic-ambiguity/1595</link>
+          <pubDate>Tue, 04 May 2021 00:52:54 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1595</guid>
+          <source url="https://forum.rebol.info/t/across-vs-copy-and-uparse-synthetic-ambiguity/1595.rss">ACROSS vs. COPY and UPARSE Synthetic Ambiguity</source>
+        </item>
+        <item>
+          <title>Name for rule to count how many times a PARSE rule matches?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>There are cases where you want to know how many of a certain match there are.</p>
+<p>Here's an example:</p>
+<pre><code> uparse "&lt;&lt;&lt;stuff&gt;&gt;&gt;" [
+     (n: 0)
+     some ["&lt;" (n: n + 1)]
+     x: between here n "&gt;"
+ ]
+</code></pre>
+<p>Here I'm just trying to match the number of <code>&gt;</code> on the right to how many <code>&lt;</code> were on the left.</p>
+<p><em>(Note: I still think this INTEGER! abstracting of rules is confusing to read.  Is a REPEAT/LOOP keyword missing that would help?  <a href="https://forum.rebol.info/t/is-integer-in-parse-too-obfuscating/1578">I've written about this, please register an opinion.</a>)</em></p>
+<h2>This Feels Like It Needs A (Value-Bearing) Rule</h2>
+<p>Maybe call it TALLY ?</p>
+<pre><code> uparse "&lt;&lt;&lt;stuff&gt;&gt;&gt;" [
+     n: tally "&lt;"
+     x: between here n "&gt;"
+ ]
+</code></pre>
+<p>I'm reluctant to call it COUNT since that's used so often as a variable name / noun.  But TALLY seems like fair game.</p>
+<p><a href="https://github.com/metaeducation/ren-c/commit/937eb630ee0e976ba6db3a8003d804fbfa2eedd5"><strong>For now, it's checked in as TALLY for UPARSE</strong></a></p>
+<p>But the main thing to focus on here is just how much killer leverage we get when parse rules can fit into this extensible framework.  <a href="https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577">And my major point I raised about synthesizing values that are not restricted to the type of the input.</a></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/name-for-rule-to-count-how-many-times-a-parse-rule-matches/1581">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/name-for-rule-to-count-how-many-times-a-parse-rule-matches/1581</link>
+          <pubDate>Mon, 12 Apr 2021 03:54:09 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1581</guid>
+          <source url="https://forum.rebol.info/t/name-for-rule-to-count-how-many-times-a-parse-rule-matches/1581.rss">Name for rule to count how many times a PARSE rule matches?</source>
+        </item>
+        <item>
+          <title>What to Call Historical &quot;SKIP&quot; in PARSE?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>SKIP suggests you're not using the result.  Yet historical SKIP doesn't really do that:</p>
+<pre><code>rebol2&gt; parse [1] [set x skip]
+rebol2&gt; x
+== 1  ; How was this "skipped" exactly?
+</code></pre>
+<p>We could use another name for "match next input element".  What should it be?</p>
+<p>Moving thread here, starting with <a class="mention" href="/u/ingohohmann">@IngoHohmann</a>'s original proposal that skip mean what I've called "elide", e.g. don't use result in a block assignment:</p>
+<pre><code>&gt;&gt; uparse [1 2] [x: [skip integer!, integer!]]
+&gt;&gt; x
+== 2</code></pre>
+            <p><small>13 posts - 6 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-to-call-historical-skip-in-parse/1557">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-to-call-historical-skip-in-parse/1557</link>
+          <pubDate>Sun, 14 Mar 2021 03:56:58 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1557</guid>
+          <source url="https://forum.rebol.info/t/what-to-call-historical-skip-in-parse/1557.rss">What to Call Historical &quot;SKIP&quot; in PARSE?</source>
+        </item>
+        <item>
+          <title>ANY vs. MANY in PARSE...</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>In at least one Haskell text combinator set, it uses <a href="https://hackage.haskell.org/package/parsers-0.12.10/docs/Text-Parser-Combinators.html#v:some"><strong>some</strong></a> to mean one or more match, and <a href="https://hackage.haskell.org/package/parsers-0.12.10/docs/Text-Parser-Combinators.html#v:many"><strong>many</strong></a> for zero or more matches.</p>
+<p>I can see why ANY makes more <em>sense</em>...to mean "any number of matches" (including 0).  But a disadvantage is that it looks a lot like the common ANY construct in regular code... <em>which kind of has the opposite meaning</em> (non-PARSE ANY means "at least one of the following things, go with the first one that's truthy, else return null").</p>
+<p>Because we're sort of dealing in a gray area of learned behavior here, I wonder if the benefit of going with MANY to make parse rules look different is enough to prefer it.</p>
+            <p><small>12 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/any-vs-many-in-parse/1540">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/any-vs-many-in-parse/1540</link>
+          <pubDate>Thu, 04 Mar 2021 06:23:30 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1540</guid>
+          <source url="https://forum.rebol.info/t/any-vs-many-in-parse/1540.rss">ANY vs. MANY in PARSE...</source>
+        </item>
+        <item>
+          <title>A RETURN-like annotation for block result being used</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>There's a situation I run into often where I'm looking at long bunches of code where a value is being calculated to be used in a long expression, like THING and OTHER-THING below:</p>
+<pre><code>result: case [
+    ...something... [
+        if condition [
+            ...bunch of code...
+            thing
+        ] else [
+            ...bunch of code...
+            other-thing
+        ]
+    ]
+    ...
+]
+</code></pre>
+<p>Ultimately, the value is getting stored in RESULT.  But it can be hard to make that connection, when this is scrolled across a lot of pages.</p>
+<p>I've thought it would be nice to have an annotation that helps to say "this is a used result"...kind of the way that having a RETURN statement on the last line of a function isn't <em>technically</em> necessary, but helps you realize that the last line has a meaningful return value.  <em>(I still am personally conflicted over <a href="https://forum.rebol.info/t/how-attached-are-we-to-functions-return-last-result/1219">whether or not to require RETURN if you want a value back</a>.)</em></p>
+<p>Long ago, I tried using left arrow as a comment to say "this value is used"</p>
+<pre><code>result: case [
+    ...something... [
+        if condition [
+            ...bunch of code...
+            &lt;- thing
+        ] else [
+            ...bunch of code...
+            &lt;- other-thing
+        ]
+    ]
+    ...
+]
+</code></pre>
+<p>Kind of a waste of the symbol for a no-op, though.</p>
+<p>There might be some strange idiom, like leading comma on the result line to say "oh, and this is the result"</p>
+<pre><code>result: case [
+    ...something... [
+        if condition [
+            ...bunch of code...
+            , thing
+        ] else [
+            ...bunch of code...
+            , other-thing
+        ]
+    ]
+    ...
+]
+</code></pre>
+<p>Anyway, my discomfort with how easily the important "result" parts vanish into the overall code means this comes up a lot.  You can use comments of course:</p>
+<pre><code>result: case [
+    ...something... [
+        if condition [
+            ...bunch of code...
+            thing  ; -&gt; result
+        ] else [
+            ...bunch of code...
+            other-thing  ; -&gt; result
+        ]
+    ]
+    ...
+]</code></pre>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/a-return-like-annotation-for-block-result-being-used/1526">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/a-return-like-annotation-for-block-result-being-used/1526</link>
+          <pubDate>Fri, 26 Feb 2021 08:02:45 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1526</guid>
+          <source url="https://forum.rebol.info/t/a-return-like-annotation-for-block-result-being-used/1526.rss">A RETURN-like annotation for block result being used</source>
+        </item>
+        <item>
+          <title>What to Do About FUNCT (including &quot;Not Calling It That&quot;)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>FUNCT was an R3-Alpha-ism that made it easier to keep track of one's declaration of local variables in functions.  It walked the  body of the function looking for any SET-WORD! usages.  If those set-words didn't name arguments or explicit locals...and weren't explicitly specified as being non-local via the /EXTERN refinement...they would be automatically made local.</p>
+<p>It gained popularity since declaring locals manually is more of a hassle--and stale locals are hard to notice and can linger after their references are all removed.  Since it was popular, several people (myself included) lobbied for it to get the name FUNCTION.</p>
+<p>However:</p>
+<ul>
+<li>
+<p>locals-gathering via SET-WORD! turned out to be <a href="https://forum.rebol.info/t/rethinking-auto-gathered-set-word-locals/1150">problematic for several reasons that I have repeatedly explained</a></p>
+</li>
+<li>
+<p>I've come to think that <a href="https://forum.rebol.info/t/abbreviations-as-synonyms/1211">having FUNC be anything other than a shorthand for FUNCTION is confusing</a>...an abbreviation that has drastic changes in behavior seems bad.</p>
+</li>
+</ul>
+<p>I feel pretty good about the current plan to switch over to a mix of virtual-binding-based LET...with explicit <code>&lt;local&gt;</code> when it makes sense.  This means FUNCTION as we have known it (which is to say FUNCT) is going to die.</p>
+<h2>Plan is to Temporarily Deprecate FUNCTION in favor of FUNC</h2>
+<p>I'm going to deprecate FUNCTION for a while... and just use FUNC with LET (or <code>&lt;local&gt;</code>).    Once this has gotten wide acceptance, we can reintroduce FUNCTION as a synonym for FUNC.</p>
+<p>This is a slow process, because doing the change across large bodies of code is exposing issues in the virtual binding mechanics.  So I don't know the exact time when FUNCTION will be going away.</p>
+<p>But I have committed one step of moving away from the "gathering of SET-WORD!s" model.  I changed METHOD to no longer be the "gathering form of METH".  This gave me an idea of how hard it would be to get a bootstrap executable to fake up LET mechanics...even though it doesn't have virtual binding.</p>
+<p>I left behind METH/GATHER as a compatibility form... just because that's how it was implemented prior (<strong>method: :meth/gather</strong>).</p>
+<p>Ideally you would not use METH/GATHER, instead you would convert your code to use LET... <em>unless</em> you think your code is too performance sensitive, in which case you would declare your <strong><code>&lt;local&gt;</code></strong> variables in the function spec.</p>
+<h2>What's the Role of the /GATHER Mechanic, And What to Call It?</h2>
+<p>I think locals gathering through SET-WORD! is a good code golf tool.  But does it have a place in the system besides that?</p>
+<p>I'm not thrilled about leaving it on FUNC itself as part of the core "important" code... as a refinement or as part of the spec language.</p>
+<p><strong>Does anyone have a super strong vote for it, or it needing a name, or does LET + <code>&lt;local&gt;</code> feel like it covers enough for what's needed in the box?</strong></p>
+            <p><small>5 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-to-do-about-funct-including-not-calling-it-that/1518">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-to-do-about-funct-including-not-calling-it-that/1518</link>
+          <pubDate>Tue, 23 Feb 2021 03:44:14 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1518</guid>
+          <source url="https://forum.rebol.info/t/what-to-do-about-funct-including-not-calling-it-that/1518.rss">What to Do About FUNCT (including &quot;Not Calling It That&quot;)</source>
+        </item>
+        <item>
+          <title>Non-Network related schemes and URLs</title>
+          <dc:creator><![CDATA[rgchris]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>Questions have been raised following the implementation of a handful of schemes in the ReplPad package. A prominent aspect of this is whether a URL can be set to the current path and how each scheme handles this and path changes via relative file through CHANGE-DIR</p>
+<p>There are eight schemes in all: FILE, DIR, HTTP, HTTPS, STORAGE, CLIPBOARD, LOG and DOWNLOADS. In implementing them, the first four are moot—you can set them via change-dir and the FILE/DIR schemes know to map relative files to those schemes.</p>
+<p>In designing the latter four there are different considerations—none map to a hierarchical filesystem, thus I sought to avoid structuring them in the traditional <strong>thing://</strong> form.</p>
+<ul>
+<li>
+<p>Storage — maps to key/value storage, so it uses a plain <strong>storage:key</strong> form:</p>
+<pre><code>read storage:key
+write storage:another-key "Something"
+</code></pre>
+<p>It could stand to distinguish between localStorage and sessionStorage—for another day.</p>
+</li>
+<li>
+<p>Clipboard — doesn't have any prescribed form, just simply saying the following is enough and equivalent:</p>
+<pre><code>write clipboard:// "Something"
+write clipboard::foobar "Something"
+; read is not feasible
+</code></pre>
+<p>As a side note, in a Mac implementation, I use the following forms to distinguish between different available text clipboards:</p>
+<pre><code>clipboard::general
+clipboard::ruler
+clipboard::font
+clipboard::find
+</code></pre>
+</li>
+<li>
+<p>Log — for this scheme, I possibly could've gone for the double-colon again, but opted for a triplet. There are precisely four endpoints:</p>
+<pre><code>log:type=log
+log:type=info
+log:type=warn
+log:type=error
+</code></pre>
+</li>
+<li>
+<p>Downloads — for this scheme, the argument is a variable single filename, I opted for downloads:/// so as to take advantage of DECODE-URL extracting that name for us:</p>
+<pre><code>write downloads:///data.bin #{CAFEF00D}
+</code></pre>
+<p>It will ignore any values between the second and last slash, though it doesn't check for conformance.</p>
+</li>
+</ul>
+<p>Each one of these is a subjective choice that I made.</p>
+<p>Amongst the questions raised:</p>
+<ul>
+<li>
+<p>Is there significance in deviating from the traditional <strong>scheme://</strong> format when you couldn't conceivably say: <strong>change-dir log:type=</strong> and then say: <strong>write %error "Foo"</strong>?</p>
+</li>
+<li>
+<p>Is this the right design direction to go in at all when you could just write functions that say <strong>download</strong> or <strong>log/warn</strong> or <strong>write-clipboard</strong>?</p>
+</li>
+</ul>
+<hr>
+<p>My shorter opinions on this are 1) no—I'm not suggesting these forms are ideal, but there are prominent URL schemes that don't adhere to this form, for example: <strong>tel:</strong> and <strong>mailto:</strong>. I think that URLs should be constructed to fit their domain. 2) yes—URLs and Ports represent abstract external resources; schemes offer versatility on how the standard verbs adapt to their domain rather than introducing many domain-specific verb constructions.</p>
+            <p><small>28 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/non-network-related-schemes-and-urls/1506">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/non-network-related-schemes-and-urls/1506</link>
+          <pubDate>Sat, 13 Feb 2021 05:54:39 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1506</guid>
+          <source url="https://forum.rebol.info/t/non-network-related-schemes-and-urls/1506.rss">Non-Network related schemes and URLs</source>
+        </item>
+        <item>
+          <title>MY, MY, MY</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>ME was introduced as a tool for replacing the likes of ++.</p>
+<p>So instead of <strong>++ variable</strong> you could write <strong>variable: me + 1</strong>.  This had the nice advantage of generalizing to other operators and parameters...as well as making it clearer that an assigment to variable was taking place.</p>
+<p>Unfortunately, with the one-unit-of-lookahead workings, you could not write <strong>variable: next me</strong>.  Even if it <em>could</em> work, moving away from being right next to the SET-WORD! makes it even less obvious what that means.</p>
+<p>So MY was an attempt to do a similar thing for functions that were not enfix.  You could rewrite <strong>block: next block</strong> as <strong>block: my next</strong></p>
+<p>That's pretty cool.  Though as binding gets hammered through, I got to wondering if it had a higher calling in binding...for letting you propagate bindings on SET-WORD!s on the left to blocks and functions.  That gave me the idea for <strong>my func</strong> being a general replacement for METHOD, and things like <strong>x: my block</strong> would act like <strong>x: in (binding of x) block</strong></p>
+<p>But these are two completely different things.  So they can't have the same name...</p>
+<h2>Alternatives For "Old MY"</h2>
+<p>Let's look back at it:</p>
+<pre><code>block: ??? next  -&gt; block: next block
+</code></pre>
+<p>We could ignore the linguistic problem and say ME just works with anything.  <strong>block: me next</strong>  It's kind of incohrent, though consistent.</p>
+<p>There's <strong>block: be next</strong>.  Strange, and kind of works there ("hey block. be (your) next value")  I don't know quite how it generalizes across other words you might use it with.  <strong>block: be append 10</strong></p>
+<p>I'm fairly used to MY for this, and the closeness to ME makes it feel right.  Looking at it more closely, it seems unwise to change it.</p>
+<h2>Alternatives For "New MY"</h2>
+<p>If old MY was hard to understand, the new MY is even weirder...saying that it's going to swipe the <em>binding</em> off the SET-WORD! on the left, and move it over to the right.</p>
+<p>There's HAS...</p>
+<pre><code> obj: make/bind-set-words-only object! [  ; imagine something like this exists
+     x: 10
+     block: has [x + 1] 
+     action: has func [y] [x + y]
+ ]
+</code></pre>
+<p>It's strange.  But when you're talking about trying to communicate bindings at a mechanical level, the options are limited.</p>
+<p>Also unclear is how this would work on PATH!.  ME and old MY were only interested in the value, and there's a way to get that out of a path.  But if you have something like <strong>x/y/z</strong> and Y is an object, how do you extract that object?  :-/</p>
+<p>I've hypothesized a bit about <a href="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442/3">quoting vs. JUST</a> being a way of ducking the virtual bind.</p>
+<pre><code> x: 20
+ obj: make object! [  ; imagine something like this exists
+     x: 10
+     block1: '[x + 1]  ; escaped, would get the x=20 binding
+     block2: just [x + 1]  ; no quote hence no escape, gets x=10 binding
+     action: func [y] '[x + y]  ; you could exempt bodies from binding here
+ ]
+</code></pre>
+<p>Soft-quoted branching and other constructs that subvert the evaluator mix this up a bit.  But if you're having to worry about <strong>'(a + b)</strong> vs. <strong>just (a + b)</strong> being different meanings for binding, then you'd just have to kick in that awareness and not use <strong>if true '[a]</strong> if you wanted the binding, and use <strong>if true [[a]]</strong> instead.</p>
+<p>The HAS could still fit in, where <strong>has func</strong> replaces the derived binding mechanics of METHOD.</p>
+<h2>Um...</h2>
+<p>I think all I've really done here is talk myself into leaving MY as-is, realized that the variant (which I'll call HAS for now) which gets bindings from the left would need new mechanics for PATH!... and I've gotten myself thinking more about the "quoting subverts virtual binding idea."</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/my-my-my/1486">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/my-my-my/1486</link>
+          <pubDate>Mon, 01 Feb 2021 17:25:52 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1486</guid>
+          <source url="https://forum.rebol.info/t/my-my-my/1486.rss">MY, MY, MY</source>
+        </item>
+        <item>
+          <title>BINARY! vs. BYTES!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>It has occurred to me that it might be nice to have a datatype which represents a string of bits, where you don't have to have exactly multiples of 8 of them...and where positions were on a bit-level.</p>
+<p>If there were such a type, it might be called BITS! to not conflict...but either way it does point out that BINARY! is kind of a misleading name.</p>
+<p>Since today's BINARY! is a series managed in multiples of 8 bits, wouldn't it be better to call it BYTES! ?</p>
+<p>I'll add that I'm kind of leaning toward saying that the representation be <strong>${FFFF}</strong> or <strong>$"FFFF"</strong> as opposed to using <strong>&amp;</strong> to replace <strong>#</strong>.   This is more of a nod to historical $ sign for hex... leaves &amp; free for other applications...and gives the ability to put characters in quoted strings cleanly, like:</p>
+<pre><code>rebElide("some-char: #{c}");
+</code></pre>
+<p>Although that particular case can be done without delimiters as <strong><span class="hashtag">#c</span></strong> ... but we need to work through what is and isn't legal to do without quotes or braces.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/binary-vs-bytes/1477">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/binary-vs-bytes/1477</link>
+          <pubDate>Wed, 27 Jan 2021 00:47:03 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1477</guid>
+          <source url="https://forum.rebol.info/t/binary-vs-bytes/1477.rss">BINARY! vs. BYTES!</source>
+        </item>
+        <item>
+          <title>Annotation for When Something May Be Null</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>Sometimes you might want to reinforce that a value may or may not be null.  You can do this in the name, like <code>optional-foo</code>, so if you were printing it:</p>
+<pre><code>optional-foo: if condition [&lt;thing&gt;]  ; else it will be null
+...
+...
+print ["This is message" optional-foo bar baz]
+</code></pre>
+<p>You might also keep the name short, and then invoke conditionality even though you don't need it...to reinforce the awareness:</p>
+<pre><code>foo: if condition [&lt;thing&gt;]
+...
+...
+print ["This is message" (if foo [foo]) bar baz]
+</code></pre>
+<p>MAYBE is taken for another much cooler purpose than this.</p>
+<pre><code>&gt;&gt; x: 10
+
+&gt;&gt; x: maybe case [
+      1 = 2 [&lt;not&gt;]
+      3 = 4 [&lt;not either&gt;]
+   ]
+
+&gt;&gt; x
+== 10  ; right hand side of NULL meant MAYBE didn't overwrite X
+</code></pre>
+<p>There's still MAYHAP.  <img src="https://forum.rebol.info/images/emoji/twitter/face_with_monocle.png?v=9" title=":face_with_monocle:" class="emoji" alt=":face_with_monocle:">  or PERHAPS.</p>
+<pre><code>print ["This is message" (perhaps foo) bar baz]
+</code></pre>
+<p>Or building on IF... IFFY?</p>
+<pre><code>print ["This is message" (iffy foo) bar baz]
+</code></pre>
+<p>OPT has been used to turn blanks into nulls.  To help avoid using OPT where it isn't needed, it has been turning nulls into voids.  But I guess it doesn't have to.</p>
+<pre><code>print ["This is message" (opt foo) bar baz]
+</code></pre>
+<p>Still...if it does <em>anything</em> then it's potentially going to add confusion in the mind of whoever's reading as to whether it's necessary.</p>
+<p>Could involve symbols in the name.  Dashes?  Leading question marks?</p>
+<pre><code>print ["This is message" -foo- bar baz]
+
+print ["This is message" ?foo bar baz]
+
+print ["This is message" foo* bar baz]
+</code></pre>
+<p>For a while I'd wondered if you should have to use / to read null variables, otherwise they'd error...but I thought of some reasons to not do that which presumably still apply (including wanting to use them in APPLY)</p>
+<pre><code>print ["This is message" /foo bar baz]
+</code></pre>
+<p>Dunno.  Out of the above, I probably like PERHAPS the most.  It's a bit long, but the thing is that when you consider the amount of clarity such things can provide it can save on much lengthier naming and commenting to try and communicate intent.</p>
+<p>I'll mention that THE (discussed recently as a potential alternative to ENSURE) was previously considered as a shortcut for NON NULL:</p>
+<pre><code>print ["This is message" (perhaps foo) (the bar) (the baz)]
+</code></pre>
+<p>Which seems fairly intuitive.</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/annotation-for-when-something-may-be-null/1473">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/annotation-for-when-something-may-be-null/1473</link>
+          <pubDate>Mon, 25 Jan 2021 07:08:23 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1473</guid>
+          <source url="https://forum.rebol.info/t/annotation-for-when-something-may-be-null/1473.rss">Annotation for When Something May Be Null</source>
+        </item>
+        <item>
+          <title>Replace ENSURE with THE ?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p>I make frequent use of something called ENSURE, which lets you check that something is the type you think it is.  It passes it through if it is, and errors if not:</p>
+<pre><code>&gt;&gt; ensure integer! 5
+== 5
+
+&gt;&gt; ensure integer! "not an integer"
+** Error: ENSURE failed with argument of type text!
+</code></pre>
+<p>The error message could be better, but you get the idea.</p>
+<p>It has a counter part called NON:</p>
+<pre><code>&gt;&gt; non integer! 5 
+** Error: NON failed with argument of type integer!
+
+&gt;&gt; non integer! "not an integer"
+== "not an integer"
+</code></pre>
+<h2>Lisp calls its ENSURE operator "THE"</h2>
+<p>It's maybe a little bit less obvious, but it does save on typing:</p>
+<pre><code>&gt;&gt; the integer! 5
+== 5
+
+&gt;&gt; the integer! "not an integer"
+** Error: THE failed with argument of type text!
+</code></pre>
+<p>It makes a bit more sense when you use it with a single type than when you use it with more than one:</p>
+<pre><code>&gt;&gt; the [integer! text!] 5
+== 5
+
+&gt;&gt; the [integer! text!] "not an integer"
+== "not an integer"
+</code></pre>
+<h2>Worth changing?</h2>
+<p>Being short and 3-lettered makes it kind of a better complement to NON.  They read pretty well:</p>
+<pre><code>&gt;&gt; value: 5
+
+&gt;&gt; append [1 2 3 4] the integer! value
+== [1 2 3 4 5]
+
+&gt;&gt; append [1 2 3 4] non null value
+== [1 2 3 4 5]
+</code></pre>
+<p>I'm leaning toward thinking this might be worth the change.  Though ENSURE isn't really needed for anything else.  Maybe they could be synonyms, and if you wanted to retake the short THE for something else you could.</p>
+            <p><small>6 posts - 5 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/replace-ensure-with-the/1464">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/replace-ensure-with-the/1464</link>
+          <pubDate>Mon, 11 Jan 2021 16:38:17 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1464</guid>
+          <source url="https://forum.rebol.info/t/replace-ensure-with-the/1464.rss">Replace ENSURE with THE ?</source>
+        </item>
+        <item>
+          <title>Is IN too good a variable name? vs (WITH, FIND?)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Naming</category>
+          <description><![CDATA[
+            <p><a class="mention" href="/u/rgchris">@rgchris</a> suggested WITH for virtual binding, as in <strong>do with context [...]</strong>.</p>
+<p>I said that the historical IN operator--which is used to bind words to contexts, wouldn't have any alternate purpose for blocks.  So it was economical to consider it the virtual binding operator.</p>
+<p>But that took for granted that IN was a good name to take for an operator.  Is it, really?  Or are people likely going to want to have local variables called <strong>in</strong> and <strong>out</strong> so often that this would be inconvenient?  (You can say <strong>lib/in</strong> but would you want to?)</p>
+<p>We've <a href="https://forum.rebol.info/t/improving-the-ask-dialect-and-replacing-input/1124">switched <strong>INPUT</strong> as a verb to <strong>ASK TEXT!</strong></a> and I think that's much better, so pushing IN out of the way seems like it might be good as well.</p>
+<p>This occurred to me while noticing that virtual binding chains can do something regular binding can't do, which is be removed.  You can peel off layers of virtual binding to get a view of the thing before.  Naming that <strong>out</strong> seemed bad, which drew my attention that we've taken for granted that <strong>in</strong> is an annoying word to be taking for such a common use.  And <strong>without</strong> seemed kind of like a good "virtual unbinding" operator.</p>
+<p>But when you compare <strong>if in obj word [...]</strong> against <strong>if with obj word [...]</strong>, the WITH doesn't make a lot of sense for searching to see if the key is present.</p>
+<p>But could FIND be used for that?  It's not totally clear what FIND on an object would do, but Rebol2 made it search the keys, not the vars:</p>
+<pre><code>rebol2&gt;&gt; find make object! [x: 10] 'x
+== true
+
+rebol2&gt;&gt; find make object! [x: 10] 10
+** Script Error: Invalid argument: 10
+</code></pre>
+<p>That FIND could work on ANY-WORD!, and return the bound word in the case of objects instead of <code>true</code>.  I'm not sure if it would be any more weird than returning a LOGIC! instead of a position...arguably more consistent (the key is the "position" in an object, because it can be used as a cache for re-retrieving what you found).</p>
+<p>So that would give you <strong>if find obj word [...]</strong>, and then you could use any of <strong>find obj word</strong> or <strong>with obj word</strong> or <strong>bind obj word</strong> to get the bound word.</p>
+<p>(If we want to stress BIND is mutating, then maybe it shouldn't take WORD!s as arguments...but PATH!s with nested GROUP!s/BLOCK!s throw a bit of a wrench into everything.)</p>
+<p>Anyway, just challenging if the word IN is a bad thing to take as a native.</p>
+            <p><small>6 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/is-in-too-good-a-variable-name-vs-with-find/1452">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/is-in-too-good-a-variable-name-vs-with-find/1452</link>
+          <pubDate>Sat, 02 Jan 2021 13:44:27 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1452</guid>
+          <source url="https://forum.rebol.info/t/is-in-too-good-a-variable-name-vs-with-find/1452.rss">Is IN too good a variable name? vs (WITH, FIND?)</source>
+        </item>
+  </channel>
+</rss>

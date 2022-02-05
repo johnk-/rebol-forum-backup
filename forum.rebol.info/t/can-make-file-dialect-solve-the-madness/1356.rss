@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Can MAKE FILE! Dialect Solve the Madness</title>
+    <link>https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356</link>
+    <description>With Generic Tuple, the dawn of NewPath is upon us.
+
+    &gt;&gt; filelike-path: &#39;base/{sub dir}/name.ext
+    == base/{sub dir}/name.ext   ; path!
+
+    &gt;&gt; first filelike-path
+    == base  ; word!
+
+    &gt;&gt; second filelike-path
+    == &quot;sub dir&quot;  ; text!
+
+    &gt;&gt; third filelike-path
+    == name.ext  ; tuple!
+
+    &gt;&gt; last third filelike-path
+    == ext  ; word!
+
+At some point you&#39;ll need transformations that get you actual FILE! strings out of PATH!s you were using as a convenient structural substitute.  I&#39;m trying to think about good sanity-checking features that will pay dividends, like this one:
+
+    &gt;&gt; extension: &quot;txt&quot;
+
+    &gt;&gt; file: make file! &#39;base/{sub dir}/name.(extension)
+    == %&quot;base/sub dir/name.txt&quot;
+
+    &gt;&gt; extension: &quot;not/legal&quot;
+
+    &gt;&gt; file: make file! &#39;base/{sub dir}/name.(extension)
+     ** Error: Can&#39;t use slash in filename sub-component &quot;not/legal&quot;
+
+**With this new direction, I want to kill off the old behavior of FILE!s that get path-picked IMPLICITLY doing appending of path segments to file names.**  That means no more of this:
+
+    &gt;&gt; src-dir: %foo/bar
+
+    &gt;&gt; src-dir/main
+    == %foo/bar/main
+
+## A Compelling Example Of Why Implicit FILE! Pathing Must Die
+
+Here is a bit of code I&#39;d like you to look at, [from rebmake.r](https://github.com/metaeducation/ren-c/blob/37cd566d3ab4729faae710e82741c0183a97e269/make.r#L1278):
+
+    depends: reduce [
+        either user-config/main
+        [gen-obj/main user-config/main]
+        [gen-obj/dir file-base/main src-dir/main]
+    ]
+
+I thought this was attempting to generate a BLOCK! of FILE!s.  My attention was drawn to `src-dir/main`, which I figured was using the &quot;evil&quot; implicit pathing feature.
+
+This made me imagine the others were doing that too.  So the first case would make a block of two files, and the second a block of three.
+
+**Looking closer, nope**.  GEN-OBJ is a function which takes a varying number of directories as arguments, depending on whether it has refinements.  So these are two potential calls to that function which generate only one result.  `user-config` and `file-base` are OBJECT!s from which an element is being picked, while only src-dir is a FILE!.  /DIR and /MAIN are refinements to GEN-OBJ, where /DIR takes a FILE! argument.
+
+*How can anybody expect to be able to read this?*
+
+## Let&#39;s Try And Make Sense of It
+
+First, let&#39;s kill off the implicit pathing, and use MAKE FILE!
+
+    depends: reduce [
+        either user-config/main
+            [gen-obj/main user-config/main]
+            [gen-obj/dir file-base/main make file! &#39;(src-dir)/main/]
+    ]
+
+It&#39;s...slightly better.  Now let&#39;s go with the idea of inert-based picking of members with dots, to make it more obvious where the function calls are:
+
+    depends: reduce [
+        either user-config.main
+            [gen-obj/main user-config.main]
+            [gen-obj/dir file-base.main make file! &#39;(src-dir)/main/]
+    ]
+
+Now we can discern that /MAIN is (probably) a *refinement* to GEN-OBJ, while MAIN is a *field* in both user-config and file-base.
+
+Breaking this apart and adding some comments might help (despite the fact some people seem allergic to writing comments).  :-/
+
+     main-obj-spec: either user-config.main [
+         ;
+         ; Config specified a main .c filename, tell GEN-OBJ via /MAIN
+         ; to put it in a derived location relative to that filename&#39;s path.
+         ;
+         gen-obj/main user-config.main
+     ][
+         ; If there&#39;s no explicit config main override, then use the main file
+         ; from %file-base.r.  Assume its /DIR location is in the %/main/
+         ; subdirectory of wherever the rest of the source code is.
+         ;
+         main-c-file-dir: make file! &#39;(src-dir)/main/
+         gen-obj/dir file-base.main main-c-file-dir
+     ]
+
+     depends: reduce [ensure object! main-obj-spec]
+
+It actually turns out that it&#39;s not returning an obj FILE!, but a Rebmake OBJ file descriptor object.  I really think ENSURE helps in cases like this.
+
+## Really This Was About MAKE FILE!...
+
+@giuliolunati will back me up when I say Rebmake is a beast.  But makefile systems always are.  The good news is that since it&#39;s written in Ren-C, there&#39;s weapons for attacking it... so we can see just how much dialecting can be brought to bear upon it.  It needs rethinking from the most basic premises, but that will take time.
+
+In any case, I just wanted to show some arguments for why no one should mourn the loss of implicit pathing for filenames.  It&#39;s cool to be able to pun on PATH! to make file paths--it&#39;s made for that.  But when that is tied in implicitly to evaluation we see what kind of a mess it makes.
+
+This also gives a pretty good argument for why the dotted access pattern helps you see what&#39;s going on, by knowing they&#39;re not refinements.
+
+## Please Help with MAKE FILE!  (!!!)
+
+Ideas and testing are going to be important.  I&#39;ll commit the source to the beginnings soon.</description>
+    
+    <lastBuildDate>Sun, 04 Oct 2020 19:45:18 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Can MAKE FILE! Dialect Solve the Madness</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="1356">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p>Better if I thought before I wrote... :-/</p>
+</blockquote>
+</aside>
+<p>It's hard to know what to think about a lot of these things.</p>
+<p>The first time I saw the PATH!s in %file-base.r I thought <em>"well that seems wrong, there's a datatype for FILE!, these should be FILE!s instead of being confused with PATH!"</em>.</p>
+<p>When you start trying to separate everything into its "role" then I think that misses the idea.  Where the idea is that you have generic parts and you do what you want with them.</p>
+<p>The language kind of caters to the data format... not vice-versa.  If you look at it as "data first, code second" then you see it differently.  What you're <em>hoping</em> to do is spend a little bit of time working up each dialect, and then get to put most of your expression in the dialect...</p>
+          <p><a href="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/5</link>
+        <pubDate>Sun, 04 Oct 2020 19:45:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1356-5</guid>
+        <source url="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356.rss">Can MAKE FILE! Dialect Solve the Madness</source>
+      </item>
+      <item>
+        <title>Can MAKE FILE! Dialect Solve the Madness</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>Yes, you're right. Better if I thought before I wrote... :-/</p>
+          <p><a href="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/4</link>
+        <pubDate>Sun, 04 Oct 2020 19:13:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1356-4</guid>
+        <source url="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356.rss">Can MAKE FILE! Dialect Solve the Madness</source>
+      </item>
+      <item>
+        <title>Can MAKE FILE! Dialect Solve the Madness</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1356">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p><code>file-base.main</code> looks like a filename with extension "main"</p>
+</blockquote>
+</aside>
+<p>How does it look "more like  a file" than "append/only" looks like a directory?</p>
+<p>This is the way it is, so the difference is whether something is evaluative or not.</p>
+<p>Remember that %file-base.main is available for non-structured files, just as %append/only is available for filenames.</p>
+<p>So the trick with using PATH!s or TUPLE!s is when that's what you want in your dialect.  This is why I'm pointing out that MAKE FILE! from a PATH! is important...you were able to do this before in your dialects, e.g. see <a href="https://github.com/metaeducation/ren-c/blob/37cd566d3ab4729faae710e82741c0183a97e269/tools/file-base.r#L211" rel="nofollow noopener">%file-base.r</a>.  (I'll point out that notation for file-base of using PATH!s was Carl's invention).</p>
+<p>Some people might want to avoid ever using NewPath style MAKE FILE! mechanics.  They can always use FILE! and live in the string world.  That's fine, though I think they'll be missing out...losing on structure and having their dialects be "messy" by needing % in slots where there's no contention with plain paths.  Dialects are supposed to let you be clever, and it seems a waste to not exploit it, but...</p>
+<p>Generally speaking, I don't see how <strong>file-base.main</strong> is any more confusing as a TUPLE! than as a WORD!...and you have actual structural capability with it.</p>
+          <p><a href="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/3</link>
+        <pubDate>Sun, 04 Oct 2020 17:09:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1356-3</guid>
+        <source url="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356.rss">Can MAKE FILE! Dialect Solve the Madness</source>
+      </item>
+      <item>
+        <title>Can MAKE FILE! Dialect Solve the Madness</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>Uhm... <code>file-base.main</code> looks like a filename with extension "main" <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+          <p><a href="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/2</link>
+        <pubDate>Sun, 04 Oct 2020 17:08:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1356-2</guid>
+        <source url="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356.rss">Can MAKE FILE! Dialect Solve the Madness</source>
+      </item>
+      <item>
+        <title>Can MAKE FILE! Dialect Solve the Madness</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>With Generic Tuple, the dawn of NewPath is upon us.</p>
+<pre><code>&gt;&gt; filelike-path: 'base/{sub dir}/name.ext
+== base/{sub dir}/name.ext   ; path!
+
+&gt;&gt; first filelike-path
+== base  ; word!
+
+&gt;&gt; second filelike-path
+== "sub dir"  ; text!
+
+&gt;&gt; third filelike-path
+== name.ext  ; tuple!
+
+&gt;&gt; last third filelike-path
+== ext  ; word!
+</code></pre>
+<p>At some point you'll need transformations that get you actual FILE! strings out of PATH!s you were using as a convenient structural substitute.  I'm trying to think about good sanity-checking features that will pay dividends, like this one:</p>
+<pre><code>&gt;&gt; extension: "txt"
+
+&gt;&gt; file: make file! 'base/{sub dir}/name.(extension)
+== %"base/sub dir/name.txt"
+
+&gt;&gt; extension: "not/legal"
+
+&gt;&gt; file: make file! 'base/{sub dir}/name.(extension)
+ ** Error: Can't use slash in filename sub-component "not/legal"
+</code></pre>
+<p><strong>With this new direction, I want to kill off the old behavior of FILE!s that get path-picked IMPLICITLY doing appending of path segments to file names.</strong>  That means no more of this:</p>
+<pre><code>&gt;&gt; src-dir: %foo/bar
+
+&gt;&gt; src-dir/main
+== %foo/bar/main
+</code></pre>
+<h2>A Compelling Example Of Why Implicit FILE! Pathing Must Die</h2>
+<p>Here is a bit of code I'd like you to look at, <a href="https://github.com/metaeducation/ren-c/blob/37cd566d3ab4729faae710e82741c0183a97e269/make.r#L1278">from rebmake.r</a>:</p>
+<pre><code>depends: reduce [
+    either user-config/main
+    [gen-obj/main user-config/main]
+    [gen-obj/dir file-base/main src-dir/main]
+]
+</code></pre>
+<p>I thought this was attempting to generate a BLOCK! of FILE!s.  My attention was drawn to <code>src-dir/main</code>, which I figured was using the "evil" implicit pathing feature.</p>
+<p>This made me imagine the others were doing that too.  So the first case would make a block of two files, and the second a block of three.</p>
+<p><strong>Looking closer, nope</strong>.  GEN-OBJ is a function which takes a varying number of directories as arguments, depending on whether it has refinements.  So these are two potential calls to that function which generate only one result.  <code>user-config</code> and <code>file-base</code> are OBJECT!s from which an element is being picked, while only src-dir is a FILE!.  /DIR and /MAIN are refinements to GEN-OBJ, where /DIR takes a FILE! argument.</p>
+<p><em>How can anybody expect to be able to read this?</em></p>
+<h2>Let's Try And Make Sense of It</h2>
+<p>First, let's kill off the implicit pathing, and use MAKE FILE!</p>
+<pre><code>depends: reduce [
+    either user-config/main
+        [gen-obj/main user-config/main]
+        [gen-obj/dir file-base/main make file! '(src-dir)/main/]
+]
+</code></pre>
+<p>It's...slightly better.  Now let's go with the idea of inert-based picking of members with dots, to make it more obvious where the function calls are:</p>
+<pre><code>depends: reduce [
+    either user-config.main
+        [gen-obj/main user-config.main]
+        [gen-obj/dir file-base.main make file! '(src-dir)/main/]
+]
+</code></pre>
+<p>Now we can discern that /MAIN is (probably) a <em>refinement</em> to GEN-OBJ, while MAIN is a <em>field</em> in both user-config and file-base.</p>
+<p>Breaking this apart and adding some comments might help (despite the fact some people seem allergic to writing comments).  :-/</p>
+<pre><code> main-obj-spec: either user-config.main [
+     ;
+     ; Config specified a main .c filename, tell GEN-OBJ via /MAIN
+     ; to put it in a derived location relative to that filename's path.
+     ;
+     gen-obj/main user-config.main
+ ][
+     ; If there's no explicit config main override, then use the main file
+     ; from %file-base.r.  Assume its /DIR location is in the %/main/
+     ; subdirectory of wherever the rest of the source code is.
+     ;
+     main-c-file-dir: make file! '(src-dir)/main/
+     gen-obj/dir file-base.main main-c-file-dir
+ ]
+
+ depends: reduce [ensure object! main-obj-spec]
+</code></pre>
+<p>It actually turns out that it's not returning an obj FILE!, but a Rebmake OBJ file descriptor object.  I really think ENSURE helps in cases like this.</p>
+<h2>Really This Was About MAKE FILE!...</h2>
+<p><a class="mention" href="/u/giuliolunati">@giuliolunati</a> will back me up when I say Rebmake is a beast.  But makefile systems always are.  The good news is that since it's written in Ren-C, there's weapons for attacking it... so we can see just how much dialecting can be brought to bear upon it.  It needs rethinking from the most basic premises, but that will take time.</p>
+<p>In any case, I just wanted to show some arguments for why no one should mourn the loss of implicit pathing for filenames.  It's cool to be able to pun on PATH! to make file paths--it's made for that.  But when that is tied in implicitly to evaluation we see what kind of a mess it makes.</p>
+<p>This also gives a pretty good argument for why the dotted access pattern helps you see what's going on, by knowing they're not refinements.</p>
+<h2>Please Help with MAKE FILE!  (!!!)</h2>
+<p>Ideas and testing are going to be important.  I'll commit the source to the beginnings soon.</p>
+          <p><a href="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356/1</link>
+        <pubDate>Sun, 04 Oct 2020 16:49:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1356-1</guid>
+        <source url="https://forum.rebol.info/t/can-make-file-dialect-solve-the-madness/1356.rss">Can MAKE FILE! Dialect Solve the Madness</source>
+      </item>
+  </channel>
+</rss>

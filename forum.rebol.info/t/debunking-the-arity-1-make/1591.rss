@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Debunking the Arity-1 MAKE</title>
+    <link>https://forum.rebol.info/t/debunking-the-arity-1-make/1591</link>
+    <description>Rebol2, R3-Alpha, and Red embrace the idea of an arity-1 MAKE, that you use for any type.
+
+When a single parameter seems insufficient to create a datatype, it just stuffed the two things into a BLOCK!.  That led to things like this FUNC definition in the bootstrap for R3-Alpha...which is a weird two-step process.  It wants to copy the spec/body in most cases, but the mezzanine optimizes and does not write code in a style that would need to copy the spec/body...so there&#39;s a &quot;funco&quot; helper:
+
+    funco: make function! [[
+        {Non-copying function constructor (optimized for boot).}
+        spec [block!] {Help string (opt) followed by arg words}
+        body [block!] {The body block of the function}
+    ][
+        make function! reduce [spec body]
+    ]]
+
+    func: funco [
+        {Defines a user function with given spec and body.}
+        spec [block!] {Help string (opt) followed by arg words}
+        body [block!] {The body block of the function}
+    ][
+        make function! copy/deep reduce [spec body]  ; (now it deep copies)
+    ]
+
+## Is This Just &quot;Make-Work&quot;? (pun intended)
+
+Imagine a different approach in which FUNC itself is just a native that takes two parameters and makes a function out of it.  There would be several benefits:
+
+* You don&#39;t need to run a REDUCE to make a block that you&#39;re ultimately just going to separate into two blocks.  That&#39;s wasted space and computation.  The FUNC passes through the two blocks separately.
+
+* You avoid looking into a table of MAKE dispatchers, breaking down a block and re-type checking it to make sure it&#39;s a block of exactly two other blocks.  The FUNC type checking takes care of that on the independent proeprties.
+
+* If there&#39;s a low-level property such as not copying the blocks passed in, that could be handled by a refinement (/NOCOPY) which makes the distinction clearer in the cases that use it.
+
+Faster, clearer.  No one really uses the &quot;polymorphism&quot; of **make some-type some-definition** without really knowing what type or definition is, right?  That seems essentially meaningless.
+
+## So What Is The Theoretical Value of Arity-1 MAKE?
+
+I&#39;d assumed that the actual theoretical value was something along the lines of *having a serialization form of every type as a BLOCK!* (or other simple type)
+
+Perhaps the reasoning went:
+
+* *if* you can *create* any type from a single argument like a BLOCK!
+* ...then that means you can MOLD any instance of a value into that same representation.
+
+So what I did in the early days of Ren-C is I tried to enforce a correspondence between **make function! [...]** and **#[function! [...]]**.  The code that was dispatched by MAKE was the same code that constructing a molded function would call.
+
+*That was a nice thought, but due to binding, it doesn&#39;t actually work.*  Basic disproof:
+
+    &gt;&gt; obj: make object! [y: 10]
+
+    &gt;&gt; f: func [x] bind [x + y] obj
+
+    &gt;&gt; y: 100
+
+    &gt;&gt; molded: mold f
+    == &quot;#[action! [[x] [x + y]]]&quot;
+
+    &gt;&gt; g: load molded
+
+    &gt;&gt; f 1
+    == 11
+
+    &gt;&gt; g 1
+    == 101
+
+The only real way to preserve the loaded connections of things is in some kind of binary serialization format (like &quot;redbin&quot; is pursuing)...or to always be storing the session&#39;s memory as a persistent VM state (like Smalltalk&#39;s Squeak and such).
+
+### ...any counter-arguments in defense of the usefulness of Arity-1 Make?</description>
+    
+    <lastBuildDate>Fri, 30 Apr 2021 16:54:31 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/debunking-the-arity-1-make/1591.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Debunking the Arity-1 MAKE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebol2, R3-Alpha, and Red embrace the idea of an arity-1 MAKE, that you use for any type.</p>
+<p>When a single parameter seems insufficient to create a datatype, it just stuffed the two things into a BLOCK!.  That led to things like this FUNC definition in the bootstrap for R3-Alpha...which is a weird two-step process.  It wants to copy the spec/body in most cases, but the mezzanine optimizes and does not write code in a style that would need to copy the spec/body...so there's a "funco" helper:</p>
+<pre><code>funco: make function! [[
+    {Non-copying function constructor (optimized for boot).}
+    spec [block!] {Help string (opt) followed by arg words}
+    body [block!] {The body block of the function}
+][
+    make function! reduce [spec body]
+]]
+
+func: funco [
+    {Defines a user function with given spec and body.}
+    spec [block!] {Help string (opt) followed by arg words}
+    body [block!] {The body block of the function}
+][
+    make function! copy/deep reduce [spec body]  ; (now it deep copies)
+]
+</code></pre>
+<h2>Is This Just "Make-Work"? (pun intended)</h2>
+<p>Imagine a different approach in which FUNC itself is just a native that takes two parameters and makes a function out of it.  There would be several benefits:</p>
+<ul>
+<li>
+<p>You don't need to run a REDUCE to make a block that you're ultimately just going to separate into two blocks.  That's wasted space and computation.  The FUNC passes through the two blocks separately.</p>
+</li>
+<li>
+<p>You avoid looking into a table of MAKE dispatchers, breaking down a block and re-type checking it to make sure it's a block of exactly two other blocks.  The FUNC type checking takes care of that on the independent proeprties.</p>
+</li>
+<li>
+<p>If there's a low-level property such as not copying the blocks passed in, that could be handled by a refinement (/NOCOPY) which makes the distinction clearer in the cases that use it.</p>
+</li>
+</ul>
+<p>Faster, clearer.  No one really uses the "polymorphism" of <strong>make some-type some-definition</strong> without really knowing what type or definition is, right?  That seems essentially meaningless.</p>
+<h2>So What Is The Theoretical Value of Arity-1 MAKE?</h2>
+<p>I'd assumed that the actual theoretical value was something along the lines of <em>having a serialization form of every type as a BLOCK!</em> (or other simple type)</p>
+<p>Perhaps the reasoning went:</p>
+<ul>
+<li>
+<em>if</em> you can <em>create</em> any type from a single argument like a BLOCK!</li>
+<li>...then that means you can MOLD any instance of a value into that same representation.</li>
+</ul>
+<p>So what I did in the early days of Ren-C is I tried to enforce a correspondence between <strong>make function! [...]</strong> and <strong>#[function! [...]]</strong>.  The code that was dispatched by MAKE was the same code that constructing a molded function would call.</p>
+<p><em>That was a nice thought, but due to binding, it doesn't actually work.</em>  Basic disproof:</p>
+<pre><code>&gt;&gt; obj: make object! [y: 10]
+
+&gt;&gt; f: func [x] bind [x + y] obj
+
+&gt;&gt; y: 100
+
+&gt;&gt; molded: mold f
+== "#[action! [[x] [x + y]]]"
+
+&gt;&gt; g: load molded
+
+&gt;&gt; f 1
+== 11
+
+&gt;&gt; g 1
+== 101
+</code></pre>
+<p>The only real way to preserve the loaded connections of things is in some kind of binary serialization format (like "redbin" is pursuing)...or to always be storing the session's memory as a persistent VM state (like Smalltalk's Squeak and such).</p>
+<h3>...any counter-arguments in defense of the usefulness of Arity-1 Make?</h3>
+          <p><a href="https://forum.rebol.info/t/debunking-the-arity-1-make/1591/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/debunking-the-arity-1-make/1591/1</link>
+        <pubDate>Fri, 30 Apr 2021 16:54:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1591-1</guid>
+        <source url="https://forum.rebol.info/t/debunking-the-arity-1-make/1591.rss">Debunking the Arity-1 MAKE</source>
+      </item>
+  </channel>
+</rss>

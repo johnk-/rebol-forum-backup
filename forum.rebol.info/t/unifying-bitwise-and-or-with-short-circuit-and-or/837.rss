@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Unifying bitwise AND/OR with short circuit AND/OR</title>
+    <link>https://forum.rebol.info/t/unifying-bitwise-and-or-with-short-circuit-and-or/837</link>
+    <description>With conditional short circuit operations for AND, OR, and XOR...we&#39;ve struggled to find a good name for the bitwise operations.  Previous thread on the topic: [&quot;Naming of bitwise OR, AND, XOR&quot;](https://forum.rebol.info/t/naming-of-bitwise-or-and-xor/472)
+
+On the end of that thread I made a suggestion I want to bring up again, especially because we have a new option to make even the left hand side parameter convention change.
+
+## What if GROUP! on the right meant bitwise AND/OR/XOR?
+
+    &gt;&gt; #{FF00} and (#{FFFF})
+    == #{FF00} ;-- e.g. intersect #{FF00} #{FFFF}
+
+    &gt;&gt; #{FF00} and [#{FFFF}]
+    == #{FFFF} ;-- e.g. all [#{FF00} #{FFFF}]
+
+There are competing needs in parameter convention on the left.  Using the block form has come to need to let the left hand side complete, for instance to enable:
+
+    parse data rules or [...]
+
+But the bitwise operators have historically acted like math ops.
+
+    add 1 2 or 3 =&gt; add 1 (2 or 3)
+
+Doing both is now possible in the same function, due to *&quot;variadic left enfix&quot;*.  This is what facilitates [the SHOVE operator](https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794/2)
+
+The operator can start running, inspect its quoted right hand side for blockness or groupness, and *then* decide what convention to use when requesting the left argument.  This request can then run an arbitrary amount of evaluation, before returning to let the right hand side run (or not run, if not necessary, in the BLOCK! right hand side case).  Since the right side was quoted, this won&#39;t run anything out of expected order.
+
+Having the parameter convention vary is kind of a separate issue from whether the GROUP! form is bitwise.  But it&#39;s worth pointing out that it can be done now.
+
+## It would make the GROUP! semantics seem more consistent
+
+Right now the GROUP! on the right merely forces the result to a LOGIC!.  It&#39;s still conditional and not bitwise. 
+ And it&#39;s still a short-circuit operation...that means the right hand clause might not run, based on the left hand side.
+
+Yet in general, when you see a GROUP! as an argument to a function (that isn&#39;t QUOTE) you expect it to execute.  One thing about the bitwise operators is that they are *not* short-circuit, they always need to execute both sides to get a result.
+
+Might this make it somewhat easy to explain?  If you see a BLOCK! on the right hand side, it&#39;s the short-circuit form and might not run that clause...if you see the GROUP! it will run for sure, it&#39;s bitwise?
+
+## We can duck coming up with other names
+
+I&#39;m not 100% satisfied with `and+` or `or+`.  They aren&#39;t terrible.  But they aren&#39;t stellar.
+
+While it&#39;s a new idea to be facing, I think **and (...)** vs. **and [...]** are pretty easy to see the difference between.  People will make mistakes, I&#39;m sure.  But of all the things in the language you might have to learn, the subtlety of &quot;use a group if you mean bitwise&quot; isn&#39;t the biggest hurdle.
+
+It&#39;s weird, but what I kind of like about this &quot;right hand side polymorphism&quot; is that it&#39;s a new and uniquely Rebol-enabled idea.
+
+Thoughts?</description>
+    
+    <lastBuildDate>Mon, 08 Oct 2018 01:57:10 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/unifying-bitwise-and-or-with-short-circuit-and-or/837.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Unifying bitwise AND/OR with short circuit AND/OR</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="1" data-topic="837">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Yet in general, when you see a GROUP! as an argument to a function (that isn’t QUOTE) you expect it to execute. One thing about the bitwise operators is that they are <em>not</em> short-circuit, they always need to execute both sides to get a result.</p>
+</blockquote>
+</aside>
+<p>This is a worthy observation.  But discussion produced a clearer way to utilize the difference.</p>
+<p><strong>Make the operation with GROUP! have the same return-value logic as the operation with BLOCK!, but have it be <em>non-short-circuit</em>.</strong></p>
+<pre><code>&gt;&gt; (print "left" &lt;left&gt;) or (print "right" &lt;right&gt;)
+left
+right
+== &lt;left&gt; ;-- runs both sides up front, but left result wins out
+
+&gt;&gt; (print "left" &lt;left&gt;) or [print "right" &lt;right&gt;]
+left
+== &lt;left&gt; ;-- runs left side, doesn't need to run right for result
+
+&gt;&gt; (print "left" false) or (print "right" &lt;right&gt;)
+left
+right
+== &lt;right&gt; ;-- runs both sides up front, right result returned
+
+&gt;&gt; (print "left" false) or [print "right" &lt;right&gt;]
+left
+right
+== &lt;right&gt; ;-- runs left side first, result means it still has to run right
+</code></pre>
+<p>One benefit to this distinction is that there's a way to make it clearer with <strong>xor</strong> that it has no choice but to run both sides in order to give an answer: <em>simply don't have a version of XOR that takes a BLOCK! on the right</em>.</p>
+<h2>Enables something like Non-Short-Circuit ANY and ALL</h2>
+<p>I'd been wondering about making non-short-circuit variants of ANY and ALL...things that would run all their clauses, but not change their return value logic.  This lets you build a chain of ANDs and ORs that gives you a choice at each step of whether you're going to be short circuit or not.</p>
+<pre><code> ;-- synonymous with `all [foo bar baz]`
+ (foo) and [bar] and [baz]
+
+ ;-- runs foo then bar always, but only runs baz if neither are truthy
+ ;-- `all compose/only [quote (foo) quote (bar) baz]`
+ (foo) and (bar) and [baz]
+
+ ;-- `all compose/only [quote (foo) quote (bar) quote (baz)]`
+ (foo) and (bar) and (baz)
+</code></pre>
+<p>I should point out they're not precise synonyms, because ALL and ANY force failed results to NULL, making them usable with ELSE and THEN.  AND and OR try to preserve the falsey state they're given, so that:</p>
+<pre><code> &gt;&gt; false and (true)
+ == #[false] ;-- not forced to NULL the way `all [false true]` is
+</code></pre>
+<p>Notice also here you can mix and match, ANDs and ORs.</p>
+<aside class="quote no-group quote-modified" data-post="1" data-topic="837">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>It’s weird, but what I kind of like about this “right hand side polymorphism” is that it’s a new and uniquely Rebol-enabled idea.</p>
+</blockquote>
+</aside>
+<p>This alternative idea keeps that unique and Rebol-enabled feeling, without being as weird.  <em>It's clever, but it's also clear.</em>  Putting a block on the right hand side is unusual enough to make you ask "why is that in a BLOCK!" and the answer is "oh, so it will only execute it if it <em>has</em> to"...then that is the only difference.</p>
+<p>Unfortunately it doesn't solve the bitwise operation naming problem.  For now, we'll stick with <code>and+</code>, <code>or+</code>... and keep thinking...</p>
+          <p><a href="https://forum.rebol.info/t/unifying-bitwise-and-or-with-short-circuit-and-or/837/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/unifying-bitwise-and-or-with-short-circuit-and-or/837/2</link>
+        <pubDate>Sun, 07 Oct 2018 16:47:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-837-2</guid>
+        <source url="https://forum.rebol.info/t/unifying-bitwise-and-or-with-short-circuit-and-or/837.rss">Unifying bitwise AND/OR with short circuit AND/OR</source>
+      </item>
+      <item>
+        <title>Unifying bitwise AND/OR with short circuit AND/OR</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>With conditional short circuit operations for AND, OR, and XOR...we've struggled to find a good name for the bitwise operations.  Previous thread on the topic: <a href="https://forum.rebol.info/t/naming-of-bitwise-or-and-xor/472">"Naming of bitwise OR, AND, XOR"</a></p>
+<p>On the end of that thread I made a suggestion I want to bring up again, especially because we have a new option to make even the left hand side parameter convention change.</p>
+<h2>What if GROUP! on the right meant bitwise AND/OR/XOR?</h2>
+<pre><code>&gt;&gt; #{FF00} and (#{FFFF})
+== #{FF00} ;-- e.g. intersect #{FF00} #{FFFF}
+
+&gt;&gt; #{FF00} and [#{FFFF}]
+== #{FFFF} ;-- e.g. all [#{FF00} #{FFFF}]
+</code></pre>
+<p>There are competing needs in parameter convention on the left.  Using the block form has come to need to let the left hand side complete, for instance to enable:</p>
+<pre><code>parse data rules or [...]
+</code></pre>
+<p>But the bitwise operators have historically acted like math ops.</p>
+<pre><code>add 1 2 or 3 =&gt; add 1 (2 or 3)
+</code></pre>
+<p>Doing both is now possible in the same function, due to <em>"variadic left enfix"</em>.  This is what facilitates <a href="https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794/2">the SHOVE operator</a></p>
+<p>The operator can start running, inspect its quoted right hand side for blockness or groupness, and <em>then</em> decide what convention to use when requesting the left argument.  This request can then run an arbitrary amount of evaluation, before returning to let the right hand side run (or not run, if not necessary, in the BLOCK! right hand side case).  Since the right side was quoted, this won't run anything out of expected order.</p>
+<p>Having the parameter convention vary is kind of a separate issue from whether the GROUP! form is bitwise.  But it's worth pointing out that it can be done now.</p>
+<h2>It would make the GROUP! semantics seem more consistent</h2>
+<p>Right now the GROUP! on the right merely forces the result to a LOGIC!.  It's still conditional and not bitwise.<br>
+And it's still a short-circuit operation...that means the right hand clause might not run, based on the left hand side.</p>
+<p>Yet in general, when you see a GROUP! as an argument to a function (that isn't QUOTE) you expect it to execute.  One thing about the bitwise operators is that they are <em>not</em> short-circuit, they always need to execute both sides to get a result.</p>
+<p>Might this make it somewhat easy to explain?  If you see a BLOCK! on the right hand side, it's the short-circuit form and might not run that clause...if you see the GROUP! it will run for sure, it's bitwise?</p>
+<h2>We can duck coming up with other names</h2>
+<p>I'm not 100% satisfied with <code>and+</code> or <code>or+</code>.  They aren't terrible.  But they aren't stellar.</p>
+<p>While it's a new idea to be facing, I think <strong>and (...)</strong> vs. <strong>and [...]</strong> are pretty easy to see the difference between.  People will make mistakes, I'm sure.  But of all the things in the language you might have to learn, the subtlety of "use a group if you mean bitwise" isn't the biggest hurdle.</p>
+<p>It's weird, but what I kind of like about this "right hand side polymorphism" is that it's a new and uniquely Rebol-enabled idea.</p>
+<p>Thoughts?</p>
+          <p><a href="https://forum.rebol.info/t/unifying-bitwise-and-or-with-short-circuit-and-or/837/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/unifying-bitwise-and-or-with-short-circuit-and-or/837/1</link>
+        <pubDate>Tue, 02 Oct 2018 02:14:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-837-1</guid>
+        <source url="https://forum.rebol.info/t/unifying-bitwise-and-or-with-short-circuit-and-or/837.rss">Unifying bitwise AND/OR with short circuit AND/OR</source>
+      </item>
+  </channel>
+</rss>

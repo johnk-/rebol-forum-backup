@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Breaking MAKE OBJECT! Into Component Operations</title>
+    <link>https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442</link>
+    <description>The behavior of the following in historical Rebol/Red strikes me as *extremely buggy*:
+
+    rule-ctx: [num: 1020]
+    rule: [num &#39;foo]
+    bind rule rule-ctx
+
+    parse-obj: make object! compose [
+         rule: (rule)  ; assume this is the non-splicing semantic
+         run: method [data] [
+              parse data rule
+         ]
+         ...
+         num: 304  ; imagine this is just an incidental field name
+    ]
+
+1. **The COMPOSE&#39;d rule will be bound to PARSE-OBJ&#39;s `num` instead of RULE-CTX&#39;s `num`.**  The more generic the word, the more likely this is going to happen on accident.  You get different behavior than if you&#39;d named the rule something else, and not used COMPOSE... as with **make object! [rule: a-rule, ...]**, because then the block wouldn&#39;t be fetched via word when the body runs.  It would be the word `a-rule` that was hit with the binding wave, not what it looked up to.
+
+2. **Not only was the COMPOSE&#39;d rule changed, but the *original* rule is changed!**  This is because there&#39;s nowhere to store unique binding information for the rule as seen through the lens of the object vs. not.  It is mutably bound, and the only way to avoid this is to make a copy.
+
+*As it happens, I actually have some progress to report on #2 with virtual binding.*  I&#39;m making it possible for multiple &quot;views&quot; of the same block to see it bound different ways (a technique which started with having multiple views of a function&#39;s body viewed via different frame instances, that is extended to stacking on views through arbitrary objects).
+
+But that doesn&#39;t do anything to help #1.
+
+## MAKE OBJECT! Is Actually Three Operations
+
+There are three distinct steps performed historically by MAKE OBJECT!.
+
+* COLLECT all the top-level SET-WORD!s in the BLOCK! to make an empty OBJECT!, with all those words unset.
+
+* BIND the block&#39;s ANY-WORD! elements to the newly created object.
+
+* DO the bound block.
+
+Virtual binding means the second step can be very fast.  The block is just annotated to say &quot;you are a view as seen by this object&quot;.  (It&#39;s possible to deep-walk the block and do some a-priori caching to make the execution the first time faster, but that&#39;s not necessary.)
+
+Without virtual binding, the second step requires a deep walk... *and destructively binds the block so any other references to the block are now contaminated*.  This is usually not what you&#39;d want, but sometimes (as when modules are being loaded) it&#39;s intended.
+
+## What If MAKE OBJECT! Was Just The COLLECT Step?
+
+If we let you make an object from a block without actually binding or running it, you could tailor the steps as appropriate for your operation.
+
+For instance: Modules don&#39;t want virtual binding...they fabricated a new block themselves from the input UTF-8.  They want to destructively bind their single copy to lib and the module:
+
+     block: transcode read module-filename  ; oversimplified...
+     mod: make module! block  ; imagine this does *not* run the block
+     bind block lib
+     bind block mod
+     do block
+
+You get another advantage: *you have access to both the result of the DO and the result of the MAKE*.  These could be provided as separate outputs from something like IMPORT.
+
+If you wanted something that was a cleaned-up version of today&#39;s MAKE OBJECT! that used virtual binding to avoid contaminating the input block (e.g. because it was read-only material in a function body, or passed as a const parameter), you could say:
+
+     obj: make object! block
+     do in obj block  ; I&#39;ve repurposed IN to be the virtual binding operator
+     obj   ; the object as the result
+
+This still has the possibly unintended effects of #1 above, where all COMPOSE&#39;d components inherit the binding.  But you could use a more conservative virtual bind that only applied to the top level set-words.  I have that implemented, it would just need to be exposed somehow:
+
+     obj: make object! block
+     do in/shallow/set obj block
+     obj
+
+This would make binding into the object optional.  If MY were like METHOD and took the binding on the left and propagated it to the right, you could say either:
+
+     make-obj-toplevel compose [rule: (rule), ...]  ; no binding effect
+     make-obj-toplevel compose [rule: my (rule), ...]  ; block bound into object
+
+And if MY were powered by virtual binding, that wouldn&#39;t have to touch the original rule.
+
+For that matter, with only top-level words assigned, you&#39;d get the advantage of not even needing a COMPOSE.  Any normal words would be left as they were:
+
+     make-obj-toplevel compose [rule: rule, ...]  ; different `rule`s
+
+## This Seems A Promising Direction
+
+It needs to be hammered out in terms of the details, and names.  We have names like CONSTRUCT and CLASS that we are looking at.  I don&#39;t particularly like CONTEXT or OBJECT as verbs since they are type names.
+
+There&#39;s an uneasy question about whether MAKE should be a high-level operation (due to its short name, wanting the high-level operations to be in reach).  However, while its name is short, it has to be combined with a type which makes it not all that short compared to e.g. CONSTRUCT.
+
+I experimented for a time with HAS as seeming analogue to DOES.  It didn&#39;t catch on at the time, I suspected because it sounds more like a question than a statement.  But it is does have brevity on its side:
+
+    obj: has [
+        x: 10
+        y: 20
+    ]
+
+I&#39;ll throw it back out there.  Anyway, my natural leaning would be to say that MAKE becomes the low level operation that doesn&#39;t actually run the block you give it, then these other higher-level variations get names.
+
+This would also seem consistent with MAKE FRAME!, which gives you an empty (seeming) context.  But we could also distinguish **`make*`** from MAKE, or variations of that.
+
+---
+
+*Afterthought:* I&#39;ll also remind people about WRAP, which was an operator I proposed long ago that was like MAKE OBJECT! but returned the result of the evaluation...which could be more convenient now:
+
+    &gt;&gt; wrap [x: 1000, y: 20, x + y]
+    == 1020
+
+This gives you the same result as **`use [x y] [x: 1000, y: 20, x + y]`** by automatically collecting top-level SET-WORD!s.  This could make a comeback...more efficiently expressed with virtual binding.</description>
+    
+    <lastBuildDate>Sat, 02 Jan 2021 00:58:25 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Breaking MAKE OBJECT! Into Component Operations</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Over on the CONST thread, I mentioned a property of generic quoting that I found disconcerting, <a href="https://forum.rebol.info/t/the-beta-one-mutability-manifesto/1062/4">in that it subverted CONSTness</a>.  Because there was no other clean way for the API to bypass an "evaluative wave of constness" otherwise.</p>
+<p>I resolved to put my discomfort aside, and accept that generic quoting offers a way for things to be put into an evaluative situation...behaving <em>as-if</em> they had been accessed by a WORD!.  Because sometimes (e.g. in the API or when COMPOSING) you don't have a word to access through...to get that behavior if it's what you wanted.</p>
+<p>The proposed workaround for when that const subversion was not intended was that people use <strong>just (...)</strong> (e.g. give me that group literally, I'm still liking JUST instead of LIT for that) instead of <strong>'(...)</strong> in cases that they wanted the constness to match the flow of the block.</p>
+<p><strong>Which reminded me of the situation in this thread...</strong></p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1442">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>You get different behavior than if you'd named the rule something else, and not used COMPOSE... as with <strong>make object! [rule: a-rule, ...]</strong>, because then the block wouldn't be fetched via word when the body runs. It would be the word <code>a-rule</code> that was hit with the binding wave, not what it looked up to.</p>
+</blockquote>
+</aside>
+<p>The two connected in my head, to ask the hypothetical question <em>what if quoted things had their binding left untouched</em>...as if the thing you get had been fetched by a word, instead of subtracting a quote level?</p>
+<pre><code>some-rule: [num: 10]
+
+make object! [rule: some-rule, num: 20]
+;   word access, no binding influence on RULE
+
+make object! compose [rule: (some-rule), num: 20]
+;   becomes make object! [rule: [num: 10], num: 20]
+;      following the (...) is don't splice and ((...)) is splice convention
+;   today this would virtually bind NUM in the rule member into the object
+;   so from RULE's point of view, NUM is 20
+;   but thanks to virtual binding, SOME-RULE is unaffected
+
+make object! compose [rule: '(some-rule), num: 20]
+;   becomes  make object! [rule: '[num: 10], num: 20]
+;      because COMPOSE keeps the decoration on the composed thing
+;   what if the quote subverted the virtual bind, as in the WORD! case?
+;   so the NUM is seen however it was in SOME-RULE?
+</code></pre>
+<p>A wild--but promising--thought.</p>
+<p>Though it raises the question of how things in quotes would <em>ever</em> get bound--such as the SOME-RULE inside of <strong>'(some-rule)</strong>.  So if this technique were used, it couldn't apply to <em>all</em> bindings.</p>
+<p>But where it did apply, it would mean using a literalizing operator that didn't employ quotes (like what is proposed as JUST) more than we do now.  And there would be a lot of <em>unbound</em> things, since most quotes aren't programmatic with QUOTE or COMPOSE.</p>
+<p>When this was in effect, you couldn't write stuff like <strong>get 'x</strong> (which you wouldn't usually, because you could say just <strong>x</strong> or <strong>:x</strong>)...but you'd have to say <strong>get/any just x</strong> instead of <strong>get/any 'x</strong>.  If you were going to write <strong>if condition [[a block]]</strong> that would be different from <strong>if condition '[a block]</strong>.</p>
+<p>It would mean that <strong>append block [x]</strong> and <strong>append block just x</strong> would mean something different from <strong>append block 'x</strong>.</p>
+<p>It has a plus side in data exchange.  I've talked about <a href="https://forum.rebol.info/t/what-happens-to-function-arguments-and-locals-when-the-call-ends/234/2">the hazards of "stray bindings"</a>, not only do they offer possible unwanted linkages to internals of things that weren't intended when using words as a kind of enum symbol, they also hold GC things live which they may have no interest in.</p>
+<p>PARSE's mechanics for recognizing things literally wouldn't be affected, as bindings aren't heeded by the matching process.  <strong>parse [[a] [a]] [some '[a]]</strong></p>
+<p>Anyway... I just saw some potential synergy with the "act like you got it from a word" issue run up against in const.  I've mentioned how the problems that you run into with the API are no different than the issues you run up against with COMPOSE when you don't have getting things out of a variable...which is why <strong>rebQ()</strong> is so important...but it also points out that this comes up in non-API scenarios, like this binding problem.</p>
+          <p><a href="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442/3</link>
+        <pubDate>Fri, 01 Jan 2021 21:52:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1442-3</guid>
+        <source url="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442.rss">Breaking MAKE OBJECT! Into Component Operations</source>
+      </item>
+      <item>
+        <title>Breaking MAKE OBJECT! Into Component Operations</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>This indeed seems a good direction. Certainly leans against using <a href="http://rebol.info/rebolsteps.html#section-8">MAKE as the means of creating derivatives</a>:</p>
+<pre><code class="lang-nohighlight">account: new-object-constructor-that-works-the-old-way [
+    name: "Flintstone"
+    balance: $100
+    ss-number: #1234-XX-4321
+    deposit:  func [amount] [balance: balance + amount]
+    withdraw: func [amount] [balance: balance - amount]
+]
+
+other-account: make account [
+    name: "Rubble"
+    balance: $200
+    ss-num: #012-XX-3456
+]
+</code></pre>
+<p>I presume a streamlined MAKE would now enforce the following form?</p>
+<pre><code class="lang-nohighlight">do in other-account: make object! account [
+    name: "Rubble"
+    balance: $200
+    ss-num: #012-XX-3456
+]
+
+; sort of a parallel to the way the following
+; similarly makes a clone
+make text! "Foo"
+</code></pre>
+          <p><a href="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442/2</link>
+        <pubDate>Mon, 28 Dec 2020 15:01:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1442-2</guid>
+        <source url="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442.rss">Breaking MAKE OBJECT! Into Component Operations</source>
+      </item>
+      <item>
+        <title>Breaking MAKE OBJECT! Into Component Operations</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The behavior of the following in historical Rebol/Red strikes me as <em>extremely buggy</em>:</p>
+<pre><code>rule-ctx: [num: 1020]
+rule: [num 'foo]
+bind rule rule-ctx
+
+parse-obj: make object! compose [
+     rule: (rule)  ; assume this is the non-splicing semantic
+     run: method [data] [
+          parse data rule
+     ]
+     ...
+     num: 304  ; imagine this is just an incidental field name
+]
+</code></pre>
+<ol>
+<li>
+<p><strong>The COMPOSE'd rule will be bound to PARSE-OBJ's <code>num</code> instead of RULE-CTX's <code>num</code>.</strong>  The more generic the word, the more likely this is going to happen on accident.  You get different behavior than if you'd named the rule something else, and not used COMPOSE... as with <strong>make object! [rule: a-rule, ...]</strong>, because then the block wouldn't be fetched via word when the body runs.  It would be the word <code>a-rule</code> that was hit with the binding wave, not what it looked up to.</p>
+</li>
+<li>
+<p><strong>Not only was the COMPOSE'd rule changed, but the <em>original</em> rule is changed!</strong>  This is because there's nowhere to store unique binding information for the rule as seen through the lens of the object vs. not.  It is mutably bound, and the only way to avoid this is to make a copy.</p>
+</li>
+</ol>
+<p><em>As it happens, I actually have some progress to report on <span class="hashtag">#2</span> with virtual binding.</em>  I'm making it possible for multiple "views" of the same block to see it bound different ways (a technique which started with having multiple views of a function's body viewed via different frame instances, that is extended to stacking on views through arbitrary objects).</p>
+<p>But that doesn't do anything to help <span class="hashtag">#1</span>.</p>
+<h2>MAKE OBJECT! Is Actually Three Operations</h2>
+<p>There are three distinct steps performed historically by MAKE OBJECT!.</p>
+<ul>
+<li>
+<p>COLLECT all the top-level SET-WORD!s in the BLOCK! to make an empty OBJECT!, with all those words unset.</p>
+</li>
+<li>
+<p>BIND the block's ANY-WORD! elements to the newly created object.</p>
+</li>
+<li>
+<p>DO the bound block.</p>
+</li>
+</ul>
+<p>Virtual binding means the second step can be very fast.  The block is just annotated to say "you are a view as seen by this object".  (It's possible to deep-walk the block and do some a-priori caching to make the execution the first time faster, but that's not necessary.)</p>
+<p>Without virtual binding, the second step requires a deep walk... <em>and destructively binds the block so any other references to the block are now contaminated</em>.  This is usually not what you'd want, but sometimes (as when modules are being loaded) it's intended.</p>
+<h2>What If MAKE OBJECT! Was Just The COLLECT Step?</h2>
+<p>If we let you make an object from a block without actually binding or running it, you could tailor the steps as appropriate for your operation.</p>
+<p>For instance: Modules don't want virtual binding...they fabricated a new block themselves from the input UTF-8.  They want to destructively bind their single copy to lib and the module:</p>
+<pre><code> block: transcode read module-filename  ; oversimplified...
+ mod: make module! block  ; imagine this does *not* run the block
+ bind block lib
+ bind block mod
+ do block
+</code></pre>
+<p>You get another advantage: <em>you have access to both the result of the DO and the result of the MAKE</em>.  These could be provided as separate outputs from something like IMPORT.</p>
+<p>If you wanted something that was a cleaned-up version of today's MAKE OBJECT! that used virtual binding to avoid contaminating the input block (e.g. because it was read-only material in a function body, or passed as a const parameter), you could say:</p>
+<pre><code> obj: make object! block
+ do in obj block  ; I've repurposed IN to be the virtual binding operator
+ obj   ; the object as the result
+</code></pre>
+<p>This still has the possibly unintended effects of <span class="hashtag">#1</span> above, where all COMPOSE'd components inherit the binding.  But you could use a more conservative virtual bind that only applied to the top level set-words.  I have that implemented, it would just need to be exposed somehow:</p>
+<pre><code> obj: make object! block
+ do in/shallow/set obj block
+ obj
+</code></pre>
+<p>This would make binding into the object optional.  If MY were like METHOD and took the binding on the left and propagated it to the right, you could say either:</p>
+<pre><code> make-obj-toplevel compose [rule: (rule), ...]  ; no binding effect
+ make-obj-toplevel compose [rule: my (rule), ...]  ; block bound into object
+</code></pre>
+<p>And if MY were powered by virtual binding, that wouldn't have to touch the original rule.</p>
+<p>For that matter, with only top-level words assigned, you'd get the advantage of not even needing a COMPOSE.  Any normal words would be left as they were:</p>
+<pre><code> make-obj-toplevel compose [rule: rule, ...]  ; different `rule`s
+</code></pre>
+<h2>This Seems A Promising Direction</h2>
+<p>It needs to be hammered out in terms of the details, and names.  We have names like CONSTRUCT and CLASS that we are looking at.  I don't particularly like CONTEXT or OBJECT as verbs since they are type names.</p>
+<p>There's an uneasy question about whether MAKE should be a high-level operation (due to its short name, wanting the high-level operations to be in reach).  However, while its name is short, it has to be combined with a type which makes it not all that short compared to e.g. CONSTRUCT.</p>
+<p>I experimented for a time with HAS as seeming analogue to DOES.  It didn't catch on at the time, I suspected because it sounds more like a question than a statement.  But it is does have brevity on its side:</p>
+<pre><code>obj: has [
+    x: 10
+    y: 20
+]
+</code></pre>
+<p>I'll throw it back out there.  Anyway, my natural leaning would be to say that MAKE becomes the low level operation that doesn't actually run the block you give it, then these other higher-level variations get names.</p>
+<p>This would also seem consistent with MAKE FRAME!, which gives you an empty (seeming) context.  But we could also distinguish <strong><code>make*</code></strong> from MAKE, or variations of that.</p>
+<hr>
+<p><em>Afterthought:</em> I'll also remind people about WRAP, which was an operator I proposed long ago that was like MAKE OBJECT! but returned the result of the evaluation...which could be more convenient now:</p>
+<pre><code>&gt;&gt; wrap [x: 1000, y: 20, x + y]
+== 1020
+</code></pre>
+<p>This gives you the same result as <strong><code>use [x y] [x: 1000, y: 20, x + y]</code></strong> by automatically collecting top-level SET-WORD!s.  This could make a comeback...more efficiently expressed with virtual binding.</p>
+          <p><a href="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442/1</link>
+        <pubDate>Mon, 28 Dec 2020 08:53:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1442-1</guid>
+        <source url="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442.rss">Breaking MAKE OBJECT! Into Component Operations</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</title>
+    <link>https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765</link>
+    <description>As we are familiar, DATE! can have a TIME! component:
+
+    &gt;&gt; d: now
+    == 21-Nov-2021/18:56:45-5:00 
+
+    &gt;&gt; type of d
+    == #[datatype! date!]
+
+    &gt;&gt; t: d.time
+    == 18:56:45
+
+    &gt;&gt; type of t
+    == #[datatype! time!]
+
+Although TIME! can exist as a separate cell and value type, *a DATE! doesn&#39;t store a time cell inside of it*.  It packs the date and time information into a single cell.
+
+Hence when you say **d.time** above, a *new* TIME! value has to be synthesized.  There&#39;s not a whole cell worth of time to hand a pointer back to...its woven into the bits of the DATE!.
+
+**That might not sound like much of an issue, but it creates the problem I refer to as *&quot;sub-cell addressing&quot;*.**
+
+*If you&#39;ve missed everything I&#39;ve griped about with this so far*, it means that when you want to see a behavior like the following:
+
+    &gt;&gt; d.time.hour: 12
+    == 12
+
+    &gt;&gt; date
+    == 21-Nov-2021/12:56:45-5:00  ; we want hour updated
+
+We run into the problem that if **d.time** *synthesizes* a value, then a naive picking process of **(d.time).hour: 12** would only be able to manipulate the bits in the synthesized time.  That wouldn&#39;t change **d**.  *What the user actually wanted was to update the bits of a time that was folded into the implementation of the date.*
+
+## Rebol Lacks The Vocabulary To Do This In An Obvious Way
+
+The smallest units that Rebol speaks in terms of are the **`cell`** and the **`node`**.
+
+*(If you need a refresher on these, my [conference video tech talk](https://www.youtube.com/watch?v=6nsKTpArTCE) explains them.)*
+
+**It would appear we could be able to simplify matters if we changed the combination of DATE! and TIME! to point to a 2-cell node.**
+
+    DATETIME! cell
+    [  ]                DATE!           TIME!
+      --&gt; points to [ 21-Nov-2021 | 18:56:45-5:00 ]  (2 cells)
+
+*(Whether the &quot;zone&quot; is part of a time or lives in the datetime would depend on whether you wanted to write `d.zone: -5:00` or `d.time.zone: -5:00`, I don&#39;t know if it ever makes sense to speak of a time with a zone independent of a datetime or not.)*
+
+Breaking things up this way, we can say that **d.time** implicates a cell.  And we can have some operation that acts on a cell (let&#39;s say POKE) like:
+
+     &gt;&gt; poke 18:56:45 &#39;hour 12
+     == 12:56:45
+
+## Hang On: DATE!, TIME! (and DATETIME!) are IMMEDIATE!
+
+We still have a bit of a problem here with our smallest units of representation.  Presumably we don&#39;t want this:
+
+     &gt;&gt; d1: 21-Nov-2021/18:56:45-5:00 
+
+     &gt;&gt; d2: d1
+
+     &gt;&gt; d1.time.hour: 12
+     == 12
+
+     &gt;&gt; d1
+     == 21-Nov-2021/12:56:45-5:00
+
+     &gt;&gt; d2
+     == 21-Nov-2021/12:56:45-5:00  ; don&#39;t want d2 to change (right?)
+
+But we also don&#39;t want to be needlessly copying the 2-cell node each time a date is assigned.  So it would be a *copy-on-write* mechanic.
+
+If we&#39;re working with a cell-based granularity, then we wind up in a somewhat similar situation to what we had before...where the tuple processing has to propagate backwards.  e.g. when you have the POKE that changes the cell bits for the TIME! to make a new TIME! cell, there has to be some memory going back to the DATETIME! in order to tell it to make a new node and write the cell into the copy.
+
+Does framing this in terms of cells offer any benefit over letting the DATETIME! be a higher-level entity that does a more specific folding of the TIME! cell into its bits?  This is a question I&#39;ve been trying to answer, and haven&#39;t had an easy time of answering.
+
+**One thing it would do to use a cell-based protocol is that it could generalize properties that had flags on cells, such as being PROTECT&#39;ed.**  Without the picking protocol requiring each step to go through a cell, the system cannot fiddle these bits in a known way.  So just as the DATE! folds the TIME! into it in some arbitrary way, the protect bit would have to go through this through a complex protocol also.
+
+What I do know is that my current generalized solution is rather complex and slow--and doesn&#39;t answer how to do things like PROTECT.  We&#39;re seeing a slowdown from many different angles and I am trying to figure out what the best tradeoff is in terms of simplicity and generality.  It&#39;s not easy.</description>
+    
+    <lastBuildDate>Sun, 05 Dec 2021 06:19:32 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm not so much worried about the micro optimization issue, as to whether bringing in limits truly simplifies things.</p>
+<p>Of those two forms of currency--"cell" and "node"--the running of arbitrary code in the evaluator can move most any cell address.  Imagine something like this:</p>
+<pre><code>&gt;&gt; block: [10:20]
+
+&gt;&gt; block.1.(clear block, recycle, 'hour): 3
+</code></pre>
+<p>If the selection moves one step at a time, when you are at the <strong>block.1</strong> point you might find you have a TIME! at address <code>0x5788ace0</code>.  But if the next thing you do is run the code in the GROUP! to resolve to <strong>hour</strong> then you've made that address invalid.  This is C, and so you can wind up doing arbitrary damage if you don't account for such things.</p>
+<p><em>(Note: The recycle is not necessary, as it can happen at any time.  Ren-C debug builds would actually usually catch this without it, as they pay an additional cost on operations like CLEAR to intentionally corrupt cells that are no longer valid.  This kind of bug is rampant in R3-Alpha and Red...and one assumes Rebol2 also)</em></p>
+<p>So the reliable currency is actually <em>a copy of a cell's contents</em> (the bytes in the cell), and not the <em>address of the cell</em>.  But without the address you can't make changes to an existing location.</p>
+<p>Rebol is doing something most other languages simply don't do, by trying to open up field selection into something that's a kind of messaging...and if it can run any user code at all, that code can disrupt cell addresses.</p>
+<p>The generalized way I have put this together would preserve the path itself as the invariant backbone for the messaging.  Then it would run forward across that and then propagate any cells backwards to be written by the method that had picked the cell prior.  But it didn't use addresses to do this: if you said something like <strong><code>obj.field.subfield: x</code></strong> then going forward it would ask for the cell represented by <strong>obj.field</strong> and then going backwards after <strong>.subfield: x</strong> was processed it would <em>again</em> lookup <strong>obj.field</strong>'s address and ask to write it back.</p>
+<p>What's frustrating is that there's really not all that much that avoiding subcell addressing buys us over this.  :-/</p>
+<p>I know how C++ operator overloading works quite well, but unfortunately just about nothing involved there applies here.  We're lacking the parts.  And I very much doubt that adding things like references and RValue references to the language is in service of the ultimate "vision" of what the system is supposed to be like.  But maybe there does just have to be a new way of looking at the runtime to cover this kind of thing.</p>
+<p>So I'm looking at what guiding principle can decide what to cut and what to allow.</p>
+          <p><a href="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765/3</link>
+        <pubDate>Sat, 04 Dec 2021 17:39:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1765-3</guid>
+        <source url="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765.rss">DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</source>
+      </item>
+      <item>
+        <title>DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>It seems to me, that a micro optimisation like this doesn't buy much, but has a high price in overall complexity.</p>
+          <p><a href="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765/2</link>
+        <pubDate>Fri, 03 Dec 2021 23:37:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1765-2</guid>
+        <source url="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765.rss">DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</source>
+      </item>
+      <item>
+        <title>DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>As we are familiar, DATE! can have a TIME! component:</p>
+<pre><code>&gt;&gt; d: now
+== 21-Nov-2021/18:56:45-5:00 
+
+&gt;&gt; type of d
+== #[datatype! date!]
+
+&gt;&gt; t: d.time
+== 18:56:45
+
+&gt;&gt; type of t
+== #[datatype! time!]
+</code></pre>
+<p>Although TIME! can exist as a separate cell and value type, <em>a DATE! doesn't store a time cell inside of it</em>.  It packs the date and time information into a single cell.</p>
+<p>Hence when you say <strong>d.time</strong> above, a <em>new</em> TIME! value has to be synthesized.  There's not a whole cell worth of time to hand a pointer back to...its woven into the bits of the DATE!.</p>
+<p><strong>That might not sound like much of an issue, but it creates the problem I refer to as <em>"sub-cell addressing"</em>.</strong></p>
+<p><em>If you've missed everything I've griped about with this so far</em>, it means that when you want to see a behavior like the following:</p>
+<pre><code>&gt;&gt; d.time.hour: 12
+== 12
+
+&gt;&gt; date
+== 21-Nov-2021/12:56:45-5:00  ; we want hour updated
+</code></pre>
+<p>We run into the problem that if <strong>d.time</strong> <em>synthesizes</em> a value, then a naive picking process of <strong>(d.time).hour: 12</strong> would only be able to manipulate the bits in the synthesized time.  That wouldn't change <strong>d</strong>.  <em>What the user actually wanted was to update the bits of a time that was folded into the implementation of the date.</em></p>
+<h2>Rebol Lacks The Vocabulary To Do This In An Obvious Way</h2>
+<p>The smallest units that Rebol speaks in terms of are the <strong><code>cell</code></strong> and the <strong><code>node</code></strong>.</p>
+<p><em>(If you need a refresher on these, my <a href="https://www.youtube.com/watch?v=6nsKTpArTCE">conference video tech talk</a> explains them.)</em></p>
+<p><strong>It would appear we could be able to simplify matters if we changed the combination of DATE! and TIME! to point to a 2-cell node.</strong></p>
+<pre><code>DATETIME! cell
+[  ]                DATE!           TIME!
+  --&gt; points to [ 21-Nov-2021 | 18:56:45-5:00 ]  (2 cells)
+</code></pre>
+<p><em>(Whether the "zone" is part of a time or lives in the datetime would depend on whether you wanted to write <code>d.zone: -5:00</code> or <code>d.time.zone: -5:00</code>, I don't know if it ever makes sense to speak of a time with a zone independent of a datetime or not.)</em></p>
+<p>Breaking things up this way, we can say that <strong>d.time</strong> implicates a cell.  And we can have some operation that acts on a cell (let's say POKE) like:</p>
+<pre><code> &gt;&gt; poke 18:56:45 'hour 12
+ == 12:56:45
+</code></pre>
+<h2>Hang On: DATE!, TIME! (and DATETIME!) are IMMEDIATE!</h2>
+<p>We still have a bit of a problem here with our smallest units of representation.  Presumably we don't want this:</p>
+<pre><code> &gt;&gt; d1: 21-Nov-2021/18:56:45-5:00 
+
+ &gt;&gt; d2: d1
+
+ &gt;&gt; d1.time.hour: 12
+ == 12
+
+ &gt;&gt; d1
+ == 21-Nov-2021/12:56:45-5:00
+
+ &gt;&gt; d2
+ == 21-Nov-2021/12:56:45-5:00  ; don't want d2 to change (right?)
+</code></pre>
+<p>But we also don't want to be needlessly copying the 2-cell node each time a date is assigned.  So it would be a <em>copy-on-write</em> mechanic.</p>
+<p>If we're working with a cell-based granularity, then we wind up in a somewhat similar situation to what we had before...where the tuple processing has to propagate backwards.  e.g. when you have the POKE that changes the cell bits for the TIME! to make a new TIME! cell, there has to be some memory going back to the DATETIME! in order to tell it to make a new node and write the cell into the copy.</p>
+<p>Does framing this in terms of cells offer any benefit over letting the DATETIME! be a higher-level entity that does a more specific folding of the TIME! cell into its bits?  This is a question I've been trying to answer, and haven't had an easy time of answering.</p>
+<p><strong>One thing it would do to use a cell-based protocol is that it could generalize properties that had flags on cells, such as being PROTECT'ed.</strong>  Without the picking protocol requiring each step to go through a cell, the system cannot fiddle these bits in a known way.  So just as the DATE! folds the TIME! into it in some arbitrary way, the protect bit would have to go through this through a complex protocol also.</p>
+<p>What I do know is that my current generalized solution is rather complex and slow--and doesn't answer how to do things like PROTECT.  We're seeing a slowdown from many different angles and I am trying to figure out what the best tradeoff is in terms of simplicity and generality.  It's not easy.</p>
+          <p><a href="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765/1</link>
+        <pubDate>Thu, 02 Dec 2021 16:57:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1765-1</guid>
+        <source url="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765.rss">DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</source>
+      </item>
+  </channel>
+</rss>

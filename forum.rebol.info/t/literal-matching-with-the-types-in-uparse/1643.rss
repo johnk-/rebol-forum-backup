@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Literal Matching with the @ Types In UPARSE</title>
+    <link>https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643</link>
+    <description>I mentioned that the @ types were slated for use for literal matching.  The most frequent example I have given is:
+
+    &gt;&gt; block: [some &quot;a&quot;]
+
+    &gt;&gt; uparse [[some &quot;a&quot;] [some &quot;a&quot;]] [some @block]
+    == [some &quot;a&quot;]  ; success gives result of last matching rule
+
+Works with all types:
+
+    &gt;&gt; num: 1
+
+    &gt;&gt; uparse [1 1 1] [some @num]
+    == 1
+
+I didn&#39;t mention things like @(gr o up) but those work too:
+
+    &gt;&gt; uparse [1 1 1] [some @(3 - 2)]
+    == 1
+
+**I realized I actually do not know how to write the above two cases in Red or Rebol2.**  You can&#39;t use the number as a plain variable in Red, since it acts as a repeat rule *(UPARSE prohibits that, since it&#39;s a rule that takes an argument, you must use REPEAT for such behavior)*
+
+    red&gt;&gt; num: 1
+
+    red&gt;&gt; parse [1 1 1] [some num]
+    *** Script Error: PARSE - invalid rule or usage of rule: 1
+
+Also in Red, I&#39;m not clear on why the following isn&#39;t an error, since the GROUP! product is just discarded:
+
+    red&gt;&gt; parse [1 1 1] [some (3 - 2)]
+    == false
+
+This is something that would work in R3-Alpha, but doesn&#39;t in Red or Rebol2:
+
+    red&gt;&gt; parse [1 1 1] [some quote (3 - 2)]
+    == false
+
+**Your guess is as good as mine.**  Whatever the answer in their world is, it&#39;s not obvious.  But I think the @ types give a clean answer in UPARSE.
+
+## But What About @[bl o ck] ?
+
+In the past I suggested that one reason why `@[...]` might be taken for datatypes is because in cases like this, there&#39;d be no difference between `@[bl o ck]` and `&#39;[block]`.  I was imagining these being synonyms, because I couldn&#39;t think of anything else (since plain block was already &quot;run rule&quot;):
+
+    &gt;&gt; uparse [[some &quot;a&quot;] [some &quot;a&quot;]] [some &#39;[some &quot;a&quot;]]
+    == [some &quot;a&quot;]
+
+    &gt;&gt; uparse [[some &quot;a&quot;] [some &quot;a&quot;]] [some @[some &quot;a&quot;]]
+    == [some &quot;a&quot;]  ; &quot;wasteful application of @[...], so why not datatype?&quot;
+
+But UPARSE has changed the game for why @[...] and [...] can mean different things...because *block rules synthesize values*.  And who&#39;s to say you might not want to match a rule and use its product as the literal thing to match against?
+
+    &gt;&gt; uparse [1 1 1 2] [@[some &#39;10, (10 + 10) | some &#39;1 (1 + 1)]]
+    == 2
+
+In other words your rule can match *and* provide an answer for the thing to match next.  We have zero experience with how often that might be useful.  But it does have meaning, which I guess is probably the death knell for using the @ types as DATATYPE!.
+
+So this all looks pretty good.  But back to the drawing board for types.</description>
+    
+    <lastBuildDate>Mon, 29 Nov 2021 14:12:09 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Literal Matching with the @ Types In UPARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-username="hostilefork" data-post="2" data-topic="1643">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1643">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I mentioned that the @ types were slated for use for literal matching.</p>
+</blockquote>
+</aside>
+<p>Usage is making me wonder if this is the best use for @, or if it would be more helpful for literal non-matching... e.g. synthesizing values like a GROUP! would.</p>
+</blockquote>
+</aside>
+<p><strong>This has become a real sticking point, between two really good potential uses for the <code>@XXX</code> types in PARSE.</strong></p>
+<ul>
+<li>
+<p>It's neat to have them be completely inert.  That lines up with their behavior in the normal evaluator, and by having them just passed through by the PARSE dialect you can make your combinators react to them in novel ways.</p>
+</li>
+<li>
+<p>But without a way of saying <em>"I mean match this variable literally"</em>, you can't do things like <strong><code>num: 1, parse [1 1 1] [some @num]</code></strong></p>
+</li>
+</ul>
+<p>One of the motivators to support the neutral interpretation was to allow things like PARSE's COLLECT+KEEP to build on this behavior:</p>
+<pre><code>&gt;&gt; append [a b c] @d
+== [a b c d]
+</code></pre>
+<p>You could do similar things with:</p>
+<pre><code>&gt;&gt; uparse [1 2] [collect some [keep @hello, keep integer!]]
+== [hello 1 hello 2]
+</code></pre>
+<p>It's messier without this, especially with the rules prohibiting raw evaluative values.  You have to quote the WORD! to keep it from evaluating, put it inside a group, and then either META it or ONLY it:</p>
+<pre><code>&gt;&gt; uparse [1 2] [collect some [keep ^('hello), keep integer!]]
+== [hello 1 hello 2]
+
+&gt;&gt; uparse [1 2] [collect some [keep only ('hello), keep integer!]]
+== [hello 1 hello 2]
+</code></pre>
+<p>Arguably you could do this with a combinator like THE, or if lone @ was allowed to do the behavior:</p>
+<pre><code>&gt;&gt; uparse [1 2] [collect some [keep only the hello, keep integer!]]
+== [hello 1 hello 2]
+
+&gt;&gt; uparse [1 2] [collect some [keep only @ hello, keep integer!]]
+== [hello 1 hello 2]
+</code></pre>
+<h2>Is The Inert-Only Rule Cure Worse Than The Disease?</h2>
+<p>I'm not really ready to give up on the rules for block mechanics that have emerged, which make meta usage with variables very sensible:</p>
+<pre><code>; if var is a BAD-WORD! isotope (like ~unset~ isotope) then ^var will
+; be a plain BAD-WORD!, which APPEND won't accept unless you quote it
+;
+; if var is NULL then ^var will still be NULL, which append won't accept
+; unless you TRY it to produce a BLANK!, where it will be a no-op
+;
+; if var is anything else, it will get quoted and appended as-is
+;
+append data ^var
+</code></pre>
+<p>There's nice properties there...something about that feels just <em>right</em>.  The problem we wind up with isn't when things are in variables, but how to work with literal content.  Blocks are certainly an option:</p>
+<pre><code>append data [whatever]
+</code></pre>
+<p>Going back to PARSE, it winds up looking like this:</p>
+<pre><code>&gt;&gt; uparse [1 2] [collect some [keep ([hello]), keep integer!]]
+== [hello 1 hello 2]
+
+&gt;&gt; uparse [1 2] [collect some [keep the [hello], keep integer!]]
+== [hello 1 hello 2]
+</code></pre>
+<p><strong>This all feels close but it's not quite there.</strong>  If I squint long enough maybe I'll see it.</p>
+<p>Maybe this really is just pointing to the fact that we need another part of speech, the <strong>$xxx</strong> ?</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1643">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Though I'd already noticed one nagging missing point on literal matches, which was how to literally match a fetched block as a splice.</p>
+<pre><code class="lang-auto">block: [a b]
+uparse [a b a b] [some ?operation? (block)]
+</code></pre>
+</blockquote>
+</aside>
+<p>One idea here, would be: <strong>uparse [a b a b] [some $((block))]</strong></p>
+<p>So <strong><code>$block</code></strong> would assume you meant as-is, and <strong><code>$(block)</code></strong> would similarly make the same assumption, but <strong><code>$((block))</code></strong> would think you wanted to match across the spliced elements.</p>
+<p>It's an idea.</p>
+<p>Things here need sorting out, but after all this time there's no point in making hasty bad decisions.  Keep working on it until it's right.</p>
+          <p><a href="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643/4</link>
+        <pubDate>Mon, 29 Nov 2021 12:06:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1643-4</guid>
+        <source url="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643.rss">Literal Matching with the @ Types In UPARSE</source>
+      </item>
+      <item>
+        <title>Literal Matching with the @ Types In UPARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1643">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>The key to seeing why this breaks us out of the problem is that it lets us get at literal values without a GROUP!, which means we aren't trying to COMPOSE inside of COMPOSE groups.</p>
+</blockquote>
+</aside>
+<p>So trying this out, it does solve my problem, but it creates a disconnect I'm not totally comfortable with...</p>
+<p>The @ operator itself has a parity.  In the normal evaluator:</p>
+<pre><code>&gt;&gt; var: @ x
+== x
+
+&gt;&gt; var
+== x
+</code></pre>
+<p>And in UPARSE:</p>
+<pre><code>&gt;&gt; uparse "" [var: @ x]
+== x
+
+&gt;&gt; var
+== x
+</code></pre>
+<p>All's good so far... this is the Gordian-knot slicer I talked about.  Synthesizing values out of thin air without a GROUP!, so it plays nicely with COMPOSE.</p>
+<p>But I think this difference may be a mistake:</p>
+<pre><code>&gt;&gt; var: @[a b]
+== @[a b]
+
+&gt;&gt; uparse "" [var: @[a b]]
+== [a b]
+</code></pre>
+<p>While we accept that UPARSE and regular code act differently, I'm not clear on why @ would act the same but @[...] wouldn't.  The concept was maybe making it easier to do REPEAT ranges, but...well, if you wanted that, why not make REPEAT allow you to give it either BLOCK! or THE-BLOCK! ?</p>
+<p>This also lets us maybe experiment with that trick I was suggesting, where even though evaluative types don't get added to blocks without a quote that maybe the @[...] types would.</p>
+<pre><code>&gt;&gt; uparse "a" [collect [keep @keep, keep &lt;any&gt;]]]  ; no quote or ^ needed
+== [keep #a]
+</code></pre>
+<p>This way you have both options for blocks:</p>
+<pre><code>&gt;&gt; uparse "a" [collect [keep @[keep some], keep &lt;any&gt;]]
+== [[keep some] #a]
+
+&gt;&gt; uparse "a" [collect [keep @ [keep some], keep &lt;any&gt;]]
+== [keep some #a]
+</code></pre>
+<p>I think I was trying to make those both do the same thing, but when you look at the broader picture, that doesn't seem all that useful.  If that inconsistency bothers you, then use THE instead:</p>
+<pre><code>&gt;&gt; uparse "a" [collect [keep @[keep some], keep &lt;any&gt;]]
+== [[keep some] #a]
+
+&gt;&gt; uparse "a" [collect [keep the [keep some], keep &lt;any&gt;]]
+== [keep some #a]
+</code></pre>
+<p>If we had infinite symbols on the keyboard I might propose the symbolic THE use something else besides @, but, we don't have infinite symbols and I think I can wrap my head around the rule:</p>
+<pre><code>@ x =&gt; x
+@x =&gt; @x
+</code></pre>
+<p>I haven't fully absorbed the implications here, but I do think this concept of having the <code>@xxx</code> types being a new "do whatever you want with it" argument type that plays along with combinators is pretty interesting.  The ANY rule could accept it, for example:</p>
+<pre><code>uparse [10 &lt;twenty&gt; "hello" 20 304] [some any @[integer! tag! text!]]
+</code></pre>
+<p>Which to my eyes feels a little bit more comfortable than:</p>
+<pre><code>uparse [10 &lt;twenty&gt; "hello" 20 304] [some any ([integer! tag! text!])]
+</code></pre>
+<p>I'll just have to see how it comes along.</p>
+          <p><a href="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643/3</link>
+        <pubDate>Sun, 15 Aug 2021 02:05:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1643-3</guid>
+        <source url="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643.rss">Literal Matching with the @ Types In UPARSE</source>
+      </item>
+      <item>
+        <title>Literal Matching with the @ Types In UPARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1643">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I mentioned that the @ types were slated for use for literal matching.</p>
+</blockquote>
+</aside>
+<p>Usage is making me wonder if this is the best use for @, or if it would be more helpful for literal non-matching... e.g. synthesizing values like a GROUP! would.</p>
+<pre><code>&gt;&gt; uparse "a" [collect [keep @[keep some], keep &lt;any&gt;]]
+== [keep some "a"]
+
+&gt;&gt; uparse "a" [collect [keep @ 'keep, keep &lt;any&gt;]]
+== [keep "a"]
+</code></pre>
+<p>Doing this kind of thing right now has several ugly alternatives:</p>
+<pre><code>&gt;&gt; uparse "a" [collect [keep ^('keep), keep &lt;any&gt;]]
+== [keep "a"]
+
+&gt;&gt; uparse "a" [collect [keep ([keep]), keep &lt;any&gt;]]
+== [keep "a"]
+</code></pre>
+<p><em>"What's so ugly about <strong>keep ([keep])</strong>"</em>, you might ask.  The problem isn't with it when it's written literally like that.  It's when you're trying to build a rule with COMPOSE and the contention over GROUP! and trying to nest inside of it becomes a bummer.</p>
+<p>Let's say you're trying to build a KEEP parse rule inside a parse rule <em>(which I am actually at this moment trying to do in the whitespace interpreter project)</em>:</p>
+<pre><code>name: "Binky"
+uparse ... [... collect [
+     keep (compose [keep (to word! name)])
+] ...]
+</code></pre>
+<p>Okay so that gives you <strong>[keep Binky]</strong>.  Not what you wanted.  You can quote it...</p>
+<pre><code>keep (compose [keep '(to word! name)])
+</code></pre>
+<p>Now you've got <strong>[keep 'Binky]</strong>.  But you're not trying to match Binky in the input, you're trying to synthesize it out of thin air.  Need it in a GROUP!... let's just go ahead and use the wacky engroup operator to do that:</p>
+<pre><code>keep (compose [keep (engroup quote to word! name)])
+</code></pre>
+<p>So are we set, we've got <strong>[keep ('Binky)]</strong>?  Well, no... because KEEP demands evaluative values be quoted, and that quote is vaporized during the group evaluation so KEEP is getting a plain Binky word.  D'oh, so we need another quote on there somehow.  The ^ operator is one way, there are others that are more verbose:</p>
+<pre><code>keep (compose [keep ^(engroup quote to word! name)])
+</code></pre>
+<blockquote>
+<p><em>Notably you can't say <strong>keep '(engroup quote to word! name)</strong> because that becomes <strong>keep '('Binky)</strong>, which would look literally for a match in the input of a GROUP! like <strong>('Binky)</strong>.  <img src="https://forum.rebol.info/images/emoji/twitter/roll_eyes.png?v=9" title=":roll_eyes:" class="emoji" alt=":roll_eyes:"></em></p>
+</blockquote>
+<h2>What A Freaking PITA... <img src="https://forum.rebol.info/images/emoji/twitter/cloud_with_rain.png?v=9" title=":cloud_with_rain:" class="emoji" alt=":cloud_with_rain:"> ...We Can Do Better!</h2>
+<p>If @ were used for literalization and synthesis of a non-match, we can make something less head-scratchy:</p>
+<pre><code>keep (compose [keep @ '(to word! name)])
+</code></pre>
+<p>Poof.  If you wanted to quote inside the group you could do that too (effectively putting the "ONLY" on the value, as you would for keeping a block literally):</p>
+<pre><code>keep (compose [keep @(quote to word! name)])
+</code></pre>
+<p><strong>The key to seeing why this breaks us out of the problem is that it lets us get at literal values without a GROUP!, which means we aren't trying to COMPOSE inside of COMPOSE groups.</strong></p>
+<p>And there are lots of places we could benefit from this, I think.</p>
+<pre><code>repeat ([2 3]) rule  =&gt;  repeat @[2 3] rule
+</code></pre>
+<p>Some situations might be a bit unsettling for people who don't see the @ as being quoting, e.g.:</p>
+<pre><code>repeat (2) rule  =&gt;  repeat @ 2 rule
+</code></pre>
+<p>The 2 might look a bit too attached to the rule, if you don't realize the @ takes <em>one unit</em> of quoted parameterization to its right... not a full combinatorized parser like [2 rule]</p>
+<p>But, I think it's just something you would have to get used to.  Like I say, it's actually this "let the @ stand off as a separate value" form that breaks the Gordian knot, when it comes to deeper forms of composition.</p>
+<h2>What Would @(...) Mean In This Context?</h2>
+<p>I guess it would just have to mean literally that GROUP, e.g. a synonym for <strong>@ (...)</strong>?</p>
+<p>Because if it evaluated the group, what would it do to the result that would make it "more literal" than it already was?  You have ^(...) to add a quote level already--which wouldn't make sense for @.</p>
+<p>It's an odd thing, but not useless.  After all, <strong>keep @[a b]</strong> is only one less character than <strong>keep ([a b])</strong>... though it would be more efficient due to knowing it doesn't need to run the evaluator on a GROUP!.  And <strong>keep @('foo)</strong> saves an additional character due to not needing to quote the group, as in <strong>keep ('('foo))</strong>.</p>
+<p>Hm, so actually, I can see that being rather useful.</p>
+<h2>How To Literal Match If Not With @ ?</h2>
+<p>We were back to the drawing board on this when @ started acting like META, but then got it back when the ^XXX types came around...</p>
+<p>And now we're back again.</p>
+<p>You can splice the value in as a quoted rule, so at least there are options...  <strong>:(quote var)</strong> or <strong>:(^var)</strong></p>
+<pre><code>&gt;&gt; block: [some "a"]
+&gt;&gt; uparse [[some "a"] [some "a"]] [some :(quote block)]
+== [some "a"]
+</code></pre>
+<p>Not my favorite, but by no means incoherent.</p>
+<p>Though I'd already noticed one nagging missing point on literal matches, which was how to literally match a fetched block as a splice.</p>
+<pre><code>block: [a b]
+uparse [a b a b] [some ?operation? (block)]
+</code></pre>
+<p>When <code>@block</code> was a literal match, it had <strong>[[a b] [a b]]</strong> covered, but not this.  I don't know what that means, but it just pointed out to me there was something else afoot.</p>
+<p>Still available at the moment are <strong>.foo</strong> and <strong>.(foo)</strong>, and <strong>/foo</strong> and <strong>/(foo)</strong> -- though I don't like those for this purpose.</p>
+<p>I've been eyeing $foo $[foo] $(foo) etc for reasons like getting environment variables in shell dialects, and because I honestly think the potential here goes pretty far beyond MONEY!.  It would take some reckoning in the type system to get those available.</p>
+<p>If $ becomes synonymous with "substitution", then might be that $(foo) makes more sense for "substitute this expansion as a rule" than GET-BLOCK! does, which might let the GET-XXX! variations mean "use this as a literal value".</p>
+<h2>For Now I Need to Change @ So Code Gets Better... so...</h2>
+          <p><a href="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643/2</link>
+        <pubDate>Sat, 14 Aug 2021 22:58:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1643-2</guid>
+        <source url="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643.rss">Literal Matching with the @ Types In UPARSE</source>
+      </item>
+      <item>
+        <title>Literal Matching with the @ Types In UPARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I mentioned that the @ types were slated for use for literal matching.  The most frequent example I have given is:</p>
+<pre><code>&gt;&gt; block: [some "a"]
+
+&gt;&gt; uparse [[some "a"] [some "a"]] [some @block]
+== [some "a"]  ; success gives result of last matching rule
+</code></pre>
+<p>Works with all types:</p>
+<pre><code>&gt;&gt; num: 1
+
+&gt;&gt; uparse [1 1 1] [some @num]
+== 1
+</code></pre>
+<p>I didn't mention things like @(gr o up) but those work too:</p>
+<pre><code>&gt;&gt; uparse [1 1 1] [some @(3 - 2)]
+== 1
+</code></pre>
+<p><strong>I realized I actually do not know how to write the above two cases in Red or Rebol2.</strong>  You can't use the number as a plain variable in Red, since it acts as a repeat rule <em>(UPARSE prohibits that, since it's a rule that takes an argument, you must use REPEAT for such behavior)</em></p>
+<pre><code>red&gt;&gt; num: 1
+
+red&gt;&gt; parse [1 1 1] [some num]
+*** Script Error: PARSE - invalid rule or usage of rule: 1
+</code></pre>
+<p>Also in Red, I'm not clear on why the following isn't an error, since the GROUP! product is just discarded:</p>
+<pre><code>red&gt;&gt; parse [1 1 1] [some (3 - 2)]
+== false
+</code></pre>
+<p>This is something that would work in R3-Alpha, but doesn't in Red or Rebol2:</p>
+<pre><code>red&gt;&gt; parse [1 1 1] [some quote (3 - 2)]
+== false
+</code></pre>
+<p><strong>Your guess is as good as mine.</strong>  Whatever the answer in their world is, it's not obvious.  But I think the @ types give a clean answer in UPARSE.</p>
+<h2>But What About @[bl o ck] ?</h2>
+<p>In the past I suggested that one reason why <code>@[...]</code> might be taken for datatypes is because in cases like this, there'd be no difference between <code>@[bl o ck]</code> and <code>'[block]</code>.  I was imagining these being synonyms, because I couldn't think of anything else (since plain block was already "run rule"):</p>
+<pre><code>&gt;&gt; uparse [[some "a"] [some "a"]] [some '[some "a"]]
+== [some "a"]
+
+&gt;&gt; uparse [[some "a"] [some "a"]] [some @[some "a"]]
+== [some "a"]  ; "wasteful application of @[...], so why not datatype?"
+</code></pre>
+<p>But UPARSE has changed the game for why @[...] and [...] can mean different things...because <em>block rules synthesize values</em>.  And who's to say you might not want to match a rule and use its product as the literal thing to match against?</p>
+<pre><code>&gt;&gt; uparse [1 1 1 2] [@[some '10, (10 + 10) | some '1 (1 + 1)]]
+== 2
+</code></pre>
+<p>In other words your rule can match <em>and</em> provide an answer for the thing to match next.  We have zero experience with how often that might be useful.  But it does have meaning, which I guess is probably the death knell for using the @ types as DATATYPE!.</p>
+<p>So this all looks pretty good.  But back to the drawing board for types.</p>
+          <p><a href="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643/1</link>
+        <pubDate>Mon, 02 Aug 2021 18:58:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1643-1</guid>
+        <source url="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643.rss">Literal Matching with the @ Types In UPARSE</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Real Story about User and Lib Contexts</title>
+    <link>https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764</link>
+    <description>People know about binding in the sense of making an object--which has certain named keys--and then binding an ANY-WORD! which has the same spelling (case-insensitive) as those keys into that object.  Once bound, the words look up into that object.
+
+Yet the mysterious **user context** influences a lot of how people experience the system.  How does it operate?
+
+---
+
+For the moment, let&#39;s oversimplify matters a bit and imagine that the user context starts out empty.  Then say you type into the console something like:
+
+    &gt;&gt; foo: func [arg] [print [&quot;arg is&quot; arg]]
+
+This idealized user context would now contain keys for **foo**, **func**, **print**, and **arg**.  FOO would be set to this new action we&#39;ve just defined.  FUNC and PRINT would be values of their respective actions from lib.  And ARG would be an unset variable--present in the user context, but with no value assigned to it.
+
+Ok...it seems fairly obvious that the user context would contain a FOO.  You just defined it, and there&#39;s nowhere else for it to live.  But why did it create entries for **func** and **print**?  Aren&#39;t they in the **lib** context?  Couldn&#39;t it have just bound the words into the lib context directly?
+
+Binding words into lib implies you probably also bind SET-WORD!s (and even if you didn&#39;t, you could use SET to set through a WORD!).  When you have a direct reference to something like **print** or **append** in lib--and casually overwrite what it points to--you would wreak havoc on the implementations of mezzanine routines that live in lib that use those definitions.  e.g. if you say **print: :fail**--then try to run HELP--then all the printing in HELP would break.
+
+So what happens instead is that when a word isn&#39;t found in the user context already, the LOAD process checks `lib` to see if it exists there.  When it creates the binding in user, it captures the value of what lib holds for that word at that moment.  The two words then go their own way--any changes to lib&#39;s definition after that point won&#39;t update the user context&#39;s version.
+
+Next we might ask why **arg** got a binding.  It&#39;s a function argument, why should it have a definition in the user context?  That variable is just going to be unset...because the function is going to use a binding for the arg based on the invocation, not use any &quot;global&quot; arg.
+
+The thing is that LOAD didn&#39;t know what you were going to do with the code you loaded.  And when it made a WORD!, it has a moment in time to either make the choice to bind it or not.  If it left it unbound because it couldn&#39;t find anything to point it to, you might be disappointed by how that behaved.
+
+Let&#39;s try out a console in an alternate world where you&#39;d have to have a SET-WORD! before getting a binding:
+
+    &gt;&gt; d1: does [print foo]
+
+    &gt;&gt; foo: 1020
+
+    &gt;&gt; d2: does [print foo]
+
+    &gt;&gt; d2
+    1020
+
+    &gt;&gt; d1
+    ** Error: foo is not bound to a context
+
+So here you see the problem of not pre-emptively adding a context key for every word you see.  If you didn&#39;t, you&#39;d have to do some kind of &quot;forward declaration&quot;.
+
+### Every ANY-WORD! gets a binding in user?  That&#39;s a lot of words!
+
+Yep.  And the context only grows--it never shrinks.
+
+This was worse when ISSUE! was an ANY-WORD! (a decision that has been reversed in Ren-C, it is now [an immutable string form, unified with characters](https://forum.rebol.info/t/removing-issue-from-the-any-word-category/1106/3)).  Not only would you get a word for every data-bearing issue, you&#39;d get invalid words:
+
+    &gt;&gt; foo: func [] [print [#1020-0304]]   
+
+    &gt;&gt; find words of binding of &#39;foo &#39;1020-0304
+    == [1020-0304 words]
+
+Your context has FIND, WORDS, OF, BINDING, FOO, 1020-0304, and WORDS... (1020-0304 was just close to the tail).  So as crazy as everything else is, it&#39;s good to have issues out of this picture.
+
+### How much space are we talking about?
+
+Each entry in a context is a key and a value.  The key is 4 platform pointers, the value is 4 platform pointers.  On a 64-bit system that&#39;s (4 + 4) * 8 =&gt; 64 bytes.
+
+Every unique word, issue, or otherwise that gets its own binding adds that cost, whether the declaration comes from lib or not.  And if modules are isolated into their own user-type contexts, then they start bloating up too...with their own copies of lib declarations, and their own declarations for any word they use.
+
+So if you use 800 unique words in a module, that module has about 50k of overhead just for that list on a 64-bit system.
+
+### Could lib be read-only, so direct bindings could be used?
+
+The main problem with making the variables in lib read-only is what would happen if you decide you want to redefine something.  You&#39;d have to do that redefinition up-front.  Because at present, there&#39;s no way to go back and update bindings that were made historically...you don&#39;t know where the blocks of code containing the old binding got handed to.
+
+When you think about the impact to the usage model, it is significant.  Again, think about how much in the console it&#39;s taken for granted that **d1: does [print foo]** can have foo defined *after* that and still be found by that foo.  If direct bindings were used until overridden, you would face a different use problem in that you&#39;d redefine PRINT but only bindings that were made after that point would see it.
+
+### How do modules treat this?
+
+I mention that this same concept extends to module isolation.  The state of modules in R3-Alpha was that they were bound directly into lib unless you said `Options: [Isolate]`.  Look how quickly that goes south:
+
+    &gt;&gt; m: module [] [test: does [print: does [do make error! &quot;surprise!&quot;]]]
+    &gt;&gt; m/test
+    &gt;&gt; help append
+    USAGE:
+        ** User error: &quot;surprise!&quot;
+
+*(Note: USAGE is output with [PRIN and not PRINT](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/mezz-help.r#L262), so that&#39;s why you see it.  Good argument for a common hookpoint like WRITE-STDOUT, isn&#39;t it?)*
+
+Once you throw on that `Options: [Isolate]` you don&#39;t wreak that havoc.  But you&#39;ll start noticing your module went from having a handful of declarations in it for your exports, to having a definition for every single ANY-WORD! it so much as *mentions*.
+
+I&#39;ve just added some interesting code which lets the libRebol API detect at runtime what native they&#39;re running in, and use that as a guide to what context to do bindings into.  So a native registered as part of an extension module would be able to bind into that module&#39;s context...thus not being disrupted when other modules (or the user context) changes the definition of something basic like `rebRun(&quot;append&quot;...)` or `rebRun(&quot;print&quot;...)`...also using the specific overridden versions of words that particular module defined.  But for this to work, they must be using `Isolate`, which means they&#39;ll be getting those tens of kilobytes of overhead by having their own copies of every WORD!, SET-WORD!, ISSUE!, etc. they reference.
+
+### ...?
+
+It&#39;s unfortunate that people let things get this far down the road in Rebol lore without a body of clear-headed thinking about this.  I take every chance I get to complain about it not having been a priority.  :-/
+
+What I&#39;ve brought in is a lot of mechanical tools for solving binding problems--we already have specific binding and derived binding which are solutions to *fundamental* design holes.  The same level of control that permitted the implementation of those features can be brought in to help here.  So it&#39;s not a matter of execution--it&#39;s a matter of figuring out what the plan is.</description>
+    
+    <lastBuildDate>Sun, 13 Dec 2020 22:46:32 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Real Story about User and Lib Contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>People know about binding in the sense of making an object--which has certain named keys--and then binding an ANY-WORD! which has the same spelling (case-insensitive) as those keys into that object.  Once bound, the words look up into that object.</p>
+<p>Yet the mysterious <strong>user context</strong> influences a lot of how people experience the system.  How does it operate?</p>
+<hr>
+<p>For the moment, let's oversimplify matters a bit and imagine that the user context starts out empty.  Then say you type into the console something like:</p>
+<pre><code>&gt;&gt; foo: func [arg] [print ["arg is" arg]]
+</code></pre>
+<p>This idealized user context would now contain keys for <strong>foo</strong>, <strong>func</strong>, <strong>print</strong>, and <strong>arg</strong>.  FOO would be set to this new action we've just defined.  FUNC and PRINT would be values of their respective actions from lib.  And ARG would be an unset variable--present in the user context, but with no value assigned to it.</p>
+<p>Ok...it seems fairly obvious that the user context would contain a FOO.  You just defined it, and there's nowhere else for it to live.  But why did it create entries for <strong>func</strong> and <strong>print</strong>?  Aren't they in the <strong>lib</strong> context?  Couldn't it have just bound the words into the lib context directly?</p>
+<p>Binding words into lib implies you probably also bind SET-WORD!s (and even if you didn't, you could use SET to set through a WORD!).  When you have a direct reference to something like <strong>print</strong> or <strong>append</strong> in lib--and casually overwrite what it points to--you would wreak havoc on the implementations of mezzanine routines that live in lib that use those definitions.  e.g. if you say <strong>print: :fail</strong>--then try to run HELP--then all the printing in HELP would break.</p>
+<p>So what happens instead is that when a word isn't found in the user context already, the LOAD process checks <code>lib</code> to see if it exists there.  When it creates the binding in user, it captures the value of what lib holds for that word at that moment.  The two words then go their own way--any changes to lib's definition after that point won't update the user context's version.</p>
+<p>Next we might ask why <strong>arg</strong> got a binding.  It's a function argument, why should it have a definition in the user context?  That variable is just going to be unset...because the function is going to use a binding for the arg based on the invocation, not use any "global" arg.</p>
+<p>The thing is that LOAD didn't know what you were going to do with the code you loaded.  And when it made a WORD!, it has a moment in time to either make the choice to bind it or not.  If it left it unbound because it couldn't find anything to point it to, you might be disappointed by how that behaved.</p>
+<p>Let's try out a console in an alternate world where you'd have to have a SET-WORD! before getting a binding:</p>
+<pre><code>&gt;&gt; d1: does [print foo]
+
+&gt;&gt; foo: 1020
+
+&gt;&gt; d2: does [print foo]
+
+&gt;&gt; d2
+1020
+
+&gt;&gt; d1
+** Error: foo is not bound to a context
+</code></pre>
+<p>So here you see the problem of not pre-emptively adding a context key for every word you see.  If you didn't, you'd have to do some kind of "forward declaration".</p>
+<h3>Every ANY-WORD! gets a binding in user?  That's a lot of words!</h3>
+<p>Yep.  And the context only grows--it never shrinks.</p>
+<p>This was worse when ISSUE! was an ANY-WORD! (a decision that has been reversed in Ren-C, it is now <a href="https://forum.rebol.info/t/removing-issue-from-the-any-word-category/1106/3">an immutable string form, unified with characters</a>).  Not only would you get a word for every data-bearing issue, you'd get invalid words:</p>
+<pre><code>&gt;&gt; foo: func [] [print [#1020-0304]]   
+
+&gt;&gt; find words of binding of 'foo '1020-0304
+== [1020-0304 words]
+</code></pre>
+<p>Your context has FIND, WORDS, OF, BINDING, FOO, 1020-0304, and WORDS... (1020-0304 was just close to the tail).  So as crazy as everything else is, it's good to have issues out of this picture.</p>
+<h3>How much space are we talking about?</h3>
+<p>Each entry in a context is a key and a value.  The key is 4 platform pointers, the value is 4 platform pointers.  On a 64-bit system that's (4 + 4) * 8 =&gt; 64 bytes.</p>
+<p>Every unique word, issue, or otherwise that gets its own binding adds that cost, whether the declaration comes from lib or not.  And if modules are isolated into their own user-type contexts, then they start bloating up too...with their own copies of lib declarations, and their own declarations for any word they use.</p>
+<p>So if you use 800 unique words in a module, that module has about 50k of overhead just for that list on a 64-bit system.</p>
+<h3>Could lib be read-only, so direct bindings could be used?</h3>
+<p>The main problem with making the variables in lib read-only is what would happen if you decide you want to redefine something.  You'd have to do that redefinition up-front.  Because at present, there's no way to go back and update bindings that were made historically...you don't know where the blocks of code containing the old binding got handed to.</p>
+<p>When you think about the impact to the usage model, it is significant.  Again, think about how much in the console it's taken for granted that <strong>d1: does [print foo]</strong> can have foo defined <em>after</em> that and still be found by that foo.  If direct bindings were used until overridden, you would face a different use problem in that you'd redefine PRINT but only bindings that were made after that point would see it.</p>
+<h3>How do modules treat this?</h3>
+<p>I mention that this same concept extends to module isolation.  The state of modules in R3-Alpha was that they were bound directly into lib unless you said <code>Options: [Isolate]</code>.  Look how quickly that goes south:</p>
+<pre><code>&gt;&gt; m: module [] [test: does [print: does [do make error! "surprise!"]]]
+&gt;&gt; m/test
+&gt;&gt; help append
+USAGE:
+    ** User error: "surprise!"
+</code></pre>
+<p><em>(Note: USAGE is output with <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/mezz-help.r#L262">PRIN and not PRINT</a>, so that's why you see it.  Good argument for a common hookpoint like WRITE-STDOUT, isn't it?)</em></p>
+<p>Once you throw on that <code>Options: [Isolate]</code> you don't wreak that havoc.  But you'll start noticing your module went from having a handful of declarations in it for your exports, to having a definition for every single ANY-WORD! it so much as <em>mentions</em>.</p>
+<p>I've just added some interesting code which lets the libRebol API detect at runtime what native they're running in, and use that as a guide to what context to do bindings into.  So a native registered as part of an extension module would be able to bind into that module's context...thus not being disrupted when other modules (or the user context) changes the definition of something basic like <code>rebRun("append"...)</code> or <code>rebRun("print"...)</code>...also using the specific overridden versions of words that particular module defined.  But for this to work, they must be using <code>Isolate</code>, which means they'll be getting those tens of kilobytes of overhead by having their own copies of every WORD!, SET-WORD!, ISSUE!, etc. they reference.</p>
+<h3>...?</h3>
+<p>It's unfortunate that people let things get this far down the road in Rebol lore without a body of clear-headed thinking about this.  I take every chance I get to complain about it not having been a priority.  :-/</p>
+<p>What I've brought in is a lot of mechanical tools for solving binding problems--we already have specific binding and derived binding which are solutions to <em>fundamental</em> design holes.  The same level of control that permitted the implementation of those features can be brought in to help here.  So it's not a matter of execution--it's a matter of figuring out what the plan is.</p>
+          <p><a href="https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764/1</link>
+        <pubDate>Mon, 30 Jul 2018 15:59:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-764-1</guid>
+        <source url="https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764.rss">The Real Story about User and Lib Contexts</source>
+      </item>
+  </channel>
+</rss>

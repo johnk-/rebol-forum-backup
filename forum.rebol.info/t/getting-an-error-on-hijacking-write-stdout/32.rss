@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Getting an error on hijacking write-stdout</title>
+    <link>https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32</link>
+    <description>    old-write-stdout: copy :write-stdout
+
+    so-print: procedure [
+        &quot;Switch between using a print or a so-print operation for the bot&quot;
+        val [logic!]
+    ][
+        write %so-print.txt copy &quot;&quot;
+        either val [
+            print &quot;so-print is now on&quot;
+            hijack &#39;write-stdout func [value][
+                write/append %so-print.txt value
+            ]
+        ][
+            hijack &#39;write-stdout :old-write-stdout
+        ]
+    ]
+
+    so-print on
+    print &quot;hello&quot;
+    so-print off
+
+gives me this error
+
+    managed series was likely created during evaluator tick: 539490
+
+What does this mean?  And how do I fix it?</description>
+    
+    <lastBuildDate>Sat, 08 Jul 2017 19:51:51 +0000</lastBuildDate>
+    <category>First Steps</category>
+    <atom:link href="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Getting an error on hijacking write-stdout</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>Is it still a target to make STDOUT a port (presumably the default for SYSTEM/PORTS/OUTPUT)? I'd assume that you could just say <code>system/ports/output: open %so-print.txt</code></p>
+          <p><a href="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32/4</link>
+        <pubDate>Sat, 08 Jul 2017 19:51:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-32-4</guid>
+        <source url="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32.rss">Getting an error on hijacking write-stdout</source>
+      </item>
+      <item>
+        <title>Getting an error on hijacking write-stdout</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In debug builds, the message  <em>"managed series was likely created during evaluator tick..."</em> is something you get when a "panic" condition is met.  Panics are like Assertion Failures, but can carry more information to help diagnose the problem.  If you are running a tool like Address Sanitizer or Valgrind, then you'll get significantly more information.</p>
+<aside class="onebox githubblob">
+  <header class="source">
+      <a href="https://github.com/metaeducation/ren-c/blob/d503c1db5546aab94ade9886e34681403655e862/src/include/sys-trap.h#L330" target="_blank" rel="nofollow noopener">github.com</a>
+  </header>
+  <article class="onebox-body">
+    <h4><a href="https://github.com/metaeducation/ren-c/blob/d503c1db5546aab94ade9886e34681403655e862/src/include/sys-trap.h#L330" target="_blank" rel="nofollow noopener">metaeducation/ren-c/blob/d503c1db5546aab94ade9886e34681403655e862/src/include/sys-trap.h#L330</a></h4>
+<pre class="onebox"><code class="lang-h"><ol class="start lines" start="320" style="counter-reset: li-counter 319 ;">
+<li>                TG_Erroring_C_File = __FILE__; \</li>
+<li>                TG_Erroring_C_Line = __LINE__; \</li>
+<li>                Fail_Core(error); \</li>
+<li>            } while (0)</li>
+<li>    #endif</li>
+<li>#endif</li>
+<li>
+</li>
+<li>
+</li>
+<li>//=////////////////////////////////////////////////////////////////////////=//</li>
+<li>//</li>
+<li class="selected">// PANIC (Force System Exit with Diagnostic Info)</li>
+<li>//</li>
+<li>//=////////////////////////////////////////////////////////////////////////=//</li>
+<li>//</li>
+<li>// Panics are the equivalent of the "blue screen of death" and should never</li>
+<li>// happen in normal operation.  Generally, it is assumed nothing under the</li>
+<li>// user's control could fix or work around the issue, hence the main goal is</li>
+<li>// to provide the most diagnostic information possible.</li>
+<li>//</li>
+<li>// So the best thing to do is to pass in whatever REBVAL* or REBSER* subclass</li>
+<li>// (including REBARR*, REBCTX*, REBFUN*...) is the most useful "smoking gun":</li>
+</ol></code></pre>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>The problem you've run into here is that the REPL depends on PRINT deeply, and PRINT depends on WRITE-STDOUT.  If you make a mistake in hijacking the behavior of PRINT it is a more serious kind of error, because it will fail at first and then fail during the report.  Basically, it will create an unrecoverable error  to break the version of PRINT that the console depends on.</p>
+<p>There is some fledgling work at a "userspace echo" which does what you are trying to do:</p>
+<pre><code>&gt;&gt; echo on
+
+&gt;&gt; 1 + 2
+== 3
+
+&gt;&gt; 3 + 4
+== 7
+
+&gt;&gt; echo off
+
+&gt;&gt; read/lines %echo.txt
+== [
+    ""
+    "&gt;&gt; 1 + 2"
+    "== 3"
+    ""
+    "&gt;&gt; 3 + 4"
+    "== 7"
+    ""
+    "&gt;&gt; echo off"
+]
+
+&gt;&gt; echo "cat"
+
+&gt;&gt; 'meow 'meow
+== meow
+
+&gt;&gt; echo off
+
+&gt;&gt; read/lines %echo-cat.txt
+== [
+    ""
+    "&gt;&gt; 'meow 'meow"
+    "== meow"
+    ""
+    "&gt;&gt; echo off"
+]
+
+&gt;&gt; echo [%custom * %-format.log]
+
+&gt;&gt; echo on
+
+&gt;&gt; "use blocks for templates"
+== "use blocks for templates"
+
+&gt;&gt; echo off
+
+&gt;&gt; read/lines %custom-cat-format.log
+== [
+    ""
+    "&gt;&gt; echo on"
+    ""
+    {&gt;&gt; "use blocks for templates"}
+    {== "use blocks for templates"}
+    ""
+    "&gt;&gt; echo off"
+]
+
+&gt;&gt; echo reset
+
+&gt;&gt; read/lines %custom-cat-format.log
+== []
+</code></pre>
+<p>Truly writing a good echo requires tighter cooperation with the console code.  The console is userspace (written in Rebol), so this is something interested users can work on improving:</p>
+<aside class="onebox githubblob">
+  <header class="source">
+      <a href="https://github.com/metaeducation/ren-c/blob/d503c1db5546aab94ade9886e34681403655e862/src/os/host-console.r#L42" target="_blank" rel="nofollow noopener">github.com</a>
+  </header>
+  <article class="onebox-body">
+    <h4><a href="https://github.com/metaeducation/ren-c/blob/d503c1db5546aab94ade9886e34681403655e862/src/os/host-console.r#L42" target="_blank" rel="nofollow noopener">metaeducation/ren-c/blob/d503c1db5546aab94ade9886e34681403655e862/src/os/host-console.r#L42</a></h4>
+<pre class="onebox"><code class="lang-r"><ol class="start lines" start="32" style="counter-reset: li-counter 31 ;">
+<li>;</li>
+<li>; !!! The features that tie the echo specifically to the console would be</li>
+<li>; things like ECHO INPUT, e.g.:</li>
+<li>;</li>
+<li>; https://github.com/red/red/issues/2487</li>
+<li>;</li>
+<li>; They are not implemented yet, but ECHO is moved here to signify the known</li>
+<li>; issue that the CONSOLE must collaborate specifically with ECHO to achieve</li>
+<li>; this.</li>
+<li>;</li>
+<li class="selected">echo: procedure [</li>
+<li>    {Copies console I/O to a file.}</li>
+<li>
+</li>
+<li>    'instruction [file! string! block! word!]</li>
+<li>        {File or template with * substitution, or command: [ON OFF RESET].}</li>
+<li>
+</li>
+<li>    &lt;has&gt;</li>
+<li>    target ([%echo * %.txt])</li>
+<li>    form-target</li>
+<li>    sub ("")</li>
+<li>    old-input (copy :input)</li>
+</ol></code></pre>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+          <p><a href="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32/3</link>
+        <pubDate>Thu, 18 May 2017 21:50:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-32-3</guid>
+        <source url="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32.rss">Getting an error on hijacking write-stdout</source>
+      </item>
+      <item>
+        <title>Getting an error on hijacking write-stdout</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p><code>hijack</code> needs to have the new function return the same type as the original function so we need to change the new function to be a <code>proc</code></p>
+<pre><code>    so-print: procedure [
+    "Switch between using a print or a so-print operation for the bot"
+    val [logic!]
+][
+    write %so-print.txt copy ""
+    either val [
+        print "so-print is now on"
+        hijack 'write-stdout proc [value][
+            write/append %so-print.txt value
+        ]
+    ][
+        hijack 'write-stdout :old-write-stdout
+    ]
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32/2</link>
+        <pubDate>Thu, 18 May 2017 21:43:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-32-2</guid>
+        <source url="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32.rss">Getting an error on hijacking write-stdout</source>
+      </item>
+      <item>
+        <title>Getting an error on hijacking write-stdout</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <pre><code>old-write-stdout: copy :write-stdout
+
+so-print: procedure [
+    "Switch between using a print or a so-print operation for the bot"
+    val [logic!]
+][
+    write %so-print.txt copy ""
+    either val [
+        print "so-print is now on"
+        hijack 'write-stdout func [value][
+            write/append %so-print.txt value
+        ]
+    ][
+        hijack 'write-stdout :old-write-stdout
+    ]
+]
+
+so-print on
+print "hello"
+so-print off
+</code></pre>
+<p>gives me this error</p>
+<pre><code>managed series was likely created during evaluator tick: 539490
+</code></pre>
+<p>What does this mean?  And how do I fix it?</p>
+          <p><a href="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32/1</link>
+        <pubDate>Thu, 18 May 2017 20:44:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-32-1</guid>
+        <source url="https://forum.rebol.info/t/getting-an-error-on-hijacking-write-stdout/32.rss">Getting an error on hijacking write-stdout</source>
+      </item>
+  </channel>
+</rss>

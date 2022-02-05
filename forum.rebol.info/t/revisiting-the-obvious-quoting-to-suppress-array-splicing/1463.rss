@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Revisiting the &quot;Obvious&quot;: Quoting To Suppress Array Splicing?</title>
+    <link>https://forum.rebol.info/t/revisiting-the-obvious-quoting-to-suppress-array-splicing/1463</link>
+    <description>A while ago, [@IngoHohmann made a sensible-sounding suggestion](https://forum.rebol.info/t/make-splicing-by-default-only-apply-when-appending-a-block/226/7?u=hostilefork):
+
+[quote=&quot;IngoHohmann, post:7, topic:226&quot;]
+Well these days to splice or not to splice could be controlled with quoted-, get-, set- variants.
+[/quote]
+
+I pointed out that unfortunately this wouldn&#39;t have the desired behavior at the callsites... because the evaluation of the parameter would strip the quote off before APPEND saw it:
+
+    &gt;&gt; &#39;[d e]
+    == [d e]
+
+    &gt;&gt; append [a b c] &#39;[d e]
+    == [a b c d e]
+
+For APPEND to &quot;see the tick&quot;, it would have to change its parameter convention to take its argument literally...which is not desirable...or you have to use a function that adds it:
+
+    &gt;&gt; quote [d e]
+    == &#39;[d e]
+
+    &gt;&gt; append [a b c] quote [d e]
+    == [a b c [d e]]
+
+## You Could Ask: &quot;So What?&quot;
+
+We&#39;ve been expressing a willingness to use an ONLY operator to signal an intent to add things &quot;as is&quot;:
+
+    &gt;&gt; only [d e]
+    == [[d e]]
+
+    &gt;&gt; append [a b c] only [d e] 
+    == [a b c [d e]]
+
+But optimizing that to an extreme would be hard, and weird.  The more I look at it, the more reluctant I am to push the optimizations to the point of not using a series node.  e.g. the &quot;one series node&quot; optimization is about as far as I may feel comfortable pushing ONLY.
+
+On the other hand...generic quoting is already written, and systemically optimized, even to multiple levels (up to 3)...and does no allocations.  And QUOTE will be something users are already familiar with.
+
+Plus, you at least have the option when writing expert-optimized code to use the learnable idiom of two ticks when you have a literal:
+
+    &gt;&gt; append [a b c] &#39;&#39;[d e]
+    == [a b c [d e]]
+
+## Ok, But, It Makes QUOTED! Another Interfered-With Type :-(
+
+Let&#39;s say you&#39;re running through a block of items that contains quoted things and want to append them somewhere...you&#39;ve now got another type that APPEND chooses to muck with if you don&#39;t say /ONLY or QUOTE:
+
+    data1: [1 2 &lt;skipme&gt; x y &#39;z]
+    data2: []
+
+    for-each item data1 [
+        if not tag? item [
+            append data2 item
+        ]
+    ]
+
+    &gt;&gt; data2
+    == [1 2 x y z]  ; oops, &#39;z got turned into plain z
+
+Still.. *what happened to **&#39;z** would have just as easily happened to **[z]**.*  So how much worse is losing of a level of quote than losing the containership of a block?  
+
+Rebol2 messed with your BLOCK!s, GROUP!s and ANY-PATH!s if you forgot to say /ONLY.  Now it would mess with your BLOCK!s and your QUOTED!s.
+
+**I&#39;m not in love with this aspect...but just pointing out that there&#39;s been no perfect answer to the problem, yet.**  So having an imperfect property doesn&#39;t rule something out automatically.
+
+## Main Point: Stepping Back From The Abyss of Optimization...
+
+Using the sunk cost of work on QUOTED! vs. making a &quot;magic&quot; kind of block came to me while thinking about something related.
+
+Imagine you have a function that takes actions to run, and you want to pass that something that just returns a constant value.
+
+One way to do this today is to make a specialization of the IDENTITY function:
+
+    &gt;&gt; three: specialize :identity [value: 3]
+
+    &gt;&gt; type of :three
+    == #[action!]
+
+    &gt;&gt; three
+    == 3
+
+But it feels a shame for such an action to take up more space and load the GC than just the simple number 3 would take.  So we can imagine an overlaying cell formats, and how to &quot;lie&quot; about being an ACTION! when the cell is really an INTEGER!.
+
+*But oh what a tangled web we weave...* trying to engineer this deception has so many problems it becomes hard to count them all.  You can set meta information on actions, but this integer-action has no place to put it.  If you convert it to a real ACTION! on demand, then each such conversion would get a new identity...putting the inefficiencies aside, that&#39;s a semantic problem because actions are expected to have individual identities, and these just don&#39;t.
+
+**It would be much simpler if you had written the routine that was willing to take an action to also take a QUOTED!**.
+
+This makes a good argument for why QUOTED!s should answer to the same questions that an action might...just minus that one lie of &quot;I am an action!&quot;
+
+    &gt;&gt; a: func [] [return just x]
+    &gt;&gt; q: just &#39;x
+
+    &gt;&gt; do :a
+    == x
+
+    &gt;&gt; do :q  ; colon not needed, but shows same flow as when using an action
+    == x
+
+    &gt;&gt; parameters of :a
+    == []
+
+    &gt;&gt; parameters of :q
+    == []
+
+I guess the point I&#39;m trying to make is that while it might seem a bit dissatisfying to have to handle a QUOTED! or an ACTION!, it seems that the places where you would have actual trouble with it is anywhere such methods don&#39;t make sense...and those points are exactly where a &quot;fake&quot; optimized action would break down.
+
+This line of thinking took me to where I thought that making an optimized BLOCK! that doesn&#39;t have the implementation character of a BLOCK! (e.g. a series node) is a mistake in a similar vein.  If you demand this particular axis of efficiency, you should use the systemic mechanism of a QUOTED! to get it...or say it&#39;s not worth it.
+
+## So Does Mucking Up QUOTED!s Beat the /ONLY Option?
+
+I&#39;m not feeling convinced.
+
+The only thing I think I&#39;ve convinced myself of is that the fake no-node block trick I was considering is bad for the health of the system.  We are making 1-element blocks somewhat efficiently, but they&#39;re not free.  So I wanted to write up the thinking behind that...and share the rest in case it triggered any brainstorms.</description>
+    
+    <lastBuildDate>Sun, 10 Jan 2021 18:19:07 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/revisiting-the-obvious-quoting-to-suppress-array-splicing/1463.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Revisiting the &quot;Obvious&quot;: Quoting To Suppress Array Splicing?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>A while ago, <a href="https://forum.rebol.info/t/make-splicing-by-default-only-apply-when-appending-a-block/226/7">@IngoHohmann made a sensible-sounding suggestion</a>:</p>
+<aside class="quote no-group" data-username="IngoHohmann" data-post="7" data-topic="226">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"><a href="https://forum.rebol.info/t/make-splicing-by-default-only-apply-when-appending-a-block/226/7">Make Splicing by default only apply when appending a BLOCK!</a>
+</div>
+<blockquote>
+<p>Well these days to splice or not to splice could be controlled with quoted-, get-, set- variants.</p>
+</blockquote>
+</aside>
+<p>I pointed out that unfortunately this wouldn't have the desired behavior at the callsites... because the evaluation of the parameter would strip the quote off before APPEND saw it:</p>
+<pre><code>&gt;&gt; '[d e]
+== [d e]
+
+&gt;&gt; append [a b c] '[d e]
+== [a b c d e]
+</code></pre>
+<p>For APPEND to "see the tick", it would have to change its parameter convention to take its argument literally...which is not desirable...or you have to use a function that adds it:</p>
+<pre><code>&gt;&gt; quote [d e]
+== '[d e]
+
+&gt;&gt; append [a b c] quote [d e]
+== [a b c [d e]]
+</code></pre>
+<h2>You Could Ask: "So What?"</h2>
+<p>We've been expressing a willingness to use an ONLY operator to signal an intent to add things "as is":</p>
+<pre><code>&gt;&gt; only [d e]
+== [[d e]]
+
+&gt;&gt; append [a b c] only [d e] 
+== [a b c [d e]]
+</code></pre>
+<p>But optimizing that to an extreme would be hard, and weird.  The more I look at it, the more reluctant I am to push the optimizations to the point of not using a series node.  e.g. the "one series node" optimization is about as far as I may feel comfortable pushing ONLY.</p>
+<p>On the other hand...generic quoting is already written, and systemically optimized, even to multiple levels (up to 3)...and does no allocations.  And QUOTE will be something users are already familiar with.</p>
+<p>Plus, you at least have the option when writing expert-optimized code to use the learnable idiom of two ticks when you have a literal:</p>
+<pre><code>&gt;&gt; append [a b c] ''[d e]
+== [a b c [d e]]
+</code></pre>
+<h2>Ok, But, It Makes QUOTED! Another Interfered-With Type <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">
+</h2>
+<p>Let's say you're running through a block of items that contains quoted things and want to append them somewhere...you've now got another type that APPEND chooses to muck with if you don't say /ONLY or QUOTE:</p>
+<pre><code>data1: [1 2 &lt;skipme&gt; x y 'z]
+data2: []
+
+for-each item data1 [
+    if not tag? item [
+        append data2 item
+    ]
+]
+
+&gt;&gt; data2
+== [1 2 x y z]  ; oops, 'z got turned into plain z
+</code></pre>
+<p>Still.. <em>what happened to <strong>'z</strong> would have just as easily happened to <strong>[z]</strong>.</em>  So how much worse is losing of a level of quote than losing the containership of a block?</p>
+<p>Rebol2 messed with your BLOCK!s, GROUP!s and ANY-PATH!s if you forgot to say /ONLY.  Now it would mess with your BLOCK!s and your QUOTED!s.</p>
+<p><strong>I'm not in love with this aspect...but just pointing out that there's been no perfect answer to the problem, yet.</strong>  So having an imperfect property doesn't rule something out automatically.</p>
+<h2>Main Point: Stepping Back From The Abyss of Optimization...</h2>
+<p>Using the sunk cost of work on QUOTED! vs. making a "magic" kind of block came to me while thinking about something related.</p>
+<p>Imagine you have a function that takes actions to run, and you want to pass that something that just returns a constant value.</p>
+<p>One way to do this today is to make a specialization of the IDENTITY function:</p>
+<pre><code>&gt;&gt; three: specialize :identity [value: 3]
+
+&gt;&gt; type of :three
+== #[action!]
+
+&gt;&gt; three
+== 3
+</code></pre>
+<p>But it feels a shame for such an action to take up more space and load the GC than just the simple number 3 would take.  So we can imagine an overlaying cell formats, and how to "lie" about being an ACTION! when the cell is really an INTEGER!.</p>
+<p><em>But oh what a tangled web we weave...</em> trying to engineer this deception has so many problems it becomes hard to count them all.  You can set meta information on actions, but this integer-action has no place to put it.  If you convert it to a real ACTION! on demand, then each such conversion would get a new identity...putting the inefficiencies aside, that's a semantic problem because actions are expected to have individual identities, and these just don't.</p>
+<p><strong>It would be much simpler if you had written the routine that was willing to take an action to also take a QUOTED!</strong>.</p>
+<p>This makes a good argument for why QUOTED!s should answer to the same questions that an action might...just minus that one lie of "I am an action!"</p>
+<pre><code>&gt;&gt; a: func [] [return just x]
+&gt;&gt; q: just 'x
+
+&gt;&gt; do :a
+== x
+
+&gt;&gt; do :q  ; colon not needed, but shows same flow as when using an action
+== x
+
+&gt;&gt; parameters of :a
+== []
+
+&gt;&gt; parameters of :q
+== []
+</code></pre>
+<p>I guess the point I'm trying to make is that while it might seem a bit dissatisfying to have to handle a QUOTED! or an ACTION!, it seems that the places where you would have actual trouble with it is anywhere such methods don't make sense...and those points are exactly where a "fake" optimized action would break down.</p>
+<p>This line of thinking took me to where I thought that making an optimized BLOCK! that doesn't have the implementation character of a BLOCK! (e.g. a series node) is a mistake in a similar vein.  If you demand this particular axis of efficiency, you should use the systemic mechanism of a QUOTED! to get it...or say it's not worth it.</p>
+<h2>So Does Mucking Up QUOTED!s Beat the /ONLY Option?</h2>
+<p>I'm not feeling convinced.</p>
+<p>The only thing I think I've convinced myself of is that the fake no-node block trick I was considering is bad for the health of the system.  We are making 1-element blocks somewhat efficiently, but they're not free.  So I wanted to write up the thinking behind that...and share the rest in case it triggered any brainstorms.</p>
+          <p><a href="https://forum.rebol.info/t/revisiting-the-obvious-quoting-to-suppress-array-splicing/1463/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/revisiting-the-obvious-quoting-to-suppress-array-splicing/1463/1</link>
+        <pubDate>Sun, 10 Jan 2021 16:27:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1463-1</guid>
+        <source url="https://forum.rebol.info/t/revisiting-the-obvious-quoting-to-suppress-array-splicing/1463.rss">Revisiting the &quot;Obvious&quot;: Quoting To Suppress Array Splicing?</source>
+      </item>
+  </channel>
+</rss>

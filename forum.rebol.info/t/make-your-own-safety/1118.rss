@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Make Your Own Safety?</title>
+    <link>https://forum.rebol.info/t/make-your-own-safety/1118</link>
+    <description>At times it seems like Rebol can&#39;t decide if it&#39;s an extremely high-level language, or some kind of assembly language.  It&#39;s subject to interpretation *(pun possibly intended)*.
+
+Certain unchecked assumptions seem like disasters ready to happen.  For instance, if GET of a PATH! allows evaluation:
+
+    &gt;&gt; o: make object! [x: 10 y: 20]
+
+    &gt;&gt; value: &#39;o/(print &quot;Boo!&quot; | either condition &#39;x &#39;y | elide condition: false)
+    &gt;&gt; condition: true
+
+    &gt;&gt; get value
+    Boo!
+    == 10
+
+    &gt;&gt; get value
+    Boo!
+    == 20
+
+The word GET does not really seem like it would have side-effects.  You may not think to check that value is a PATH!.  You may expect two GETs in a row to return the same thing.  Etc. etc.
+
+But if you put code as a GET-PATH! in source, it wouldn&#39;t seem so uncomfortable:
+
+    &gt;&gt; :o/(print &quot;Boo!&quot; &#39;x)
+    Boo!  ; Well, I told it to say that at this exact callsite, must have meant it...
+    == 10  
+
+For this case Ren-C tried to straddle the line, by allowing it in the GET-PATH! and SET-PATH! cases of the evaluator but not in the GET and SET native operations.  But this starts creating a drift to where GET of a PATH is not the same as a GET-PATH!.  That gets tangled up pretty fast...refinements here don&#39;t line up with choices there, it feels asymmetrical and unkempt.
+
+Is it worth the tangle?  Isn&#39;t everyone just one step away from assuming that **do compose [(value): ...]** will work the same as if you said SET VALUE?  Is there really such a difference between the &quot;English&quot; **get &#39;foo** and the shorthand **:foo** in the first place?
+
+## Rebol is for customization, should people build their own safety?
+
+One hates to pass the buck and say *&quot;well, the user can do it&quot;*.  But if you&#39;re making a system that&#39;s small enough to [Put The Personal Back Into Personal Computing](https://forum.rebol.info/t/back-to-personal-computing/186), maybe you don&#39;t want to second guess things like what everyone would want from SET.  You might guess wrong.
+
+Ren-C&#39;s pursuit is Power to the People to address the pain points that specifically peeve *them*.  They don&#39;t have to wait for any language implementer to do it.  e.g.
+
+    set: adapt &#39;set [
+        if any-path? target [
+            for-each x target [if group? x [fail &quot;GROUP! in ANY-PATH!&quot;]]
+        ]
+        ; fall through to normal SET behavior
+    ]
+
+The SET as used by the mezzanine will keep on working.  The goal is that this definition applies in whatever place you were doing your work.
+
+They didn&#39;t have to redefine the function interface, or rewrite the HELP unless they want to.  This is the essence of what we&#39;re going for.  And there are ways to make it more efficient, you can implement that check as native code against the internal API if you wanted.
+
+So is the main value consistent behavior between GET-XXX! and GET (actually GET/ANY)?  Then have a GET/HARD which doesn&#39;t evaluate groups and uses them as data (e.g. **`set/hard &#39;my-map/(1 + 2): &lt;sum&gt;`** would actually consider the GROUP! `(1 + 2)` to be the key.  There are other reasons this ability is important besides maps, like avoiding double-evaluations in constructs like DEFAULT that have to both GET a left hand path and SET it, and don&#39;t want to run groups twice.)
+
+## ...Maybe?  But not everything should be laissez-faire...
+
+The argument above about GET works because if you don&#39;t like it, you can change it.  But what happens when the very tools by which you might change things fall down on you at a basic level?
+
+We know how quickly things go to hell if you put functions in blocks and try to enumerate them.
+
+     &gt;&gt; block: reduce [:print]
+
+     &gt;&gt; for-each i block [if group? i [print &quot;Found a group!&quot;]]
+     Found a group!
+     #[void]
+     ** Script Error: if is missing its branch argument
+
+I don&#39;t want to belabor the implications of security, here.  [That&#39;s another thread.](https://forum.rebol.info/c/usage/philosophy)
+
+But it seems to me that if the bias on a few things were tweaked a little, it would be a big help.  One thing I&#39;ve written about before is the idea that GET-WORD! not mean soft quote, but mean &quot;I can accept ACTION!s&quot;.  If you leave it off, you don&#39;t...and the FOR-EACH errors.  Seeing the notation **for-each :i block [...]** would be a visual reminder that you&#39;re dealing with an iteration that *might* have an `i` that&#39;s an action, so you should be sensitive to it.
+
+These are places that have to be looked at, and looked at soon.  The web demo is going pretty well so far and even a bit ahead of schedule for Beta/One.  But topics like this are weighty and monstrous, and there&#39;s so many of them that we would be looking at decades if they all were to be known-to-the-extent-we&#39;ll-know-them.
+
+## So in the end, what should SET do on PATH!s with GROUP!s?
+
+I actually was going to go ahead and bias it so that SET goes ahead and runs GROUP!s in the path.  Looking at the reality of the code is giving me some cold feet.  As is often the case, the process of trying to reverse a change that was put in for a reason is a reminder of the motivations.
+
+I&#39;m going to keep thinking about it.  But still, the point I raise here is a valid one.  There may be a general principle that we be very selective about where we make our safety pushes--being mindful of the question of *how difficult it would be for a user to customize the feature for themselves*.  The harder it would be, the more attention that issue should get.</description>
+    
+    <lastBuildDate>Mon, 11 Jan 2021 17:03:32 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/make-your-own-safety/1118.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Make Your Own Safety?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1118">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Rebol is for customization, should people build their own safety?</p>
+</blockquote>
+</aside>
+<p>I was a bit frustrated by MOLD, because it was erroring on NULL input.</p>
+<p>I was looking at this case:</p>
+<pre><code>print ["RETURNS:" either return-type [mold return-type] ["(undocumented)"]]
+</code></pre>
+<p>If MOLD of NULL returned NULL I could just say:</p>
+<pre><code>print ["RETURNS:" mold return-type else ["(undocumented)"]]
+</code></pre>
+<p>But this risks being caught unawares when asking to MOLD a NULL in other cases.</p>
+<p>However, we've decided this is legal:</p>
+<pre><code>&gt;&gt; unspaced ["a" if false ["b"] "c"]
+"ac"
+</code></pre>
+<p>So even though there is a general rule that functions not silently pass on NULL, MOLD is one of those cases where it's actually useful to do so.</p>
+<h2>Tying this back to "Make Your Own Safety..."</h2>
+<p>We should make it very easy for someone to make a version of MOLD that <em>does</em> error on NULL input.</p>
+<p>Even without easy type signature manipulation (coming soon?) there's already a pretty good answer for this case with ADAPT:</p>
+<pre><code>mold: adapt :mold [
+    if null? :value [fail 'value "MOLD adapted to not take NULL"]
+]
+</code></pre>
+<p>This customized mold has all the refinements and help information of the original, and by "blaming" the callsite (with the <strong>fail 'value</strong>) the error is even half-decent.</p>
+<p>The idea here of making it painless for people to twist constructs to address the problems that irritate them personally seems the best bias to take.  We want these function variations to be frictionless and efficient enough that you don't feel burdened by creating a lot of them.</p>
+<p><strong>It's going to pretty much always be easier to add checks on at higher levels than to remove them from lower ones</strong>.  So I think allowing NULL inputs to MOLD is a good default.</p>
+          <p><a href="https://forum.rebol.info/t/make-your-own-safety/1118/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/make-your-own-safety/1118/3</link>
+        <pubDate>Mon, 11 Jan 2021 17:03:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1118-3</guid>
+        <source url="https://forum.rebol.info/t/make-your-own-safety/1118.rss">Make Your Own Safety?</source>
+      </item>
+      <item>
+        <title>Make Your Own Safety?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1118">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>At times it seems like Rebol can't decide if it's an extremely high-level language, or some kind of assembly language. It's subject to interpretation <em>(pun possibly intended)</em> .</p>
+<p>Certain unchecked assumptions seem like disasters ready to happen.</p>
+</blockquote>
+</aside>
+<p>As another example of ceding "safety" to "expressivity", <a>enfixedness has gone back to being an intrinsic property of functions</a>.  As such, it is preserved by assignment, or by passing as a parameter.</p>
+<pre><code>&gt;&gt; plus: :+
+
+&gt;&gt; 1 plus 2
+== 3
+
+&gt;&gt; foo: function [arity-two [action!]] [
+     print "Hello"
+     arity-two 1 2
+]
+
+&gt;&gt; foo :plus
+** Script Error: arity-two does not allow text! for its value1 argument
+</code></pre>
+<p>So you're getting an arity-two function, but you don't know its parameter convention.  Hence it's dangerous to invoke it without an APPLY.</p>
+<p>Breaking enfix functions out into a separate datatype (like OP!) would <em>sort of</em> help.  But note that in Rebol2/R3-Alpha/Red there was only an ANY-FUNCTION! class, not ANY-PREFIX! and OP!.  You could have made ANY-PREFIX! as a typeset yourself, but we have to ask <em>how useful is this, really</em>.  When invoked through the evaluator, any aspect of the calling convention you don't know about is going to be a problem.  Not just using the wrong number of args, but even with the right number then a function that quotes an argument is going to behave differently from one that doesn't when you call it.</p>
+<p>So if there's a way of enforcing a type convention on function arguments, it seems that checking a signature for its left-looking-ness is just another thing that you'd have to check.  Or, you should use an APPLY that supplies the arguments on your own terms.</p>
+<p><strong>It's not in vain to try things to improve the safety of the language.</strong>  Making enfix not carry through assignments helped develop some interesting properties of the system that are serving in other places today, like CONST.  But the idea that a function you trusted could lose its behavior by calling convention when passed through a simple assignment just turned out to not be worth the perceived "safety" it was granting.</p>
+          <p><a href="https://forum.rebol.info/t/make-your-own-safety/1118/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/make-your-own-safety/1118/2</link>
+        <pubDate>Thu, 02 May 2019 19:22:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1118-2</guid>
+        <source url="https://forum.rebol.info/t/make-your-own-safety/1118.rss">Make Your Own Safety?</source>
+      </item>
+      <item>
+        <title>Make Your Own Safety?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>At times it seems like Rebol can't decide if it's an extremely high-level language, or some kind of assembly language.  It's subject to interpretation <em>(pun possibly intended)</em>.</p>
+<p>Certain unchecked assumptions seem like disasters ready to happen.  For instance, if GET of a PATH! allows evaluation:</p>
+<pre><code>&gt;&gt; o: make object! [x: 10 y: 20]
+
+&gt;&gt; value: 'o/(print "Boo!" | either condition 'x 'y | elide condition: false)
+&gt;&gt; condition: true
+
+&gt;&gt; get value
+Boo!
+== 10
+
+&gt;&gt; get value
+Boo!
+== 20
+</code></pre>
+<p>The word GET does not really seem like it would have side-effects.  You may not think to check that value is a PATH!.  You may expect two GETs in a row to return the same thing.  Etc. etc.</p>
+<p>But if you put code as a GET-PATH! in source, it wouldn't seem so uncomfortable:</p>
+<pre><code>&gt;&gt; :o/(print "Boo!" 'x)
+Boo!  ; Well, I told it to say that at this exact callsite, must have meant it...
+== 10  
+</code></pre>
+<p>For this case Ren-C tried to straddle the line, by allowing it in the GET-PATH! and SET-PATH! cases of the evaluator but not in the GET and SET native operations.  But this starts creating a drift to where GET of a PATH is not the same as a GET-PATH!.  That gets tangled up pretty fast...refinements here don't line up with choices there, it feels asymmetrical and unkempt.</p>
+<p>Is it worth the tangle?  Isn't everyone just one step away from assuming that <strong>do compose [(value): ...]</strong> will work the same as if you said SET VALUE?  Is there really such a difference between the "English" <strong>get 'foo</strong> and the shorthand <strong>:foo</strong> in the first place?</p>
+<h2>Rebol is for customization, should people build their own safety?</h2>
+<p>One hates to pass the buck and say <em>"well, the user can do it"</em>.  But if you're making a system that's small enough to <a href="https://forum.rebol.info/t/back-to-personal-computing/186">Put The Personal Back Into Personal Computing</a>, maybe you don't want to second guess things like what everyone would want from SET.  You might guess wrong.</p>
+<p>Ren-C's pursuit is Power to the People to address the pain points that specifically peeve <em>them</em>.  They don't have to wait for any language implementer to do it.  e.g.</p>
+<pre><code>set: adapt 'set [
+    if any-path? target [
+        for-each x target [if group? x [fail "GROUP! in ANY-PATH!"]]
+    ]
+    ; fall through to normal SET behavior
+]
+</code></pre>
+<p>The SET as used by the mezzanine will keep on working.  The goal is that this definition applies in whatever place you were doing your work.</p>
+<p>They didn't have to redefine the function interface, or rewrite the HELP unless they want to.  This is the essence of what we're going for.  And there are ways to make it more efficient, you can implement that check as native code against the internal API if you wanted.</p>
+<p>So is the main value consistent behavior between GET-XXX! and GET (actually GET/ANY)?  Then have a GET/HARD which doesn't evaluate groups and uses them as data (e.g. <strong><code>set/hard 'my-map/(1 + 2): &lt;sum&gt;</code></strong> would actually consider the GROUP! <code>(1 + 2)</code> to be the key.  There are other reasons this ability is important besides maps, like avoiding double-evaluations in constructs like DEFAULT that have to both GET a left hand path and SET it, and don't want to run groups twice.)</p>
+<h2>...Maybe?  But not everything should be laissez-faire...</h2>
+<p>The argument above about GET works because if you don't like it, you can change it.  But what happens when the very tools by which you might change things fall down on you at a basic level?</p>
+<p>We know how quickly things go to hell if you put functions in blocks and try to enumerate them.</p>
+<pre><code> &gt;&gt; block: reduce [:print]
+
+ &gt;&gt; for-each i block [if group? i [print "Found a group!"]]
+ Found a group!
+ #[void]
+ ** Script Error: if is missing its branch argument
+</code></pre>
+<p>I don't want to belabor the implications of security, here.  <a href="https://forum.rebol.info/c/usage/philosophy">That's another thread.</a></p>
+<p>But it seems to me that if the bias on a few things were tweaked a little, it would be a big help.  One thing I've written about before is the idea that GET-WORD! not mean soft quote, but mean "I can accept ACTION!s".  If you leave it off, you don't...and the FOR-EACH errors.  Seeing the notation <strong>for-each :i block [...]</strong> would be a visual reminder that you're dealing with an iteration that <em>might</em> have an <code>i</code> that's an action, so you should be sensitive to it.</p>
+<p>These are places that have to be looked at, and looked at soon.  The web demo is going pretty well so far and even a bit ahead of schedule for Beta/One.  But topics like this are weighty and monstrous, and there's so many of them that we would be looking at decades if they all were to be known-to-the-extent-we'll-know-them.</p>
+<h2>So in the end, what should SET do on PATH!s with GROUP!s?</h2>
+<p>I actually was going to go ahead and bias it so that SET goes ahead and runs GROUP!s in the path.  Looking at the reality of the code is giving me some cold feet.  As is often the case, the process of trying to reverse a change that was put in for a reason is a reminder of the motivations.</p>
+<p>I'm going to keep thinking about it.  But still, the point I raise here is a valid one.  There may be a general principle that we be very selective about where we make our safety pushes--being mindful of the question of <em>how difficult it would be for a user to customize the feature for themselves</em>.  The harder it would be, the more attention that issue should get.</p>
+          <p><a href="https://forum.rebol.info/t/make-your-own-safety/1118/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/make-your-own-safety/1118/1</link>
+        <pubDate>Sat, 16 Mar 2019 16:34:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1118-1</guid>
+        <source url="https://forum.rebol.info/t/make-your-own-safety/1118.rss">Make Your Own Safety?</source>
+      </item>
+  </channel>
+</rss>

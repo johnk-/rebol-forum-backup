@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Lessons from Encapping: Improving BINARY! PARSE</title>
+    <link>https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577</link>
+    <description>The Atronix R3 version that Ren-C started from had a bunch of OS-specific C code (that wasn&#39;t in R3-Alpha) pertaining to encapping.
+
+I saw this as a liability.  Also, it was inflexible...you&#39;d have to have a Windows EXE to do encapping on Windows, and a Linux executable to do encapping on Linux, etc.
+
+Encapping seemed like a perfect opportunity to be moved fully to usermode...to exercise BINARY! parsing.  The well-documented ELF, PE, and Mach-O specs would be a great test of how well those specs could be translated into a resource-rewriting tool.
+
+As a first task, I undertook the ELF binary.  **And it was painful.**  The code did not feel good.
+
+Shixin was somehow inspired and did the Windows PE version (on his own time over a weekend, perhaps, if I recall).  And in this case, he actually probably did it in a more Rebol-like way than I did.  His implementation abstracted the PARSE rules more into his own GEN-RULE dialect, so it was a bit less redundant.  **But it was still far from ideal.**
+
+**[The source today is not pleasant (%encap.reb)](https://github.com/metaeducation/ren-c/blob/master/scripts/encap.reb)**.  However, I think it has potential, and can evolve into a showcase of better practices as features get shored up.
+
+## Basic Problem: No Composition Of Higher-Level Captures
+
+A huge problem I&#39;ve identified with historical PARSE is that your SET and COPY operations were limited by the type of your input.  If your input is a string, the only thing you can directly capture are characters or portions of strings.  If your input is a block, the only thing you can directly capture are values or ranges out of that block.
+
+This doesn&#39;t give you any abstraction power.  It&#39;s harrowing.
+
+Let&#39;s say you want to capture a little-endian 16-bit unsigned integer.  You make a rule, which has to associate with a buffer variable and then a variable to hold the translated value:
+
+    u16: _
+    buf: _
+    u16-le-rule: [copy buf 2 skip (u16: debin [LE + 2] buf)]
+
+This is already worlds better than what we had, [because it&#39;s using DEBIN](https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270) (which did not exist back then).
+
+Even so, you&#39;re not done.  Now if you want to capture a uint16 little-endian, you need to run the rule...and then grab this mysterious variable:
+
+    parse bin [u16-le-rule (my-var: u16)]
+
+*This is not competitive with the parser combinators people are familiar with in other languages!*  For starters, it would at least have to be much more like:
+
+    parse bin [my-var: u16-le-rule]
+
+But I&#39;d argue that capturing various forms of integers with different byte widths and signedness and endianness is so foundational that this should basically be in the box.
+
+    parse bin [my-var: debin [LE + 2]]
+
+    -or-
+
+    u16: [debin [LE + 2]]
+    parse bin [my-var: u16]
+
+I don&#39;t know if that&#39;s exactly right.  But it shouldn&#39;t be any harder than that.
+
+## Combinators Should Be Able To Return *ANYTHING*
+
+The main point to absorb here is that abstraction isn&#39;t going to work unless a &quot;value-bearing&quot; parse rule is able to return whatever it wants...disconnected from the input type of the series.  It&#39;s a major oversight in PARSE.
+
+UPARSE is seeking to fix this.
+
+## There&#39;s no Pattern For Reading and Writing Duality
+
+When you describe a file format, you have all the information you need to read it...but also all the information to write it.  How do you deal with that?
+
+My awkward answer was to lay out rules like this, looking for fields in the binary (e_xxx)
+
+        4 skip ; e_flags
+        2 skip ; e_ehsize
+        begin: here, 2 skip (handler &#39;e_phentsize 2)
+        begin: here, 2 skip (handler &#39;e_phnum 2)
+        begin: here, 2 skip (handler &#39;e_shentsize 2)
+
+&quot;Uninteresting&quot; data was skipped.  &quot;Interesting&quot; data would laboriously mark the start position, skip to the end position, and then call a handler with the name of the field and the size.  If in write mode, that handler would CHANGE the span to the encoding of a variable with that name.  If in read mode, it would decode into that variable.
+
+I was planning on writing a higher-level abstraction for this.  But I didn&#39;t.
+
+The handler looks like:
+
+    handler: func [name [word!] num-bytes [integer!]] [
+        either mode = &#39;read [
+            let bin: copy/part begin num-bytes
+            set name debin [(either endian = &#39;little [&#39;le] [&#39;be]) +] bin
+        ][
+            let val: ensure integer! get name
+            change begin enbin [
+                (either endian = &#39;little [&#39;le] [&#39;be]) + (num-bytes)
+            ] val
+        ]
+    ]
+
+I guess a question to answer is whether PARSE should have any particular facilitation of bidirectional specification of a rule.  It might be able to pick values out of a buffer, or build a buffer from values, or just tweak particular values in an existing buffer.
+
+This may be a job for a higher-level dialect.  [I&#39;ll also point out the TLS EMIT dialect (and Oldes&#39; take on it)](https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498) for something to consider that&#39;s related.
+
+## Plenty of Room for Improvement
+
+I don&#39;t know what the timeline is for making encap better, but now that it has [at least some testing](https://forum.rebol.info/t/not-scrapping-encapping-now-tested-on-win-mac-linux/1576), maybe it will be a good place to try new ideas.</description>
+    
+    <lastBuildDate>Mon, 19 Apr 2021 07:11:07 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Lessons from Encapping: Improving BINARY! PARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>So UPARSE is now being used in %unzip.reb for BINARY! parse, and it's leveraging the improvements that I talk about here.</strong></p>
+<aside class="onebox githubcommit">
+  <header class="source">
+      <a href="https://github.com/metaeducation/ren-c/commit/83de33e9e8fa40db3f8df8d65dccc47ddedc0e78" target="_blank" rel="noopener">github.com/metaeducation/ren-c</a>
+  </header>
+  <article class="onebox-body">
+    <div class="github-row">
+  <div class="github-icon-container" title="Commit">
+    <svg width="60" height="60" class="github-icon" viewbox="0 0 14 16" aria-hidden="true"><path d="M10.86 7c-.45-1.72-2-3-3.86-3-1.86 0-3.41 1.28-3.86 3H0v2h3.14c.45 1.72 2 3 3.86 3 1.86 0 3.41-1.28 3.86-3H14V7h-3.14zM7 10.2c-1.22 0-2.2-.98-2.2-2.2 0-1.22.98-2.2 2.2-2.2 1.22 0 2.2.98 2.2 2.2 0 1.22-.98 2.2-2.2 2.2z"></path></svg>
+  </div>
+
+  <div class="github-info-container">
+    <h4>
+      <a href="https://github.com/metaeducation/ren-c/commit/83de33e9e8fa40db3f8df8d65dccc47ddedc0e78" target="_blank" rel="noopener">Change UNZIP to use UPARSE, Revisit Streaming Fix</a>
+    </h4>
+
+    <div class="github-info">
+      <div class="date">
+        committed <span class="discourse-local-date" data-format="ll" data-date="2021-04-19" data-time="06:46:14" data-timezone="UTC">06:46AM - 19 Apr 21 UTC</span>
+      </div>
+
+      <div class="user">
+        <a href="https://github.com/hostilefork" target="_blank" rel="noopener">
+          <img alt="hostilefork" src="https://avatars.githubusercontent.com/u/20440?v=4" class="onebox-avatar-inline" width="20" height="20">
+          hostilefork
+        </a>
+        
+      </div>
+
+      <div class="lines" title="changed 1 files with 188 additions and 87 deletions">
+        <a href="https://github.com/metaeducation/ren-c/commit/83de33e9e8fa40db3f8df8d65dccc47ddedc0e78" target="_blank" rel="noopener">
+          <span class="added">+188</span>
+          <span class="removed">-87</span>
+        </a>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+  <div class="github-row">
+    <pre class="github-content" style="white-space: normal;">This changes the UNZIP code to use UPARSE. Although UPARSE is in the
+prototype stage and very slow, what the ZIP code...</pre>
+  </div>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>It's not just a switch to UPARSE, but also fixes up some code Giulio added to solve a problem with streaming zips that rebzip couldn't decode.  So it's more robust and now has lots of comments, and is factored.  Hence even though the UPARSE features help the expressions be shorter, it got longer because it's doing more (and saying more).</p>
+<p>I went ahead and <a href="https://github.com/metaeducation/ren-c/commit/5807743c99d1828815bb32025d696e518c3ff52c">changed SEEK to take a rule</a>, as well.  I still think we should think about the question of which combinators break the rules and do things like quote variables and such.  But I actually did hit a case here of wanting to be able to seek a calculated expression, so SEEK of a GROUP! was important...and so long as I was needing that I figured it might as well use a rule vs. doing something weird and quoting groups.</p>
+<hr>
+<p><em>Sidenote on various frustrations: <a href="https://games.greggman.com/game/zip-rant/">ZIP: How not to design a file format</a></em></p>
+          <p><a href="https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577/2</link>
+        <pubDate>Mon, 19 Apr 2021 07:05:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1577-2</guid>
+        <source url="https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577.rss">Lessons from Encapping: Improving BINARY! PARSE</source>
+      </item>
+      <item>
+        <title>Lessons from Encapping: Improving BINARY! PARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The Atronix R3 version that Ren-C started from had a bunch of OS-specific C code (that wasn't in R3-Alpha) pertaining to encapping.</p>
+<p>I saw this as a liability.  Also, it was inflexible...you'd have to have a Windows EXE to do encapping on Windows, and a Linux executable to do encapping on Linux, etc.</p>
+<p>Encapping seemed like a perfect opportunity to be moved fully to usermode...to exercise BINARY! parsing.  The well-documented ELF, PE, and Mach-O specs would be a great test of how well those specs could be translated into a resource-rewriting tool.</p>
+<p>As a first task, I undertook the ELF binary.  <strong>And it was painful.</strong>  The code did not feel good.</p>
+<p>Shixin was somehow inspired and did the Windows PE version (on his own time over a weekend, perhaps, if I recall).  And in this case, he actually probably did it in a more Rebol-like way than I did.  His implementation abstracted the PARSE rules more into his own GEN-RULE dialect, so it was a bit less redundant.  <strong>But it was still far from ideal.</strong></p>
+<p><strong><a href="https://github.com/metaeducation/ren-c/blob/master/scripts/encap.reb">The source today is not pleasant (%encap.reb)</a></strong>.  However, I think it has potential, and can evolve into a showcase of better practices as features get shored up.</p>
+<h2>Basic Problem: No Composition Of Higher-Level Captures</h2>
+<p>A huge problem I've identified with historical PARSE is that your SET and COPY operations were limited by the type of your input.  If your input is a string, the only thing you can directly capture are characters or portions of strings.  If your input is a block, the only thing you can directly capture are values or ranges out of that block.</p>
+<p>This doesn't give you any abstraction power.  It's harrowing.</p>
+<p>Let's say you want to capture a little-endian 16-bit unsigned integer.  You make a rule, which has to associate with a buffer variable and then a variable to hold the translated value:</p>
+<pre><code>u16: _
+buf: _
+u16-le-rule: [copy buf 2 skip (u16: debin [LE + 2] buf)]
+</code></pre>
+<p>This is already worlds better than what we had, <a href="https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270">because it's using DEBIN</a> (which did not exist back then).</p>
+<p>Even so, you're not done.  Now if you want to capture a uint16 little-endian, you need to run the rule...and then grab this mysterious variable:</p>
+<pre><code>parse bin [u16-le-rule (my-var: u16)]
+</code></pre>
+<p><em>This is not competitive with the parser combinators people are familiar with in other languages!</em>  For starters, it would at least have to be much more like:</p>
+<pre><code>parse bin [my-var: u16-le-rule]
+</code></pre>
+<p>But I'd argue that capturing various forms of integers with different byte widths and signedness and endianness is so foundational that this should basically be in the box.</p>
+<pre><code>parse bin [my-var: debin [LE + 2]]
+
+-or-
+
+u16: [debin [LE + 2]]
+parse bin [my-var: u16]
+</code></pre>
+<p>I don't know if that's exactly right.  But it shouldn't be any harder than that.</p>
+<h2>Combinators Should Be Able To Return <em>ANYTHING</em>
+</h2>
+<p>The main point to absorb here is that abstraction isn't going to work unless a "value-bearing" parse rule is able to return whatever it wants...disconnected from the input type of the series.  It's a major oversight in PARSE.</p>
+<p>UPARSE is seeking to fix this.</p>
+<h2>There's no Pattern For Reading and Writing Duality</h2>
+<p>When you describe a file format, you have all the information you need to read it...but also all the information to write it.  How do you deal with that?</p>
+<p>My awkward answer was to lay out rules like this, looking for fields in the binary (e_xxx)</p>
+<pre><code>    4 skip ; e_flags
+    2 skip ; e_ehsize
+    begin: here, 2 skip (handler 'e_phentsize 2)
+    begin: here, 2 skip (handler 'e_phnum 2)
+    begin: here, 2 skip (handler 'e_shentsize 2)
+</code></pre>
+<p>"Uninteresting" data was skipped.  "Interesting" data would laboriously mark the start position, skip to the end position, and then call a handler with the name of the field and the size.  If in write mode, that handler would CHANGE the span to the encoding of a variable with that name.  If in read mode, it would decode into that variable.</p>
+<p>I was planning on writing a higher-level abstraction for this.  But I didn't.</p>
+<p>The handler looks like:</p>
+<pre><code>handler: func [name [word!] num-bytes [integer!]] [
+    either mode = 'read [
+        let bin: copy/part begin num-bytes
+        set name debin [(either endian = 'little ['le] ['be]) +] bin
+    ][
+        let val: ensure integer! get name
+        change begin enbin [
+            (either endian = 'little ['le] ['be]) + (num-bytes)
+        ] val
+    ]
+]
+</code></pre>
+<p>I guess a question to answer is whether PARSE should have any particular facilitation of bidirectional specification of a rule.  It might be able to pick values out of a buffer, or build a buffer from values, or just tweak particular values in an existing buffer.</p>
+<p>This may be a job for a higher-level dialect.  <a href="https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498">I'll also point out the TLS EMIT dialect (and Oldes' take on it)</a> for something to consider that's related.</p>
+<h2>Plenty of Room for Improvement</h2>
+<p>I don't know what the timeline is for making encap better, but now that it has <a href="https://forum.rebol.info/t/not-scrapping-encapping-now-tested-on-win-mac-linux/1576">at least some testing</a>, maybe it will be a good place to try new ideas.</p>
+          <p><a href="https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577/1</link>
+        <pubDate>Sun, 28 Mar 2021 17:08:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1577-1</guid>
+        <source url="https://forum.rebol.info/t/lessons-from-encapping-improving-binary-parse/1577.rss">Lessons from Encapping: Improving BINARY! PARSE</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>UPARSE Value-Bearing Control vs. Rule Success/Failure Control</title>
+    <link>https://forum.rebol.info/t/uparse-value-bearing-control-vs-rule-success-failure-control/1585</link>
+    <description>When **@(...)** was value-bearing, and **(...)** was not, I had the interesting idea that **@(...)** would consider the rule to have failed if it produced a NULL.
+
+Because the only reason it could fail was producing NULL, you could hygienically turn it into a rule that succeeded on null just by saying **opt @(...)**
+
+Cool as that is, I didn&#39;t feel comfortable transferring it over to plain GROUP! when it took over the role of &quot;bearing a value&quot; in a rule.  What if a group incidentally returns NULL, like this?
+
+    &gt;&gt; verbosity: 1
+
+    &gt;&gt; did parse &quot;aaa&quot; [some &quot;a&quot; (if verbosity &gt; 2 [print &quot;found an A&quot;])]
+    == #[false]
+
+Oops... you had an IF that vanished and returned NULL.  But then that triggered failure for the (...) rule.  That seems unfriendly.  While I&#39;m okay with saying that BLOCK! rule&#39;s evaluative result is NULL because the group made a null, it doesn&#39;t seem the rule should *fail to match*.
+
+But I feel like something got lost in the shuffle here.  Like what I&#39;d managed with generators:
+
+    gen: func [&lt;static&gt; n (0)] [
+        if n &lt; 3 [return n: n + 1]
+        return null
+    ]
+
+    
+    &gt;&gt; uparse &quot;a&quot; [&quot;a&quot;, data: some @(gen)]  ; old @(...) semantics (non-matching)
+    == &quot;a&quot;
+
+    &gt;&gt; data
+    == [1 2 3]
+
+How could you make something like a GROUP! that *would* fail if it were NULL, but return its value otherwise?
+
+This also calls to attention that there is a choice in constructs like WHILE to react to the success or failure, and not the value a rule produces.  This made me wonder if we could do it the other way...if all succeeding rules returned non-null, and failing rules returned null...then the WHILE/SOME could be driven by the result and not whether it matched or not.  Then you could have a rule that matched and produced NULL, but stopped a WHILE or SOME anyway.
+
+But there&#39;s a problem with that if any interesting matching rules return NULL, e.g. opt:
+
+    &gt;&gt; did uparse &quot;aaa&quot; [while [&quot;a&quot; opt &quot;b&quot;]]
+    == #[false]
+
+The problem is that if OPT &quot;B&quot; matches and returns NULL, and WHILE looks at that NULL instead of the success, the rule is run just once.  So OPT would have to succeed and bear a value other than NULL (perhaps the elusive NULL-2...that seems like it might work)
+
+That solves things like that OPT, but still throws a wrench in:
+
+    &gt;&gt; did uparse &quot;aaa&quot; [while [&quot;a&quot; opt &quot;b&quot; (if debug [print &quot;Still have this.&quot;])]]
+    == #[false]
+
+That detour examined...we can conclude it is probably the case that WHILE and SOME should not be looking at the &quot;value bearing&quot; result.  They should only look at if the rule matched or not...and whether it returned NULL is not relevant (only relevant to what it returns as its value, if it bears the value of its last matching run).
+
+    &gt;&gt; did uparse &quot;aaa&quot; [x: while [&quot;a&quot; opt &quot;b&quot;]]
+    == #[true]
+
+    &gt;&gt; x
+    ; null - because `opt &quot;b&quot;` was null so [&quot;a&quot; opt &quot;b&quot;] as a whole was null
+
+    &gt;&gt; did uparse &quot;aaa&quot; [x: while [&quot;a&quot; elide opt &quot;b&quot;]]
+    == #[true]
+
+    &gt;&gt; x
+    == &quot;a&quot;  ; because you ELIDE&#39;d the opt
+
+    &gt;&gt; did uparse &quot;aaa&quot; [x: while [&quot;a&quot; opt &quot;b&quot; (1020)]]
+    == #[true]
+
+    &gt;&gt; x
+    == 1020  ; arbitrary value from GROUP!
+
+**But still, I feel there should be some way to branch or react on the value bearing bit.**  Maybe it&#39;s a refinement to while?  WHILE/VALUE ?  Maybe it&#39;s a new operator?  **while [non-null (gen)]**  Or an arity-2 operator **while [non (null) (gen)]** ?
+
+I&#39;m not sure.  Just wanted to document my feeling something was lost when @(...) failing on NULL was folded into a (...) that doesn&#39;t do that.
+
+Maybe the answer is we just get more careful with (...) and understand that if it evaluates to NULL the rule fails, so you throw in some non null thing at the end of your ():
+
+    uparse &quot;aaa&quot; [some &quot;a&quot; (if verbosity &gt; 2 [print &quot;found an A&quot;], true)]
+
+But that seems to bias it the wrong way. 
+
+Maybe if you want the optionality you say **/(rule)** and that&#39;s a signal to fail if it&#39;s NULL?
+
+Or an operator like **must (rule)**?
+
+Not sure.  But still, I think matters are heading in a positive direction for the flexibility of PARSE.</description>
+    
+    <lastBuildDate>Tue, 13 Apr 2021 20:40:02 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/uparse-value-bearing-control-vs-rule-success-failure-control/1585.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>UPARSE Value-Bearing Control vs. Rule Success/Failure Control</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When <strong>@(...)</strong> was value-bearing, and <strong>(...)</strong> was not, I had the interesting idea that <strong>@(...)</strong> would consider the rule to have failed if it produced a NULL.</p>
+<p>Because the only reason it could fail was producing NULL, you could hygienically turn it into a rule that succeeded on null just by saying <strong>opt @(...)</strong></p>
+<p>Cool as that is, I didn't feel comfortable transferring it over to plain GROUP! when it took over the role of "bearing a value" in a rule.  What if a group incidentally returns NULL, like this?</p>
+<pre><code>&gt;&gt; verbosity: 1
+
+&gt;&gt; did parse "aaa" [some "a" (if verbosity &gt; 2 [print "found an A"])]
+== #[false]
+</code></pre>
+<p>Oops... you had an IF that vanished and returned NULL.  But then that triggered failure for the (...) rule.  That seems unfriendly.  While I'm okay with saying that BLOCK! rule's evaluative result is NULL because the group made a null, it doesn't seem the rule should <em>fail to match</em>.</p>
+<p>But I feel like something got lost in the shuffle here.  Like what I'd managed with generators:</p>
+<pre><code>gen: func [&lt;static&gt; n (0)] [
+    if n &lt; 3 [return n: n + 1]
+    return null
+]
+
+
+&gt;&gt; uparse "a" ["a", data: some @(gen)]  ; old @(...) semantics (non-matching)
+== "a"
+
+&gt;&gt; data
+== [1 2 3]
+</code></pre>
+<p>How could you make something like a GROUP! that <em>would</em> fail if it were NULL, but return its value otherwise?</p>
+<p>This also calls to attention that there is a choice in constructs like WHILE to react to the success or failure, and not the value a rule produces.  This made me wonder if we could do it the other way...if all succeeding rules returned non-null, and failing rules returned null...then the WHILE/SOME could be driven by the result and not whether it matched or not.  Then you could have a rule that matched and produced NULL, but stopped a WHILE or SOME anyway.</p>
+<p>But there's a problem with that if any interesting matching rules return NULL, e.g. opt:</p>
+<pre><code>&gt;&gt; did uparse "aaa" [while ["a" opt "b"]]
+== #[false]
+</code></pre>
+<p>The problem is that if OPT "B" matches and returns NULL, and WHILE looks at that NULL instead of the success, the rule is run just once.  So OPT would have to succeed and bear a value other than NULL (perhaps the elusive NULL-2...that seems like it might work)</p>
+<p>That solves things like that OPT, but still throws a wrench in:</p>
+<pre><code>&gt;&gt; did uparse "aaa" [while ["a" opt "b" (if debug [print "Still have this."])]]
+== #[false]
+</code></pre>
+<p>That detour examined...we can conclude it is probably the case that WHILE and SOME should not be looking at the "value bearing" result.  They should only look at if the rule matched or not...and whether it returned NULL is not relevant (only relevant to what it returns as its value, if it bears the value of its last matching run).</p>
+<pre><code>&gt;&gt; did uparse "aaa" [x: while ["a" opt "b"]]
+== #[true]
+
+&gt;&gt; x
+; null - because `opt "b"` was null so ["a" opt "b"] as a whole was null
+
+&gt;&gt; did uparse "aaa" [x: while ["a" elide opt "b"]]
+== #[true]
+
+&gt;&gt; x
+== "a"  ; because you ELIDE'd the opt
+
+&gt;&gt; did uparse "aaa" [x: while ["a" opt "b" (1020)]]
+== #[true]
+
+&gt;&gt; x
+== 1020  ; arbitrary value from GROUP!
+</code></pre>
+<p><strong>But still, I feel there should be some way to branch or react on the value bearing bit.</strong>  Maybe it's a refinement to while?  WHILE/VALUE ?  Maybe it's a new operator?  <strong>while [non-null (gen)]</strong>  Or an arity-2 operator <strong>while [non (null) (gen)]</strong> ?</p>
+<p>I'm not sure.  Just wanted to document my feeling something was lost when @(...) failing on NULL was folded into a (...) that doesn't do that.</p>
+<p>Maybe the answer is we just get more careful with (...) and understand that if it evaluates to NULL the rule fails, so you throw in some non null thing at the end of your ():</p>
+<pre><code>uparse "aaa" [some "a" (if verbosity &gt; 2 [print "found an A"], true)]
+</code></pre>
+<p>But that seems to bias it the wrong way.</p>
+<p>Maybe if you want the optionality you say <strong>/(rule)</strong> and that's a signal to fail if it's NULL?</p>
+<p>Or an operator like <strong>must (rule)</strong>?</p>
+<p>Not sure.  But still, I think matters are heading in a positive direction for the flexibility of PARSE.</p>
+          <p><a href="https://forum.rebol.info/t/uparse-value-bearing-control-vs-rule-success-failure-control/1585/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/uparse-value-bearing-control-vs-rule-success-failure-control/1585/1</link>
+        <pubDate>Tue, 13 Apr 2021 18:56:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1585-1</guid>
+        <source url="https://forum.rebol.info/t/uparse-value-bearing-control-vs-rule-success-failure-control/1585.rss">UPARSE Value-Bearing Control vs. Rule Success/Failure Control</source>
+      </item>
+  </channel>
+</rss>

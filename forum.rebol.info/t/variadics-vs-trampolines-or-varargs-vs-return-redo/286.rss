@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Variadics vs. Trampolines (or VARARGS! vs. RETURN/REDO)</title>
+    <link>https://forum.rebol.info/t/variadics-vs-trampolines-or-varargs-vs-return-redo/286</link>
+    <description>On Red&#39;s gitter.im, [@UnchartedWorks wrote](https://gitter.im/red/red/welcome?at=59a96eb166c1c7c477050d3e):
+
+&gt; Red isn’t functional, it can’t return a function and take arguments.
+
+Historically R3-Alpha had something called RETURN/REDO:
+
+https://stackoverflow.com/questions/14760916/
+
+It was disliked because it had a kind of invisible &quot;contract violation&quot; on the interface of the called function.  You&#39;d type HELP on something and it would look like it was arity-1, but then act as arity-10 sometimes and arity-5 sometimes.  APPLY would no longer have a consistent contract.  Most of the actual interesting applications were just very convoluted ways of writing variadics, and many Rebolers were opposed to variadics on principle.
+
+The feature was removed, though it remained as an implementation detail of DO in R3-Alpha.  When DO was passed a FUNCTION!, it would &quot;bounce&quot; it and run it, using the same mechanism that RETURN/REDO had been based on:
+
+    &gt;&gt; do :add 1 2
+    == 3
+
+But even there it shows it is problematic, because now DO has a magic power no other function has...and wrapping it becomes difficult.  Let us say that when DO takes a URL! you wish to give an error, but act the same otherwise.
+
+    &gt;&gt; safe-do: func [value] [
+         if url? :value [fail &quot;DO of a URL! is disabled&quot;]
+         do :value
+    ]
+
+If you try `safe-do :add 1 2` you will not get the behavior of DO wrapped as you might have liked, because it will attempt to collect the parameters at the `do :value` site, and see the end of the block.
+
+Ren-C has addressed this problem by introducing variadics as a formal interface concept.  DO is not variadic, and is hence constrained to taking one argument (or additional arguments as appropriate for refinements).  But a function called EVAL is variadic, yet lacks any interesting behavior beyond evaluator triggering:
+
+    &gt;&gt; eval :add 1 2
+    == 3
+
+    &gt;&gt; eval &quot;hello&quot;
+    == &quot;hello&quot;
+
+    &gt;&gt; x: 10
+    &gt;&gt; eval (quote x:) 20
+    &gt;&gt; print x
+    20
+
+By isolating this functionality into a routine that has no other complex behavior (the way DO has) the fact that one has to do a bit of &quot;extra work&quot; to wrap it doesn&#39;t come up so often.
+
+In any case, with variadics it is possible to be as sketchy as you like in Ren-C w.r.t. function retriggering, it just has to be part of your contract.  Rather than returning a function and asking the system to /REDO it, it&#39;s just that if a function is variadic, it has an opportunity before it returns to consume additional parameters from the callsite, and pass them to a function it calls directly.
+
+    add-or-reverse: func [args [string! integer! &lt;...&gt;]] [
+        a: take args
+        either string? a [
+            reverse copy a
+        ][
+            b: take args
+            add a b
+        ]
+    ]
+
+    &gt;&gt; add-or-reverse 1 2
+    == 3
+
+    &gt;&gt; add-or-reverse &quot;hello&quot;
+    == &quot;olleh&quot;
+
+Note that if one wishes to specialize a variadic function, one can.
+
+     &gt;&gt; f: specialize :add-or-reverse [
+         args: make varargs! [1 2]
+     ]
+
+    &gt;&gt; f
+    == 3
+
+    &gt;&gt; f: specialize :add-or-reverse [
+        args: make varargs! [&quot;hello&quot;]
+    ]
+
+    &gt;&gt; f
+    == &quot;olleh&quot;
+
+If you want a variadic to be able to do *anything*, it needs to be hard quoted and accept ANY-VALUE!.  Then you can, for instance, DO it.
+
+    mr-do: func [:feed [any-value! &lt;...&gt;]] [
+        print &quot;About to DO&quot;
+        result: do :feed
+        print &quot;DO is finished.&quot;
+        :result
+    ]
+
+    &gt;&gt; mr-do print 1 + 2 print 3 + 4 &quot;hello&quot;
+    About to DO
+    3
+    7
+    DO is finished
+    == &quot;hello&quot;
+
+There is a lot of flexibility in the approach, and composability isn&#39;t hurt as much as one would think.  It actually allows one to do some very interesting evaluator hooks.  While it was once a fringe feature, it has been solidifying over time...here&#39;s some old documentation:
+
+https://trello.com/c/Y17CEywN/</description>
+    
+    <lastBuildDate>Tue, 05 Sep 2017 14:52:49 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/variadics-vs-trampolines-or-varargs-vs-return-redo/286.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Variadics vs. Trampolines (or VARARGS! vs. RETURN/REDO)</title>
+        <dc:creator><![CDATA[unchartedworks]]></dc:creator>
+        <description><![CDATA[
+            <p>It confused me. Thanks you so much! I have a better understanding of it.</p>
+          <p><a href="https://forum.rebol.info/t/variadics-vs-trampolines-or-varargs-vs-return-redo/286/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/variadics-vs-trampolines-or-varargs-vs-return-redo/286/2</link>
+        <pubDate>Tue, 05 Sep 2017 14:52:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-286-2</guid>
+        <source url="https://forum.rebol.info/t/variadics-vs-trampolines-or-varargs-vs-return-redo/286.rss">Variadics vs. Trampolines (or VARARGS! vs. RETURN/REDO)</source>
+      </item>
+      <item>
+        <title>Variadics vs. Trampolines (or VARARGS! vs. RETURN/REDO)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>On Red's gitter.im, <a href="https://gitter.im/red/red/welcome?at=59a96eb166c1c7c477050d3e">@UnchartedWorks wrote</a>:</p>
+<blockquote>
+<p>Red isn’t functional, it can’t return a function and take arguments.</p>
+</blockquote>
+<p>Historically R3-Alpha had something called RETURN/REDO:</p>
+<aside class="onebox stackexchange">
+  <header class="source">
+      <a href="https://stackoverflow.com/questions/14760916/why-does-return-redo-evaluate-result-functions-in-the-calling-context-but-block" target="_blank" rel="noopener">stackoverflow.com</a>
+  </header>
+  <article class="onebox-body">
+      <a href="https://stackoverflow.com/users/211160/hostilefork-says-dont-trust-se" target="_blank" rel="noopener">
+    <img alt="HostileFork says dont trust SE" src="https://i.stack.imgur.com/VWHTU.png?s=128&amp;g=1" class="thumbnail onebox-avatar" width="128" height="128">
+  </a>
+<h4>
+  <a href="https://stackoverflow.com/questions/14760916/why-does-return-redo-evaluate-result-functions-in-the-calling-context-but-block" target="_blank" rel="noopener">Why does return/redo evaluate result functions in the calling context, but block results are not evaluated?</a>
+</h4>
+
+<div class="tags">
+  <strong>return, rebol, tail-call-optimization, trampolines</strong>
+</div>
+
+<div class="date">
+  asked by
+  
+  <a href="https://stackoverflow.com/users/211160/hostilefork-says-dont-trust-se" target="_blank" rel="noopener">
+    HostileFork says dont trust SE
+  </a>
+  on <a href="https://stackoverflow.com/questions/14760916/why-does-return-redo-evaluate-result-functions-in-the-calling-context-but-block" target="_blank" rel="noopener">09:02PM - 07 Feb 13 UTC</a>
+</div>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>It was disliked because it had a kind of invisible "contract violation" on the interface of the called function.  You'd type HELP on something and it would look like it was arity-1, but then act as arity-10 sometimes and arity-5 sometimes.  APPLY would no longer have a consistent contract.  Most of the actual interesting applications were just very convoluted ways of writing variadics, and many Rebolers were opposed to variadics on principle.</p>
+<p>The feature was removed, though it remained as an implementation detail of DO in R3-Alpha.  When DO was passed a FUNCTION!, it would "bounce" it and run it, using the same mechanism that RETURN/REDO had been based on:</p>
+<pre><code>&gt;&gt; do :add 1 2
+== 3
+</code></pre>
+<p>But even there it shows it is problematic, because now DO has a magic power no other function has...and wrapping it becomes difficult.  Let us say that when DO takes a URL! you wish to give an error, but act the same otherwise.</p>
+<pre><code>&gt;&gt; safe-do: func [value] [
+     if url? :value [fail "DO of a URL! is disabled"]
+     do :value
+]
+</code></pre>
+<p>If you try <code>safe-do :add 1 2</code> you will not get the behavior of DO wrapped as you might have liked, because it will attempt to collect the parameters at the <code>do :value</code> site, and see the end of the block.</p>
+<p>Ren-C has addressed this problem by introducing variadics as a formal interface concept.  DO is not variadic, and is hence constrained to taking one argument (or additional arguments as appropriate for refinements).  But a function called EVAL is variadic, yet lacks any interesting behavior beyond evaluator triggering:</p>
+<pre><code>&gt;&gt; eval :add 1 2
+== 3
+
+&gt;&gt; eval "hello"
+== "hello"
+
+&gt;&gt; x: 10
+&gt;&gt; eval (quote x:) 20
+&gt;&gt; print x
+20
+</code></pre>
+<p>By isolating this functionality into a routine that has no other complex behavior (the way DO has) the fact that one has to do a bit of "extra work" to wrap it doesn't come up so often.</p>
+<p>In any case, with variadics it is possible to be as sketchy as you like in Ren-C w.r.t. function retriggering, it just has to be part of your contract.  Rather than returning a function and asking the system to /REDO it, it's just that if a function is variadic, it has an opportunity before it returns to consume additional parameters from the callsite, and pass them to a function it calls directly.</p>
+<pre><code>add-or-reverse: func [args [string! integer! &lt;...&gt;]] [
+    a: take args
+    either string? a [
+        reverse copy a
+    ][
+        b: take args
+        add a b
+    ]
+]
+
+&gt;&gt; add-or-reverse 1 2
+== 3
+
+&gt;&gt; add-or-reverse "hello"
+== "olleh"
+</code></pre>
+<p>Note that if one wishes to specialize a variadic function, one can.</p>
+<pre><code> &gt;&gt; f: specialize :add-or-reverse [
+     args: make varargs! [1 2]
+ ]
+
+&gt;&gt; f
+== 3
+
+&gt;&gt; f: specialize :add-or-reverse [
+    args: make varargs! ["hello"]
+]
+
+&gt;&gt; f
+== "olleh"
+</code></pre>
+<p>If you want a variadic to be able to do <em>anything</em>, it needs to be hard quoted and accept ANY-VALUE!.  Then you can, for instance, DO it.</p>
+<pre><code>mr-do: func [:feed [any-value! &lt;...&gt;]] [
+    print "About to DO"
+    result: do :feed
+    print "DO is finished."
+    :result
+]
+
+&gt;&gt; mr-do print 1 + 2 print 3 + 4 "hello"
+About to DO
+3
+7
+DO is finished
+== "hello"
+</code></pre>
+<p>There is a lot of flexibility in the approach, and composability isn't hurt as much as one would think.  It actually allows one to do some very interesting evaluator hooks.  While it was once a fringe feature, it has been solidifying over time...here's some old documentation:</p>
+<p>          <iframe src="https://trello.com/c/Y17CEywN.html" width="100%" height="200" frameborder="0" style="border:0" seamless="seamless" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation"></iframe>
+</p>
+          <p><a href="https://forum.rebol.info/t/variadics-vs-trampolines-or-varargs-vs-return-redo/286/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/variadics-vs-trampolines-or-varargs-vs-return-redo/286/1</link>
+        <pubDate>Tue, 05 Sep 2017 14:40:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-286-1</guid>
+        <source url="https://forum.rebol.info/t/variadics-vs-trampolines-or-varargs-vs-return-redo/286.rss">Variadics vs. Trampolines (or VARARGS! vs. RETURN/REDO)</source>
+      </item>
+  </channel>
+</rss>

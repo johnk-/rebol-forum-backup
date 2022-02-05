@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Why VOID! is not like UNSET! (and why it&#39;s &quot;more ornery&quot;)</title>
+    <link>https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947</link>
+    <description>Today&#39;s #[void] has a lot in common with R3-Alpha&#39;s #[unset].
+
+* It&#39;s what functions return when they want to say they do not return *&quot;interesting&quot;* values, e.g. PRINT
+* Voids are values, and have a datatype (VOID!)
+* If you try to assign a value of type void via a SET-WORD! or SET-PATH!, you&#39;ll get an error
+* If you try to access a variable holding a VOID! through a plain WORD! or PATH!, you&#39;ll get an error (this is true of unset variables also, but that gives a distinct error of &quot;unsetness&quot;)
+* Voids are considered to be neither true nor false--giving an error if used in conditional expressions
+
+So one might wonder:
+
+&gt; *&quot;If VOID! is acting so much like UNSET!, is this saying that Rebol2/R3-Alpha were right all along?  Did Ren-C just complicate things a bunch and then come full-circle to where all that happened is it changed the name?  Why not just call it UNSET!?&quot;* &amp;mdash; Hypothetical Person Who Is Not Paying Attention
+
+I can&#39;t respond to this more clearly than I already have, but I&#39;ll say it again:  Variables can be &quot;unset&quot;, not values.  [A variable holding a value that indicates the value is unset is a contradiction in terms.](https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113)
+
+So void is its &quot;own thing&quot;:
+
+&gt; **A void! is a means of giving a hot potato back that is a warning about *something*, but you don&#39;t want to force an error &quot;in the moment&quot;...in case the returned information wasn&#39;t going to be used anyway.** 
+
+You can see this very clearly in how VOID! helps avoid mistakes when using conditionals with ELSE branches:
+
+     data: if condition [expression-that-returns-null] else [value2]
+
+ELSE is triggered by nulls.  But you wouldn&#39;t want a routine that incidentally returned nulls to wreck your logic--this should not be running the ELSE branch just because the IF branch returned null.
+
+So nulls get &quot;voidified&quot;; when an if runs a branch that evaluates to null, it gives back VOID!...saving null as the signal for a branch not running.  This fills in the gap, avoids running the else, then the overall IF...ELSE evaluates to VOID!.  This means the assignment doesn&#39;t work, you&#39;ll find out.  You can stick a TRY on that expression and get a blank, but at least you&#39;re aware you won&#39;t be returning a null (you can OPT it back to a null if you must):
+
+     data: opt if condition [try expression-that-returns-null] else [value2]
+
+
+But what if you hadn&#39;t had an assignment?  There&#39;s no reason to error on:
+
+     if condition [expression-that-returns-null] else [value2]
+
+Having the truthy branch convert the NULL into a VOID! in this case allows the logic to work just fine.  The void appears, does its job as a value cue, and vanishes.  You didn&#39;t find out there was a problem because there wasn&#39;t one--you weren&#39;t going to assign the value anyway.
+
+But while that isn&#39;t really about unsetness of variables, it does involve NULL, as only nulls are turned into voids.  So perhaps seeing the distance from unsets can be demonstrated through another construct...
+
+## How MATCH uses VOID! to warn you of a tricky case
+
+MATCH is a promising tool.  It a takes a value and a test, and if the value passes the test it gives the value back...or gives you a null otherwise:
+
+     &gt;&gt; match integer! 3
+     == 3
+
+     &gt;&gt; match integer! &lt;some-tag&gt;
+     ; null
+
+That&#39;s useful.  All the more useful since you can use typesets expressed as blocks (**match [integer! text!] ...**), logical truth or falsehood (**match false blank** and **match false 1 = 2** being matches), or even direct function applications (**match parse &quot;aaa&quot; [some &quot;a&quot;]** being &quot;aaa&quot;)
+
+It seems useful as a conditional, but what if you say:
+
+     whatever: false
+     ...
+     if match [logic! integer!] whatever [print &quot;It&#39;s a match!&quot;]
+
+If it passed through the false, then even though the MATCH was &quot;successful&quot;, it wouldn&#39;t print `It&#39;s a match!`.  This could very easily get confusing and lead to mystery bugs.
+
+But VOID! to the rescue.  By turning any falsey-valued matches to voids, you find out what&#39;s up:
+
+    &gt;&gt; if match [block! blank!] 10 [print &quot;10 isn&#39;t a block or blank&quot;]
+    10 isn&#39;t a block or blank  ; because match returned null
+
+    &gt;&gt; if match [block! blank!] blank [print &quot;conveniently warns you!&quot;]
+    ** Script Error: VOID! values are not conditionally true or false
+
+You still get a distinction...the second case returns a value, the first returns a null.  So you can test for valueness:
+
+     &gt;&gt; if value? match [block! blank!] 10 [print &quot;matched&quot;]
+     ; null
+
+     &gt;&gt; if value? match [block! blank!] blank [print &quot;matched&quot;]
+     matched!
+
+     &gt;&gt; match [block! blank!] blank then [print &quot;matched!&quot;]
+     matched!
+
+But if that&#39;s not good enough, the gift to you is that you now know that MATCH is not the construct you wanted.  You&#39;ll need to use the routine match is based on, called EITHER-MATCH:
+
+     &gt;&gt; either-match [block! blank!] blank [print &quot;branch if no match&quot;]
+     == _
+
+     &gt;&gt; either-match [block! blank!] 10 [print &quot;branch if no match&quot;]
+     branch if no match
+
+## Deferred errors is the essence of VOID!, not unsetness
+
+Hopefully you can see why UNSET! is not a suitable name for the type.  It&#39;s an ornery value that your routines can use for the &quot;hot potato&quot; situation.
+
+So it&#39;s best to make voids about as irritating as possible--while still being technically able to write code that builds and inspects structures using them.  Almost no one should be doing so, but they can.
+
+In this spirit, VOID!s have been made even more ornery than R3-Alpha unsets.  e.g. they cause errors in ANY and ALL vs. just being ignored.  *(I wrote up a pretty good explanation of [how invisibles provide every real desire that was intended for](https://github.com/rebol/rebol-issues/issues/2248#issuecomment-444496545)...tidying up a bunch of murky issues nicely.)*
+
+Also, R3-Alpha used to be able to append/insert/modify UNSET! into blocks:
+
+    r3-alpha&gt;&gt; append copy [a b c] print &quot;Hello&quot;
+    == [a b c #[unset]]
+
+But now you need /ONLY to add VOID!s to blocks in Ren-C:
+
+    &gt;&gt; append copy [a b c] print &quot;Illegal now&quot;
+    Illegal now
+    ** Error: VOID! cannot be put into arrays without using /ONLY
+
+    &gt;&gt; append/only copy [a b c] print &quot;Must use /ONLY&quot;
+    Must use /ONLY
+    == [a b c #[void]]
+
+## Even Deeper: Shuffling the logic of OPT and TRY
+
+TRY was created as a way to turn nulls into blanks.  For a while it decided to turn voids into blanks too--apparently there was a situation where it seemed useful.  I can&#39;t find that situation now, and it seems like a pretty bad idea.  If such an operation is ever needed, it could be called DEVOID or something.  So now TRY on a void will error.
+
+But a parallel to TRY is OPT, which changes blanks into nulls.  Previously the behavior for nulls was also to produce nulls, as a no-op.  But now the twist is *OPT turns nulls into voids*.
+
+This stops you from having a value that you don&#39;t know if it contains blanks or nulls as an opting out form, but you OPT it &quot;just to be sure&quot;.  You can still do that, with **opt try (expression)**, since TRY has to allow both blanks and nulls to become BLANK!.  It&#39;s unusual enough that you would want to do this that having the  unusual pairing is probably good for communicating that you don&#39;t really know which it is.
+
+Something that voiding OPTed NULLS instantly helped with... *finding superfluous opts*.  I found several due to the change, where it was being called when it wasn&#39;t needed because the routine&#39;s failure naturally returned null already.  This is a holdover from when many routines would indicate &quot;soft failure&quot; with the none!-like BLANK!.</description>
+    
+    <lastBuildDate>Sat, 08 Dec 2018 15:46:15 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Why VOID! is not like UNSET! (and why it&#39;s &quot;more ornery&quot;)</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Ornery value from an ornery fork. <img src="//forum.rebol.info/images/emoji/twitter/wink.png?v=7" title=":wink:" class="emoji" alt=":wink:"></p>
+          <p><a href="https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947/2</link>
+        <pubDate>Sat, 08 Dec 2018 15:46:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-947-2</guid>
+        <source url="https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947.rss">Why VOID! is not like UNSET! (and why it&#39;s &quot;more ornery&quot;)</source>
+      </item>
+      <item>
+        <title>Why VOID! is not like UNSET! (and why it&#39;s &quot;more ornery&quot;)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Today's #[void] has a lot in common with R3-Alpha's #[unset].</p>
+<ul>
+<li>It's what functions return when they want to say they do not return <em>"interesting"</em> values, e.g. PRINT</li>
+<li>Voids are values, and have a datatype (VOID!)</li>
+<li>If you try to assign a value of type void via a SET-WORD! or SET-PATH!, you'll get an error</li>
+<li>If you try to access a variable holding a VOID! through a plain WORD! or PATH!, you'll get an error (this is true of unset variables also, but that gives a distinct error of "unsetness")</li>
+<li>Voids are considered to be neither true nor false--giving an error if used in conditional expressions</li>
+</ul>
+<p>So one might wonder:</p>
+<blockquote>
+<p><em>"If VOID! is acting so much like UNSET!, is this saying that Rebol2/R3-Alpha were right all along?  Did Ren-C just complicate things a bunch and then come full-circle to where all that happened is it changed the name?  Why not just call it UNSET!?"</em> — Hypothetical Person Who Is Not Paying Attention</p>
+</blockquote>
+<p>I can't respond to this more clearly than I already have, but I'll say it again:  Variables can be "unset", not values.  <a href="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113">A variable holding a value that indicates the value is unset is a contradiction in terms.</a></p>
+<p>So void is its "own thing":</p>
+<blockquote>
+<p><strong>A void! is a means of giving a hot potato back that is a warning about <em>something</em>, but you don't want to force an error "in the moment"...in case the returned information wasn't going to be used anyway.</strong></p>
+</blockquote>
+<p>You can see this very clearly in how VOID! helps avoid mistakes when using conditionals with ELSE branches:</p>
+<pre><code> data: if condition [expression-that-returns-null] else [value2]
+</code></pre>
+<p>ELSE is triggered by nulls.  But you wouldn't want a routine that incidentally returned nulls to wreck your logic--this should not be running the ELSE branch just because the IF branch returned null.</p>
+<p>So nulls get "voidified"; when an if runs a branch that evaluates to null, it gives back VOID!...saving null as the signal for a branch not running.  This fills in the gap, avoids running the else, then the overall IF...ELSE evaluates to VOID!.  This means the assignment doesn't work, you'll find out.  You can stick a TRY on that expression and get a blank, but at least you're aware you won't be returning a null (you can OPT it back to a null if you must):</p>
+<pre><code> data: opt if condition [try expression-that-returns-null] else [value2]
+</code></pre>
+<p>But what if you hadn't had an assignment?  There's no reason to error on:</p>
+<pre><code> if condition [expression-that-returns-null] else [value2]
+</code></pre>
+<p>Having the truthy branch convert the NULL into a VOID! in this case allows the logic to work just fine.  The void appears, does its job as a value cue, and vanishes.  You didn't find out there was a problem because there wasn't one--you weren't going to assign the value anyway.</p>
+<p>But while that isn't really about unsetness of variables, it does involve NULL, as only nulls are turned into voids.  So perhaps seeing the distance from unsets can be demonstrated through another construct...</p>
+<h2>How MATCH uses VOID! to warn you of a tricky case</h2>
+<p>MATCH is a promising tool.  It a takes a value and a test, and if the value passes the test it gives the value back...or gives you a null otherwise:</p>
+<pre><code> &gt;&gt; match integer! 3
+ == 3
+
+ &gt;&gt; match integer! &lt;some-tag&gt;
+ ; null
+</code></pre>
+<p>That's useful.  All the more useful since you can use typesets expressed as blocks (<strong>match [integer! text!] ...</strong>), logical truth or falsehood (<strong>match false blank</strong> and <strong>match false 1 = 2</strong> being matches), or even direct function applications (<strong>match parse "aaa" [some "a"]</strong> being "aaa")</p>
+<p>It seems useful as a conditional, but what if you say:</p>
+<pre><code> whatever: false
+ ...
+ if match [logic! integer!] whatever [print "It's a match!"]
+</code></pre>
+<p>If it passed through the false, then even though the MATCH was "successful", it wouldn't print <code>It's a match!</code>.  This could very easily get confusing and lead to mystery bugs.</p>
+<p>But VOID! to the rescue.  By turning any falsey-valued matches to voids, you find out what's up:</p>
+<pre><code>&gt;&gt; if match [block! blank!] 10 [print "10 isn't a block or blank"]
+10 isn't a block or blank  ; because match returned null
+
+&gt;&gt; if match [block! blank!] blank [print "conveniently warns you!"]
+** Script Error: VOID! values are not conditionally true or false
+</code></pre>
+<p>You still get a distinction...the second case returns a value, the first returns a null.  So you can test for valueness:</p>
+<pre><code> &gt;&gt; if value? match [block! blank!] 10 [print "matched"]
+ ; null
+
+ &gt;&gt; if value? match [block! blank!] blank [print "matched"]
+ matched!
+
+ &gt;&gt; match [block! blank!] blank then [print "matched!"]
+ matched!
+</code></pre>
+<p>But if that's not good enough, the gift to you is that you now know that MATCH is not the construct you wanted.  You'll need to use the routine match is based on, called EITHER-MATCH:</p>
+<pre><code> &gt;&gt; either-match [block! blank!] blank [print "branch if no match"]
+ == _
+
+ &gt;&gt; either-match [block! blank!] 10 [print "branch if no match"]
+ branch if no match
+</code></pre>
+<h2>Deferred errors is the essence of VOID!, not unsetness</h2>
+<p>Hopefully you can see why UNSET! is not a suitable name for the type.  It's an ornery value that your routines can use for the "hot potato" situation.</p>
+<p>So it's best to make voids about as irritating as possible--while still being technically able to write code that builds and inspects structures using them.  Almost no one should be doing so, but they can.</p>
+<p>In this spirit, VOID!s have been made even more ornery than R3-Alpha unsets.  e.g. they cause errors in ANY and ALL vs. just being ignored.  <em>(I wrote up a pretty good explanation of <a href="https://github.com/rebol/rebol-issues/issues/2248#issuecomment-444496545" rel="nofollow noopener">how invisibles provide every real desire that was intended for</a>...tidying up a bunch of murky issues nicely.)</em></p>
+<p>Also, R3-Alpha used to be able to append/insert/modify UNSET! into blocks:</p>
+<pre><code>r3-alpha&gt;&gt; append copy [a b c] print "Hello"
+== [a b c #[unset]]
+</code></pre>
+<p>But now you need /ONLY to add VOID!s to blocks in Ren-C:</p>
+<pre><code>&gt;&gt; append copy [a b c] print "Illegal now"
+Illegal now
+** Error: VOID! cannot be put into arrays without using /ONLY
+
+&gt;&gt; append/only copy [a b c] print "Must use /ONLY"
+Must use /ONLY
+== [a b c #[void]]
+</code></pre>
+<h2>Even Deeper: Shuffling the logic of OPT and TRY</h2>
+<p>TRY was created as a way to turn nulls into blanks.  For a while it decided to turn voids into blanks too--apparently there was a situation where it seemed useful.  I can't find that situation now, and it seems like a pretty bad idea.  If such an operation is ever needed, it could be called DEVOID or something.  So now TRY on a void will error.</p>
+<p>But a parallel to TRY is OPT, which changes blanks into nulls.  Previously the behavior for nulls was also to produce nulls, as a no-op.  But now the twist is <em>OPT turns nulls into voids</em>.</p>
+<p>This stops you from having a value that you don't know if it contains blanks or nulls as an opting out form, but you OPT it "just to be sure".  You can still do that, with <strong>opt try (expression)</strong>, since TRY has to allow both blanks and nulls to become BLANK!.  It's unusual enough that you would want to do this that having the  unusual pairing is probably good for communicating that you don't really know which it is.</p>
+<p>Something that voiding OPTed NULLS instantly helped with... <em>finding superfluous opts</em>.  I found several due to the change, where it was being called when it wasn't needed because the routine's failure naturally returned null already.  This is a holdover from when many routines would indicate "soft failure" with the none!-like BLANK!.</p>
+          <p><a href="https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947/1</link>
+        <pubDate>Sat, 08 Dec 2018 02:05:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-947-1</guid>
+        <source url="https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947.rss">Why VOID! is not like UNSET! (and why it&#39;s &quot;more ornery&quot;)</source>
+      </item>
+  </channel>
+</rss>

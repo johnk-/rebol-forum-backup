@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The difference of the binary representation and decimal representation toward the user</title>
+    <link>https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597</link>
+    <description>When an integer! is created, its value is kept as in binary form. When in the console is entered:
+
+    &gt;&gt; x: 256
+    == 256
+
+The value 256 is converted to a binary representation to save the integer! value in memory.
+And afterwards the result of the operation is returned. The value that was assigned to x is converted from its binary form to the display format of 256.
+
+Where exactly in the code is this conversion taking place?</description>
+    
+    <lastBuildDate>Fri, 07 May 2021 00:26:23 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The difference of the binary representation and decimal representation toward the user</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="iArnold" data-post="1" data-topic="1597">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>The value 256 is converted to a binary representation to save the integer! value in memory.<br>
+And afterwards the result of the operation is returned. The value that was assigned to x is converted from its binary form to the display format of 256.</p>
+</blockquote>
+</aside>
+<p>The console <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/extensions/console/ext-console-init.reb#L185">has something called INPUT-HOOK</a>.  This is what it calls to get a string.  The default is simply ASK TEXT!:</p>
+<pre><code>input-hook: meth [
+    {Receives line input, parse/transform, send back to CONSOLE eval}
+
+    return: "null if canceled, otherwise processed text line input"
+        [&lt;opt&gt; text!]
+][
+    ask text!
+]
+</code></pre>
+<p>It uses this to read one line at a time.  Each time a line is read, <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/extensions/console/ext-console-init.reb#L661">it tries to LOAD it</a>.  If the LOAD fails due to a problem of a <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/extensions/console/ext-console-init.reb#L677">missing <strong><code>]</code></strong> or <strong>)</strong> or <strong>}</strong></a>, then it will try calling INPUT-HOOK again for another line of text.</p>
+<p>Once there is a successful LOAD, the code is represented in memory as a BLOCK!.  Hence the block you get is <strong>[256]</strong> in this case.</p>
+<p>There is another step you can hook here, <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/extensions/console/ext-console-init.reb#L194">which is DIALECT-HOOK</a>.  This is any transformation code you want that will process blocks after they've been fully loaded.  The default is to do nothing.</p>
+<p>After this, the code is evaluated.  The evaluation actually happens from C, with no console code on the stack.  The reason for this has to do with cancellation... there is no way in usermode to "catch" cancellation, and we wouldn't want the console implementation itself being canceled.  Only the code the console is asked to run.</p>
+<p>Finally the result is printed <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/extensions/console/ext-console-init.reb#L117">with a hook called PRINT-RESULT</a>.</p>
+<h2>How Does LOAD Work?</h2>
+<p>LOAD is built on top of TRANSCODE, which is the scanner.  It's basically just C code that builds bricks of memory for each cell in a block, recursively.</p>
+<p>Some hand-written and chaotic C code recognizes patterns and emits "tokens".  The token scanner finds the start and the end of things that look like an integer, and emit <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/src/core/l-scan.c#L2091">TOKEN_INTEGER</a></p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/src/core/l-types.c#L747">A cell is made by Scan_Integer()</a>, which relies on the C functions <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/src/include/sys-scan.h#L364">_atoi64() or strtoll()</a> to do the conversion.</p>
+<p>In terms of bits of memory, the cell is 4 platform pointers in size.  On a 32-bit platform, 2 of those are used for the cell payload...a 64-bit integer.  One is the cell header, marking that it's an INTEGER! and carrying other information about the memory that cell is formatted for.  And then another is unused.</p>
+<h2>How Does PRINT Work?</h2>
+<p>When cells need to be converted to strings, it's a "Mold Function" that does it.  The mold function handles both forming and molding, based on a flag it gets passed.  Many types mold and form the same, integer is one of those.</p>
+<p>The <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/src/core/t-integer.c#L242">MF_Integer()</a> function extracts the 64-bit integer from the cell with the macro VAL_INT64().  Then it passes it to "Emit_Integer()" which is based on INT_TO_STR that uses <a href="https://github.com/metaeducation/ren-c/blob/a7e8f404c745a349c5c8df007a84feb7b005e06a/src/include/sys-scan.h#L356">_ito64a()</a> from C or an equivalent reimplementation.</p>
+<p><strong>There's really no magic in the "string to integer" or "integer to string" bits.</strong>  These are common C routines.  But the console hooks show Ren-C being used in its own implementation, where features are being developed aggressively.</p>
+          <p><a href="https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597/2</link>
+        <pubDate>Fri, 07 May 2021 00:26:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1597-2</guid>
+        <source url="https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597.rss">The difference of the binary representation and decimal representation toward the user</source>
+      </item>
+      <item>
+        <title>The difference of the binary representation and decimal representation toward the user</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>When an integer! is created, its value is kept as in binary form. When in the console is entered:</p>
+<pre><code>&gt;&gt; x: 256
+== 256
+</code></pre>
+<p>The value 256 is converted to a binary representation to save the integer! value in memory.<br>
+And afterwards the result of the operation is returned. The value that was assigned to x is converted from its binary form to the display format of 256.</p>
+<p>Where exactly in the code is this conversion taking place?</p>
+          <p><a href="https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597/1</link>
+        <pubDate>Thu, 06 May 2021 11:21:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1597-1</guid>
+        <source url="https://forum.rebol.info/t/the-difference-of-the-binary-representation-and-decimal-representation-toward-the-user/1597.rss">The difference of the binary representation and decimal representation toward the user</source>
+      </item>
+  </channel>
+</rss>

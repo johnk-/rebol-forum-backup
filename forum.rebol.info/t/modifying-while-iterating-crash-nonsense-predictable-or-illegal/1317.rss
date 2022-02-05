@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</title>
+    <link>https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317</link>
+    <description>Every imperative language has the problem of when you modify a data structure, you run the risk of confusing other code that is looking at that data structure at the same time.  Whether it&#39;s threads competing for access, or just a loop whose body modifies the data being looped over...the problem comes up.
+
+The options for dealing with it are:
+
+* **Crash** - You can just crash.  R3-Alpha had this in several places--for instance PARSE, where a [data pointer (REBVAL*) into the rules series](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/u-parse.c#L658) was incremented along the rules...even though code was permitted to change the rules as you went (via GROUP!s).  The rule series might grow and be retargeted at a larger memory block, leaving the old pointer recycled and invalid.
+
+* **Nonsense** - You can make the iteration never crash, but be protected in such a way that it does *something* to avoid crashing.  Basically this means you modify only in ways that can be checked by iterations.  However, this means additional checking must run in the iterations to make sure it picks up on the signal that something has changed.  For instance: in the PARSE example above there could be a check of the length and a re-fetch of the pointer by index; if the length is out of bounds, it could error.  If still in bounds--even if between rules--it could take a shot at keeping running, and just fail as if the nonsense had been how it were written all along.
+
+* **Predictable** - Some languages offer guarantees about what kind of modifications are safe, and which ones are not.  For instance it may say if you are iterating a map, then anything you remove that you haven&#39;t visited yet won&#39;t be seen...or if you insert then anything you add won&#39;t cause something already visited to be seen again.  They might tell you explicitly when all bets are off--and say the effects may vary, or even if they may crash.  (C++ has container guarantees, and things outside the guarantees may crash.)
+
+* **Illegal** - This has been Ren-C&#39;s strategy so far...to simply say you cannot modify things that are being iterated.  Some routines (like FOR-NEXT) aren&#39;t considered to be iterating, because they are just running NEXT on a variable each time, and so have the same between loop invariants as if you did it yourself.
+
+---
+It&#39;s likely that most people agree that crashing is not a good choice.  [Python says](https://wiki.python.org/moin/CrashingPython):
+
+*&quot;I&#39;m not saying it&#39;s uncrashable. I&#39;m saying that if you crash it, it&#39;s a bug unless proven harebrained.&quot;*
+
+So what they get are exceptions, e.g.:
+
+    my_list = [1,2,3,4,5,6,7,8,9] 
+    for i in range(len(my_list)): 
+        if my_list[i] == 8: 
+            del my_list[i] 
+
+     IndexError: list index out of range
+
+Rebol (and Red&#39;s) history seems to aspire to *non-crashing Nonsense*.  There&#39;s not a lot of emphasis on what the promised invariants are, but they give lip service to the idea of &quot;crashing is bad&quot;.  So if you point out a crash, a patch is made at that point based on some testable property (index out of bounds, etc.) and a non-crashing behavior is picked.  Repeat as crashes are discovered.
+
+*I&#39;ve felt like illegal has worked out pretty well for Ren-C*.  It&#39;s conservative...but the general rule of thumb is that modification during iteration is a so-called &quot;code smell&quot;.  You can always do it another way.  And if this ever became a real performance problem, a dedicated native that caters to a certain explicit stylized modification could optimize for that particular case (e.g. REMOVE-EACH).
+
+**But stackless introduces a problem for locking series: it means locks are no longer necessarily taken in a stack-like manner, so locking cannot be done via a single bit.**
+
+Previously series had a single bit on them... SERIES_INFO_HOLD.  This bit is in the same bitflag set as other sources of read-only-ness, such as SERIES_INFO_PROTECTED (can be turned on and off) and SERIES_INFO_FROZEN (permanently immutable).  So all three could be conveniently checked in one masking operation on modification.
+
+What would happen in an operation that wanted to take a hold is that it would look to see if the series already had SERIES_INFO_HOLD.  If so, it would do nothing.  If not, it would set a flag on itself to say that it took a hold it needed to release...and release when it was done.
+
+*This does not work in a stackless model.*  A sort of minimum would be that the series would need to have a lock count that was incremented and decremented.  The miserly design for series does not currently have space to put that in the series node.  Something will have to grow, somewhere.
+
+---
+
+Python&#39;s approach seems to please people enough...with questions on Stack Overflow about modifying while iterating having people say &quot;avoid it&quot;.  They don&#39;t have locks, and the code just does what it does.
+
+**This is a deeper question for Rebol than for Python, because the locking questions apply to source code itself (source blocks, parse rules, etc.)...not just user data structures.**
+
+I hate to give up putting iterative holds on series, and letting chaos win.  We wouldn&#39;t want that in our filesystems, why allow it in programming languages?  The problem of releasing locks is something I think that the [DEFER](https://forum.rebol.info/t/module-startup-and-shutdown-constructors-destructors/960/4?u=hostilefork) mechanism can probably handle pretty well.
+
+I&#39;ve been thinking about some hybrid approaches which use a bit if it&#39;s sufficient, but only break out into a locking table if there&#39;s more than one iterator.  Build options could decide: no locks (allow crashes), cheap locks (reference counts), heavy locks (be able to tell you which frame took the lock).
+
+I&#39;ll probably give an enhanced locking method a shot, and stay the course on prohibiting modification during iteration (unless using an iterator that specifically accounts for that).</description>
+    
+    <lastBuildDate>Thu, 03 Dec 2020 17:59:59 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><a href="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317">Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal? </a></p>
+</blockquote>
+<p><em>Q.</em>  What should the following code do?</p>
+<pre><code>do code: [append code [print "addendum"]]
+</code></pre>
+<p>Here's Rebol2 and Red's answer:</p>
+<pre><code>rebol2/red&gt;&gt; do code: [append code [print "addendum"]]
+== [append code [print "addendum"] print "addendum"]
+</code></pre>
+<p>While R3-Alpha does this:</p>
+<pre><code>r3-alpha&gt;&gt; do code: [append code [print "addendum"]]
+addendum
+</code></pre>
+<p>So R3-Alpha noticed the new addition of code to what it was executing, and Rebol2 and Red didn't.</p>
+<p>While either answer may seem reasonable in some way, the general case of having the array shuffled more drastically does not have a sensible answer.  <strong>As outlined in my post, I've liked Ren-C's answer better:</strong></p>
+<pre><code>ren-c&gt;&gt; do code: [append code [print "addendum"]]
+** Access Error: series has temporary read-only hold for iteration
+</code></pre>
+<h2>...but I broke it, and I don't know exactly how to fix it.</h2>
+<p>I was stitching together arrays into one continuous execution.  So you could have one array that says [1 +] and another that says [2 * 3] and put them together to act as [1 + 2 * 3].  The problem is that protections only applied to the segment of the array you were <em>currently</em> processing.</p>
+<p>Implementation-wise, there was a hold on an array as long as you were enumerating.  It would drop the hold after the enumeration was done... <em>but before the last function ran</em>.</p>
+<p>So you wouldn't be able to write:</p>
+<pre><code>&gt;&gt; do code: [clear code print "Can't do this"]
+</code></pre>
+<p>But you <em>would</em> be able to write:</p>
+<pre><code>&gt;&gt; do code: [print "This was allowed" clear code]
+</code></pre>
+<p>...because by the time it actually ran the CLEAR command, the enumeration was finished.</p>
+<p><strong>I worked around it in a sort of dumb way, but this just points out the continued need for a solid philosophy about this topic.</strong>  We can't really hit perfection with this model, but we can quantify the imperfection and say what the guarantees are and aren't.  And I don't consider <em>"there are no promises, it's all pretty much random"</em> to be acceptable.</p>
+          <p><a href="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/5</link>
+        <pubDate>Thu, 03 Dec 2020 17:59:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1317-5</guid>
+        <source url="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317.rss">Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</source>
+      </item>
+      <item>
+        <title>Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p>Well, I don't like crashing any more than the next guy. But, we are aiming for interpreted, not compiled (unlike Red), so, there is a further choice: break into the debugger. This, I like. And it completely avoids the, in my opinion in the best case unending, prevent-guns-from-shooting-foot "problem".</p>
+          <p><a href="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/4</link>
+        <pubDate>Fri, 07 Aug 2020 13:51:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1317-4</guid>
+        <source url="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317.rss">Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</source>
+      </item>
+      <item>
+        <title>Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>We also do not want the chaos to be in our databases.</p>
+<p>There is no way of telling beforehand what the programmer is trying to achieve, but making this impossible is the other end. I think it is a good thing to be aware of.</p>
+          <p><a href="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/3</link>
+        <pubDate>Fri, 07 Aug 2020 06:35:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1317-3</guid>
+        <source url="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317.rss">Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</source>
+      </item>
+      <item>
+        <title>Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Out of curiosity I decided to go ahead and crack open Red's concept of FOREACH and how it is implemented.</p>
+<p>I found <a href="https://github.com/red/red/blob/2cc46aae4009c7584f495d3286a884b07c8fe0a5/runtime/natives.reds#L283" rel="nofollow noopener">FOREACH* here in %natives.reds</a>.  (Remember that it is Red/System code, it's best to think of this as being sort of C-like, despite the syntax looking Rebol-ish.)</p>
+<p>It has two helper functions based on whether the iteration variables are a BLOCK! or not.  So <strong>foreach x ...</strong> vs <strong>foreach [x y] ...</strong> (a block of words to iterate, vs whether the data being iterated is a block). These helpers are called <a href="https://github.com/red/red/blob/2cc46aae4009c7584f495d3286a884b07c8fe0a5/runtime/natives.reds#L3206" rel="nofollow noopener">FOREACH-NEXT</a> and <a href="https://github.com/red/red/blob/2cc46aae4009c7584f495d3286a884b07c8fe0a5/runtime/natives.reds#L3156" rel="nofollow noopener">FOREACH-NEXT-BLOCK</a>.</p>
+<p>Looking at the more fundamental case first of FOREACH-NEXT, the primary logic is:</p>
+<pre><code>result: loop? series
+if result [
+    _context/set word actions/pick series 1 null
+    series/head: series/head + 1
+]
+result
+</code></pre>
+<p>Roughly we see that this is built on top of PICK mechanics with an argument of 1.  A copy of the series cell is held by the FOREACH so it keeps updating the head in that cell as it goes.  RESULT is a local variable which determines if there is an element to pick, and if it is then it performs the action...and RESULT is also returned to the FOREACH* higher-level caller to tell it when to stop evaluating the body.</p>
+<p>So the "safety" in this process comes from LOOP?...which just essentially asks if <a href="https://github.com/red/red/blob/2cc46aae4009c7584f495d3286a884b07c8fe0a5/runtime/natives.reds#L3039" rel="nofollow noopener">the series index is past the tail of the data buffer</a>.  The buffer is <a href="https://github.com/red/red/blob/2cc46aae4009c7584f495d3286a884b07c8fe0a5/runtime/natives.reds#L3052" rel="nofollow noopener">retrieved each time</a>, and everything here is speaking in terms of indices instead of pointers.</p>
+<p>This reveals an implementation detail, that maps are just BLOCK!s of data with some specially marked missing elements (that was true of R3-Alpha and Ren-C as well...the accelerated performance comes from a sidestructure associated with the block).  It means that those missing elements must be skipped, which is done by a call to a different "enumerate-and-set" variation of a pick-based helper called SET-MANY for maps that is called <a href="https://github.com/red/red/blob/2cc46aae4009c7584f495d3286a884b07c8fe0a5/runtime/natives.reds#L3187" rel="nofollow noopener">MAP/SET-MANY</a>.  This knows how to <a href="https://github.com/red/red/blob/2cc46aae4009c7584f495d3286a884b07c8fe0a5/runtime/datatypes/map.reds#L722" rel="nofollow noopener">skip over deleted keys</a>.</p>
+<p>At first I thought that for this to work they'd have to maintain an invariant where there are no MAP_KEY_DELETED entries at the tail of the series... or their LOOP? would say "yes there's more data" for the enumeration when all it would find would be MAP_KEY_DELETEDs.  When their map removal didn't account for this, I wondered why you wouldn't get a bug from it, <a href="https://github.com/red/red/blob/2cc46aae4009c7584f495d3286a884b07c8fe0a5/runtime/natives.reds#L3187" rel="nofollow noopener">until I saw the reason</a>:</p>
+<pre><code>result: map/set-many blk as red-hash! series size
+</code></pre>
+<p>So although their LOOP? check said there was data in this case, all MAP_KEY_DELETEDs got another vote to send a failed result back to the FOREACH to not continue the loop.</p>
+<h2>So what does this mean?</h2>
+<p>It's dirt-simple code.  It refreshes buffers and pointers on each iteration, and offers non-crashing and relatively obvious invariants.  If you add an item to a map, you may or may not see it in the enumeration of upcoming elements...based on whether it hashes before or after your enumeration point.</p>
+<p>For instance, let's try deleting the <code>a</code> key from a map and then adding a <code>y</code> key while enumerating:</p>
+<pre><code>red&gt;&gt; m: make map! [a: 10 b: 20 c: 30]
+red&gt;&gt; remove/key m 'a
+red&gt;&gt; n: 0
+red&gt;&gt; foreach [k v] m [n: n + 1 if n = 1 [m/y: 40] print [k v]]
+b 20
+c 30
+y 40
+</code></pre>
+<p>That didn't hash into the same bucket as <code>a</code>, so it didn't reuse the slot... leaving it as MAP_KEY_DELETED.  The easiest way to pick something that hashes into the same slot as <code>a</code> is just to use <code>a</code> itself again, so let's add that during the enumeration and see the difference:</p>
+<pre><code>red&gt;&gt; m: make map! [a: 10 b: 20 c: 30]
+red&gt;&gt; remove/key m 'a
+red&gt;&gt; n: 0
+red&gt;&gt; foreach [k v] m [n: n + 1 if n = 1 [m/a: 40] print [k v]]
+b 20
+c 30
+</code></pre>
+<p>Promising such behavior may not leave the doors open to much more sophisticated implementations of map...e.g. maybe a sophisticated implementation would have trouble promising you wouldn't see the same key twice in an enumeration if you shuffled the map.  Maybe that's okay, I don't know.</p>
+<p><strong>One thing I do know is that this kind of approach would be a problem for UTF-8 Everywhere and strings.</strong>  We do not guarantee being able to rapidly get to a byte address in a string by index (although there is a strategy for trying to mitigate that through caching).  But it becomes a a good reason for FOR-EACH and friends to put an enumeration lock on the string.</p>
+<p><strong>Not having a locking system also means every bit of evaluator code has to be paranoid all the time.</strong>  If any piece of user code can modify anything anywhere, then every time you run the evaluator it has the potential to invalidate the assumptions your evaluator was mid-running.</p>
+<p>I've given a lot of examples of this, and they are trivial to come up with:</p>
+<pre><code>red&gt;&gt; obj: make object! [x: 10]
+red&gt;&gt; do code: [obj/x: (clear code recycle 20)]
+**crrrrash**
+</code></pre>
+<p>Being able to put holds on these series make Ren-C robust.</p>
+<pre><code>ren-c&gt;&gt; obj: make object! [x: 10]
+ren-c&gt;&gt; do code: [obj/x: (clear code recycle 20)]
+** Access Error: series has temporary read-only hold for iteration
+</code></pre>
+<p><em>(You also get a performance benefit, because you can use direct pointers without worrying about them changing.  Look at how Red has to re-fetch the buffer, check the indexes...a direct pointer that you can trust won't change out from under you is more optimal.)</em></p>
+<p>In such cases, you're witnessing what happens when the evaluator and usermode code are experiencing contention over the same data.  I feel like not letting people actively interrupt extant enumerations--while a step toward the "immutability religion" of pure functional programming--isn't all that restricting in practice.  When you look at the big picture, this just seems like a better answer for the system overall.</p>
+          <p><a href="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/2</link>
+        <pubDate>Fri, 07 Aug 2020 06:32:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1317-2</guid>
+        <source url="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317.rss">Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</source>
+      </item>
+      <item>
+        <title>Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Every imperative language has the problem of when you modify a data structure, you run the risk of confusing other code that is looking at that data structure at the same time.  Whether it's threads competing for access, or just a loop whose body modifies the data being looped over...the problem comes up.</p>
+<p>The options for dealing with it are:</p>
+<ul>
+<li>
+<p><strong>Crash</strong> - You can just crash.  R3-Alpha had this in several places--for instance PARSE, where a <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/u-parse.c#L658" rel="nofollow noopener">data pointer (REBVAL*) into the rules series</a> was incremented along the rules...even though code was permitted to change the rules as you went (via GROUP!s).  The rule series might grow and be retargeted at a larger memory block, leaving the old pointer recycled and invalid.</p>
+</li>
+<li>
+<p><strong>Nonsense</strong> - You can make the iteration never crash, but be protected in such a way that it does <em>something</em> to avoid crashing.  Basically this means you modify only in ways that can be checked by iterations.  However, this means additional checking must run in the iterations to make sure it picks up on the signal that something has changed.  For instance: in the PARSE example above there could be a check of the length and a re-fetch of the pointer by index; if the length is out of bounds, it could error.  If still in bounds--even if between rules--it could take a shot at keeping running, and just fail as if the nonsense had been how it were written all along.</p>
+</li>
+<li>
+<p><strong>Predictable</strong> - Some languages offer guarantees about what kind of modifications are safe, and which ones are not.  For instance it may say if you are iterating a map, then anything you remove that you haven't visited yet won't be seen...or if you insert then anything you add won't cause something already visited to be seen again.  They might tell you explicitly when all bets are off--and say the effects may vary, or even if they may crash.  (C++ has container guarantees, and things outside the guarantees may crash.)</p>
+</li>
+<li>
+<p><strong>Illegal</strong> - This has been Ren-C's strategy so far...to simply say you cannot modify things that are being iterated.  Some routines (like FOR-NEXT) aren't considered to be iterating, because they are just running NEXT on a variable each time, and so have the same between loop invariants as if you did it yourself.</p>
+</li>
+</ul>
+<hr>
+<p>It's likely that most people agree that crashing is not a good choice.  <a href="https://wiki.python.org/moin/CrashingPython" rel="nofollow noopener">Python says</a>:</p>
+<p><em>"I'm not saying it's uncrashable. I'm saying that if you crash it, it's a bug unless proven harebrained."</em></p>
+<p>So what they get are exceptions, e.g.:</p>
+<pre><code>my_list = [1,2,3,4,5,6,7,8,9] 
+for i in range(len(my_list)): 
+    if my_list[i] == 8: 
+        del my_list[i] 
+
+ IndexError: list index out of range
+</code></pre>
+<p>Rebol (and Red's) history seems to aspire to <em>non-crashing Nonsense</em>.  There's not a lot of emphasis on what the promised invariants are, but they give lip service to the idea of "crashing is bad".  So if you point out a crash, a patch is made at that point based on some testable property (index out of bounds, etc.) and a non-crashing behavior is picked.  Repeat as crashes are discovered.</p>
+<p><em>I've felt like illegal has worked out pretty well for Ren-C</em>.  It's conservative...but the general rule of thumb is that modification during iteration is a so-called "code smell".  You can always do it another way.  And if this ever became a real performance problem, a dedicated native that caters to a certain explicit stylized modification could optimize for that particular case (e.g. REMOVE-EACH).</p>
+<p><strong>But stackless introduces a problem for locking series: it means locks are no longer necessarily taken in a stack-like manner, so locking cannot be done via a single bit.</strong></p>
+<p>Previously series had a single bit on them... SERIES_INFO_HOLD.  This bit is in the same bitflag set as other sources of read-only-ness, such as SERIES_INFO_PROTECTED (can be turned on and off) and SERIES_INFO_FROZEN (permanently immutable).  So all three could be conveniently checked in one masking operation on modification.</p>
+<p>What would happen in an operation that wanted to take a hold is that it would look to see if the series already had SERIES_INFO_HOLD.  If so, it would do nothing.  If not, it would set a flag on itself to say that it took a hold it needed to release...and release when it was done.</p>
+<p><em>This does not work in a stackless model.</em>  A sort of minimum would be that the series would need to have a lock count that was incremented and decremented.  The miserly design for series does not currently have space to put that in the series node.  Something will have to grow, somewhere.</p>
+<hr>
+<p>Python's approach seems to please people enough...with questions on Stack Overflow about modifying while iterating having people say "avoid it".  They don't have locks, and the code just does what it does.</p>
+<p><strong>This is a deeper question for Rebol than for Python, because the locking questions apply to source code itself (source blocks, parse rules, etc.)...not just user data structures.</strong></p>
+<p>I hate to give up putting iterative holds on series, and letting chaos win.  We wouldn't want that in our filesystems, why allow it in programming languages?  The problem of releasing locks is something I think that the <a href="https://forum.rebol.info/t/module-startup-and-shutdown-constructors-destructors/960/4">DEFER</a> mechanism can probably handle pretty well.</p>
+<p>I've been thinking about some hybrid approaches which use a bit if it's sufficient, but only break out into a locking table if there's more than one iterator.  Build options could decide: no locks (allow crashes), cheap locks (reference counts), heavy locks (be able to tell you which frame took the lock).</p>
+<p>I'll probably give an enhanced locking method a shot, and stay the course on prohibiting modification during iteration (unless using an iterator that specifically accounts for that).</p>
+          <p><a href="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317/1</link>
+        <pubDate>Thu, 06 Aug 2020 22:30:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1317-1</guid>
+        <source url="https://forum.rebol.info/t/modifying-while-iterating-crash-nonsense-predictable-or-illegal/1317.rss">Modifying While Iterating: Crash, Nonsense, Predictable, or Illegal?</source>
+      </item>
+  </channel>
+</rss>

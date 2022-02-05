@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How Should Redirected Input Work For The Console?</title>
+    <link>https://forum.rebol.info/t/how-should-redirected-input-work-for-the-console/1546</link>
+    <description>When you run language interpreters without supplying a script to run on the command line, most will go into an interactive console mode.
+
+But what if you didn&#39;t want interaction?  It&#39;s possible to pipe input to a process, for instance:
+
+    $ echo &quot;print(\&quot;Hello\&quot;)&quot; | python3
+    Hello
+
+*(Note: You have to backslash escape quotes to pass them in bash like that.)*
+
+The echo command produced some output, and python runs it as code.  It doesn&#39;t do the same thing as if you&#39;d typed the code--there&#39;s no console banner, and it doesn&#39;t give you a response about what the output is.
+
+**But Rebol, Red, and Ren-C all fail at this.**
+
+## Rebol2 on Windows Ignores Piped Input
+
+Rebol2 on Windows ignores the issue entirely.  The following will just launch a GUI window, as if you hadn&#39;t said anything:
+
+    C:\Projects\rebol2&gt; echo &quot;print {Hello} 1 + 2&quot; | rebol2-view
+    ; Launches a GUI terminal window
+
+    C:\Projects\rebol2&gt; echo &quot;print {Hello} 1 + 2&quot; | rebol2-core
+    ; Also launches a GUI terminal widow
+
+I don&#39;t have a 32-bit Linux handy to test rebol2 with, so we&#39;ll just look at R3-Alpha on Linux.
+
+## R3Alpha on Linux Runs The Input And Shows Half A Console
+
+R3-Alpha does a little better, in terms of running the code you asked for.  But it still runs the output side of the console, while not echoing the input side:
+
+    $ echo &quot;print {Hello} 1 + 2&quot; | ./r3-alpha
+    **************************************************************************
+    **                                                                      **
+    **  REBOL 3.0 [Alpha Test]                                              **
+    **                                                              
+    ...(rest of the boot banner and help)...
+    Upgrade - check for newer releases
+    Changes - what&#39;s new about this version (web)
+
+    &gt;&gt; Hello
+    == 3
+
+    &gt;&gt;
+
+If that would print the input code too so this looked coherent, you could imagine this being a interesting mode to offer.  But while interesting, it&#39;s certainly not the default you&#39;d want.
+
+If we look into why R3-Alpha quits, it&#39;s because when it runs out of standard input to read [a failure makes Fetch_Buf() return 0](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/os/host-stdio.c#L90).  You can see that it had at one time crashed under this condition, but that was commented out:
+
+    // If error, don&#39;t crash, just ignore it:
+    if (Std_IO_Req.error) return 0; //Host_Crash(stdio read);
+
+When Fetch_Buf() returned 0, then Get_Line() would return 0....and that would [stop the main loop](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/os/host-main.c#L183) and lead the console to exit.
+
+## Red On Windows Runs Out of Memory
+
+If you don&#39;t use the `--cli` switch it will pop up a normal GUI Window and ignore the piped input like Rebol2 did.
+
+But if you do use the `--cli` switch then it fails and exits.
+
+    C:\Projects\red&gt; echo &quot;print {Hello} 1 + 2&quot; | red --cli
+    --== Red 0.6.4 ==--
+    Type HELP for starting information.
+
+    *** Internal Error: not enough memory
+    *** Where: append
+    *** Stack:
+
+## Ren-C Prints Console Banner/Prompt, Then Infinite Loops
+
+Ren-C unified the way Windows worked somewhat with the way that the Linux build had worked, in terms of the relationship between the console and standard input.  Hence the behavior (and failure modes) are similar.
+
+Both of these get into an infinite loop, because the console uses ASK TEXT! in usermode and calls it in a loop.  There&#39;s no special handling of pipe errors to break that loop, so it just keeps trying READ-LINE over and over again.
+
+## So Nothing Historically Works.  What&#39;s The Plan?
+
+We need to detect a piped situation and not print out console banners, prompts, or expression evaluation results.
+
+I&#39;m guessing this would imply not running the console at all.  That seems saner than running the console in a mode where it still did the same REPL loop, but ASK had to worry about things like noticing when a pipe disconnected...and the printing out of expression evaluation results had to be overridden by hiding the output.
+
+So that would imply that running from a pipe would be much more like running a script that was read from a file.  But a pipe may not come up with its data all at once...it could come character by character, or line by line.  What execution model would apply to pipes?
+
+## What Does Python Do?
+
+Python3 seems to wait until all of the data is read before executing.  If we pipe the output of the &quot;cat&quot; command (e.g. me typing lines of input) into Python3
+
+    $ cat | python3
+    print(&quot;Hello&quot;)  # I typed this line, hit enter
+    print(&quot;Goodbye&quot;)  # I typed this, hit enter, then Ctrl-D to end input
+    Hello 
+    Goodbye
+
+Their [logic for starting up](https://github.com/python/cpython/blob/c7c3b7db29c4dda0519acdf7450e20d47a6409f4/Modules/main.c#L34) does an interactivity detection, which can be driven by things like configuration flags vs. just guessing.  If the various phases opt out of interactivity, the whole thing falls through to run using the same method as running a file... **PyRun_AnyFileExFlags**.
+
+    if (stdin_is_interactive(config)) {
+        config-&gt;inspect = 0;
+        Py_InspectFlag = 0; /* do exit on SystemExit */
+        int exitcode;
+        if (pymain_run_startup(config, cf, &amp;exitcode))
+            return exitcode;
+
+        if (pymain_run_interactive_hook(&amp;exitcode))
+            return exitcode;
+    }
+
+    /* call pending calls like signal handlers (SIGINT) */
+    if (Py_MakePendingCalls() == -1)
+        return pymain_exit_err_print();
+
+    if (PySys_Audit(&quot;cpython.run_stdin&quot;, NULL) &lt; 0)
+        return pymain_exit_err_print();
+
+    int run = PyRun_AnyFileExFlags(stdin, &quot;&lt;stdin&gt;&quot;, 0, cf);
+    return (run != 0);
+
+## Conclusion
+
+Long story short is that I think by default, input redirection should probably be such that:
+
+    $ command | r3
+
+...acts basically like if you&#39;d written:
+
+    $ command &gt; output.reb
+    $ r3 output.reb
+
+We&#39;ll want to offer more flexible behaviors for if you&#39;re processing data, e.g. line by line.  But for source code it probably makes less sense to run it line by line.
+
+Maybe there could be a console automation mode where it acts like you&#39;d typed line-by-line and prints all the output the console would print--but that&#39;s a weird feature that doesn&#39;t seem terribly useful.
+
+Of course, you should be able to write a script that reads from the stdin like a file...line by line or character by character, and process it.  But that&#39;s a different question.</description>
+    
+    <lastBuildDate>Tue, 09 Mar 2021 08:45:25 +0000</lastBuildDate>
+    <category>Console</category>
+    <atom:link href="https://forum.rebol.info/t/how-should-redirected-input-work-for-the-console/1546.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How Should Redirected Input Work For The Console?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When you run language interpreters without supplying a script to run on the command line, most will go into an interactive console mode.</p>
+<p>But what if you didn't want interaction?  It's possible to pipe input to a process, for instance:</p>
+<pre><code>$ echo "print(\"Hello\")" | python3
+Hello
+</code></pre>
+<p><em>(Note: You have to backslash escape quotes to pass them in bash like that.)</em></p>
+<p>The echo command produced some output, and python runs it as code.  It doesn't do the same thing as if you'd typed the code--there's no console banner, and it doesn't give you a response about what the output is.</p>
+<p><strong>But Rebol, Red, and Ren-C all fail at this.</strong></p>
+<h2>Rebol2 on Windows Ignores Piped Input</h2>
+<p>Rebol2 on Windows ignores the issue entirely.  The following will just launch a GUI window, as if you hadn't said anything:</p>
+<pre><code>C:\Projects\rebol2&gt; echo "print {Hello} 1 + 2" | rebol2-view
+; Launches a GUI terminal window
+
+C:\Projects\rebol2&gt; echo "print {Hello} 1 + 2" | rebol2-core
+; Also launches a GUI terminal widow
+</code></pre>
+<p>I don't have a 32-bit Linux handy to test rebol2 with, so we'll just look at R3-Alpha on Linux.</p>
+<h2>R3Alpha on Linux Runs The Input And Shows Half A Console</h2>
+<p>R3-Alpha does a little better, in terms of running the code you asked for.  But it still runs the output side of the console, while not echoing the input side:</p>
+<pre><code>$ echo "print {Hello} 1 + 2" | ./r3-alpha
+**************************************************************************
+**                                                                      **
+**  REBOL 3.0 [Alpha Test]                                              **
+**                                                              
+...(rest of the boot banner and help)...
+Upgrade - check for newer releases
+Changes - what's new about this version (web)
+
+&gt;&gt; Hello
+== 3
+
+&gt;&gt;
+</code></pre>
+<p>If that would print the input code too so this looked coherent, you could imagine this being a interesting mode to offer.  But while interesting, it's certainly not the default you'd want.</p>
+<p>If we look into why R3-Alpha quits, it's because when it runs out of standard input to read <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/os/host-stdio.c#L90">a failure makes Fetch_Buf() return 0</a>.  You can see that it had at one time crashed under this condition, but that was commented out:</p>
+<pre><code>// If error, don't crash, just ignore it:
+if (Std_IO_Req.error) return 0; //Host_Crash(stdio read);
+</code></pre>
+<p>When Fetch_Buf() returned 0, then Get_Line() would return 0....and that would <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/os/host-main.c#L183">stop the main loop</a> and lead the console to exit.</p>
+<h2>Red On Windows Runs Out of Memory</h2>
+<p>If you don't use the <code>--cli</code> switch it will pop up a normal GUI Window and ignore the piped input like Rebol2 did.</p>
+<p>But if you do use the <code>--cli</code> switch then it fails and exits.</p>
+<pre><code>C:\Projects\red&gt; echo "print {Hello} 1 + 2" | red --cli
+--== Red 0.6.4 ==--
+Type HELP for starting information.
+
+*** Internal Error: not enough memory
+*** Where: append
+*** Stack:
+</code></pre>
+<h2>Ren-C Prints Console Banner/Prompt, Then Infinite Loops</h2>
+<p>Ren-C unified the way Windows worked somewhat with the way that the Linux build had worked, in terms of the relationship between the console and standard input.  Hence the behavior (and failure modes) are similar.</p>
+<p>Both of these get into an infinite loop, because the console uses ASK TEXT! in usermode and calls it in a loop.  There's no special handling of pipe errors to break that loop, so it just keeps trying READ-LINE over and over again.</p>
+<h2>So Nothing Historically Works.  What's The Plan?</h2>
+<p>We need to detect a piped situation and not print out console banners, prompts, or expression evaluation results.</p>
+<p>I'm guessing this would imply not running the console at all.  That seems saner than running the console in a mode where it still did the same REPL loop, but ASK had to worry about things like noticing when a pipe disconnected...and the printing out of expression evaluation results had to be overridden by hiding the output.</p>
+<p>So that would imply that running from a pipe would be much more like running a script that was read from a file.  But a pipe may not come up with its data all at once...it could come character by character, or line by line.  What execution model would apply to pipes?</p>
+<h2>What Does Python Do?</h2>
+<p>Python3 seems to wait until all of the data is read before executing.  If we pipe the output of the "cat" command (e.g. me typing lines of input) into Python3</p>
+<pre><code>$ cat | python3
+print("Hello")  # I typed this line, hit enter
+print("Goodbye")  # I typed this, hit enter, then Ctrl-D to end input
+Hello 
+Goodbye
+</code></pre>
+<p>Their <a href="https://github.com/python/cpython/blob/c7c3b7db29c4dda0519acdf7450e20d47a6409f4/Modules/main.c#L34">logic for starting up</a> does an interactivity detection, which can be driven by things like configuration flags vs. just guessing.  If the various phases opt out of interactivity, the whole thing falls through to run using the same method as running a file... <strong>PyRun_AnyFileExFlags</strong>.</p>
+<pre><code>if (stdin_is_interactive(config)) {
+    config-&gt;inspect = 0;
+    Py_InspectFlag = 0; /* do exit on SystemExit */
+    int exitcode;
+    if (pymain_run_startup(config, cf, &amp;exitcode))
+        return exitcode;
+
+    if (pymain_run_interactive_hook(&amp;exitcode))
+        return exitcode;
+}
+
+/* call pending calls like signal handlers (SIGINT) */
+if (Py_MakePendingCalls() == -1)
+    return pymain_exit_err_print();
+
+if (PySys_Audit("cpython.run_stdin", NULL) &lt; 0)
+    return pymain_exit_err_print();
+
+int run = PyRun_AnyFileExFlags(stdin, "&lt;stdin&gt;", 0, cf);
+return (run != 0);
+</code></pre>
+<h2>Conclusion</h2>
+<p>Long story short is that I think by default, input redirection should probably be such that:</p>
+<pre><code>$ command | r3
+</code></pre>
+<p>...acts basically like if you'd written:</p>
+<pre><code>$ command &gt; output.reb
+$ r3 output.reb
+</code></pre>
+<p>We'll want to offer more flexible behaviors for if you're processing data, e.g. line by line.  But for source code it probably makes less sense to run it line by line.</p>
+<p>Maybe there could be a console automation mode where it acts like you'd typed line-by-line and prints all the output the console would print--but that's a weird feature that doesn't seem terribly useful.</p>
+<p>Of course, you should be able to write a script that reads from the stdin like a file...line by line or character by character, and process it.  But that's a different question.</p>
+          <p><a href="https://forum.rebol.info/t/how-should-redirected-input-work-for-the-console/1546/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-should-redirected-input-work-for-the-console/1546/1</link>
+        <pubDate>Tue, 09 Mar 2021 08:45:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1546-1</guid>
+        <source url="https://forum.rebol.info/t/how-should-redirected-input-work-for-the-console/1546.rss">How Should Redirected Input Work For The Console?</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Who needs NEEDS: headers when you have IMPORT?</title>
+    <link>https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566</link>
+    <description>There&#39;s a concept that seems to have been in the module design that if you put the NEEDS of your code as part of the header.
+
+But you run into a bit of trouble if you want to do some kind of programmatic inclusion:
+
+    if &quot;use-foo-version&quot; = getenv &quot;WHICH_FOO&quot; [
+        utils: import &lt;foo&gt;
+    ] else [
+        utils: import &lt;bar&gt;
+    ]
+
+**Because you&#39;re going to have a desire for this level of control, I don&#39;t really understand exactly what role the header and Needs: should be playing in module dependencies.**
+
+One possible reason it had been put in the header is because of the fact that you [lose all your binding](https://forum.rebol.info/t/slipping-bindings-into-a-module/1565), this would be the only chance you had to get bindings to the exports of the library on the code in the body.
+
+But with [**Sea of Words**](https://forum.rebol.info/t/the-sea-of-words/1564) you don&#39;t have this one chance in the hands of the MODULE-running to bind the body.  You get *all* the words bound writable to the module, and readably from the modules it inherits (e.g. LIB).
+
+That means IMPORT has the power to make declarations appear and link up to the code in the body.  Assuming it knows what module it&#39;s importing to.
+
+*(This means IMPORT needs to be &quot;definitionally&quot; defined, like RETURN is.  EXPORT needs that as well.  e.g. they are different specializations of importation for each module.)*
+
+## I&#39;m Going to Drop NEEDS for the Moment
+
+In order to be able to focus on getting at least one thing working right, I&#39;m going to dig into IMPORT and EXPORT.
+
+When we better understand what the header form is for, we can add it back.
+
+Here is DO-NEEDS at time of writing (and it has dated concepts in it like /NO-LIB and /NO-USER, these ideas are going away with a rule of all modules being isolated):
+
+    do-needs: function [
+        {Process the NEEDS block of a program header. Returns unapplied mixins.}
+
+        needs &quot;Needs block, header or version&quot;
+            [block! object! tuple! blank!]  ; has to handle blank! if in object!
+        /no-lib &quot;Don&#39;t export to the runtime library&quot;
+        /no-user &quot;Don&#39;t export to the user context (mixins returned)&quot;
+        /block &quot;Return all the imported modules in a block, instead&quot;
+    ][
+        ; This is a low-level function and its use and return values reflect that.
+        ;
+        ; In user mode, the mixins are applied by IMPORT, so they don&#39;t need to
+        ; be returned. In /NO-USER mode the mixins are collected into an object
+        ; and returned, if the object isn&#39;t empty. This object can then be passed
+        ; to MAKE module! to be applied there.
+        ;
+        ; The /BLOCK option returns a block of all the modules imported, not any
+        ; mixins.  This is for when IMPORT is called with a `Needs: [...]` block.
+
+        if object? needs [  ; header object
+            needs: select needs &#39;needs  ; (protected)
+        ]
+
+        switch type of needs [
+            blank! [return blank]  ; may have come from SELECT, not just arg
+
+            tuple! [  ; simple version number check for interpreter itself
+                case [
+                    needs &gt; system/version [
+                        cause-error &#39;syntax &#39;needs reduce [&#39;core needs]
+                    ]
+
+                    3 &gt;= length of needs [  ; no platform id
+                        blank
+                    ]
+
+                    (needs and+ 0.0.0.255.255)
+                    &lt;&gt; (system/version and+ 0.0.0.255.255) [
+                        cause-error &#39;syntax &#39;needs reduce [&#39;core needs]
+                    ]
+                ]
+                return blank
+            ]
+
+            block! [
+                if empty? needs [return blank]
+            ]
+        ] else [
+            needs: reduce [needs]  ; If it&#39;s an inline value, put it in a block
+        ]
+
+        ; Parse the needs dialect [source &lt;version&gt;]
+
+        mods: make block! length of needs
+        name: vers: hash: _
+        parse ensure block! needs [
+            here:
+            opt [opt &#39;core set vers tuple! (do-needs vers)]
+            any [
+                here:
+                set name [word! | file! | url! | tag!]
+                set vers opt tuple!
+                set hash opt binary!
+                (append mods reduce [name vers hash])
+            ]
+            end
+        ] else [
+            cause-error &#39;script &#39;invalid-arg here
+        ]
+
+        ; Temporary object to collect exports of &quot;mixins&quot; (private modules).
+        ; Don&#39;t bother if returning all the modules in a block, or if in user mode.
+        ;
+        if no-user and (not block) [
+            mixins: make object! 0  ; Minimal length since it may persist later
+        ]
+
+        ; Import the modules:
+        ;
+        mods: map-each [name vers hash] mods [
+            mod: applique :import [
+                module: name
+
+                version: true  ; !!! automatic from VERS?
+                ver: opt vers
+
+                no-lib: no-lib
+                no-user: no-user
+            ]
+
+            ; Collect any mixins into the object (if we are doing that)
+            if all [set? &#39;mixins, mixin? mod] [
+                resolve/extend/only mixins mod select meta-of mod &#39;exports
+            ]
+            mod
+        ]
+
+        return try case [
+            block [mods]  ; /BLOCK refinement asks for block of modules
+            not empty? to-value :mixins [mixins]  ; if any mixins, return them
+        ]
+    ]</description>
+    
+    <lastBuildDate>Fri, 19 Mar 2021 13:48:31 +0000</lastBuildDate>
+    <category>Modules</category>
+    <atom:link href="https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Who needs NEEDS: headers when you have IMPORT?</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>Having this "needs:" inside the header, has always struck me as something odd about Rebol. The header block is used for clarifying and meta info and suddenly there is NEEDS and it forces the things it needs to be available. It looks inside the header like it is just another description but it turns out to be REAL code, next to many other items that could just as well be left out.<br>
+So having NEEDS as an alias for IMPORT and solving the dependencies in some other way... I say +1 from me.</p>
+          <p><a href="https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566/2</link>
+        <pubDate>Fri, 19 Mar 2021 13:48:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1566-2</guid>
+        <source url="https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566.rss">Who needs NEEDS: headers when you have IMPORT?</source>
+      </item>
+      <item>
+        <title>Who needs NEEDS: headers when you have IMPORT?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>There's a concept that seems to have been in the module design that if you put the NEEDS of your code as part of the header.</p>
+<p>But you run into a bit of trouble if you want to do some kind of programmatic inclusion:</p>
+<pre><code>if "use-foo-version" = getenv "WHICH_FOO" [
+    utils: import &lt;foo&gt;
+] else [
+    utils: import &lt;bar&gt;
+]
+</code></pre>
+<p><strong>Because you're going to have a desire for this level of control, I don't really understand exactly what role the header and Needs: should be playing in module dependencies.</strong></p>
+<p>One possible reason it had been put in the header is because of the fact that you <a href="https://forum.rebol.info/t/slipping-bindings-into-a-module/1565">lose all your binding</a>, this would be the only chance you had to get bindings to the exports of the library on the code in the body.</p>
+<p>But with <a href="https://forum.rebol.info/t/the-sea-of-words/1564"><strong>Sea of Words</strong></a> you don't have this one chance in the hands of the MODULE-running to bind the body.  You get <em>all</em> the words bound writable to the module, and readably from the modules it inherits (e.g. LIB).</p>
+<p>That means IMPORT has the power to make declarations appear and link up to the code in the body.  Assuming it knows what module it's importing to.</p>
+<p><em>(This means IMPORT needs to be "definitionally" defined, like RETURN is.  EXPORT needs that as well.  e.g. they are different specializations of importation for each module.)</em></p>
+<h2>I'm Going to Drop NEEDS for the Moment</h2>
+<p>In order to be able to focus on getting at least one thing working right, I'm going to dig into IMPORT and EXPORT.</p>
+<p>When we better understand what the header form is for, we can add it back.</p>
+<p>Here is DO-NEEDS at time of writing (and it has dated concepts in it like /NO-LIB and /NO-USER, these ideas are going away with a rule of all modules being isolated):</p>
+<pre><code>do-needs: function [
+    {Process the NEEDS block of a program header. Returns unapplied mixins.}
+
+    needs "Needs block, header or version"
+        [block! object! tuple! blank!]  ; has to handle blank! if in object!
+    /no-lib "Don't export to the runtime library"
+    /no-user "Don't export to the user context (mixins returned)"
+    /block "Return all the imported modules in a block, instead"
+][
+    ; This is a low-level function and its use and return values reflect that.
+    ;
+    ; In user mode, the mixins are applied by IMPORT, so they don't need to
+    ; be returned. In /NO-USER mode the mixins are collected into an object
+    ; and returned, if the object isn't empty. This object can then be passed
+    ; to MAKE module! to be applied there.
+    ;
+    ; The /BLOCK option returns a block of all the modules imported, not any
+    ; mixins.  This is for when IMPORT is called with a `Needs: [...]` block.
+
+    if object? needs [  ; header object
+        needs: select needs 'needs  ; (protected)
+    ]
+
+    switch type of needs [
+        blank! [return blank]  ; may have come from SELECT, not just arg
+
+        tuple! [  ; simple version number check for interpreter itself
+            case [
+                needs &gt; system/version [
+                    cause-error 'syntax 'needs reduce ['core needs]
+                ]
+
+                3 &gt;= length of needs [  ; no platform id
+                    blank
+                ]
+
+                (needs and+ 0.0.0.255.255)
+                &lt;&gt; (system/version and+ 0.0.0.255.255) [
+                    cause-error 'syntax 'needs reduce ['core needs]
+                ]
+            ]
+            return blank
+        ]
+
+        block! [
+            if empty? needs [return blank]
+        ]
+    ] else [
+        needs: reduce [needs]  ; If it's an inline value, put it in a block
+    ]
+
+    ; Parse the needs dialect [source &lt;version&gt;]
+
+    mods: make block! length of needs
+    name: vers: hash: _
+    parse ensure block! needs [
+        here:
+        opt [opt 'core set vers tuple! (do-needs vers)]
+        any [
+            here:
+            set name [word! | file! | url! | tag!]
+            set vers opt tuple!
+            set hash opt binary!
+            (append mods reduce [name vers hash])
+        ]
+        end
+    ] else [
+        cause-error 'script 'invalid-arg here
+    ]
+
+    ; Temporary object to collect exports of "mixins" (private modules).
+    ; Don't bother if returning all the modules in a block, or if in user mode.
+    ;
+    if no-user and (not block) [
+        mixins: make object! 0  ; Minimal length since it may persist later
+    ]
+
+    ; Import the modules:
+    ;
+    mods: map-each [name vers hash] mods [
+        mod: applique :import [
+            module: name
+
+            version: true  ; !!! automatic from VERS?
+            ver: opt vers
+
+            no-lib: no-lib
+            no-user: no-user
+        ]
+
+        ; Collect any mixins into the object (if we are doing that)
+        if all [set? 'mixins, mixin? mod] [
+            resolve/extend/only mixins mod select meta-of mod 'exports
+        ]
+        mod
+    ]
+
+    return try case [
+        block [mods]  ; /BLOCK refinement asks for block of modules
+        not empty? to-value :mixins [mixins]  ; if any mixins, return them
+    ]
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566/1</link>
+        <pubDate>Fri, 19 Mar 2021 12:39:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1566-1</guid>
+        <source url="https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566.rss">Who needs NEEDS: headers when you have IMPORT?</source>
+      </item>
+  </channel>
+</rss>

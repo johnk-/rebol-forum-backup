@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Moving Enfixedness Back into the ACTION!</title>
+    <link>https://forum.rebol.info/t/moving-enfixedness-back-into-the-action/1156</link>
+    <description>**LONG STORY SHORT:**
+
+The seemingly-subtle distinction of *&quot;enfix is a property of a WORD!, and not of an ACTION!&quot;* arose to try and give a uniformity and stability to the interface of ACTION!.  You always knew--for instance--that if you said `f: function [a [action!]] [...]` that the ACTION! parameter would not be enfix...hence you wouldn&#39;t have to &quot;fear&quot; that an arbitrary function would try and take parameters from the left and could &quot;call it normally.  It meant that **+** and **add** both pointed to the same function identity, even though there was still only one ACTION! type.
+
+(This was actually somewhat similar to how OP! worked...because the type byte is a property of the cell, not the native dispatcher.)
+
+The collateral damage of this distinction was that **plus: :+** would lose the enfixedness, since there were no &quot;enfix ACTION! values&quot;.  This created inconvenience, but was made more tolerable with an ever-evolving set of interesting tricks.
+
+Yet the &quot;security&quot; offered by not having to worry about parameters being nfix functions doesn&#39;t matter much...since functions can still have other parameter conventions (quoting, etc.) which break their expectations.  The only &quot;safe&quot; way to deal with an unknown function is with APPLY (and we&#39;ll have much better APPLY behavior soon).  If functions are type checked, the same checking for other parameter conventions could apply to enfixedness as well.
+
+So in an environment where &quot;opportunistic enfix&quot; functions exist (like DEFAULT), it seems too brittle to wind up in a situation where assignments like **target: :original** don&#39;t retain whatever the calling behaviors of the original were.  And some of the mechanical reasons for favoring the original method don&#39;t exist anymore...e.g. it&#39;s possible to COPY an ACTION! and have the copy be a lightweight identity that doesn&#39;t need to copy the body of non-natives...yet runs just as fast as the original.  So it matters less that **+** and **add** would be distinct function identities.
+
+It&#39;s therefore probably for the best to revert to letting the ACTION! itself carry enfixedness as part of its calling convention.  This also enables compatibility in Redbol emulation that wouldn&#39;t be possible if this change were kept.
+
+---
+
+**More on the topic...**
+
+
+Pulling together the disparate ANY-FUNCTION! types into the single ACTION! type has been a good change.  If we actually had to have a separate datatype for each new implementation mechanic behind a function, the list would be very long now.
+
+*(That list would be something like TYPE-CHECKER!, TYPESET-CHECKER!, JS-NATIVE!, TCC-NATIVE!, ONESHOT!, INVISIBLE!...in addition to GENERIC!, ROUTINE!, NATIVE!...)*
+
+The one function type that doesn&#39;t neatly fold away has always been the tricky OP!... which has evolved into a whole field of &quot;enfix science&quot; (for lack of a better term).
+
+To try and square the circle of truly having only one type of ACTION!, the trick was to say that it wasn&#39;t functions that were enfix...it was *the association between a WORD! and an action*.
+
+This might sound like splitting hairs.  But it meant that there weren&#39;t &quot;enfix function specs&quot;.  And it meant that if you used a GET-WORD! you&#39;d always be extracting a prefix action, giving a fairly uniform calling convention.
+
+    &gt;&gt; +: enfix :add
+
+    &gt;&gt; 1 + 2
+    == 3
+
+    &gt;&gt; plus: :+  ; extracts plain ACTION! (there *are* no &quot;enfix actions&quot;)
+
+    &gt;&gt; 1 plus 2
+    ** Error: plus is missing its value2 argument
+
+It was a bit odd.  But it pushed the complexity around so that at least you never had to ask an ACTION! if it had a &quot;left hand argument&quot;.  And any action value you passed a function wouldn&#39;t be enfix, making it &quot;easier to call with a uniform convention&quot;.
+  
+## That was before `&lt;skip&gt;`-able arguments...
+
+Skippable arguments have become something of a game changer, making for some &quot;opportunistically enfix&quot; constructs.
+
+But this means you can&#39;t always tell just by using a construct if it&#39;s enfix or not.  If you&#39;ve been using DEFAULT in CASE and SWITCH, but never seen it pick up a SET-WORD! or SET-PATH! from the left... you might try **def: :default** and be confused when it starts looking for its left hand side on the right.
+
+So what&#39;s happening is that the line between an enfix function and a not enfixed one begin to blur.  It&#39;s like every function *might* take arguments from their left, even if you don&#39;t particularly think of them as an enfix function.
+
+## So...what if all functions were enfix?
+
+As a thought experiment, what if you say *everything* is enfix, but the left hand side may be skippable?  The convention would then be that you understood the first parameter is the one it gets from the left.  And perhaps that could be blank:
+
+    &gt;&gt; parameters of :add
+    == [_ value1 value2]
+
+    &gt;&gt; parameters of :+
+    == [value1 value2]
+
+Plus, it seems like skippability is important enough it may warrant being a separate parameter class (maybe the @param notation?)  There&#39;s no way to make skippable parameters that aren&#39;t hard quoted, so that&#39;s implied.
+
+We can go with having enfixedness it be a &quot;hidden&quot; flag...but if it&#39;s hidden it&#39;s easy to forget to check for it.  And I feel like making it a separate datatype pushes enfixedness into a category of &quot;otherness&quot; that&#39;s no longer a fit...it&#39;s a spectrum of parameter conventions for when a function is invoked without APPLY or an explicit FRAME!.
+
+## Regardless, I think it has to be an action property...
+
+It has been interesting to experiment with infixedness being a WORD! property.  The enfix flag pioneered cell properties that weren&#39;t transferred when cells moved--which now is used for tons of other things.
+
+But I think at the end of the day, the advantages are outweighed by making it an intrinsic property of the action itself...that travels with the action when you reassign it.  The relationship between ADD and + is truly the outlier class.  Most modern routines are designed to function with a particular interface and expectation of enfixedness or not.
+
+[Significant improvements to APPLY](https://forum.rebol.info/t/positional-apply-as-default-applique-for-frame-style-apply/1103) are going to pick up the slack on receiving functions from unknown sources.  So I think things are going to work out for the better.</description>
+    
+    <lastBuildDate>Thu, 02 May 2019 22:55:47 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/moving-enfixedness-back-into-the-action/1156.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Moving Enfixedness Back into the ACTION!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>LONG STORY SHORT:</strong></p>
+<p>The seemingly-subtle distinction of <em>"enfix is a property of a WORD!, and not of an ACTION!"</em> arose to try and give a uniformity and stability to the interface of ACTION!.  You always knew--for instance--that if you said <code>f: function [a [action!]] [...]</code> that the ACTION! parameter would not be enfix...hence you wouldn't have to "fear" that an arbitrary function would try and take parameters from the left and could "call it normally.  It meant that <strong>+</strong> and <strong>add</strong> both pointed to the same function identity, even though there was still only one ACTION! type.</p>
+<p>(This was actually somewhat similar to how OP! worked...because the type byte is a property of the cell, not the native dispatcher.)</p>
+<p>The collateral damage of this distinction was that <strong>plus: :+</strong> would lose the enfixedness, since there were no "enfix ACTION! values".  This created inconvenience, but was made more tolerable with an ever-evolving set of interesting tricks.</p>
+<p>Yet the "security" offered by not having to worry about parameters being nfix functions doesn't matter much...since functions can still have other parameter conventions (quoting, etc.) which break their expectations.  The only "safe" way to deal with an unknown function is with APPLY (and we'll have much better APPLY behavior soon).  If functions are type checked, the same checking for other parameter conventions could apply to enfixedness as well.</p>
+<p>So in an environment where "opportunistic enfix" functions exist (like DEFAULT), it seems too brittle to wind up in a situation where assignments like <strong>target: :original</strong> don't retain whatever the calling behaviors of the original were.  And some of the mechanical reasons for favoring the original method don't exist anymore...e.g. it's possible to COPY an ACTION! and have the copy be a lightweight identity that doesn't need to copy the body of non-natives...yet runs just as fast as the original.  So it matters less that <strong>+</strong> and <strong>add</strong> would be distinct function identities.</p>
+<p>It's therefore probably for the best to revert to letting the ACTION! itself carry enfixedness as part of its calling convention.  This also enables compatibility in Redbol emulation that wouldn't be possible if this change were kept.</p>
+<hr>
+<p><strong>More on the topic...</strong></p>
+<p>Pulling together the disparate ANY-FUNCTION! types into the single ACTION! type has been a good change.  If we actually had to have a separate datatype for each new implementation mechanic behind a function, the list would be very long now.</p>
+<p><em>(That list would be something like TYPE-CHECKER!, TYPESET-CHECKER!, JS-NATIVE!, TCC-NATIVE!, ONESHOT!, INVISIBLE!...in addition to GENERIC!, ROUTINE!, NATIVE!...)</em></p>
+<p>The one function type that doesn't neatly fold away has always been the tricky OP!... which has evolved into a whole field of "enfix science" (for lack of a better term).</p>
+<p>To try and square the circle of truly having only one type of ACTION!, the trick was to say that it wasn't functions that were enfix...it was <em>the association between a WORD! and an action</em>.</p>
+<p>This might sound like splitting hairs.  But it meant that there weren't "enfix function specs".  And it meant that if you used a GET-WORD! you'd always be extracting a prefix action, giving a fairly uniform calling convention.</p>
+<pre><code>&gt;&gt; +: enfix :add
+
+&gt;&gt; 1 + 2
+== 3
+
+&gt;&gt; plus: :+  ; extracts plain ACTION! (there *are* no "enfix actions")
+
+&gt;&gt; 1 plus 2
+** Error: plus is missing its value2 argument
+</code></pre>
+<p>It was a bit odd.  But it pushed the complexity around so that at least you never had to ask an ACTION! if it had a "left hand argument".  And any action value you passed a function wouldn't be enfix, making it "easier to call with a uniform convention".</p>
+<h2>That was before <code>&lt;skip&gt;</code>-able arguments...</h2>
+<p>Skippable arguments have become something of a game changer, making for some "opportunistically enfix" constructs.</p>
+<p>But this means you can't always tell just by using a construct if it's enfix or not.  If you've been using DEFAULT in CASE and SWITCH, but never seen it pick up a SET-WORD! or SET-PATH! from the left... you might try <strong>def: :default</strong> and be confused when it starts looking for its left hand side on the right.</p>
+<p>So what's happening is that the line between an enfix function and a not enfixed one begin to blur.  It's like every function <em>might</em> take arguments from their left, even if you don't particularly think of them as an enfix function.</p>
+<h2>So...what if all functions were enfix?</h2>
+<p>As a thought experiment, what if you say <em>everything</em> is enfix, but the left hand side may be skippable?  The convention would then be that you understood the first parameter is the one it gets from the left.  And perhaps that could be blank:</p>
+<pre><code>&gt;&gt; parameters of :add
+== [_ value1 value2]
+
+&gt;&gt; parameters of :+
+== [value1 value2]
+</code></pre>
+<p>Plus, it seems like skippability is important enough it may warrant being a separate parameter class (maybe the <span class="mention">@param</span> notation?)  There's no way to make skippable parameters that aren't hard quoted, so that's implied.</p>
+<p>We can go with having enfixedness it be a "hidden" flag...but if it's hidden it's easy to forget to check for it.  And I feel like making it a separate datatype pushes enfixedness into a category of "otherness" that's no longer a fit...it's a spectrum of parameter conventions for when a function is invoked without APPLY or an explicit FRAME!.</p>
+<h2>Regardless, I think it has to be an action property...</h2>
+<p>It has been interesting to experiment with infixedness being a WORD! property.  The enfix flag pioneered cell properties that weren't transferred when cells moved--which now is used for tons of other things.</p>
+<p>But I think at the end of the day, the advantages are outweighed by making it an intrinsic property of the action itself...that travels with the action when you reassign it.  The relationship between ADD and + is truly the outlier class.  Most modern routines are designed to function with a particular interface and expectation of enfixedness or not.</p>
+<p><a href="https://forum.rebol.info/t/positional-apply-as-default-applique-for-frame-style-apply/1103">Significant improvements to APPLY</a> are going to pick up the slack on receiving functions from unknown sources.  So I think things are going to work out for the better.</p>
+          <p><a href="https://forum.rebol.info/t/moving-enfixedness-back-into-the-action/1156/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/moving-enfixedness-back-into-the-action/1156/1</link>
+        <pubDate>Thu, 02 May 2019 08:47:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1156-1</guid>
+        <source url="https://forum.rebol.info/t/moving-enfixedness-back-into-the-action/1156.rss">Moving Enfixedness Back into the ACTION!</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Key Question on Virtual Binding and Mutability</title>
+    <link>https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765</link>
+    <description>Consider this code:
+
+    obj: make object! [
+        x: &lt;foo&gt;
+        code: copy/deep [
+            append last code [print x]
+            ()
+        ]
+    ]
+
+    foreach x [1 2 3] obj/code ;-- FOR-EACH in Ren-C
+
+Off the top of your head, what do you think that should output?  Perhaps `1 2 2 3 3 3`?
+
+*In Rebol2 and R3-Alpha, it outputs nothing.*  This might surprise you if you look at `obj/code` after running the loop:
+
+    &gt;&gt; obj/code
+    == [
+        append last code [print x]
+        (print x print x print x)
+    ]
+
+So the prints were added.   But the reason is that FOR-EACH doesn&#39;t use the block you gave it directly...it makes a rebound copy of it that points any x in the body to that iterating **x**, and runs *that copy*.  So your modifications will affect `code`, but not the deep copy of it FOR-EACH is running.
+
+*Red prints foo 6 times.*
+
+    &lt;foo&gt;
+    &lt;foo&gt;
+    &lt;foo&gt;
+    &lt;foo&gt;
+    &lt;foo&gt;
+    &lt;foo&gt;
+
+That&#39;s because it doesn&#39;t create a new binding for x...it will overwrite whatever x was before the loop, and when it&#39;s over the x you had before will have been overwritten with whatever the state was in the last loop iteration.
+
+I made this case a bit tricky by putting the code in a place where the x in the body would have a different binding than the x in the loop variable.  That was just to make the point of what&#39;s going on.  Red&#39;s argument is that it is too inefficient to pay for the copy and rebind of the body in the general case.
+
+Making a new binding might not be the most important feature in the world.  Not rebinding may be useful--in fact I added the behavior of not creating a new binding by using a LIT-WORD!, so `for-each &#39;x [1 2 3] [...]` will act like Red does, just setting that x and leaving bindings alone.
+
+&gt; **UPDATE**: This particular notation to achieve that feature was removed some time ago.  The current concept is actually to always use the LIT-WORD! notation if not using a function as the body, see [&quot;Avoiding Having To Name Higher Order Function Variants&quot;](https://forum.rebol.info/t/avoiding-having-to-name-higher-order-function-variants/1217).  It still might be an interesting feature to use another notation for.
+
+But what I don&#39;t like is the notion that *if a new binding is what you wanted, that it would be too inefficient to accomplish*.  So if my object example seems contrived, what about this example, which has some parallels:
+
+    &gt;&gt; rule: [&quot;a&quot; (keep &lt;found&gt;)]
+    == [&quot;a&quot; (keep &lt;found&gt;)]
+
+    &gt;&gt; collect [parse &quot;aaa&quot; [some rule]]
+    *** Script Error: keep has no value
+
+I&#39;ve been lumping various proposed solutions to this category problem under the label of &quot;virtual binding&quot;.  But the FOR-EACH case involves modification, which always throws a wrench into situations where you&#39;re trying to share data and avoid making copies.
+
+### How is mutability handled in other bindings?
+
+**specific binding** was an early accomplishment of Ren-C.  This allowed each invocation of a function to have words in its body point to a unique data value for *that invocation of that function*--but without needing to make a deep and rebound copy on each call (which had the only way to do it in R3-Alpha, e.g. CLOSURE).  Instead it created a single copy of the body which had references to function arguments &quot;relativized&quot; by pointing to the archetypal function definition.  Then each call would pair together a function instance frame with the relativized value--requiring the frame to be threaded through the stack to form fully resolved values.
+
+Building upon that extremely major design change was **derived binding**, which similarly avoided making unnecessary copies.  This time not deeply copying member functions of a base object when a derived instance was created.  It&#39;s a bit more nuanced, but has been deployed and is working, which should impress people--if they were paying more attention.  :-)
+
+Both of these methodologies have the advantage that ACTION! bodies in Ren-C are locked from modification.  If they weren&#39;t, it wouldn&#39;t necessarily be clear what modifying them would mean.  If you have a `func [x]` and then one call inserts a reference to `x` into the body...should other iterations of the function that fetch that word see their own x instance...or the specific x instance that was inserted?  Or should the moment of insertion cause the system to bite the bullet and make a unique copy for that function instance--as the illusion of getting unique body copies for each instantiation had been shattered?
+
+So far it&#39;s been easy enough to say you shouldn&#39;t change action bodies--and if you want to then you&#39;re on the hook for making that copy on each call yourself.  People rarely need to do this, and it&#39;s better to make the more common case the one that performs better.
+
+### Next Step: Virtual Binding?
+
+Virtual binding is yet another case of not wanting to copy and rebind code...but this one doesn&#39;t have the advantage of a &quot;relativization pass&quot; to prepare a code block in a way that makes it ready to reuse many times.  It&#39;s trying to avoid making any copies at all, so looking at a simpler FOR-EACH:
+
+    for-each x [1 2 3] [
+        if x &gt;= 2 [print x]
+    ]
+
+FOR-EACH creates a context containing just x.  And its goal is to run the body--that it has &quot;never seen before&quot;--having the x references look up to its x (instead of whatever binding they have at the outset, if any).
+
+Specific and derived binding hinge on a mechanism of augmenting a block at runtime with additional binding information.  So that already exists to build on.  But here we have an issue where there&#39;s no relationship set up between the x in the loop and the x in the body--other than having a common spelling.  That relationship must be discovered (and possibly iteratively re-discovered) as we go.
+
+The scenario we&#39;d like to avoid is paying repeatedly for having `x` looked up in some mapping structure as well as `if` and `&gt;=` and `print` getting searched...on every iteration through the loop, on every word.  We also want to try and keep these mapping structures--whatever they are--from accruing in the garbage collector.  Because if virtual binding isn&#39;t lightweight, then you might as well make a copy *(copies are expensive in nested loops, but it doesn&#39;t help to replace that with something that costs as much or more per nesting level)*.
+
+There are options on the table.  Maybe a block that gets virtually bound does make a relativized copy of a block, but caches it in case a matching relativization is used on it later.  (This would be kind of like having the system automatically factor the code into a function for reuse--which would be the manual form of optimization people would use).  Who knows. 
+
+But I guess one question to answer is if the FOR-EACH example that has a body that modifies itself is interesting or not.  How would be people feel if it was read-only once it was virtually bound?  If it&#39;s not read-only, what should happen with:
+
+    obj: make object! [
+        x: &lt;foo&gt;
+        xx: &#39;x
+    ]
+    code: copy/deep [
+        append last code compose [print (obj/xx)]
+        ()
+    ]
+    for-each x [1 2 3] code
+
+So there you have the case of after-the-fact `x`&#39;s being slipped into the body which are bound into `obj`.  Should virtual binding pick it up, the way it would a before-the-fact `x` bound into `obj`?
+
+In any case, some things to think about.  I brought up the COLLECT/KEEP example and mention how ultimately, I think this all may point to a kind of &quot;missing link&quot; in Rebol, for threading contextual information through the call stack.  ([See also this post.](https://forum.rebol.info/t/separating-parse-rules-across-contexts/313))</description>
+    
+    <lastBuildDate>Wed, 30 Dec 2020 22:56:32 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Key Question on Virtual Binding and Mutability</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>On this topic...two years later... (!)</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="765">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I guess one question to answer is if the FOR-EACH example that has a body that modifies itself is interesting or not. How would be people feel if it was read-only once it was virtually bound?</p>
+</blockquote>
+</aside>
+<p>By definition, a virtual bind does not change the bindings in the thing it is operating on.  It just provides a new "view" of it.</p>
+<pre><code>&gt;&gt; obj: make object! [x: 10]
+&gt;&gt; block: [x + 1]
+&gt;&gt; bind block obj
+&gt;&gt; do block
+== 11
+
+&gt;&gt; do use [x] compose/only [x: 20 (block)]
+== 21
+
+&gt;&gt; do block
+== 11  ; Rebol2 and R3-Alpha say 21
+</code></pre>
+<h2>Structural Changes To The Underlying Block Are Reflected</h2>
+<p>If you virtually bind something (e.g. with IN) then you will see changes made to the original array:</p>
+<pre><code>&gt;&gt; obj: make object! [x: 10]
+&gt;&gt; block: [x + 1]
+&gt;&gt; bind block obj
+&gt;&gt; do block
+== 11
+
+&gt;&gt; obj2: make object! [x: 20]
+&gt;&gt; virt: in obj2 block
+&gt;&gt; do virt
+== 21
+
+&gt;&gt; append block [+ 300]
+== [x + 1 + 300]
+
+&gt;&gt; do block
+== 311
+
+&gt;&gt; do virt
+== 321
+</code></pre>
+<h2>BIND-based Changes Are <em>NOT</em> Reflected In The Virtual View</h2>
+<p>The virtual view's job is to override the stored binding in the shared block.  So if you change the bindings of any overridden words, those will not be reflected in the view:</p>
+<pre><code>&gt;&gt; obj3: make object! [x: 30]
+&gt;&gt; bind block obj3
+
+&gt;&gt; do block
+== 331
+
+&gt;&gt; do virt
+== 321
+</code></pre>
+<p>That could be pretty confusing if you run a BIND operation on something virtual and find that it's being ignored...</p>
+<pre><code>&gt;&gt; virt
+== [x + 1 + 300]
+
+&gt;&gt; bind virt obj3  ; where x is defined as 30
+&gt;&gt; do virt
+== 321  ; the x was unaffected
+</code></pre>
+<h2>This Suggests CONST By Default for Virtual Views?</h2>
+<p>Virtual binds are designed for assuming you're not the only one interested in the block.  Destructive BIND is for blocks you yourself LOAD or COPY, and can control.</p>
+<p>Being CONST wouldn't stop you from doing binding...it would just make you say MUTABLE on the argument first.  The const would give you a hint that things might not behave how you wanted.</p>
+<p>And having the virtual views be const doesn't mean the original block is immutable.  You can still change the binding there, and you will see changes.  (Any changes that aren't part of the virtual bind will also be reflected.)</p>
+<p>It seems like a good conservative place to start.</p>
+          <p><a href="https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765/2</link>
+        <pubDate>Wed, 30 Dec 2020 22:56:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-765-2</guid>
+        <source url="https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765.rss">Key Question on Virtual Binding and Mutability</source>
+      </item>
+      <item>
+        <title>Key Question on Virtual Binding and Mutability</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Consider this code:</p>
+<pre><code>obj: make object! [
+    x: &lt;foo&gt;
+    code: copy/deep [
+        append last code [print x]
+        ()
+    ]
+]
+
+foreach x [1 2 3] obj/code ;-- FOR-EACH in Ren-C
+</code></pre>
+<p>Off the top of your head, what do you think that should output?  Perhaps <code>1 2 2 3 3 3</code>?</p>
+<p><em>In Rebol2 and R3-Alpha, it outputs nothing.</em>  This might surprise you if you look at <code>obj/code</code> after running the loop:</p>
+<pre><code>&gt;&gt; obj/code
+== [
+    append last code [print x]
+    (print x print x print x)
+]
+</code></pre>
+<p>So the prints were added.   But the reason is that FOR-EACH doesn't use the block you gave it directly...it makes a rebound copy of it that points any x in the body to that iterating <strong>x</strong>, and runs <em>that copy</em>.  So your modifications will affect <code>code</code>, but not the deep copy of it FOR-EACH is running.</p>
+<p><em>Red prints foo 6 times.</em></p>
+<pre><code>&lt;foo&gt;
+&lt;foo&gt;
+&lt;foo&gt;
+&lt;foo&gt;
+&lt;foo&gt;
+&lt;foo&gt;
+</code></pre>
+<p>That's because it doesn't create a new binding for x...it will overwrite whatever x was before the loop, and when it's over the x you had before will have been overwritten with whatever the state was in the last loop iteration.</p>
+<p>I made this case a bit tricky by putting the code in a place where the x in the body would have a different binding than the x in the loop variable.  That was just to make the point of what's going on.  Red's argument is that it is too inefficient to pay for the copy and rebind of the body in the general case.</p>
+<p>Making a new binding might not be the most important feature in the world.  Not rebinding may be useful--in fact I added the behavior of not creating a new binding by using a LIT-WORD!, so <code>for-each 'x [1 2 3] [...]</code> will act like Red does, just setting that x and leaving bindings alone.</p>
+<blockquote>
+<p><strong>UPDATE</strong>: This particular notation to achieve that feature was removed some time ago.  The current concept is actually to always use the LIT-WORD! notation if not using a function as the body, see <a href="https://forum.rebol.info/t/avoiding-having-to-name-higher-order-function-variants/1217">"Avoiding Having To Name Higher Order Function Variants"</a>.  It still might be an interesting feature to use another notation for.</p>
+</blockquote>
+<p>But what I don't like is the notion that <em>if a new binding is what you wanted, that it would be too inefficient to accomplish</em>.  So if my object example seems contrived, what about this example, which has some parallels:</p>
+<pre><code>&gt;&gt; rule: ["a" (keep &lt;found&gt;)]
+== ["a" (keep &lt;found&gt;)]
+
+&gt;&gt; collect [parse "aaa" [some rule]]
+*** Script Error: keep has no value
+</code></pre>
+<p>I've been lumping various proposed solutions to this category problem under the label of "virtual binding".  But the FOR-EACH case involves modification, which always throws a wrench into situations where you're trying to share data and avoid making copies.</p>
+<h3>How is mutability handled in other bindings?</h3>
+<p><strong>specific binding</strong> was an early accomplishment of Ren-C.  This allowed each invocation of a function to have words in its body point to a unique data value for <em>that invocation of that function</em>--but without needing to make a deep and rebound copy on each call (which had the only way to do it in R3-Alpha, e.g. CLOSURE).  Instead it created a single copy of the body which had references to function arguments "relativized" by pointing to the archetypal function definition.  Then each call would pair together a function instance frame with the relativized value--requiring the frame to be threaded through the stack to form fully resolved values.</p>
+<p>Building upon that extremely major design change was <strong>derived binding</strong>, which similarly avoided making unnecessary copies.  This time not deeply copying member functions of a base object when a derived instance was created.  It's a bit more nuanced, but has been deployed and is working, which should impress people--if they were paying more attention.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>Both of these methodologies have the advantage that ACTION! bodies in Ren-C are locked from modification.  If they weren't, it wouldn't necessarily be clear what modifying them would mean.  If you have a <code>func [x]</code> and then one call inserts a reference to <code>x</code> into the body...should other iterations of the function that fetch that word see their own x instance...or the specific x instance that was inserted?  Or should the moment of insertion cause the system to bite the bullet and make a unique copy for that function instance--as the illusion of getting unique body copies for each instantiation had been shattered?</p>
+<p>So far it's been easy enough to say you shouldn't change action bodies--and if you want to then you're on the hook for making that copy on each call yourself.  People rarely need to do this, and it's better to make the more common case the one that performs better.</p>
+<h3>Next Step: Virtual Binding?</h3>
+<p>Virtual binding is yet another case of not wanting to copy and rebind code...but this one doesn't have the advantage of a "relativization pass" to prepare a code block in a way that makes it ready to reuse many times.  It's trying to avoid making any copies at all, so looking at a simpler FOR-EACH:</p>
+<pre><code>for-each x [1 2 3] [
+    if x &gt;= 2 [print x]
+]
+</code></pre>
+<p>FOR-EACH creates a context containing just x.  And its goal is to run the body--that it has "never seen before"--having the x references look up to its x (instead of whatever binding they have at the outset, if any).</p>
+<p>Specific and derived binding hinge on a mechanism of augmenting a block at runtime with additional binding information.  So that already exists to build on.  But here we have an issue where there's no relationship set up between the x in the loop and the x in the body--other than having a common spelling.  That relationship must be discovered (and possibly iteratively re-discovered) as we go.</p>
+<p>The scenario we'd like to avoid is paying repeatedly for having <code>x</code> looked up in some mapping structure as well as <code>if</code> and <code>&gt;=</code> and <code>print</code> getting searched...on every iteration through the loop, on every word.  We also want to try and keep these mapping structures--whatever they are--from accruing in the garbage collector.  Because if virtual binding isn't lightweight, then you might as well make a copy <em>(copies are expensive in nested loops, but it doesn't help to replace that with something that costs as much or more per nesting level)</em>.</p>
+<p>There are options on the table.  Maybe a block that gets virtually bound does make a relativized copy of a block, but caches it in case a matching relativization is used on it later.  (This would be kind of like having the system automatically factor the code into a function for reuse--which would be the manual form of optimization people would use).  Who knows.</p>
+<p>But I guess one question to answer is if the FOR-EACH example that has a body that modifies itself is interesting or not.  How would be people feel if it was read-only once it was virtually bound?  If it's not read-only, what should happen with:</p>
+<pre><code>obj: make object! [
+    x: &lt;foo&gt;
+    xx: 'x
+]
+code: copy/deep [
+    append last code compose [print (obj/xx)]
+    ()
+]
+for-each x [1 2 3] code
+</code></pre>
+<p>So there you have the case of after-the-fact <code>x</code>'s being slipped into the body which are bound into <code>obj</code>.  Should virtual binding pick it up, the way it would a before-the-fact <code>x</code> bound into <code>obj</code>?</p>
+<p>In any case, some things to think about.  I brought up the COLLECT/KEEP example and mention how ultimately, I think this all may point to a kind of "missing link" in Rebol, for threading contextual information through the call stack.  (<a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313">See also this post.</a>)</p>
+          <p><a href="https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765/1</link>
+        <pubDate>Mon, 30 Jul 2018 19:23:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-765-1</guid>
+        <source url="https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765.rss">Key Question on Virtual Binding and Mutability</source>
+      </item>
+  </channel>
+</rss>

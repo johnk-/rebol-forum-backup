@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Most Vexing Evaluation: LAMBDA meets THEN/ELSE</title>
+    <link>https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361</link>
+    <description>Whenever the evaluator code gets churned around, there are a few things that break first.
+
+One of the most frequent nightmares is having to fix the mixture of lambdas and then/else.  Here&#39;s the working behavior:
+
+     &gt;&gt; if true [&lt;branch&gt;] then x -&gt; [print [&quot;THEN&quot; x]] else [print &quot;ELSE&quot;]
+     THEN &lt;branch&gt;
+
+     &gt;&gt; if false [&lt;branch&gt;] then x -&gt; [print [&quot;THEN&quot; x]] else [print &quot;ELSE&quot;]
+     ELSE
+
+**This is a showpiece of composition.**  It&#39;s one of the things that I want people to encounter and go &quot;wow&quot; when they see how it&#39;s being done.  So letting it break is not an option.
+
+## What Typically Breaks
+
+When it goes south, what happens is the ELSE won&#39;t run.
+
+We want the precedence to work out as if you had written this:
+
+     ((if false [&lt;branch&gt;]) then (x -&gt; [print [&quot;THEN&quot; x]])) else [print &quot;ELSE&quot;]
+
+So when the THEN goes to get its branch argument, it gets the function constructed from the lambda *but stops there*...deferring the ELSE.  The THEN runs, and the ELSE acts on the completed output of the entire IF..THEN expression.
+
+Instead, when this breaks, the typical broken interpretation is:
+
+     (if false [&lt;branch&gt;]) then ((x -&gt; [print [&quot;THEN&quot; x]]) else [print &quot;ELSE&quot;])
+
+Here we see that THEN went to get its branch argument of the lambda.  But the lambda--once constructed--is passed as the first argument to ELSE, and the ELSE runs.  Since the lambda isn&#39;t null the ELSE evaluates to that lambda...which the THEN runs.  If the THEN gets null as input it doesn&#39;t run, and now considers itself the end of the chain...since the ELSE ran prematurely.
+
+## Why Does It Break?
+
+Remember that THEN and ELSE are &quot;deferring enfix operations&quot;.  This is to say that they don&#39;t greedily take the first opportunity to run as an enfix (the way something like + does).  Instead, they pass on that first opportunity...and run on the *second* opportunity.
+
+Consider that if ELSE ran on its first enfix opportunity, it would be pointless:
+
+     if false [print &quot;not run&quot;] else [print &quot;run&quot;]
+
+The first time ELSE gets seen by the evaluator is while it&#39;s putting the `[print &quot;not run&quot;]` argument into IF&#39;s branch argument slot.  If it ran at that moment, you&#39;d have:
+
+    if false ([print &quot;not run&quot;] else [print &quot;run&quot;])
+
+The ELSE would have a block on its left that wasn&#39;t null, and evaluate to that.  So this would act the same as:
+
+    if false [print &quot;not run&quot;]
+
+So now back to our broken situation:
+
+    if false [&lt;branch&gt;] then x -&gt; [print [&quot;THEN&quot; x]] else [print &quot;ELSE&quot;]
+
+**ELSE will only defer *once***.  Which means it should only be &quot;seen&quot; twice.  When it breaks it gets seen *three* times:
+
+1. It gets seen while `-&gt;` is fulfilling `[print [&quot;THEN&quot; x]]` into its second argument, and does a lookahead.
+2. It gets seen after THEN fulfills its argument
+3. It gets seen after THEN executes
+
+We definitely want the second time ELSE is seen--when it executes--to be at (3).  But which of (1) or (2) is the right &quot;first&quot; time to see ELSE?  Both can&#39;t happen...but one of them has to happen.
+
+## A Case Of Conflicting Requirements for Lookahead
+
+We know that `1 + 2 * 3` is 9 and not 7.   So the first time `*` gets a chance to be looked-ahead-at is *after* the `1 + 2` enfix is finished.
+
+If we looked only at this rule, it would suggest (1) is the &quot;bad&quot; time for ELSE to be &quot;seen&quot;.  `-&gt;` is enfix like `+` is, and ELSE is enfix like `*` is.  So we might see an analogy:
+
+* `1 + 2 * 3` =&gt; `(1 + 2) * 3`
+* `x -&gt; [...] else [...]` =&gt; `(x -&gt; [...]) else [...]`
+
+But if enfix operators don&#39;t look ahead in their argument fulfillment, why would the `-&gt;` have been seen during the THEN?  Why wouldn&#39;t it be:
+
+      ((if false [&lt;branch&gt;] then x) -&gt; [print [&quot;THEN&quot; x]]) else [print &quot;ELSE&quot;]
+
+It looks like we pretty much have to gerrymander this so that something about the properties of the parts get the desired outcome.
+
+## Something Has To Bend
+
+The easiest-seeming option is: **Quoted lookbacks like the one done by -&gt; supersede the &quot;no lookahead&quot; rule**.  That would mean you get this:
+
+    &gt;&gt; 1 + 2 * 3
+    == 9  ; `*` is not quoting
+
+    &gt;&gt; left-quoting-multiplier: enfixed func [:left right] [
+           print [&quot;left-quoting-multiplier&quot; left right]
+           left * right
+       ]
+
+    &gt;&gt; 1 + 2 left-quoting-multiplier 3
+    left-quoting-multiplier 2 3
+    == 7  ; what happens when you quote
+
+I don&#39;t know if it&#39;s the *best* rule.  But it doesn&#39;t seem to come into conflict with any of the crazy examples I&#39;ve come up with yet.  *(And I try a fair number of &quot;crazy&quot; things.)*
+
+I&#39;m patching the latest breakage of this behavior, and I&#39;m kind of sure it will probably break again.  But I wanted to have a reference to why this seems to work by taking away the &quot;(1)&quot; case.
+
+A key point I want to make here is that since we&#39;ve gotten this far with it, *I&#39;m not foreseeing accepting any designs which don&#39;t allow this to work*.</description>
+    
+    <lastBuildDate>Thu, 08 Oct 2020 21:59:25 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Most Vexing Evaluation: LAMBDA meets THEN/ELSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Whenever the evaluator code gets churned around, there are a few things that break first.</p>
+<p>One of the most frequent nightmares is having to fix the mixture of lambdas and then/else.  Here's the working behavior:</p>
+<pre><code> &gt;&gt; if true [&lt;branch&gt;] then x -&gt; [print ["THEN" x]] else [print "ELSE"]
+ THEN &lt;branch&gt;
+
+ &gt;&gt; if false [&lt;branch&gt;] then x -&gt; [print ["THEN" x]] else [print "ELSE"]
+ ELSE
+</code></pre>
+<p><strong>This is a showpiece of composition.</strong>  It's one of the things that I want people to encounter and go "wow" when they see how it's being done.  So letting it break is not an option.</p>
+<h2>What Typically Breaks</h2>
+<p>When it goes south, what happens is the ELSE won't run.</p>
+<p>We want the precedence to work out as if you had written this:</p>
+<pre><code> ((if false [&lt;branch&gt;]) then (x -&gt; [print ["THEN" x]])) else [print "ELSE"]
+</code></pre>
+<p>So when the THEN goes to get its branch argument, it gets the function constructed from the lambda <em>but stops there</em>...deferring the ELSE.  The THEN runs, and the ELSE acts on the completed output of the entire IF..THEN expression.</p>
+<p>Instead, when this breaks, the typical broken interpretation is:</p>
+<pre><code> (if false [&lt;branch&gt;]) then ((x -&gt; [print ["THEN" x]]) else [print "ELSE"])
+</code></pre>
+<p>Here we see that THEN went to get its branch argument of the lambda.  But the lambda--once constructed--is passed as the first argument to ELSE, and the ELSE runs.  Since the lambda isn't null the ELSE evaluates to that lambda...which the THEN runs.  If the THEN gets null as input it doesn't run, and now considers itself the end of the chain...since the ELSE ran prematurely.</p>
+<h2>Why Does It Break?</h2>
+<p>Remember that THEN and ELSE are "deferring enfix operations".  This is to say that they don't greedily take the first opportunity to run as an enfix (the way something like + does).  Instead, they pass on that first opportunity...and run on the <em>second</em> opportunity.</p>
+<p>Consider that if ELSE ran on its first enfix opportunity, it would be pointless:</p>
+<pre><code> if false [print "not run"] else [print "run"]
+</code></pre>
+<p>The first time ELSE gets seen by the evaluator is while it's putting the <code>[print "not run"]</code> argument into IF's branch argument slot.  If it ran at that moment, you'd have:</p>
+<pre><code>if false ([print "not run"] else [print "run"])
+</code></pre>
+<p>The ELSE would have a block on its left that wasn't null, and evaluate to that.  So this would act the same as:</p>
+<pre><code>if false [print "not run"]
+</code></pre>
+<p>So now back to our broken situation:</p>
+<pre><code>if false [&lt;branch&gt;] then x -&gt; [print ["THEN" x]] else [print "ELSE"]
+</code></pre>
+<p><strong>ELSE will only defer <em>once</em></strong>.  Which means it should only be "seen" twice.  When it breaks it gets seen <em>three</em> times:</p>
+<ol>
+<li>It gets seen while <code>-&gt;</code> is fulfilling <code>[print ["THEN" x]]</code> into its second argument, and does a lookahead.</li>
+<li>It gets seen after THEN fulfills its argument</li>
+<li>It gets seen after THEN executes</li>
+</ol>
+<p>We definitely want the second time ELSE is seen--when it executes--to be at (3).  But which of (1) or (2) is the right "first" time to see ELSE?  Both can't happen...but one of them has to happen.</p>
+<h2>A Case Of Conflicting Requirements for Lookahead</h2>
+<p>We know that <code>1 + 2 * 3</code> is 9 and not 7.   So the first time <code>*</code> gets a chance to be looked-ahead-at is <em>after</em> the <code>1 + 2</code> enfix is finished.</p>
+<p>If we looked only at this rule, it would suggest (1) is the "bad" time for ELSE to be "seen".  <code>-&gt;</code> is enfix like <code>+</code> is, and ELSE is enfix like <code>*</code> is.  So we might see an analogy:</p>
+<ul>
+<li>
+<code>1 + 2 * 3</code> =&gt; <code>(1 + 2) * 3</code>
+</li>
+<li>
+<code>x -&gt; [...] else [...]</code> =&gt; <code>(x -&gt; [...]) else [...]</code>
+</li>
+</ul>
+<p>But if enfix operators don't look ahead in their argument fulfillment, why would the <code>-&gt;</code> have been seen during the THEN?  Why wouldn't it be:</p>
+<pre><code>  ((if false [&lt;branch&gt;] then x) -&gt; [print ["THEN" x]]) else [print "ELSE"]
+</code></pre>
+<p>It looks like we pretty much have to gerrymander this so that something about the properties of the parts get the desired outcome.</p>
+<h2>Something Has To Bend</h2>
+<p>The easiest-seeming option is: <strong>Quoted lookbacks like the one done by -&gt; supersede the "no lookahead" rule</strong>.  That would mean you get this:</p>
+<pre><code>&gt;&gt; 1 + 2 * 3
+== 9  ; `*` is not quoting
+
+&gt;&gt; left-quoting-multiplier: enfixed func [:left right] [
+       print ["left-quoting-multiplier" left right]
+       left * right
+   ]
+
+&gt;&gt; 1 + 2 left-quoting-multiplier 3
+left-quoting-multiplier 2 3
+== 7  ; what happens when you quote
+</code></pre>
+<p>I don't know if it's the <em>best</em> rule.  But it doesn't seem to come into conflict with any of the crazy examples I've come up with yet.  <em>(And I try a fair number of "crazy" things.)</em></p>
+<p>I'm patching the latest breakage of this behavior, and I'm kind of sure it will probably break again.  But I wanted to have a reference to why this seems to work by taking away the "(1)" case.</p>
+<p>A key point I want to make here is that since we've gotten this far with it, <em>I'm not foreseeing accepting any designs which don't allow this to work</em>.</p>
+          <p><a href="https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361/1</link>
+        <pubDate>Thu, 08 Oct 2020 21:59:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1361-1</guid>
+        <source url="https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361.rss">The Most Vexing Evaluation: LAMBDA meets THEN/ELSE</source>
+      </item>
+  </channel>
+</rss>

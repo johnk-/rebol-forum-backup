@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How To Simplify Extracting Results From UPARSE?</title>
+    <link>https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561</link>
+    <description>Imagine that we want to make the following just a little bit nicer:
+
+    ; Note: this actually works in UPARSE today
+    let result
+    uparse &quot;aaabbb&quot; [
+       result: gather [
+            emit x: collect some [&quot;a&quot;, keep @(&lt;a&gt;)]
+            emit y: collect some [&quot;b&quot;, keep @(&lt;b&gt;)]
+       ]
+    ] else [
+        fail &quot;Parse failed&quot;
+    ]
+    assert [result.x = [&lt;a&gt; &lt;a&gt; &lt;a&gt;]] 
+    assert [result.y = [&lt;b&gt; &lt;b&gt; &lt;b&gt;]]
+
+## One Idea: Allow EMIT even if no GATHER is in Effect
+
+Right now there&#39;s a little experiment which lets you do this, which assumes you meant to treat the PARSE overall as a gather vs. giving you an error that there&#39;s no GATHER:
+
+    let result: uparse &quot;aaabbb&quot; [
+        emit x: collect some [&quot;a&quot;, keep @(&lt;a&gt;)]
+        emit y: collect some [&quot;b&quot;, keep @(&lt;b&gt;)]
+    ] else [
+        fail &quot;Parse failed&quot;
+    ]
+    assert [result.x = [&lt;a&gt; &lt;a&gt; &lt;a&gt;]] 
+    assert [result.y = [&lt;b&gt; &lt;b&gt; &lt;b&gt;]]
+
+We could do a similar thing for COLLECT.  But then we&#39;d have to worry about what to do if you said **uparse &quot;...&quot; [emit x: ..., keep ...]** -- which was intended as a result?
+
+While this may seem convenient, it isn&#39;t very general.  It ties in a special relationship between UPARSE and GATHER, which violates some of the modularity.
+
+I&#39;m not thrilled about this, and would rather you made a specialization for it (GATHER-PARSE) that injected the gather above your rule block...so you were explicit about what you were doing.
+
+## Another Idea: Bring Back PARSE Return
+
+When RETURN existed in PARSE, we could have said:
+
+    let result: uparse &quot;aaabbb&quot; [
+        return gather [
+            emit x: collect some [&quot;a&quot;, keep @(&lt;a&gt;)]
+            emit y: collect some [&quot;b&quot;, keep @(&lt;b&gt;)]
+        ]
+    ] else [
+        fail &quot;Parse failed&quot;
+    ]
+    assert [result.x = [&lt;a&gt; &lt;a&gt; &lt;a&gt;]]
+    assert [result.y = [&lt;b&gt; &lt;b&gt; &lt;b&gt;]]
+
+&gt; Something to think about here would be how RETURN and NULL would mix, in terms of returning null results vs. parse failures.  RETURN has kind of an interesting property of rolling on to the next option if its rule fails:
+&gt;
+&gt;     &gt;&gt; uparse &quot;aaa&quot; [
+&gt;            return collect some &quot;b&quot;
+&gt;               |
+&gt;            return collect some &quot;a&quot;
+&gt;        ]
+&gt;     == &quot;aaa&quot;
+&gt;
+&gt; But if you wanted to force a RETURN to give NULL back you could OPT it.
+&gt;
+&gt;     &gt;&gt; uparse &quot;aaa&quot; [
+&gt;            return opt collect some &quot;b&quot;
+&gt;               |
+&gt;            return collect some &quot;a&quot;
+&gt;        ]
+&gt;     ; null
+&gt;
+
+## But RETURN Was Removed in Ren-C...
+
+I&#39;m a little hazy on the precise complete argument for dropping RETURN...**[here was the commit from over 2 years ago that did it.](https://github.com/metaeducation/ren-c/pull/898)**
+
+As a sidenote, Red&#39;s PARSE doesn&#39;t seem to have RETURN, but it doesn&#39;t seem to error either:
+
+    &gt;&gt; parse &quot;&quot; [return (10)]
+    == false
+
+    &gt;&gt; parse [10] [return integer!]
+    == false
+
+I know I didn&#39;t particularly care for losing grounding on what exactly it was you were RETURN-ing from...e.g. that it wasn&#39;t the function&#39;s RETURN.
+
+**[UPDATE: I figured out several more good reasons to avoid putting RETURN in the box, and came up with a much better answer.](https://forum.rebol.info/t/uparse-return-subtleties/1589/2?u=hostilefork)**
+
+So forget RETURN.  You can make it as your own combinator if you really want it...against my advice.</description>
+    
+    <lastBuildDate>Sun, 02 May 2021 20:21:02 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How To Simplify Extracting Results From UPARSE?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1561">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>What if this turned PARSE into a LET-like construct that declared variables available at the callsite?</p>
+</blockquote>
+</aside>
+<p>The idea of EMIT being able to throw new variables in at the callsite of UPARSE is cool... but it runs into problems with abstraction.</p>
+<p>If I make MY-UPARSE that calls UPARSE in its implementation, then you're getting the variables emitted into the guts o MY-UPARSE...not where MY-UPARSE is called.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>So that suggests one needs to be somewhat wary of writing LET-like constructs.  Hence you should be getting an object out of the parse operation, and explicitly importing that object where you want it in cope.  Maybe this is a better application for the word <strong>USE</strong>?  (IMPORT might need more parameters and wordiness).</p>
+<pre><code>if true [
+    let filename: "demo.txt"
+    use parse filename [
+        emit base: between here "."
+        emit extension: thru end
+     ] else [
+        fail "Not a file with an extension"
+    ]
+    print ["The base was" base]
+    print ["The extension was" extension]
+]
+; base and extension would not be defined here!
+</code></pre>
+<p>Or perhaps implicit emission of the variables is a feature of PARSE only, but not the lower level PARSE*.  So if you're building something that's abstracted you would build it on top of PARSE*, which wouldn't do the implicit LET emits...and then you'd decide if your parselike abstraction wanted to do it or not.</p>
+          <p><a href="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/4</link>
+        <pubDate>Sun, 02 May 2021 16:48:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1561-4</guid>
+        <source url="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561.rss">How To Simplify Extracting Results From UPARSE?</source>
+      </item>
+      <item>
+        <title>How To Simplify Extracting Results From UPARSE?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1561">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>What if this turned PARSE into a LET-like construct that declared variables available at the callsite?</p>
+</blockquote>
+</aside>
+<p>Maybe EMIT should still return an object, but you do another step to bring those variables in.  Maybe that step is IMPORT?</p>
+<pre><code>import uparse filename [
+    emit base: between here "."
+    emit extension: thru end
+]
+</code></pre>
+<p>So UPARSE would give back an object, and then IMPORT would virtually bind that object into the execution stream.  :-/</p>
+<p>That is a strange idea, but it does have a sort of level of purposeful control to it.  You wouldn't accidentally use an EMIT rule and then get variables leaking out unless you seemed aware that was what you were doing.</p>
+<p>You'd have to deal with the failing cases.  ELSE helps here:</p>
+<pre><code>import uparse filename [
+    emit base: between here "."
+    emit extension: thru end
+] else [
+    print "This clause runs before the IMPORT gets the NULL"
+]
+</code></pre>
+<p>It's generally not the plan to make things silently accept NULL, but opting out on blanks is standard practice... so you could <strong><code>import try uparse</code></strong> if you wanted to.</p>
+<p>Anyway, a further thought on this grand puzzle of binding.</p>
+          <p><a href="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/3</link>
+        <pubDate>Mon, 22 Mar 2021 15:35:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1561-3</guid>
+        <source url="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561.rss">How To Simplify Extracting Results From UPARSE?</source>
+      </item>
+      <item>
+        <title>How To Simplify Extracting Results From UPARSE?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1561">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><em>One Idea: Allow EMIT even if no GATHER is in Effect</em></p>
+<p>Right now there's a little experiment which lets you do this, which assumes you meant to treat the PARSE overall as a gather vs. giving you an error that there's no GATHER:</p>
+</blockquote>
+</aside>
+<p>So if we're going to be "all in" on the idea that you can abstract the act of variable declaration itself, that affords another interesting possibility...</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/bulb.png?v=9" title=":bulb:" class="emoji" alt=":bulb:"> <strong>What if this turned PARSE into a LET-like construct that declared variables available at the callsite?</strong></p>
+<pre><code>if true [
+    let filename: "demo.txt"
+    uparse filename [
+        emit base: between here "."
+        emit extension: thru end
+    ] else [
+        fail "Not a file with an extension"
+    ]
+    print ["The base was" base]
+    print ["The extension was" extension]
+]
+; base and extension would not be defined here!
+</code></pre>
+<p>You'd start to see things like PARSE and IMPORT and LET as variable creators.</p>
+<h2>Wow, that sounds cool... can it be done?</h2>
+<p>It's done already.  <strong><a href="https://github.com/metaeducation/ren-c/commit/fc463c801bbadd3bfd8ca0881b87f35bb89aecd4#diff-ab9e33bbe0eae0ae0bdba1aa21d97c10f89a839b23c63f82c472b85d2c711c13R232">The feature is now in UPARSE for you to test.</a></strong>  Usual caveats about "not known if this can be done efficiently", but we're trying to solve semantics first, performance...later.</p>
+<p>Having it be the same feature as EMIT may not be the right thing.  But as a general idea this seems very useful, and pushes on the definitions of binding...if we can offer this kind of thing, I feel we should, as it's giving a reality to the "you can design your own language features" claim.  Declaring variables people can access by name is something that language features do.</p>
+<p>Also, <a href="https://github.com/metaeducation/ren-c/commit/1e3af49163be17bac08eba8529277d6463c65936">made it so you don't need ACROSS to do assignments for TO and THRU</a>, cc <a class="mention" href="/u/ingohohmann">@IngoHohmann</a></p>
+          <p><a href="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/2</link>
+        <pubDate>Mon, 22 Mar 2021 14:47:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1561-2</guid>
+        <source url="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561.rss">How To Simplify Extracting Results From UPARSE?</source>
+      </item>
+      <item>
+        <title>How To Simplify Extracting Results From UPARSE?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Imagine that we want to make the following just a little bit nicer:</p>
+<pre><code>; Note: this actually works in UPARSE today
+let result
+uparse "aaabbb" [
+   result: gather [
+        emit x: collect some ["a", keep @(&lt;a&gt;)]
+        emit y: collect some ["b", keep @(&lt;b&gt;)]
+   ]
+] else [
+    fail "Parse failed"
+]
+assert [result.x = [&lt;a&gt; &lt;a&gt; &lt;a&gt;]] 
+assert [result.y = [&lt;b&gt; &lt;b&gt; &lt;b&gt;]]
+</code></pre>
+<h2>One Idea: Allow EMIT even if no GATHER is in Effect</h2>
+<p>Right now there's a little experiment which lets you do this, which assumes you meant to treat the PARSE overall as a gather vs. giving you an error that there's no GATHER:</p>
+<pre><code>let result: uparse "aaabbb" [
+    emit x: collect some ["a", keep @(&lt;a&gt;)]
+    emit y: collect some ["b", keep @(&lt;b&gt;)]
+] else [
+    fail "Parse failed"
+]
+assert [result.x = [&lt;a&gt; &lt;a&gt; &lt;a&gt;]] 
+assert [result.y = [&lt;b&gt; &lt;b&gt; &lt;b&gt;]]
+</code></pre>
+<p>We could do a similar thing for COLLECT.  But then we'd have to worry about what to do if you said <strong>uparse "..." [emit x: ..., keep ...]</strong> -- which was intended as a result?</p>
+<p>While this may seem convenient, it isn't very general.  It ties in a special relationship between UPARSE and GATHER, which violates some of the modularity.</p>
+<p>I'm not thrilled about this, and would rather you made a specialization for it (GATHER-PARSE) that injected the gather above your rule block...so you were explicit about what you were doing.</p>
+<h2>Another Idea: Bring Back PARSE Return</h2>
+<p>When RETURN existed in PARSE, we could have said:</p>
+<pre><code>let result: uparse "aaabbb" [
+    return gather [
+        emit x: collect some ["a", keep @(&lt;a&gt;)]
+        emit y: collect some ["b", keep @(&lt;b&gt;)]
+    ]
+] else [
+    fail "Parse failed"
+]
+assert [result.x = [&lt;a&gt; &lt;a&gt; &lt;a&gt;]]
+assert [result.y = [&lt;b&gt; &lt;b&gt; &lt;b&gt;]]
+</code></pre>
+<blockquote>
+<p>Something to think about here would be how RETURN and NULL would mix, in terms of returning null results vs. parse failures.  RETURN has kind of an interesting property of rolling on to the next option if its rule fails:</p>
+<pre><code>&gt;&gt; uparse "aaa" [
+       return collect some "b"
+          |
+       return collect some "a"
+   ]
+== "aaa"
+</code></pre>
+<p>But if you wanted to force a RETURN to give NULL back you could OPT it.</p>
+<pre><code>&gt;&gt; uparse "aaa" [
+       return opt collect some "b"
+          |
+       return collect some "a"
+   ]
+; null
+</code></pre>
+</blockquote>
+<h2>But RETURN Was Removed in Ren-C...</h2>
+<p>I'm a little hazy on the precise complete argument for dropping RETURN...<strong><a href="https://github.com/metaeducation/ren-c/pull/898">here was the commit from over 2 years ago that did it.</a></strong></p>
+<p>As a sidenote, Red's PARSE doesn't seem to have RETURN, but it doesn't seem to error either:</p>
+<pre><code>&gt;&gt; parse "" [return (10)]
+== false
+
+&gt;&gt; parse [10] [return integer!]
+== false
+</code></pre>
+<p>I know I didn't particularly care for losing grounding on what exactly it was you were RETURN-ing from...e.g. that it wasn't the function's RETURN.</p>
+<p><strong><a href="https://forum.rebol.info/t/uparse-return-subtleties/1589/2">UPDATE: I figured out several more good reasons to avoid putting RETURN in the box, and came up with a much better answer.</a></strong></p>
+<p>So forget RETURN.  You can make it as your own combinator if you really want it...against my advice.</p>
+          <p><a href="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/1</link>
+        <pubDate>Mon, 15 Mar 2021 07:47:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1561-1</guid>
+        <source url="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561.rss">How To Simplify Extracting Results From UPARSE?</source>
+      </item>
+  </channel>
+</rss>

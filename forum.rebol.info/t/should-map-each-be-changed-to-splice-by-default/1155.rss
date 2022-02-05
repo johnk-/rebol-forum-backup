@@ -1,0 +1,395 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should MAP-EACH be changed to splice by default?</title>
+    <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155</link>
+    <description>I was trying to do something in JavaScript, going character by character and replacing text in a string.  JS strings are immutable so it was kind of annoying.
+
+It made me wish to be able to do a MAP-EACH on a TEXT! and have the body return either a NULL, a CHAR!, or a TEXT!...
+
+    &gt;&gt; map-each c &quot;123&quot; [
+         case c [
+             #&quot;1&quot; [&quot;one&quot;]
+             #&quot;3&quot; [#&quot;T&quot;]
+         ]  ; don&#39;t have any match for 2, so fall through with null
+    ]
+    == &quot;oneT&quot;
+
+The ability to go element-by-element and map to potentially 0, 1, or many elements seemed like an appealing thing.  Enough that I wondered if MAP-EACH should splice by default.
+
+Splicing is strictly more powerful, because you can put things into a block:
+
+    &gt;&gt; map-each x [a [b c] &lt;d&gt; e] [if not tag? x [x]]
+    == [a b c e]
+
+    &gt;&gt; map-each x [a [b c] &lt;d&gt; e] [if not tag? x [reduce [x]]]
+    == [a [b c] e]
+
+    &gt;&gt; map-each x [a [b c] &lt;d&gt; e] [if not tag? x [:[x]]]
+    == [a [b c] e]
+
+It would seem to suggest you&#39;d want an /ONLY for convenience.
+
+There are benefits.  But as with APPEND doing splicing when it&#39;s not asked... it&#39;s a likely source of bugs.  This category of bugs is probably one of the biggest.
+
+**Another side of the argument is to go with MAP-EACH as it does today, producing a BLOCK! always.** If you always get a block, then you get to make up the step which coalesces things.
+
+I&#39;ve made arguments for this line of thinking in the past.  It seems a bit wasteful to always be producing a BLOCK! from a large text string, then merging it together.  But perhaps the [argument made against /INTO](https://forum.rebol.info/t/stopping-the-into-virus/705/2?u=hostilefork) applies here too...that anyone who cares wouldn&#39;t use MAP-EACH?</description>
+    
+    <lastBuildDate>Sun, 22 Aug 2021 21:34:49 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It might not be so bad if we just keep MAP-EACH as it is.  That would mean it is a synonym for MAP with the branch being META:</p>
+<pre><code>&gt;&gt; map x each [[a b] [c d]] [x]
+== [a b c d]
+
+&gt;&gt; map x each [[a b] [c d]] ^[x]  ; or ^[x] =&gt; [only x], [quote x], etc.
+== [[a b] [c d]]
+
+&gt;&gt; map-each x [[a b] [c d]] [x]
+== [[a b] [c d]]
+</code></pre>
+<p>The question would just be if adding that extra twist so that MAP X EACH and MAP-EACH X aren't precise synonyms would be drop-in synonyms would be a cognitive problem.</p>
+<p><strong>This whole thing is getting super powerful, and it justifies why /ONLY needs to die!</strong>  Repeating my example from earlier:</p>
+<pre><code>&gt;&gt; map x each [[&lt;splice&gt; a b] [&lt;nosplice&gt; c d]] [
+    switch first x [
+       &lt;splice&gt; [next x]  ; plain BLOCK! will splice
+       &lt;nosplice&gt; [only next x]  ; or (^ next x) or (quote next x)
+       fail "Unknown directive"
+   ]
+]
+== [a b [c d]]
+</code></pre>
+<p>The option to put the splicing choice inside the body lets you pick the splicing or not on every individual code path.</p>
+<p>Being able to put it on the branch itself is yet another option in the mix.  Good stuff.</p>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/9</link>
+        <pubDate>Sun, 22 Aug 2021 21:00:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-9</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="7" data-topic="1155">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But as /ONLY is being eliminated, the APPEND and FIND family of routines are joining the club of functions that do not accept NULL by default. This helps catch accidents:</p>
+<pre><code> &gt;&gt; data: [x y z]
+
+ &gt;&gt; append [a b c] fourth data
+ ** Error: Can't Append Null, see TRY etc.
+
+ &gt;&gt; append [a b c] try fourth data  ; TRY transitions NULL -&gt; BLANK!
+ == [a b c]
+</code></pre>
+<p>So if MAP-EACH were splicing, then it would presumably be getting the same rules. Not just about prohibiting NULL but making you speak in the quoting domain about non-spliced things</p>
+</blockquote>
+</aside>
+<p>All right, a few points to raise here...</p>
+<p>First of all, you don't need to escape inert things.</p>
+<pre><code>&gt;&gt; append ["some" "data"]["more"]
+== ["some" "data" "more"]
+</code></pre>
+<p>So many data-oriented cases will work.</p>
+<p>Secondly, we will have ^META branches.</p>
+<pre><code>&gt;&gt; if true [reverse [a b c]]
+== [c b a]
+
+&gt;&gt; if true ^[reverse [a b c]]
+== '[c b a]
+
+&gt;&gt; if true [~baddie~]
+== ~baddie~  ; isotope
+
+&gt;&gt; if true ^[~baddie~]
+== ~baddie~
+</code></pre>
+<p>This will work across the board, so it could work for a MAP body to say "please add everything as-is", in a way that doesn't make you have to worry about the particulars of the control paths.  It then becomes effectively a "MAP/ONLY".</p>
+<p>Thirdly, I don't think we have to make MAP-EACH follow the NULL prohibition.  That seems to be something each construct can decide how it wants to handle...</p>
+<ul>
+<li>
+<p>What makes things like APPEND a bit different in my view is that they are a one-off operation, not a batch operation.  You are bothering to write that single line of APPEND.  Wanting it to be a no-op is kind of the exceptional case, and worth making you label it explicitly with a TRY makes sense.</p>
+</li>
+<li>
+<p>I made an exception for a case recently... the case of COLLECT when you mark a slot with <strong>(())</strong>.  It's a different "announcement of intent" to say "flexible number of items in this slot".  That's distinct from the <strong>()</strong> intention, which is "one slot value here"...which turns nulls into a ~null~ BAD-WORD!.</p>
+</li>
+</ul>
+<p>I think MAP has more in common with (()) in COLLECT than it does with APPEND.</p>
+<h2>So I'll Implement This Behavior for the new MAP Construct</h2>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/8</link>
+        <pubDate>Fri, 20 Aug 2021 21:56:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-8</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="6" data-topic="1155">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>As pieces slide into place... I was right... it should splice blocks by default, and if it gets a QUOTED! value it should unquote it.</p>
+</blockquote>
+</aside>
+<h3>I'm second-guessing this.</h3>
+<p>What got me to pause was the simple example of:</p>
+<pre><code>&gt;&gt; map-each x [1 2 3 4] [if odd? x [x]]
+== [1 3]
+</code></pre>
+<p>I rather like that.  The NULL out of the IF is a special signal to map to nothing.</p>
+<p>But as /ONLY is being eliminated, the APPEND and FIND family of routines are joining the club of functions that do not accept NULL by default.  This helps catch accidents:</p>
+<pre><code> &gt;&gt; data: [x y z]
+
+ &gt;&gt; append [a b c] fourth data
+ ** Error: Can't Append Null, see TRY etc.
+
+ &gt;&gt; append [a b c] try fourth data  ; TRY transitions NULL -&gt; BLANK!
+ == [a b c]
+</code></pre>
+<p>So if MAP-EACH were splicing, then it would presumably be getting the same rules.  Not just about prohibiting NULL but making you speak in the quoting domain about non-spliced things:</p>
+<pre><code>&gt;&gt; map-each x [1 2 3 4] [try if odd? x [quote x]]
+== [1 3]
+
+&gt;&gt; map-each x [1 2 3 4] [if odd? x [^x]]
+== [1 3]
+</code></pre>
+<p>...etc.  APPEND and friends might allow INTEGER! to pass without a quote since it's inert...this is still up in the air.</p>
+<h3>Couldn't you have used COLLECT and KEEP if you wanted splicing?</h3>
+<pre><code>collect [
+    for-each x [[a b] [c d e]] [
+        if (length of x) &gt; 2 [
+            keep x  ; splice anything greater than length 3
+        ] else [ 
+            keep ^x  ; quote anything less than or equal to length 3
+        ]
+    ]
+ ]
+ == [[a b] c d e]
+</code></pre>
+<p>Being free from having to speak in the splicing domain could be MAP-EACH's unique feature, which would make you choose it.</p>
+<h3>Or Might A Quoted Branch Signal Quoting?</h3>
+<pre><code>&gt;&gt; map-each x [[a b] [c d]] [reverse copy x]
+== [b a d c]
+
+&gt;&gt; map-each x [[a b] [c d]] ^[reverse copy x]
+== [[b a] [d c]]
+</code></pre>
+<p>It's a thought.</p>
+<p>Main point is...it still doesn't feel completely clear.  Keeping it on the table.</p>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/7</link>
+        <pubDate>Tue, 18 May 2021 06:02:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-7</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="5" data-topic="1155">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>The thing to really ponder over is: <strong>am I right in saying that with a splicing default, the things you map to should always be blocks...to avoid that splice biting you when it happens that one time you have a block.</strong> Like I mention, it's easy enough to say <code>map-each vars data @[...]</code> and get the old behavior back, but if you don't then each loop iteration must evaluate to <em>either a block! to splice or a null</em>.</p>
+</blockquote>
+</aside>
+<p>As pieces slide into place... I was right... it should splice blocks by default, and if it gets a QUOTED! value it should unquote it.</p>
+<p>In our increasingly-likely new map notation:</p>
+<pre><code>&gt;&gt; map x each [[&lt;splice&gt; a b] [&lt;nosplice&gt; c d]] [
+   switch first x [
+       &lt;splice&gt; [next x]  ; plain BLOCK! will splice
+       &lt;nosplice&gt; [^ next x]  ; quoted BLOCK! will not
+       fail "Unknown directive"
+   ]
+]
+== [a b [c d]]
+</code></pre>
+<p>Power!</p>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/6</link>
+        <pubDate>Wed, 05 May 2021 14:53:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-6</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="1155" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>Maybe I'm not seeing the whole picture, but I feel like PARSE is the proper/default domain for string processing.</p>
+</blockquote>
+</aside>
+<p>Your intuition is likely right here, that since strings aren't tokenized the way blocks are, it will be a rare occasion where you want to map character-by-character to either nothing, another character, or a series of characters.  You're more likely to be looking for patterns like "&amp;nbsp", where this kind of code doesn't get you remotely what you want:</p>
+<pre><code> wtf: map-each [amp n b s p semi] str [
+     all [
+         amp = #"&amp;"  ; only first char guaranteed set :-/
+         :n = #"n"
+         :b = #"b"
+         :s = #"s"
+         :p = #"p"
+         :semi = #";"
+     ] then [
+         space
+     ] else [
+         unspaced [amp :n :b :s :p :semi]  ; up to 6 other chars
+     ]
+ ]  ; crazypants: only replaces &amp;nbsp; every 6 characters...
+</code></pre>
+<p>Having a window jumping N characters ahead across text is only going to probably come up in programming puzzles.  The case I had actually was N=1, though, which <em>did</em> come up in practice...and you can imagine it accruing state or making some other decisions for <em>some</em> scenarios.</p>
+<p>It's not a priority to support it.  But if it was supported, I think it should be string-in and string-out, and hence lends further credibility to the splicing that I now believe to be the justifiable right default.</p>
+<p>The thing to really ponder over is: <strong>am I right in saying that with a splicing default, the things you map to should always be blocks...to avoid that splice biting you when it happens that one time you have a block.</strong>  Like I mention, it's easy enough to say <code>map-each vars data @[...]</code> and get the old behavior back, but if you don't then each loop iteration must evaluate to <em>either a block! to splice or a null</em>.</p>
+<p>(All hail the primacy of BLOCK! <strong>[o]</strong>!)</p>
+<p><a href="https://github.com/metaeducation/ren-c/pull/1009" rel="nofollow noopener">I need everyone to read the PR for this very carefully to see if we're on the same page on this</a>, because it's pretty major (though code written to the convention will be backwards compatible for most cases...with MAP-EACH being an exception, as it is being changed to align with the general rules of the system elsewhere).</p>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/5</link>
+        <pubDate>Tue, 27 Aug 2019 19:31:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-5</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1155">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I think we should do this, and make MAP-EACH follow the new rules of /ONLY... e.g. if you are mapping items in a block, you have to return a block to be spliced</p>
+</blockquote>
+</aside>
+<p>There is already pretty good justification for splicing by default...but here's one motivated by an example I just wrote about in another post:</p>
+<pre><code>data: [
+    "Foo" 10 &lt;alpha&gt;
+    "Bar" 20 _
+    "Baz" 30 &lt;beta&gt;
+]
+
+transformed: map-each [x y z] data [
+    if z = &lt;alpha&gt; [z: &lt;gamma&gt;]
+    y: y + 1
+    :[x y z]
+]
+</code></pre>
+<p>How could you do that if you couldn't splice?  You'd be stuck with the "tuple" you'd gathered from a range in a block in the body with X Y Z, but only able to return a single item...so you're not doing the transformation you wanted.</p>
+<p>I like the way things are looking with being able to do either:</p>
+<pre><code> map-each/only vars data [...]
+</code></pre>
+<p>...or...</p>
+<pre><code>map-each vars data @[...]
+</code></pre>
+<p>e.g. making /ONLY a modal refinement on the block parameter itself.  I also came up with a pretty cool concept of this for COLLECT, where if you say <strong>collect/only [...]</strong> or <strong>collect @[...]</strong> then the KEEP function that gets generated <em>doesn't have an /ONLY refinement</em>.  It's specialized out.</p>
+<p>The beauty of all this is how much you can do in userspace.  I think casual programmers are going to be amazed at what they can put together.</p>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/4</link>
+        <pubDate>Tue, 27 Aug 2019 03:38:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-4</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Maybe I'm not seeing the whole picture, but I feel like PARSE is the proper/default domain for string processing.</p>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/3</link>
+        <pubDate>Tue, 13 Aug 2019 17:20:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-3</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p>Splicing is strictly more powerful, because you can put things into a block</p>
+</blockquote>
+<p>I think we should do this, and make MAP-EACH follow the new rules of /ONLY... e.g. if you are mapping items in a block, you have to return a block to be spliced...unless you use /ONLY or a modal parameter.</p>
+<pre><code>&gt;&gt; map-each x [1 2 3] [reduce [x x + 1]]
+== [1 2 2 3 3 4]
+
+&gt;&gt; map-each/only x [1 2 3] [reduce [x x + 1]]
+== [[1 2] [2 3] [3 4]]
+
+&gt;&gt; map-each x [1 2 3] @[reduce [x x + 1]]  ; "modal parameter"
+== [[1 2] [2 3] [3 4]]
+
+&gt;&gt; map-each x [1 2 3] [x + 1]
+** Error: MAP-EACH must return a block unless /ONLY used
+
+&gt;&gt; map-each/only x [1 2 3] [x + 1]
+== [2 3 4]
+
+&gt;&gt; map-each x [1 2 3] @[x + 1] 
+== [2 3 4] 
+</code></pre>
+<p>This seems more consistent; and as I say, it's strictly more powerful.</p>
+<p>As for whether the type you are enumerating over should match the output type... I dunno.  Perhaps the best plan for that might be to punt on it, and not allow you to MAP-EACH over strings yet?</p>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/2</link>
+        <pubDate>Fri, 09 Aug 2019 14:10:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-2</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+      <item>
+        <title>Should MAP-EACH be changed to splice by default?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I was trying to do something in JavaScript, going character by character and replacing text in a string.  JS strings are immutable so it was kind of annoying.</p>
+<p>It made me wish to be able to do a MAP-EACH on a TEXT! and have the body return either a NULL, a CHAR!, or a TEXT!...</p>
+<pre><code>&gt;&gt; map-each c "123" [
+     case c [
+         #"1" ["one"]
+         #"3" [#"T"]
+     ]  ; don't have any match for 2, so fall through with null
+]
+== "oneT"
+</code></pre>
+<p>The ability to go element-by-element and map to potentially 0, 1, or many elements seemed like an appealing thing.  Enough that I wondered if MAP-EACH should splice by default.</p>
+<p>Splicing is strictly more powerful, because you can put things into a block:</p>
+<pre><code>&gt;&gt; map-each x [a [b c] &lt;d&gt; e] [if not tag? x [x]]
+== [a b c e]
+
+&gt;&gt; map-each x [a [b c] &lt;d&gt; e] [if not tag? x [reduce [x]]]
+== [a [b c] e]
+
+&gt;&gt; map-each x [a [b c] &lt;d&gt; e] [if not tag? x [:[x]]]
+== [a [b c] e]
+</code></pre>
+<p>It would seem to suggest you'd want an /ONLY for convenience.</p>
+<p>There are benefits.  But as with APPEND doing splicing when it's not asked... it's a likely source of bugs.  This category of bugs is probably one of the biggest.</p>
+<p><strong>Another side of the argument is to go with MAP-EACH as it does today, producing a BLOCK! always.</strong> If you always get a block, then you get to make up the step which coalesces things.</p>
+<p>I've made arguments for this line of thinking in the past.  It seems a bit wasteful to always be producing a BLOCK! from a large text string, then merging it together.  But perhaps the <a href="https://forum.rebol.info/t/stopping-the-into-virus/705/2">argument made against /INTO</a> applies here too...that anyone who cares wouldn't use MAP-EACH?</p>
+          <p><a href="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155/1</link>
+        <pubDate>Thu, 02 May 2019 07:24:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1155-1</guid>
+        <source url="https://forum.rebol.info/t/should-map-each-be-changed-to-splice-by-default/1155.rss">Should MAP-EACH be changed to splice by default?</source>
+      </item>
+  </channel>
+</rss>

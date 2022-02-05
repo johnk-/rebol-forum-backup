@@ -1,0 +1,2168 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Parsing - AltRebol</title>
+    <link>https://forum.rebol.info/c/domains/parsing/16</link>
+    <description>Topics in the &#39;Parsing&#39; category Discussion focusing on parsing data.</description>
+    
+      <lastBuildDate>Sun, 12 Dec 2021 00:08:48 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/domains/parsing/16.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>Old Parse Tutorial</title>
+          <dc:creator><![CDATA[Brett]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <blockquote>
+<p>This is an old tutorial which originally appeared on <a href="http://codeconscious.com">codeconscious.com</a>. It has been posted here in the expectation that <a href="http://codeconscious.com">codeconscious.com</a> will be decommissioned early 2022. Other old articles on REBOL can be found at <a href="https://web.archive.org/web/*/https://codeconscious.com/rebol/">REBOL by codeconscious.com on archive.org</a></p>
+</blockquote>
+<h1>Introduction</h1>
+<blockquote>
+<p>Note: This article is a revised version written for open sourced Rebol (Rebol 3), the original Rebol 2 version is here: <a href="https://codeconscious.com/rebol/parse-tutorial.html">Parse Tutorial for Rebol 2</a>.</p>
+</blockquote>
+<p>If you want to extract data from strings (like HTML, TXT, CSV, etc.) consider Parse.</p>
+<p>If you want to just check some user data against a specific format consider using Parse.</p>
+<p>If you want to validate some message written in your new dialect use Parse.</p>
+<p>Parse is useful.</p>
+<p>Parse is quick.</p>
+<p>Parse operates on string, binary and block input.  Using Parse you can process these types of input in some way, overlaying the input with new meaning. That is you have a string or block and you are perhaps identifying fields of records, tokens of a language or even identifying sections of a message protocol.</p>
+<p>This document is a very rough show by example description of Parse with a few warnings thrown in.</p>
+<h1>Parse Dialect</h1>
+<p>You give Parse a rule block containing instructions to follow written in the Parse dialect. These instructions allow you to utilise Parse to interpret custom external formats or protocols. These instructions can be as simple or as complex as you need. A simple example would be to check that some input against postal code format. A sophisticated example is Rebol's URL parser (help sys/*parse-url/rules).</p>
+<p>The instructions are written using the Parse dialect and tell Parse how to read through your input. In actual fact, the instructions describe the patterns that the input should take. Parse attempts to match the input against your patterns. Parse will return a TRUE result if your instructions accurately describe the input. If your instructions fail to describe the input (or looking at it the other way, the input fails to follow your rules) Parse will return FALSE. You also have the ability to carry out normal Rebol operations as Parse traverses the input and your rules.</p>
+<p>It is very important to realise that the keywords of the Parse dialect are interpreted by Parse in a specific way and should be considered as being different in meaning to Rebol words when used at the console.</p>
+<h2>Let's start at the end</h2>
+<pre><code>&gt;&gt; input-string: {}
+&gt;&gt; parse input-string [end]
+== true
+</code></pre>
+<p>Ah success! Here I am parsing an empty string. My rule says to Parse "check that we are at the end". The result is of course TRUE because the string was empty to begin with.</p>
+<p>This is similar in normal Rebol script to:</p>
+<pre><code>&gt;&gt; tail? input-string
+== true
+</code></pre>
+<h2>Baby steps</h2>
+<p>Next up, let's test that a string matches our expectations:</p>
+<pre><code>&gt;&gt; input-string: "fox"
+== "fox"
+&gt;&gt; parse input-string ["fox" end]
+== true
+</code></pre>
+<p>We successfully tested that the input started with "fox" and then finished. Ok, no big deal.</p>
+<p>But reflect a moment. This is a sequence - first "fox" then END. As Parse traverses the input</p>
+<p>and your rule block, it keeps track of a current position for both. So at the start, the current position in the input is at the head of the string. After the rule "fox" was matched the current position in the input string will be directly after the "x" of "fox".</p>
+<p>In this example, this happens to be the tail of the string, so the very next match rule END will succeed.</p>
+<p>We do not always have to supply an END in the rule block. You can omit it in the last example because Parse effectively slaps one on at the end anyway.</p>
+<pre><code>&gt;&gt; parse input-string ["fox"]
+== true
+</code></pre>
+<p>While you can do this for simple examples, remember you'll likely need to add it in</p>
+<p>explicitly for more complex rules.</p>
+<p>Ok, back to the example again. In an ordinary Rebol session the above example is similar to the following:</p>
+<pre><code>&gt;&gt; input-string: find/match input-string "fox"
+== ""
+&gt;&gt; tail? input-string
+== true
+</code></pre>
+<p>Note that the ordinary Rebol code examples through this article are provided to help learn Parse. There are enough important differences between the Parse examples and the ordinary code examples that you cannot alway treat them as exactly equivalent.</p>
+<h2>Failures / challenges</h2>
+<p>For contrast let's look at an unsuccessful match:</p>
+<pre><code>&gt;&gt; input-string: "dog"
+== "dog"
+&gt;&gt; parse input-string ["fox"]
+== false
+</code></pre>
+<p>The meaning of this is pretty obvious. Hang on though, what actually happens when Parse encounters a failure with one of the rules? Well it backtracks the input to the point it was at when the rule started. So in Rebol code what happens is actually more like this:</p>
+<pre><code>input-string: "dog"
+If position: Find/match input-string "fox" [input-string: position]
+Tail? input-string
+</code></pre>
+<p>Keep this little idea in the back of your mind, it becomes more meaningful with more complex rules.</p>
+<h2>Optional matching and Compound Rules</h2>
+<p>What if we want to check for a number of common pet alternatives?</p>
+<p>Let's accept a "dog" or a "cat" or indeed a "bird":</p>
+<pre><code>&gt;&gt; input-string: "dog"
+== "dog"
+&gt;&gt; parse input-string ["dog" | "cat" | "bird"]
+== true
+</code></pre>
+<p>In ordinary Rebol this is like coding:</p>
+<pre><code>input-string: any [
+    find/match input-string "dog"
+    find/match input-string "cat"
+    find/match input-string "bird"
+]
+tail? input-string
+</code></pre>
+<p>Now, Rebol can be pretty concise and the ANY function definitely helps in writing concise code, but you can see already that the Parse dialect is looking to be better suited to matching than ordinary scripting.</p>
+<p>Reflecting on this a bit. We have here a more interesting rule, a compound rule. Our compound rule is composed of three subrules. Each of the three subrules here are very basic but subrules are allowed to be compound rules themselves. The basic rules perform the lowest level matching of the input, the compound rules check the overall structure/grammar of your data.</p>
+<p>Back to options. What about something that may or may not exist at all? Using OPT we can indicate that a bird could be big or just leave it out:</p>
+<pre><code>&gt;&gt;  input-string: "bigbird"
+== "bigbird"
+&gt;&gt;  parse input-string [opt "big" "bird"]
+== true
+&gt;&gt; input-string: "bird"
+== "bird"
+&gt;&gt; parse input-string [opt "big" "bird"]
+== true
+</code></pre>
+<p>There are more Parse options such as NOT which give you greater flexibility in specifying your rules. We'll cover this later.</p>
+<h2>Spaces and Split</h2>
+<p>Parse treats spaces like any other character. Note that Rebol 3 acts differently here to Rebol 2 as whitespace is now parsed by default without needing the /ALL refinement</p>
+<pre><code>&gt;&gt;  input-string: "black dog"
+== "black dog"
+&gt;&gt;  parse input-string ["black" " " "dog"]
+== true
+</code></pre>
+<p>There are constants defined for common characters such as SPACE, NEWLINE and TAB which can be used instead.</p>
+<pre><code>&gt;&gt;  parse input-string ["black" space "dog"]
+== true
+</code></pre>
+<p>To make things easier we can use the SPLIT function to pre-process the input string. SPLIT breaks up the string based on a given delimeter or other rules.</p>
+<pre><code>&gt;&gt; parse split "brown dog" " " ["brown" "dog"]
+== true
+</code></pre>
+<p>If we look at the output of split we see the following.</p>
+<pre><code>&gt;&gt; split "brown dog" " "
+== [ "brown" "dog" ]
+</code></pre>
+<p>In this case split is returning a block of strings simplifying our work with Parse.</p>
+<h1>Blocks, repetition and more</h1>
+<p>Using Parse for strings is good, but using parse on native Rebol datatypes really shows its power.</p>
+<p>Rebol has a rich set of datatypes which simplify parsing data, and code.</p>
+<p>This mode is used when the value to be parsed is actually a block not a string. You use this mode when you have already loaded data into Rebol values. You write Parse instructions in a rule block using the parse dialect in a similar way to that described for parsing strings except when parsing blocks the semantics are different and you have a couple more keywords to use.</p>
+<p>This is the mode of Parse that deserves the attention of anyone using Rebol. The reason is that you are free to store your data in a form understandable by yourself and others and yet is still computer readable.</p>
+<h2>First steps parsing blocks</h2>
+<p>As we move from strings to blocks we can start to use some of the Rebol datatypes to make our lives much easier.</p>
+<pre><code>&gt;&gt; parse [1234.16] [number!]
+== true
+</code></pre>
+<p>Processing dates and times are a good example. You can see how the datatypes support a wide range of input formats. It is worth noting for Americans that Rebol always assumes day/month/year order.</p>
+<pre><code>&gt;&gt; parse [12/Dec/2012 2:30pm ] [date! time!]
+== true
+</code></pre>
+<p>There are many more datatypes although that does not stop you from using strings for datatypes which do not map to Rebol types.</p>
+<pre><code>&gt;&gt; parse [&lt;div&gt; "Hello" http://rebol.com $1.00 &lt;/div&gt; bob@test.com ] [ tag! "Hello" url! money! tag! email!]
+== true
+</code></pre>
+<h2>Repetition - known range of occurrences</h2>
+<p>Time for some more compound rules.</p>
+<p>Here's how to check for exactly two dogs.</p>
+<pre><code>&gt;&gt; parse "dogdog" [2 "dog"]
+== true
+</code></pre>
+<p>I can specify between 1 and 4 Zs (inclusive) too:</p>
+<pre><code>&gt;&gt;  parse "Zzzz" [1 4 "z"]
+== true
+</code></pre>
+<p>Note that by default Parse is not case sensitive unless you want it to be by using the /CASE refinement:</p>
+<pre><code>&gt;&gt; parse/case "ZZ" [2 "Z"]
+== true
+</code></pre>
+<p>This is also very powerful for parsing blocks:</p>
+<pre><code>&gt;&gt; parse [ http://rebolsource.net http://rebol.org http://rebol.com ] [ 3 url! ]
+== true
+</code></pre>
+<h2>Repetition again <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"> - unknown number of occurrences</h2>
+<p>What if we grab a net and go prawning? We may not know how many prawns are caught by the net when we catch them:</p>
+<pre><code>&gt;&gt; loop random 100 [append input-string: "" "prawn"]
+== "prawnprawnprawnprawn"
+&gt;&gt; parse input-string [some "prawn"]
+== true
+</code></pre>
+<p>Excellent, we have some prawns but we don't know how many.</p>
+<p>The SOME keyword means "match one or more of the following". Again it is a compound rule because I could have as easily done this if it was "raining cats and dogs":</p>
+<pre><code>&gt;&gt; input-string: "dogdogcatdogcat"
+== "dogdogcatdogcat"
+&gt;&gt; parse input-string [some [ "dog" | "cat"] ]
+== true
+</code></pre>
+<p>If it fines up:</p>
+<pre><code>&gt;&gt; input-string: {}
+== ""
+&gt;&gt; parse input-string [some [ "dog" | "cat"]  ]
+== false
+</code></pre>
+<p>It returns false because SOME requires at least one instance to be matched. If however, we don't actually care whether we get some or not we can use ANY:</p>
+<pre><code>&gt;&gt; input-string: {}
+== ""
+&gt;&gt; parse input-string [any [ "dog" | "cat" ] ]
+== true
+&gt;&gt; input-string: "dog"
+== "dog"
+&gt;&gt; parse input-string [any [ "dog" | "cat"] ]
+== true
+</code></pre>
+<p>Here is another example of one of those Rebol words with a new meaning in the context of Parse. In ordinary Rebol ANY is a function that return the first non-false or non-none value in the block it is given. In Parse, by contrast, ANY is a keyword that introduces a compound rule that means, "match zero or more of the following".</p>
+<p>Repetition works equally well for blocks:</p>
+<pre><code>&gt;&gt; parse [Fibonacci 1 1 2 3 5 8 13] [some [number! | word!] ]
+== true
+</code></pre>
+<h2>Moving right along...</h2>
+<p>Sometimes we really couldn't care less what lies between things of interest.</p>
+<p>This example does not "skip c" it reads "match a, skip a character, match c, tail?".</p>
+<pre><code>&gt;&gt; parse {abc} ["a" skip "c" end]
+== true
+</code></pre>
+<p>You want to skip 5 characters? Use repetition:</p>
+<pre><code>&gt;&gt; parse {1234567890} ["123" 5 skip "90" end]
+== true
+</code></pre>
+<p>Sometimes we don't know how much is in between but we do know what is the next interesting bit:</p>
+<pre><code>&gt;&gt; input-string: {1234 fox}
+== "1234 fox"
+&gt;&gt; parse input-string [thru "fox" end]
+== true
+</code></pre>
+<p>This is like the Rebol code of:</p>
+<pre><code>&gt;&gt; input-string: find/tail input-string "fox"
+== ""
+&gt;&gt; tail? input-string
+== true
+</code></pre>
+<p>We can stop where fox starts using TO:</p>
+<pre><code>&gt;&gt;  input-string: "1234 fox"
+== "1234 fox"
+&gt;&gt;  parse input-string [to "fox" "fox" end]
+== true
+</code></pre>
+<p>And the Rebol code that performs similarly:</p>
+<pre><code>input-string: {1234 fox}
+input-string: find input-string "fox"
+input-string: find/match input-string "fox"
+tail? input-string
+</code></pre>
+<p>We can skip to the end as well:</p>
+<pre><code>&gt;&gt;  parse {123456} ["123" to end end]
+== true
+</code></pre>
+<p>This says "match 123, move to the tail, test tail". Pretty obvious we would get a true result if you think of it in these terms.</p>
+<p>While we're here how about a warning. The rule [to end] moves to the tail and reports</p>
+<p>success every time.</p>
+<h2>All these characters</h2>
+<p>Charset. Stands for character set. It is a bitset which makes it fast for pattern matching operations.</p>
+<p>Let's say you only want to check that your input contains the digits 0 to 9.</p>
+<pre><code>&gt;&gt; digit: charset [#"0" - #"9"]
+</code></pre>
+<p>Now parse can use this directly as a pattern matching instruction. It will match one character (byte) only of those in the set 0 - 9.</p>
+<pre><code>&gt;&gt; parse {1} [digit]
+== true
+</code></pre>
+<p>Naturally enough you can use these in compound rules too:</p>
+<p>An Australian postcode consists of 4 numeric digits so:</p>
+<pre><code>&gt;&gt; parse {2069} [4 digit]
+== true
+</code></pre>
+<p>Charsets (bitsets) are sets and you can apply the set operations union, intersection, exclude, etc</p>
+<p>on them:</p>
+<pre><code>letter: charset [#"a" - #"z" #"A" - #"Z"]
+digit: charset [#"0" - #"9"]
+letter-or-digit: union letter digit
+valid-name: [letter any letter-or-digit]
+&gt;&gt;  parse {1abc} valid-name
+== false
+&gt;&gt;  parse {rebol} valid-name
+== true
+&gt;&gt;  parse {xyz1234} valid-name
+== true
+</code></pre>
+<p>Maybe you want everything but digits:</p>
+<pre><code>&gt;&gt; parse {A} [not digit skip]
+== true
+</code></pre>
+<p>Notice how we needed to SKIP forward as NOT simply inverses the following rule and does not advance the input.</p>
+<p>This is different from the Rebol 2 approach of creating a COMPLEMENT of a charset. This may work in some situations, but will not always give you the desired result due to the use of UNICODE in Rebol 3.</p>
+<h2>But I want some information from it!</h2>
+<p>Up to this point I've concentrated on the various matching functionality of Parse. Of course though you want to extract information from your data. The keyword of note for this purpose is COPY. Also of use is the ability to execute Rebol code within the Parse rules (actions) and thereby set and maintain Rebol variables (eg. Counters) using that code.</p>
+<p>Ok COPY.</p>
+<p>Copy is really really simple really. It is a compound rule that takes two arguments a variable and a subrule. Whatever input the subrule matches gets copied into the variable. If the subrule doesn't match anything (fails) COPY returns the failure but leaves the variable unchanged.</p>
+<p>Here the subrule is to match an "A" which obviously fails.</p>
+<pre><code>&gt;&gt; parse {123} [copy some-text "A"]
+== false
+&gt;&gt; some-text
+** Script error: some-text has no value
+</code></pre>
+<p>Here the subrule is a simple skip:</p>
+<pre><code>&gt;&gt; parse {123} [copy some-text skip to end]
+== true
+&gt;&gt; some-text
+== "1"
+</code></pre>
+<p>And here the subrule is to match nothing NONE which is always successful so copy copies that which was matched...an empty string:</p>
+<pre><code>&gt;&gt; parse "123" [copy some-text none]
+== false
+&gt;&gt; some-text
+== ""
+</code></pre>
+<p>Another way of getting data is by using SET:</p>
+<pre><code>&gt;&gt; parse [ $100 ] [ set wallet money! ]
+== true
+&gt;&gt; wallet
+== $100
+</code></pre>
+<h2>Bring on the code (actions)</h2>
+<p>Ordinary Rebol code can be used inside the parse dialect via the use of "(" and ")" i.e. a Paren! series:</p>
+<pre><code>&gt;&gt; parse {} [(print "some code just executed") end]
+some code just executed
+== true
+</code></pre>
+<p>Obviously this is very handy. Even nicer is that it runs according to its placement in the rule. Note though that even if the rule ultimately fails your code may have already run:</p>
+<pre><code>&gt;&gt; parse {123} [
+     "1" (print "found 1!")
+     "2" (print "found 2!")
+     "A" (print "found an A!")
+    end
+]
+found 1!
+found 2!
+== false
+</code></pre>
+<p>So the upshot is you can maintain counters and take actions based on your Parse rules.</p>
+<p>During development it can be useful to put print statements in these allowing you to see what is happening.</p>
+
+<h1>Advanced section</h1>
+<h2>Repeated Repetition</h2>
+<p>Now that I've introduced repetition and compound rules, what happens if I create a compound rule made up of nested repetition rules? Hmm, tricky.</p>
+<p>This next example put Parse into a spin - an infinite loop. The escape key will not work, but you can break out with Ctrl+c:</p>
+<pre><code>&gt;&gt; input-string: {}
+== {}
+&gt;&gt; parse input-string [while [any "dog"] ]
+</code></pre>
+
+<p>To understand why this infinite loop happens you need to know when the ANY rule returns success and when it completes.</p>
+<p>Here's the major answer: WHILE ALWAYS returns success.</p>
+<p>WHILE will keep calling its subrule while that subrule returns success regardless of if the input position advances. WHILE gives up on receipt of bad news (failure) but it itself always returns success. Now if WHILE always receives a success because it's subrule in fact is another WHILE or ANY... Well I think that explains it.</p>
+<p>Remember OPT. It always returns success just like WHILE. So putting an OPT inside an WHILE is bound to lead to trouble as well.</p>
+<p>The point then is that your repetition compound rules must be carefully written because of the possibility of creating these infinite loops. It is not a bug in Rebol, it is consequence of having a flexible Parse dialect.</p>
+<p>Sometimes these infinite loops start only after traversing lots of other complex rules and therefore can become hard to catch. I create these loops less often now since I started considering how I want Parse's input position to move. When writing your rules consider how the input is consumed by the rules.</p>
+<p>That's part of the reason why I've been demonstrating the Rebol code similar to the various Parse examples.</p>
+<p>Not all combinations of repetition rules create infinite loops:</p>
+<pre><code>&gt;&gt;  input-string: {}
+== ""
+&gt;&gt;  parse input-string [while [some "dog"] ]
+== true
+</code></pre>
+<p>This last example is ok because the SOME does not always return success - it must consume some input. If SOME does not have at least one success it</p>
+<p>returns a failure result. So you can see that at some point, given that we can assume that the input is</p>
+<p>finite, the overall rule must terminate.</p>
+<p>Quoting Ladislav, "The dangerous rules are rules, that don't consume any input, yet they return success."</p>
+<p>There is another way to escape when you don't want your rule to progress further - the BREAK keyword. BREAK terminates the rule when it is encountered.</p>
+<p>This could be used to improve performance by stopping evaluation of unnecessary rules.</p>
+<pre><code>&gt;&gt; parse [1 2 end 3 4 5 7 8 9] [some [integer! | 'end break]]
+== false
+</code></pre>
+<p>This rule will exist as soon as it reaches the end keyword improving the performance.</p>
+<h2>Debugging parse rules</h2>
+<p>The ?? command is invaluable in debugging Parse rules.</p>
+<pre><code>&gt;&gt; parse "dog" [ ?? "d" ?? [ "i" | "o" ] ?? "g" ?? ]
+"d": "dog"
+["i" | "o"]: "og"
+"g": "g"
+end!: ""
+== true
+</code></pre>
+<p>It displays the next rule and the current position in the series being parsed.</p>
+<h2>The current index and manipulating it</h2>
+<p>Parse maintains a reference to the input. The reference is a series and so has a current index.</p>
+<p>Some special Parse dialect syntax allows you to get and set this reference. You use a set-word and get-word syntax respectively.</p>
+<p>In this example I set the word "mark" to the input series at the current index that Parse has, don't worry about the false - it is just saying we didn't get all the way through the input:</p>
+<pre><code>&gt;&gt;  parse {123456} ["123" mark:]
+== false
+&gt;&gt; mark
+== "456"
+</code></pre>
+<p>I can manipulate the current index that Parse uses too:</p>
+<pre><code>&gt;&gt;  parse {1234567} ["123" mark: (mark: next next mark) :mark "67"]
+== true
+</code></pre>
+<p>To explain. First "123" is matched, then the word mark is set to the reference.</p>
+<p>Then the Rebol code between the parentheses is evaluated. This code manipulates the reference we hold by two characters. I return this modified reference to Parse using the get-word syntax. Parse seeing the get-word syntax knows that it must update it's reference to that given. Finally I match the "67".</p>
+<h2>More Block examples ...</h2>
+
+<p>An example that shows what can be achieved is Carl Sassenrath's stock transaction example which you can see below. Now what if "sell 300 shares at $89.08" came in via email?</p>
+<p>If you study this example you will see that Carl, in a very small space, has created a small interpreter that parses, validates and performs computations. This is very powerful technology that is easily underestimated because it is so small and simple.</p>
+<pre><code>rule: [
+    set action ['buy | 'sell]
+    set number integer!
+    'shares 'at
+    set price money!
+    (either action = 'sell [
+            print ["income" price * number]
+            total: total + (price * number)
+        ] [
+            print ["cost" price * number]
+            total: total - (price * number)
+        ]
+    )
+]
+total: 0
+parse [sell 100 shares at $123.45] rule
+print ["total:" total]
+total: 0
+parse [
+    sell 300 shares at $89.08
+    buy 100 shares at $120.45
+    sell 400 shares at $270.89
+] [some rule]
+print ["total:" total]
+</code></pre>
+<p>Another powerful example of this is the VID dialect of Rebol/View 2. VID describes in a<br>
+effective but simple way what should appear on screen. VID is actually a block using normal<br>
+Rebol values such as words and strings. The LAYOUT function of Rebol/View 2 takes a VID<br>
+block as an argument to construct the visual objects. Layout uses Parse to process the<br>
+VID specification.</p>
+<h1>Special situations</h1>
+<h2>When you do NOT want to match a pattern</h2>
+
+<p>NOT does not consume input, so you can use it one ore more times before matching something else:</p>
+<pre><code>&gt;&gt; parse "bird" [not "big" "bird"]
+== true
+</code></pre>
+<p>One situation where you might do this is when you have a sub rule that might "consume" something needed by an enclosing rule.</p>
+<p>For my example, I'll Parse a block rather than text but the concept still applies.</p>
+<p>I want to Parse the following block, and print out every word, but if I encounter a bar ("|") I'll print out the text "**********":</p>
+<pre><code>my-block: [ the quick brown fox | jumped | over the lazy]
+</code></pre>
+<p>This next bit of code will not work. If you try it you will see that no "*" is printed, instead you will see the "|":</p>
+<pre><code>single-word: [set item word! (print mold item)]
+phrase: [some single-word]
+parse my-block [ phrase some ['| (print "**********") phrase] ]
+</code></pre>
+<p>The thing to note is that the bar "|" is a word too. Therefore the bar is "consumed" by the rule called SINGLE-WORD.</p>
+<p>So one way to solve this is to give SINGLE-WORD some indigestion (make it fail) when it encounters a bar.</p>
+<p>You can force a rule to fail using the FAIL keyword but here we use AND and NOT to make the rule fail under a specific condition.</p>
+<p>To make it clear what is happening here, I wrap SINGLE-WORD with a rule I call WORD-EXCEPT-BAR. The</p>
+<p>purpose of this new rule is to fail if it finds the "|" word otherwise it goes ahead and runs SINGLE-WORD.</p>
+<p>I've added comments to clarify how WORD-EXCEPT-BAR works:</p>
+<pre><code>word-except-bar: [
+    and not '| ; Without advancing the input position, is this not a bar?
+    single-word ; Match single-word
+]
+</code></pre>
+<p>The point to note here is that the rule AND NOT '| is a "guard" - it guards the next rule from consuming input under a specific condition.</p>
+<p>I also need to modify PHRASE to call WORD-EXCEPT-BAR.</p>
+<pre><code>phrase: [some word-except-bar]
+</code></pre>
+<p>Another way to describe the PHRASE rule, as it is now, is "a rule that matches a series of words which does not contain the word |."</p>
+<p>To finish off I'll create a function to call parse with the correct rule and</p>
+<p>wrap the whole lot in an object just to be tidy:</p>
+<pre><code>word-parsing-object: context [
+    single-word: [set item word! (print mold item)]
+    word-except-bar: [and not '| single-word]
+    phrase: [some word-except-bar]
+    set 'parse-words func[ a-block [block!] ] [
+        parse a-block [phrase some ['| (print "**********") phrase] ]
+    ]
+]
+</code></pre>
+<p>Here is a test run:</p>
+<pre><code>&gt;&gt; parse-words [the quick brown fox | jumped | over the lazy]
+the
+quick
+brown
+fox
+**********
+jumped
+**********
+over
+the
+lazy
+== true
+</code></pre>
+<p>In summary in this section I have demonstrated how one can match a specific pattern even when a more general pattern (that includes the specific pattern) gets to see the input first.</p>
+<h2>Why didn't you just write...</h2>
+<pre><code>parse-words: func [a-block [block!]] [
+    parse a-block [
+        some [
+            '| (print "**********") |
+            set item word! (print mold item)
+        ]
+    ]
+]
+</code></pre>
+<p>That is the better way to solve the problem, but the point is to demonstrate the concept of preventing a subrule from consuming certain input and how to use AND as a guard. There are situations when you need these ideas.</p>
+<h2>The BREAK keyword</h2>
+
+<p>From RT's changes document:</p>
+<pre><code>When the BREAK word is encountered within a rule block, the block is
+immediately terminated regardless of the current input pointer.
+Expressions that follow the BREAK within the same rule block will not
+be evaluated.
+</code></pre>
+<p>BREAK is usually used with repetition. In this example the SOME rule is exited early:</p>
+<pre><code>&gt;&gt; parse "X" [some [ (print "*Break*") break] "X"]
+*Break*
+== true
+</code></pre>
+<p>Here again the SOME rule is exited early just like the previous example. In this case the rule that SOME is processing is referred to by a word:</p>
+<pre><code>&gt;&gt; rule-to-break: [(print "*Break*") break]
+== [(print "*Break*") break]
+&gt;&gt; parse "X" [some rule-to-break "X"]
+*Break*
+== true
+</code></pre>
+<h1>Related toolset</h1>
+<p>I have written "Parse Analysis Toolset" to help learn and analyse the way Parse works. The Explain-parse function of the toolset should help with learning Parse. The script has related documentation. You can find the script and a linkg to the documentation at:</p>
+<p><a href="http://www.rebol.org/cgi-bin/cgiwrap/rebol/view-script.r?script=parse-analysis.r">parse-analysis.r (at REBOL.org Script Library)</a></p>
+<p>One more program I've made can return a parse tree of your input:</p>
+<p><a href="http://www.rebol.org/cgi-bin/cgiwrap/rebol/documentation.r?script=load-parse-tree.r">load-parse-tree.r (at REBOL.org Script Library)</a></p>
+<h1>Comments</h1>
+<p>Parse is a key component Rebol. Rebol is promoted as a messaging<br>
+language. Messages can come in many formats (syntaxes). Parse allows<br>
+you to define the syntax of a message so that you can interpret the message and transform<br>
+it to something else or act on it directly. That may sound complex, but it isn't really.</p>
+<p>What are messages? Lots of things can be considered as messages. Basically if you can<br>
+put it into a file and the format of the file has some rule to it, then I think you have<br>
+a message. You don't have to put it in a file though to use Parse. Rebol's networking<br>
+functions use Parse to interpret many of the internet protocols that Rebol provides<br>
+access to.</p>
+<p>With Rebol you can define a mini-language for a specific purpose - a dialect. Outside Rebol this would be called a domain-specific language or DSL.</p>
+<p>Parse helps you to validate and process such dialects. You might want to design a dialect for creating web pages on your internet site. Or perhaps for controlling a special device you have attached to your computer.</p>
+<h1>Acknowledgement</h1>
+<p>Thank you to John Kenyon for his initiative, edits and effort as we updated this article from the original.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/old-parse-tutorial/1771">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/old-parse-tutorial/1771</link>
+          <pubDate>Sun, 12 Dec 2021 00:08:48 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1771</guid>
+          <source url="https://forum.rebol.info/t/old-parse-tutorial/1771.rss">Old Parse Tutorial</source>
+        </item>
+        <item>
+          <title>How Would Stream PARSE Handle Positions?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>Generically speaking: when dealing with a streaming data source, you often don't know how many bytes or characters you want to read in advance.  You're looking for some pattern in the input to delimit it.</p>
+<p>(The simplest-yet-very-common example would be reading until a newline.)</p>
+<p>Go has dedicated operations for reading up-until one certain byte (<a href="https://pkg.go.dev/bufio#Reader.ReadBytes">ReadBytes(byte)</a>) or one certain UTF-8 character byte sequence (<a href="https://pkg.go.dev/bufio#Reader.ReadString">ReadString(codepoint)</a>).  These are methods of the buffered IO abstraction, because if you didn't go through a buffering middleman you'd have to call a lower-level <code>Read()</code> just one byte at a time.  Otherwise the lack of a buffer would mean you wouldn't have anywhere to hold the queued-up extra data after a newline...if a Read() came back with a bigger chunk.</p>
+<p>Rigging up anything more detailed in Go is harder.  <strong>So this is where I thought a streaming PARSE would offer an interesting answer for a lot of scenarios.</strong>  Getting PARSE worked out correctly would save people the trouble of having to drive the progressive Read process themselves, just to get a more nuanced condition than "until a certain byte is seen".</p>
+<h2>But Streams Aren't Series...So How Would You Call PARSE?</h2>
+<p>When you parse a <em>series</em>, you don't "consume" it:</p>
+<pre><code>&gt;&gt; data: "aaa"
+
+&gt;&gt; uparse data [some "a" (&lt;Yay, some A!&gt;)]
+== &lt;Yay, some A!&gt;
+
+&gt;&gt; data
+== "aaa"  ; hasn't changed
+</code></pre>
+<p>And you can do partial processing and get a position via <code>&lt;here&gt;</code>:</p>
+<pre><code>&gt;&gt; data: "aaabbb"
+
+&gt;&gt; uparse data [some "a" &lt;here&gt;]
+== "bbb"  ; this is a "position" that points into `data`
+
+&gt;&gt; data
+== "aaabbb"  ; again, the unchanged input
+</code></pre>
+<p><strong>However, streams don't have any position <em>but</em> "here".</strong>  So how would <code>&lt;here&gt;</code> be any different from <code>&lt;input&gt;</code>?</p>
+<h2>Some Streams May Internally Know A Position, But Not All</h2>
+<p>In Go we saw an example of how streaming is an interface that something can offer, while having other methods depending on the data source.  Those other methods can offer features like timeouts.  Or something like a file could offer the ability to re-seek so the next call reading from the stream would get from a random access position.</p>
+<p><em>But that's all outside of the streaming interface.</em>  The stream itself is a black box.  And the position is "inside"...all references to the same stream interface will be updated if you read from any reference.</p>
+<p>With Rebol series, the position is "outside"...each instance has its own index.  So when you NEXT a series, you have to save the result, or you will get the same thing again:</p>
+<pre><code>&gt;&gt; series: [a b c]
+
+&gt;&gt; next series
+== [b c]
+
+&gt;&gt; next series
+== [b c]
+</code></pre>
+<p>If streams worked this way, you'd have to constantly be saving the new stream value every time you read from it, as another return value of the READ process.</p>
+<pre><code>[data stream]: read/part stream 10
+</code></pre>
+<p>But if you did have to code like that, how would it react to a situation like this?</p>
+<pre><code>&gt;&gt; [data newstream]: read/part oldstream 10
+
+&gt;&gt; read/part oldstream 10
+</code></pre>
+<p>The (presumably) buffered stream no longer has the data on hand.  So it either preserves the data indefinitely or some of these calls would fail.</p>
+<h2>So Parsing Consumes Streams, But Not Series?</h2>
+<p>Right now, there's no way to leave a stream alone, because reading it consumes it.</p>
+<p>The only way you'd be able to "consume" a series value--e.g. advance the index of the input--would be to pass into parse a variable holding the input.  Because the index of the series is an immediate in the value itself.</p>
+<p>It seems unfortunate that something like a FILE! can know how to do random seeks, and not be able to save and restore positions in PARSE.  But if it did, what would the type of <code>&lt;here&gt;</code> be?  It would have to create a new stream instance into the same file...this would be like being able to say:</p>
+<pre><code>&gt;&gt; s2: clone stream  ; maybe file reads support, but tcp reads don't?
+
+&gt;&gt; read stream
+== #{ABCD0102}
+
+&gt;&gt; read s2
+== #{ABCD0102}
+</code></pre>
+<p>It's probably bad for PARSE to be going this direction.</p>
+<h2>A Better Idea (?) <em>some</em> Streams Offer <code>&lt;index&gt;</code>, Some Don't</h2>
+<p>It's already the case that SEEK will accept either an index number or a series position.  So when you ask for <code>&lt;index&gt;</code> it could tell you the position in the file.</p>
+<p><em>(Although I should mention that file seeking has historically always been offset-based, starting with zero.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  This was true in R3-Alpha and is also true in 1-based languages like Julia.)</em></p>
+<p>This just rules out the idea of having <code>&lt;here&gt;</code> on a stream series altogether; to basically stamp out the concept that there is such a thing as a "stream-at-position".  You only deal with positions separate from streams...and only on the streams that happen to offer them.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740</link>
+          <pubDate>Wed, 06 Oct 2021 16:40:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1740</guid>
+          <source url="https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740.rss">How Would Stream PARSE Handle Positions?</source>
+        </item>
+        <item>
+          <title>Validating Subseries Data In PARSE... INPUT or INTO TAG!s?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>If you want to validate a block of input and return that block, how do you do it?</p>
+<p>By default, UPARSE gives you the last rule match:</p>
+<pre><code>&gt;&gt; uparse [1 2 &lt;three&gt; "four"] [some integer! tag! text!] 
+== "four"
+</code></pre>
+<p>You can bend that last-result behavior to your advantage by invoking a rule that returns the input.  The tag! combinator <strong><code>&lt;input&gt;</code></strong> does exactly that!</p>
+<pre><code>&gt;&gt; uparse [1 2 &lt;three&gt; "four"] [some integer! tag! text! &lt;input&gt;] 
+== [1 2 &lt;three&gt; "four"]
+</code></pre>
+<p>Pretty slick.  But what if it's a <em>nested</em> block?  Does <code>&lt;input&gt;</code> give you the INTO series, or the original series?</p>
+<p>Right now it gives you the INTO series.  e.g. what <code>&lt;input&gt;</code> returns is whatever the <em>currently parsed input</em> is:</p>
+<pre><code>&gt;&gt; uparse [zero [1 2 &lt;three&gt; "four"]] [
+      word: word!
+      validated: into block! [some integer! tag! text! &lt;input&gt;]
+      ("some overall result")
+ ]
+== "some overall result"
+
+&gt;&gt; validated
+== [1 2 &lt;three&gt; "four"]
+
+&gt;&gt; word
+== zero
+</code></pre>
+<p>That's nice, but... you can also imagine being inside some nested rule like this where you want to make a decision like <strong><code>return &lt;input&gt;</code></strong> which wants to imply accepting the original input to the parse.</p>
+<p>Should <strong><code>&lt;input&gt;</code></strong> always return the overall parser input, and a separate rule like <strong><code>&lt;into&gt;</code></strong> give back the current sub-input?</p>
+<ul>
+<li>
+<p>At a combinator level, the currently processed argument is always called INPUT.  So calling it <code>&lt;input&gt;</code> and returning the currently applicable input is consistent with the implementation.</p>
+<ul>
+<li>
+<p>Well...it's actually only partially consistent.  Because the INPUT to each combinator actually is at the current position.  So it's more like HERE.</p>
+<ul>
+<li>I'm actually not that bothered by this</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>
+<p>INTO is not the only combinator that we can conceive of can that can go to a nested level.  So calling the tag <code>&lt;into&gt;</code> might not be a good idea.  Also, that doesn't have the ring of generality to return the input at wherever you currently are...e.g. return the main input if you haven't done an INTO</p>
+<ul>
+<li>Shades of meaning are difficult here with other words, as <code>&lt;current&gt;</code> (for instance) is hard to distinguish from <code>&lt;here&gt;</code>... e.g. you'd think it would include the position.</li>
+</ul>
+</li>
+</ul>
+<p><strong>In any case...I lean toward thinking <code>&lt;input&gt;</code> reflecting the <em>current</em> input is the best answer.</strong>  I think this suggests a special term for the main input, like <code>&lt;main-input&gt;</code>.  A better choice for this would maybe be <code>&lt;original&gt;</code>.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/validating-subseries-data-in-parse-input-or-into-tag-s/1737">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/validating-subseries-data-in-parse-input-or-into-tag-s/1737</link>
+          <pubDate>Mon, 04 Oct 2021 15:11:22 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1737</guid>
+          <source url="https://forum.rebol.info/t/validating-subseries-data-in-parse-input-or-into-tag-s/1737.rss">Validating Subseries Data In PARSE... INPUT or INTO TAG!s?</source>
+        </item>
+        <item>
+          <title>Implicit Capture In PARSE - How To Get It?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>ISO-8601 dates are very close to Rebol dates, but just different enough to make it a pain.</p>
+<pre><code>; ISO-8601
+2021-09-15T12:20:53-04:00
+
+; Rebol
+15-Sep-2021/12:20:53-04:00
+</code></pre>
+<p>Are Rebol dates more readable?  Yes.  Are they so much better as to make it worthwhile to buck the standard?  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:">  Are they in conflict with generalized PATH! representation?  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<h2>Nevermind, This Post Is About Something Else</h2>
+<p>Let's say I just want to capture the YEAR, the MONTH, and the DAY out of an ISO-8601 date.</p>
+<pre><code>uparse isodate [
+    year: between &lt;here&gt; "-"
+    month: between &lt;here&gt; "-"
+    day: between &lt;here&gt; "T"
+    ...
+ ]
+</code></pre>
+<p>Despite having BETWEEN, it's laborious.  <em>(Historical Rebol needs <code>copy to "-"</code> followed by a SKIP, even more convoluted).</em></p>
+<p>It needs a shorthand.  We have TAG! at our disposal, still:</p>
+<pre><code>uparse isodate [year: &lt;*&gt; "-" month: &lt;*&gt; "-" day: &lt;*&gt; "T" ...]
+</code></pre>
+<p>And it could be plain <strong><code>*</code></strong>:</p>
+<pre><code>uparse isodate [year: *, "-", month: *, "-", day: *, "T", ...]
+</code></pre>
+<p>But I kind of find myself wishing for another lexical type that means "capture".  I'd thought about this as being the meaning of <code>@xxx</code> before the current interpretation.</p>
+<p>I'm nearly certain we'll have <strong>$word</strong>, <strong>$[bl o ck]</strong>, <strong>$(gr o up)</strong> and friends.  Maybe that?</p>
+<pre><code>uparse isodate [$year "-" $month "-" $day "T" ...]
+</code></pre>
+<p>Though since the general meaning would be "get-environment-variable" this would raise questions about dialects bending the meaning of things so severely.</p>
+<h2>It Feels Weak To Not Have An Answer For This</h2>
+<p>Other parsing systems will always seem like they have an edge if there isn't a shorthand for this "capture until the next rule".</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/implicit-capture-in-parse-how-to-get-it/1718">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/implicit-capture-in-parse-how-to-get-it/1718</link>
+          <pubDate>Wed, 15 Sep 2021 16:40:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1718</guid>
+          <source url="https://forum.rebol.info/t/implicit-capture-in-parse-how-to-get-it/1718.rss">Implicit Capture In PARSE - How To Get It?</source>
+        </item>
+        <item>
+          <title>PARSE Errors And You: FURTHEST, FAIL, ENSURE?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>So far there's only a little bit of UPARSE featuring related to errors.  One is the FURTHEST return result:</p>
+<pre><code>&gt;&gt; [v furthest]: uparse "abbbabbabcabab" [some ["a" | "b"]]
+; null
+
+&gt;&gt; furthest
+== "cabab"
+</code></pre>
+<p>What it's doing is it's recording the high water mark of whatever a combinator called success.</p>
+<p>It's better than nothing, I guess.  But for parsers that scan ahead it might be worthless.  (I'll point this out to <a class="mention" href="/u/brett">@Brett</a>, since he suggested the feature...)</p>
+<pre><code>&gt;&gt; [v furthest]: uparse "[ababbbcabbab]" [
+       "[" ahead to "]"  ; this pushes the high water mark to the ]
+       some ["a" | "b"]
+       "]"
+   ]
+; null
+
+&gt;&gt; furthest
+== "]"
+</code></pre>
+<p>So here we are not implicating the "c", which people would think of as the actual culprit.  But it's harder than one might think to figure out who that is.</p>
+<h2>Recap of the New FAIL Feature</h2>
+<p>With the new FAIL in UPARSE, you have a little bit of support on implicating the point of the input to complain about.</p>
+<p>The idea is that you make sure the parse position is where you want to implicate, by making the FAIL an alternate to that position:</p>
+<pre><code>&gt;&gt; uparse "{ababcababa}" [
+       into between "{" "}" [
+           some ["a" | "b"] &lt;end&gt;
+           | fail @["Between braces should be just a and b"]
+       ]
+   ]
+** User Error: Between braces should be just a and b
+** Near: "ababcababa"
+</code></pre>
+<p><em>(If you've forgotten why FAIL's argument needs the @, it's because the PARSE dialect has a meaning for BLOCK! already...and for the purposes of "regularity" in the dialect this tries not to override that.  But this is an open issue if FAIL wants to break the rules.)</em></p>
+<p>For demonstration purposes here, I didn't implicate the "c", but actually wrote it so the alternate is set to backtrack to when it started matching b.  You get a different result to make the fail an alternate to the end:</p>
+<pre><code>&gt;&gt; uparse "{ababcababa}" [
+       into between "{" "}" [
+           some ["a" | "b"]
+           [&lt;end&gt; | fail @["Between braces should be just a and b"]]
+       ]
+   ]
+** User Error: Between braces should be just a and b
+** Near: "cababa"
+</code></pre>
+<h2>A New Fuzzy Concept: ENSURE</h2>
+<p>We have ENSURE for values outside of PARSE.  It runs a test and passes through the result if it matches, or stops and errors:</p>
+<pre><code>&gt;&gt; x: 10
+
+&gt;&gt; ensure integer! x
+== 10
+
+&gt;&gt; ensure tag! x
+** Error: ENSURE failed with argument of type integer!
+</code></pre>
+<p>It seems appealing to make PARSE able to do that too:</p>
+<pre><code>&gt;&gt; uparse [&lt;x&gt; 10 #y 20] [collect [while [
+       keep ensure tag!
+       keep ensure integer!
+   ]]
+** Error: ENSURE failed with argument of type ISSUE!
+** Near: [... 10 \\ #y \\ 20]
+</code></pre>
+<p>So a similar idea to FAIL, where you get some feedback on the input location causing the problem.</p>
+<p>But also similar to FAIL, this doesn't work within the model of having alternates.  It sees something it doesn't like and errors in the moment, without giving any <strong>|</strong> options in the rest of the rules a chance.  That's a bit harsh, but maybe still would fit a lot of scenarios.</p>
+<p>The historical ENSURE only works on datatypes.  Could this work on values, or alternate values?</p>
+<p>Far-out idea:</p>
+<pre><code> &gt;&gt; uparse "abbbcababa" [some ensure ["a" | b"]]
+ ** Error: ENSURE would have expected:
+       "a"
+       "b"
+   But it received "c"
+</code></pre>
+<p>The idea would be that once ENSURE started, it might have some way of collecting the "leaf nodes" of failed rules.  But I have no idea how such a thing could actually work.</p>
+<p>More generally I wonder how alternates figure into <em>any</em> system of error delivery.</p>
+<h2>Random Weird Dialect Idea: BAD-WORD!</h2>
+<p>Just wanted to write down a strange idea I had, to use BAD-WORD! to indicate a shorthand for FAIL with a message.  The idea was to make it come after a complete rule and imply a message to give if the rule to its left didn't match:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       some ["a" | "b"] ~a-or-b-expected~
+       "]"
+   ]
+** Error: a-or-b-expected
+** At parse input location: "cabbbab]"
+</code></pre>
+<p>It sucks, but it was just a brainstorming idea as a shorthand for:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       [some ["a" | "b"] | fail ~a-or-b-expected~]
+       "]"
+   ]
+</code></pre>
+<p>Maybe this points to the need for an ELSE construct, as it might be a bit smoother than having to enclose everything in blocks:</p>
+<pre><code>&gt;&gt; uparse "[ababbbcabbab]" [
+       "[" ahead to "]"
+       some ["a" | "b"] else fail ~a-or-b-expected~
+       "]"
+   ]</code></pre>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714</link>
+          <pubDate>Mon, 13 Sep 2021 02:05:43 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1714</guid>
+          <source url="https://forum.rebol.info/t/parse-errors-and-you-furthest-fail-ensure/1714.rss">PARSE Errors And You: FURTHEST, FAIL, ENSURE?</source>
+        </item>
+        <item>
+          <title>COLLECT of SET-WORD! + TEXT!... UPARSE REDUCE?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>I was trying to do something that came out a little awkward, and wondered if there was a better way.</p>
+<p>Imagine you have data like:</p>
+<pre><code>[foo: "a" bar: "b" | foo: "c" bar: "d"]
+</code></pre>
+<p>And you want to write a UPARSE rule with COLLECT to get:</p>
+<pre><code>[[foo: "a" bar: "b"] [foo: "c" bar: "d"]]
+</code></pre>
+<p>So you're recognizing <em>specific</em> SET-WORD!s, each of which you expect to be followed by TEXT!.</p>
+<p>What I did was a bit awkward:</p>
+<pre><code>&gt;&gt; data: [foo: "a" bar: "b" | foo: "c" bar: "d"]
+
+&gt;&gt; uparse data [collect while further [keep ^ collect [
+       [keep [^ 'foo:], keep text!]
+       [keep [^ 'bar:], keep text!]
+       ['| | &lt;end&gt;]
+   ]]]
+== [[foo: "a" bar: "b"] [foo: "c" bar: "d"]]
+</code></pre>
+<p>If you don't like the <strong>^</strong> then use <strong>only</strong>.  Here are a few points demonstrated:</p>
+<pre><code>&gt;&gt; uparse data [collect while further keep only collect [
+       [keep [only the foo:] keep text!]
+       [keep only the bar:, keep text!]
+       ['| | &lt;end&gt;]
+   ]]
+== [[foo: "a" bar: "b"] [foo: "c" bar: "d"]]
+</code></pre>
+<ul>
+<li>
+<p>You can use THE if you don't like the quote marks.</p>
+</li>
+<li>
+<p>We're in a world where <strong>only 3</strong> becomes <strong>only [3]</strong>, so it's not like "KEEP ONLY" is a keyword.  This means you can move things around... <strong>keep [only the foo:]</strong> is just as valid as having the ONLY outside the block.</p>
+</li>
+<li>
+<p>You can play around with the dynamics of BLOCK!s and COMMA!s.  Sometimes the presence of a BLOCK! makes a comma unnecessary.</p>
+<ul>
+<li><em>Sidenote: I actually think we should strongly discourage the idea of commas having semantic meaning in dialects.  The status quo should be that they just provide visual separation...and the only impact adding them should have would be an error if they're not put in an "interstitial" position.</em></li>
+</ul>
+</li>
+</ul>
+<h2>What Would Make This Better?</h2>
+<p>Readability is helped by breaking things into parts of course.  Maybe people would like <strong><code>&lt;end&gt; stop</code></strong> better than having to think about FURTHER... like, just stop iterating when you reach the end...vs. make sure each iteration makes progress:</p>
+<pre><code>foobar-rule: [collect [
+    [keep only ['foo:] keep text!]
+    [keep only ['bar:] keep text!]
+]]
+
+uparse data [collect while [
+    keep only foobar-rule
+    ['| | &lt;end&gt; stop]
+]]
+</code></pre>
+<p>But what was actually bugging me a little bit was having to write two KEEPs in order to pick up the SET-WORD! and the accompanying TEXT!.  We know in ordinary KEEP you can just COLLECT a block:</p>
+<pre><code>&gt;&gt; collect [keep [foo: "a"]]
+== [foo: "a"]
+</code></pre>
+<p>Is there any way to match the pattern <strong>foo: "a"</strong> and KEEP it in one step?</p>
+<h2>REDUCE, but for UPARSE?</h2>
+<p>What I was wanting was something like REDUCE to resolve to all the items individually:</p>
+<pre><code>&gt;&gt; uparse [1 2] [integer! integer!]  ; typical case, last result fallout
+== 2
+
+&gt;&gt; uparse [1 2] [reduce [integer! integer!]]  ; REDUCE keeps processed items
+== [1 2]
+</code></pre>
+<p>UPARSE has alternate meanings for WHILE, and ANY, and many other things.  Does it make sense to call this REDUCE?</p>
+<p>Such a feature would let the FOOBAR-RULE cleanup a bit:</p>
+<pre><code>foobar-rule: [collect [  ; old way
+    [keep only ['foo:] keep text!]
+    [keep only ['bar:] keep text!]
+]]
+
+=&gt;
+
+foobar-rule: [collect [  ; new way
+    keep reduce @['foo:, text!]
+    keep reduce @['bar:, text!]
+]]
+</code></pre>
+<p><strong>Note that the REDUCE combinator would need to take its block as an @[...] or become a "quoting combinator"</strong>.  This is because if it were left as a plain BLOCK! combinator, then REDUCE would not have access to the individual pieces of the block...only the advancement and the result.</p>
+<p>But, maybe you could do it with GET-BLOCK!:</p>
+<pre><code>foobar-rule: [collect [
+    keep :['foo:, text!]
+    keep :['bar:, text!]
+]]
+</code></pre>
+<p>This idea of combinators that break the rules on the meaning of BLOCK! is a heavy thing to think about.  There's some semantically tricky stuff and some technically tricky stuff involved.</p>
+<p>But one way or another, I think we need this.  Thoughts?</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/collect-of-set-word-text-uparse-reduce/1712">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/collect-of-set-word-text-uparse-reduce/1712</link>
+          <pubDate>Sun, 12 Sep 2021 13:02:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1712</guid>
+          <source url="https://forum.rebol.info/t/collect-of-set-word-text-uparse-reduce/1712.rss">COLLECT of SET-WORD! + TEXT!... UPARSE REDUCE?</source>
+        </item>
+        <item>
+          <title>Parsing Giant Streams Without Consuming Tons of Memory: How?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>I've mentioned that before I go through optimizing UPARSE I wanted to make it good at one thing that's been a bit of a pet wish of mine...</p>
+<p>...and that's to be able to PARSE a giant file or network stream without needing to read it all into memory at once.</p>
+<p>There are two levels of goal here:</p>
+<ol>
+<li>
+<p><strong>Big Crazy Goal:</strong> To have something like a long network stream of data <em>(that you can't seek backwards in)</em> and be able to have records in it parsed discretely one at a time.  Even if the stream is 100GB in size, you'd only use a fixed amount of memory to do your processing.</p>
+</li>
+<li>
+<p><strong>More Modest Goal:</strong> To let the PARSE be woven in with the read process, so it can start processing and reacting without waiting for all the data to be read...even if it ultimately isn't able to avoid reading the whole stream of data into a buffer.</p>
+</li>
+</ol>
+<p>Getting 2 to work is the easier of these.  -But- let me be clear that given the lack of existence of "streams" in historical Rebol, it by no means <em>easy</em>!</p>
+<p>1 is the more tricky and interesting one to my tastes, so I'll start by talking about that.</p>
+<h2>If Combinators Inform Us, Then (1) <em>Seems</em> Tractable <img src="https://forum.rebol.info/images/emoji/twitter/tractor.png?v=9" title=":tractor:" class="emoji" alt=":tractor:">
+</h2>
+<p>Let's say we're trying to parse lines with just the letters A and B, and count them as we go:</p>
+<pre><code>p: open %giant-file.txt
+
+count: 0
+
+parse p [while [
+   some ["A" | "B"] newline
+   (count: count + 1)
+]]
+then [
+    print ["Your giant file had" count "lines of ABs"]
+else [
+    print ["Giant file wasn't just lines of ABs"]
+]
+</code></pre>
+<p>Our intuition tells us that we can can do this one line at a time, throwing it out as you go.  But how might PARSE know that?</p>
+<p>It builds a WHILE combinator and can see that's the last thing in the rule block.  Assuming the user doesn't capture any positions with <strong><code>&lt;here&gt;</code></strong> or do any <strong><code>SEEK</code></strong>, there is no way that the WHILE will ever backtrack from the point where it started.  Each iteration can throw out the ability to backtrack.</p>
+<p><em>But right now WHILE is a black box;</em> doing whatever it wants until it finally returns a result.  From PARSE's perspective there's nothing from the outside that differentiates it from something called WHILE-HALF that will repeat a rule some number of times, and then jump back in time to the halfway point of the match:</p>
+<pre><code>&gt;&gt; parse "abababab" [while-half "ab", return &lt;here&gt;]
+== "abab"
+
+&gt;&gt; parse "abababababab" [while-half "ab", return &lt;here&gt;]
+== "ababab"
+</code></pre>
+<p>Without some additional information, the system doesn't know that WHILE won't make a decision like WHILE-HALF would.  It has to let it run until it is finished.</p>
+<h2>How Can Combinators Tell PARSE About Backtrack Needs?</h2>
+<p>One way of looking at this is that the combinator itself becomes responsible for storing any memory that it requires for backtracking.</p>
+<p>That is to say that it pulls information out of the stream...and if it wants to backtrack it pushes it back in.</p>
+<pre><code>&gt;&gt; parse "aaab" [while ["a"] "b"]    
+</code></pre>
+<ul>
+<li>WHILE combinator grabs an "a" from stream, matches the "a"</li>
+<li>WHILE combinator grabs an "a" from stream, matches the "a"</li>
+<li>WHILE combinator grabs an "a" from stream, matches the "a"</li>
+<li>WHILE combinator grabs a "b" from stream, doesn't like it, pushes it back and ends</li>
+<li>TEXT! combinator grabs a "b" from the stream, matches the "b"</li>
+</ul>
+<p>If the WHILE becomes responsible for pushing back any input it doesn't like, then the stream can just discard everything as it goes (in cases where it doesn't see any potential for some rule down the line to request backtrack).  This means offering some kind of "push back into stream" operator that combinators can use if they need to back out.</p>
+<p><strong>This concept of putting back the character is actually how many things like this work.</strong></p>
+<ul>
+<li>
+<p>In C++ iostreams there is <a href="https://stackoverflow.com/questions/6769416/difference-between-putback-and-unget">istream::putback() and istream::unget()</a></p>
+</li>
+<li>
+<p>In Haskell's Data.Stream, there is <a href="https://hackage.haskell.org/package/io-streams-1.5.2.1/docs/System-IO-Streams.html#v:unRead">unRead</a></p>
+</li>
+</ul>
+<p>In C++, unget() requires you give what you read in.  By doing so, then if the data is no longer in a buffer and you're reading from a file...it doesn't need to do anything but push its file offset backwards.  Haskell's unRead and C++ putback() let you push back something different than what you read...and considers that a feature <em>(we'll assume it does a similar optimization to unget() if you were reading from a file and it noticed what you pushed back was the same as the data in the buffer?)</em></p>
+<h2>"Going Unit-By-Unit Sounds Laborious, and <em>Slow</em>...?"</h2>
+<p>It may seem laborious on the surface, but as far as I can tell this is the way streams work.</p>
+<p>I was just working on an implementation of READ-LINE for standard input.  And all the prescribed methods of reading one line at a time from a file in C would go one character at a time.  That sounds like a lot of I/O requests, but the thing is that basically all I/O systems have buffering in them...if you ask to read a character from a file, it isn't going to your hard drive or making a network request for that one character.  It buffers it--and if you try to buffer it yourself you're likely just going to be adding complexity/code/memory and making things worse.</p>
+<p><strong>Unfortunately <a href="http://docs.libuv.org/en/v1.x/stream.html">libuv() streams</a> don't have any putback() or ungetc() ability.</strong>  There's no going back in time with them.  :-/</p>
+<p>And as it turns out Boost.ASIO doesn't have it either.  (Which surprises me.)</p>
+<p>This means if we were building combinators on top of an ungetc()-type logic...and want to go back in time to read a file and not have it fully in memory...we'd have to be using the raw file API if we wanted to keep sync'd to the data that's already on disk and be able to use it instead of keeping the full buffer contents.</p>
+<p>That's a bit depressing.  But if there's any good news, it's that Rebol datatypes are optimized specifically for "unget".  If the buffers are BLOCK!s or BINARY!s or TEXT!s then when you "NEXT" them the data is still there, and you just BACK it to do an ungetc.</p>
+<p>Plus, we'd have to have our own layer for managing this if we were going to seek back in time using <strong><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests">HTTP Range Requests</a></strong> on networks.</p>
+<p>I guess I'll just experiment and see what I can work out.  :-/</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/parsing-giant-streams-without-consuming-tons-of-memory-how/1698">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/parsing-giant-streams-without-consuming-tons-of-memory-how/1698</link>
+          <pubDate>Thu, 02 Sep 2021 05:17:04 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1698</guid>
+          <source url="https://forum.rebol.info/t/parsing-giant-streams-without-consuming-tons-of-memory-how/1698.rss">Parsing Giant Streams Without Consuming Tons of Memory: How?</source>
+        </item>
+        <item>
+          <title>The Trickiness of the New ANY Combinator Concept</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>It's a bit of a pain to collect alternate rules.  For instance:</p>
+<pre><code>alternates: copy []
+
+rules: [[some integer!] [3 text!]]
+
+for-each rule rules [
+    append alternates compose [(rule) |]
+]
+
+uparse data [alternates]
+</code></pre>
+<p>That will give you alternates as <strong>[[some integer!] | [3 text!] |]</strong></p>
+<p>But that rule will <em>always succeed</em>...should both the component rules fail to match, it will act as a no-op.  Because it's equivalent to <strong>[[some integer!] | [3 text!] | []]</strong>, and <strong>[]</strong> will always succeed.</p>
+<p>You get a similar problem if you go the other way.</p>
+<pre><code>for-each rule rules [
+    append alternates compose [| (rule)]
+]
+</code></pre>
+<p>Now you've got a rule that is always a no-op: <strong>[| [some integer!] | [3 text!]]</strong>.  Again, this is equivalent to <strong>[[] | [some integer!] | [3 text!]]</strong>, and this time the <strong>[]</strong> succeeds before the other rules get a chance.</p>
+<p>You can hack around this by starting out with <strong>alternates: [false]</strong>.  This way, you can add the <strong>[| (rule)]</strong> and it will never run the false.  So it works.</p>
+<h2>Wouldn't a New Meaning for the ANY Combinator be Better?</h2>
+<p>Having reclaimed ANY it seems it would be perfect for this.  Why not:</p>
+<pre><code>rules: [[some integer!] [3 text!]]
+uparse data [any rules]
+</code></pre>
+<p>You could leave your block in its regular old form, and use it that way.  Dyn-o-mite!</p>
+<p><strong>But wait.  BLOCK! already has semantics as a parse rule.</strong>  Conventionally, ANY doesn't get to see the block at all... it gets a <em>parser function</em> which has been made out of the block.</p>
+<p>Uh oh.</p>
+<h2>Bad Option <span class="hashtag">#1</span> - Quoting</h2>
+<p>So ANY could say it's a quoting combinator.  This means it would get whatever single thing came after it... be it a WORD! or BLOCK! or whatever.  It could try its best to turn that into a BLOCK!.</p>
+<p>In the case above ANY would thus get the WORD! rules.  It could look up the WORD!, get a block.  And then walk through the block, combinatorizing each element in it and running the element in sequence.</p>
+<p>That's rather yucky.</p>
+<h2>Less Bad Option <span class="hashtag">#2</span> - Take BLOCK! as synthesized rule product</h2>
+<p>ANY would be a better citizen if it was willing to say that the BLOCK! it's going to walk through came to it by honest means.</p>
+<pre><code>rules: [[some integer!] [3 text!]]
+uparse data [any (rules)]
+</code></pre>
+<p>At first glance that seems weird to me.  But, is it really that weird?</p>
+<p>It seems to me this is what has to be done--and it makes much more sense than going down the rabbit hole of quoting and destabilizing the whole syntax.</p>
+<h2>Also, This Mitigates Compatibility Concerns</h2>
+<p>If ANY only runs with rules that have BLOCK! synthesized products, that's a (small?) subset of all the ANYs that are out there historically.  It can choke if it doesn't like what it sees and tell you that you may be using the old sense of ANY.</p>
+<p>Even further, we probably <em>can</em> temporarily make ANY a quoting combinator that only accepts GROUP!...as a simulation of accepting any parser in the future.</p>
+<p>I'm going ahead and adding it!</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662</link>
+          <pubDate>Sat, 14 Aug 2021 18:35:44 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1662</guid>
+          <source url="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662.rss">The Trickiness of the New ANY Combinator Concept</source>
+        </item>
+        <item>
+          <title>Converting TRIM To UPARSE for Testing And Inspiration</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>A long time ago, <a class="mention" href="/u/brett">@Brett</a> converted the circuitous native code for TRIM from R3-Alpha to PARSE-based usermode code.</p>
+<p>Since we have that code--and some tests for it--I thought it would be a good idea to go ahead and try running it under UPARSE.  This would be another way of testing UPARSE...as well as to see if the new features gave it any kind of leg up.  We could also look for inspirations for new features...</p>
+<h2>New Features: <code>&lt;index&gt;</code> and MEASURE Combinators</h2>
+<p>There was a calculation of indentation done for the TRIM/AUTO feature.  It uses PARSE* which is the version that doesn't require matching to the end of the input.  <em>(Though since it doesn't check the result and doesn't do any operations which would roll back, it doesn't make a difference.)</em></p>
+<pre><code>indent: _
+if auto [
+    parse* series [
+        ; Don't count empty lines, (e.g. trim/auto {^/^/^/    asdf})
+        remove [while LF]
+
+        (indent: 0)
+        s: &lt;here&gt;, some rule, e: &lt;here&gt;
+        (indent: (index of e) - (index of s))
+    ]
+]
+</code></pre>
+<p>The first thought I had is that with TAG! combinators, though we lost the ability to match TAG!s without a quote like <code>[some '&lt;tag&gt;]</code>...we have a nice noun-space to play with that doesn't interfere with variable name nouns.  So what if <code>&lt;index&gt;</code> gave you the index position in the current series?</p>
+<p>That makes it a bit nicer:</p>
+<pre><code>indent: _
+if auto [
+    parse* series [
+        ; Don't count empty lines, (e.g. trim/auto {^/^/^/    asdf})
+        remove [while LF]
+
+        s: &lt;index&gt;, while rule, e: &lt;index&gt;, (indent: e - s)
+    ]
+]
+</code></pre>
+<p>I also changed the SOME to a WHILE, which always succeeds...and since <code>&lt;index&gt;</code> always succeeds there's no need to pre-emptively set the indent to 0.</p>
+<p>But wouldn't this pattern make a nice combinator in and of itself?  Something that can tell you how long a matched range is.  Well, uparse fans, meet <strong>MEASURE</strong>!</p>
+<pre><code>indent: _
+if auto [
+    parse* series [
+        ; Don't count empty lines, (e.g. trim/auto {^/^/^/    asdf})
+        remove [while LF]
+
+        indent: measure while rule
+    ]
+]
+</code></pre>
+<p>And look how easy the combinator is to write <em>(it's one of those that can just use the default rollback)</em>:</p>
+<pre><code>measure: combinator [
+    {Get the length of a matched portion of content}
+    return: "Length in series units"
+        [&lt;opt&gt; integer!]
+    parser [action!]
+    &lt;local&gt; s e
+][
+    ([# (remainder)]: parser input) else [return null]  ; ignore result
+
+    e: index of get remainder
+    s: index of input
+
+    if s &gt; e [  ; could also return something like ~bad-seek~ isotope
+        fail "Can't MEASURE region where rules did a SEEK before the INPUT"
+    ]
+
+    return e - s
+]
+</code></pre>
+<h2>That's A Pretty Good Start!</h2>
+<p>It seems to me that what the TRIM code needs is probably a bit better definition of the semantics.  TRIM/AUTO is a bit strange:</p>
+<pre><code>&gt;&gt; utrim/auto "  x^/ y^/   z^/"
+== "x^/ y^/ z^/"
+</code></pre>
+<p>It indents relative to the first non-newline-line...but that creates an issue of what to do about the line that comes after it which is <em>less</em> indented.  The rule for processing lines was:</p>
+<pre><code>line-start-rule: compose/deep [
+    remove [((if indent [[opt repeat (indent)]] else ['while])) rule]
+]
+</code></pre>
+<p>The <strong>indent</strong> not being a BLANK! implies TRIM/AUTO.</p>
+<p>That's a /DEEP compose that does splicing (signified these days by <strong><code>((...))</code></strong>.  I rewrote the rule to be a bit clearer as:</p>
+<pre><code>line-start-rule: compose [
+    remove (if indent '[opt repeat (indent) rule] else '[while rule])
+]
+</code></pre>
+<p>That's more pleasing to me, as well as more efficient.  It's a nice use of the quoted branches!</p>
+<p>But back to the semantics: <em>is this right?</em>  It could also slam the less indented lines to the left by moving the OPT.</p>
+<pre><code>line-start-rule: compose [
+    remove (if indent '[repeat (indent) opt rule] else '[while rule])
+]
+</code></pre>
+<p>That would make the <strong><code>y</code></strong> flush with the left:</p>
+<pre><code>&gt;&gt; utrim/auto "  x^/ y^/   z^/"
+== "x^/y^/ z^/"
+</code></pre>
+<p>Anyway... let's keep those UPARSE test cases coming!  It's to a point now where UPARSE is more reliable than R3-Alpha-derived native PARSE (I'm calling PARSE3) and Red.  So it's revealing the bugs and inconsistencies in those codebases, not vice versa.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+            <p><small>5 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/converting-trim-to-uparse-for-testing-and-inspiration/1660">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/converting-trim-to-uparse-for-testing-and-inspiration/1660</link>
+          <pubDate>Fri, 13 Aug 2021 23:09:56 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1660</guid>
+          <source url="https://forum.rebol.info/t/converting-trim-to-uparse-for-testing-and-inspiration/1660.rss">Converting TRIM To UPARSE for Testing And Inspiration</source>
+        </item>
+        <item>
+          <title>NULL Rule Failures and a Weird Parse Generator Idea</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>So a while ago, I was thinking about the idea of a kind of GROUP! as a PARSE rule that would fail if it was NULL.</p>
+<p><em>It's not a property you want for plain GROUP! in PARSE!!!</em></p>
+<pre><code>uparse "aaa" [some ["a" (if trace [print "Matched an A"])]]
+</code></pre>
+<p>You wouldn't want that IF not running to give a NULL that caused the rule to not match.  That would mean you'd have to write:</p>
+<pre><code>uparse "aaa" [some ["a" opt (if trace [print "Matched an A"])]]
+</code></pre>
+<p>That's junky.</p>
+<p>But let's imagine there were <em>another</em> kind of group that did fail when it was NULL.  For the sake of argument let's call it <strong>/(group)</strong>.  Otherwise it's just like GROUP!...result discarded and everything.</p>
+<p>When we had such a group on hand, I noticed we could do something like this:</p>
+<pre><code> gen: func [&lt;static&gt; n (0)] [
+     if n &lt; 3 [return n: n + 1]
+     return null
+ ]
+
+&gt;&gt; uparse "a" ["a", collect [while keep /(gen)]]
+== [1 2 3]
+</code></pre>
+<p>Since generators return NULL when they're done making values, you'd be able to use the natural looping ability of WHILE and then have it stop keeping things, and you'd get your values collected.</p>
+<p>So I wrote a test for that...which broke when that behavior of the group class went away.</p>
+<p>It's probably silly, since we'd be able to write something like <strong>(map :gen)</strong> and get the same effect.  I'm just writing it down here because there was a comment about it, and I had sort of a "hmmm" about uses for a GROUP! form that considered itself a failed parse match if it was NULL.</p>
+<p>Better here than in a comment.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/null-rule-failures-and-a-weird-parse-generator-idea/1648">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/null-rule-failures-and-a-weird-parse-generator-idea/1648</link>
+          <pubDate>Thu, 05 Aug 2021 18:33:22 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1648</guid>
+          <source url="https://forum.rebol.info/t/null-rule-failures-and-a-weird-parse-generator-idea/1648.rss">NULL Rule Failures and a Weird Parse Generator Idea</source>
+        </item>
+        <item>
+          <title>Literal Matching with the @ Types In UPARSE</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>I mentioned that the @ types were slated for use for literal matching.  The most frequent example I have given is:</p>
+<pre><code>&gt;&gt; block: [some "a"]
+
+&gt;&gt; uparse [[some "a"] [some "a"]] [some @block]
+== [some "a"]  ; success gives result of last matching rule
+</code></pre>
+<p>Works with all types:</p>
+<pre><code>&gt;&gt; num: 1
+
+&gt;&gt; uparse [1 1 1] [some @num]
+== 1
+</code></pre>
+<p>I didn't mention things like @(gr o up) but those work too:</p>
+<pre><code>&gt;&gt; uparse [1 1 1] [some @(3 - 2)]
+== 1
+</code></pre>
+<p><strong>I realized I actually do not know how to write the above two cases in Red or Rebol2.</strong>  You can't use the number as a plain variable in Red, since it acts as a repeat rule <em>(UPARSE prohibits that, since it's a rule that takes an argument, you must use REPEAT for such behavior)</em></p>
+<pre><code>red&gt;&gt; num: 1
+
+red&gt;&gt; parse [1 1 1] [some num]
+*** Script Error: PARSE - invalid rule or usage of rule: 1
+</code></pre>
+<p>Also in Red, I'm not clear on why the following isn't an error, since the GROUP! product is just discarded:</p>
+<pre><code>red&gt;&gt; parse [1 1 1] [some (3 - 2)]
+== false
+</code></pre>
+<p>This is something that would work in R3-Alpha, but doesn't in Red or Rebol2:</p>
+<pre><code>red&gt;&gt; parse [1 1 1] [some quote (3 - 2)]
+== false
+</code></pre>
+<p><strong>Your guess is as good as mine.</strong>  Whatever the answer in their world is, it's not obvious.  But I think the @ types give a clean answer in UPARSE.</p>
+<h2>But What About @[bl o ck] ?</h2>
+<p>In the past I suggested that one reason why <code>@[...]</code> might be taken for datatypes is because in cases like this, there'd be no difference between <code>@[bl o ck]</code> and <code>'[block]</code>.  I was imagining these being synonyms, because I couldn't think of anything else (since plain block was already "run rule"):</p>
+<pre><code>&gt;&gt; uparse [[some "a"] [some "a"]] [some '[some "a"]]
+== [some "a"]
+
+&gt;&gt; uparse [[some "a"] [some "a"]] [some @[some "a"]]
+== [some "a"]  ; "wasteful application of @[...], so why not datatype?"
+</code></pre>
+<p>But UPARSE has changed the game for why @[...] and [...] can mean different things...because <em>block rules synthesize values</em>.  And who's to say you might not want to match a rule and use its product as the literal thing to match against?</p>
+<pre><code>&gt;&gt; uparse [1 1 1 2] [@[some '10, (10 + 10) | some '1 (1 + 1)]]
+== 2
+</code></pre>
+<p>In other words your rule can match <em>and</em> provide an answer for the thing to match next.  We have zero experience with how often that might be useful.  But it does have meaning, which I guess is probably the death knell for using the @ types as DATATYPE!.</p>
+<p>So this all looks pretty good.  But back to the drawing board for types.</p>
+            <p><small>4 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643</link>
+          <pubDate>Mon, 02 Aug 2021 18:58:15 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1643</guid>
+          <source url="https://forum.rebol.info/t/literal-matching-with-the-types-in-uparse/1643.rss">Literal Matching with the @ Types In UPARSE</source>
+        </item>
+        <item>
+          <title>Visualizing PARSE</title>
+          <dc:creator><![CDATA[Brett]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <blockquote>
+<p><em>Note: This was originally posted in another thread about things people might want to do with parse events, but discussing the needs of this particular tool warrants its own thread.</em></p>
+</blockquote>
+<p>Because debugging parse rules can be painful, I created a Rebol 2 visual parse debugger of sorts (<a href="http://www.rebol.org/documentation.r?script=parse-analysis-view.r">parse-analysis-view.r</a>). Parse events are needed to track the input position and log each rule's Test, Succeed, or Fail.  The events were mapped to screen coordinates to be able to step forwards/backwards through the parse steps and to be able to find the active rules under a mouse cursor position. Mapping strings was easy, mapping block input was a pain.</p>
+<p>Running the visual debugger thing:</p>
+<pre><code>visualise-parse t j/grammar [parse/all t j/grammar/json]
+</code></pre>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0.png" data-download-href="https://forum.rebol.info/uploads/default/d6e81e9a37e78456b5bb526d8e476ac88a327bd0" title="Screenshot 2021-07-29 094450"><img src="https://forum.rebol.info/uploads/default/optimized/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0_2_690x497.png" alt="Screenshot 2021-07-29 094450" data-base62-sha1="uF9uxaah68wQOa0QmNNleZTWp1K" width="690" height="497" srcset="https://forum.rebol.info/uploads/default/optimized/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0_2_690x497.png, https://forum.rebol.info/uploads/default/optimized/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0_2_1035x745.png 1.5x, https://forum.rebol.info/uploads/default/original/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/d6e81e9a37e78456b5bb526d8e476ac88a327bd0_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">Screenshot 2021-07-29 094450</span><span class="informations">1082×780 86.2 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+            <p><small>5 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/visualizing-parse/1639">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/visualizing-parse/1639</link>
+          <pubDate>Thu, 29 Jul 2021 06:26:55 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1639</guid>
+          <source url="https://forum.rebol.info/t/visualizing-parse/1639.rss">Visualizing PARSE</source>
+        </item>
+        <item>
+          <title>Getting Hooks Into &quot;Events&quot; during PARSE</title>
+          <dc:creator><![CDATA[Brett]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>When thinking about an automated collection mechanism for parsing in Rebol 2 in the dim dark past, I thought I needed every matching/unmatching rule to be tracked for stack push and pop. I decided I couldn't achieve that without Rebol providing some sort of hook facility for it. I asked and was ignored.</p>
+<p>Nevertheless pressing on I realised a few things:</p>
+<ul>
+<li>
+<p>I could have a practically useful result by tracking success/failure for particular rules.</p>
+</li>
+<li>
+<p>Embedding some sort of bound output code in a rule, breaks the reusablity of the rule.  I didn't want to have to rewrite the same rules for the same data format, just because I wanted to extract different information for a different application.</p>
+</li>
+<li>
+<p>Theoretically, I also wanted to hook and leverage some other user's rules or Rebol2's built-in rules too.</p>
+</li>
+<li>
+<p>Some rules are used to seek for a particular pattern, or test multiple patterns at the same position, some of these are sometimes meant to fail - in order to progress the overall match. We probably don't want to collect this class of rules outside of a debugging situation.</p>
+</li>
+<li>
+<p>To solve the above I ended up with requiring rules to be tracked to be defined as words, allowing me to automatedly hook, track and emit them into a structure (<a href="http://www.rebol.org/documentation.r?script=load-parse-tree.r">load-parse-tree.r</a>). Not rocket science, nor perfect, but it was useful.</p>
+</li>
+<li>
+<p>Something of an aside, reflecting back on the usefulness of the output, <a href="https://github.com/red/REP/issues/57">it would have been nice to have had a tree type in rebol</a>, a node that was combined object (properties - its head?) and series (contents or body) as one type that could perform the role of one or other or both. So many data structures look like this.</p>
+</li>
+<li>
+<p>While definitely nice, I idly wonder now whether a collect mechanism is complete enough to achieve the things people want to use parse for, that perhaps parse should be able to emit actions to be evaluated by some sort of user specified machine.</p>
+</li>
+</ul>
+<p>Anyway, I guess I'm alluding to the point that separating some sort of user specified specifications or actions outside of the rules themselves might be useful.</p>
+            <p><small>10 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/getting-hooks-into-events-during-parse/1640">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/getting-hooks-into-events-during-parse/1640</link>
+          <pubDate>Tue, 27 Jul 2021 07:42:55 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1640</guid>
+          <source url="https://forum.rebol.info/t/getting-hooks-into-events-during-parse/1640.rss">Getting Hooks Into &quot;Events&quot; during PARSE</source>
+        </item>
+        <item>
+          <title>Generalizing Unwinding in UPARSE</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>So the COLLECT keyword in Red is--in <a class="mention" href="/u/rgchris">@rgchris</a>'s opinion (and mine) basically useless.  Because backtracking does not undo the things you've collected.</p>
+<pre><code>red&gt;&gt; parse "ac" [collect [
+    "a" keep (&lt;a1&gt;) "b" keep (&lt;b&gt;)
+    | "a" keep (&lt;a2&gt;) "c" keep (&lt;c&gt;)
+]]
+== [&lt;a1&gt; &lt;a2&gt; &lt;c&gt;]
+</code></pre>
+<p>It got half way through the first sequence...matching an "a" and doing a keep, then realized it didn't match the "b".  So it rolled back to the start and again matched an "a" and did another keep, then a "c" and did a keep.</p>
+<p>It's far more useful if bookkeeping is done to backtrack what's being collected, as Ren-C does.</p>
+<pre><code>ren-c&gt;&gt; parse "ac" [collect [
+    "a" keep (&lt;a1&gt;) "b" keep (&lt;b&gt;)
+    | "a" keep (&lt;a2&gt;) "c" keep (&lt;c&gt;)
+]]
+== [&lt;a2&gt; &lt;c&gt;]
+</code></pre>
+<h2>How Does Red Justify The Non-Rollback Behavior?</h2>
+<p>Maybe <a class="mention" href="/u/rgchris">@rgchris</a> can chime in here to say more precisely or find some direct quotes.  But I believe the general justification is that they think of rollback as a "new" behavior that swims upstream from the fact that "code with side effects isn't unwound in general".</p>
+<pre><code>all-redbols&gt;&gt; parse "ac" [collect [
+    "a" (print "a1") "b" (print "b")
+   | "a" (print "a2") "c" (print "c")
+]]
+a1
+a2
+c
+</code></pre>
+<p>Nothing rolls back arbitrary code in groups...and Ren-C is not planning on being any different.</p>
+<p>In this point of view, they would say that in the implementation of KEEP they are running an APPEND.  They conclude it's thus reasonable to say that the user experience should correspond to not wanting there to be too much of a gap from the implementation.  If there is, it would mean adding more code/design...</p>
+<p><strong>I call that the tail wagging the dog.</strong></p>
+<p>Anyway, this introduction aside... let's get on to the main part of what I wanted to write about.</p>
+<h2>The Mechanics Behind Rollback are Non-Trivial</h2>
+<p>One thing about adding something like COLLECT into the UPARSE combinator model is that it's the sort of thing that winds up having to know about what happens with the relationship of every other parser.</p>
+<p>Imagine you have something like an EITHER combinator that will succeed if either of two rules succeed.  This would be the ideal behavior.</p>
+<pre><code>&gt;&gt; uparse "aaa" [collect [either 2 keep ["a" "a"] 3 keep ["a"]]]
+== ["a" "a" "a"]
+</code></pre>
+<p>Remember that a BLOCK! rule evaluates to its last result, and TEXT! rules against strings evaluate to the rule itself, so this is the expected answer.</p>
+<p>I wrote this example above the way I did instead of putting the two arguments to this hypothetical EITHER in BLOCK!s:</p>
+<pre><code>&gt;&gt; uparse "aaa" [collect [either [2 keep ["a" "a"]] 3 [keep ["a"]]]]
+== ["a" "a" "a"]
+</code></pre>
+<p>Because if I did it that way, then you might argue that the only place COLLECT needs to get its hooks in would be BLOCK! combinators.  But we are saying part of the interesting natural-language property of PARSE is to (correctly) manage the implicit grammar...it's foundational to Rebol philosophy to not require the blocks (though to offer the option if the grouping makes it more clear).</p>
+<p>So when I wrote it without the blocks it was to demonstrate a point.  Accomplishing the rollback conceptually needs to have "hooks into the EITHER".  It needs to know that although the overall EITHER succeeded it failed in part of its implementation.  One of the 2 attempted keeps from the first rule succeeded but that turned out not be enough.</p>
+<p><strong>COLLECT must somehow thus get a notice on every combinator's call...effectively before to record the high water mark of the collection... and then after to know if it failed, to roll back.</strong></p>
+<h2>This Might Sound Familiar...like an ENCLOSE</h2>
+<p>If you recall how ENCLOSE works.</p>
+<pre><code>hooked-append: enclose :append func [f [frame!]] [
+    print ["Hey, I know you're trying to append a" f.value]
+    print ["That append only happens if I DO this frame..."]
+    let result: do f
+    print ["I did the frame and got back" mold result]
+    print ["But I'm returning something else!"]
+    return &lt;you got hooked!&gt;
+]
+</code></pre>
+<p>It's pretty nifty:</p>
+<pre><code>&gt;&gt; data: [a b c]
+== [a b c]
+
+&gt;&gt; hooked-append data 10
+Hey, I know you're trying to append a 10
+That append only happens if I DO this frame...
+I did the frame and got back [a b c 10]
+But I'm returning something else!
+== &lt;you got hooked!&gt;
+
+&gt;&gt; data
+== [a b c 10]
+</code></pre>
+<p><strong>This rather directly corresponds to what COLLECT needs, as a service.</strong>  Except instead of enclosing one function it's adding some code to a hook in every combinator.</p>
+<p>I'm going to have a bit more to say about this as I go.  But I had noticed that in my first crack at thinking about where to put the rollback I'd made the mistake of putting it in the BLOCK! combinator.  So I was motivated to write up a good example like the EITHER to show why that wasn't correct.</p>
+<p>Also any chance to talk about Red as being (intellectually) lazy and anti-intelligent-design is fun.  <img src="https://forum.rebol.info/images/emoji/twitter/stuck_out_tongue.png?v=9" title=":stuck_out_tongue:" class="emoji" alt=":stuck_out_tongue:"></p>
+            <p><small>5 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/generalizing-unwinding-in-uparse/1637">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/generalizing-unwinding-in-uparse/1637</link>
+          <pubDate>Mon, 19 Jul 2021 15:09:46 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1637</guid>
+          <source url="https://forum.rebol.info/t/generalizing-unwinding-in-uparse/1637.rss">Generalizing Unwinding in UPARSE</source>
+        </item>
+        <item>
+          <title>Progress on Nativizing Parser Combinators</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>So... let's start with a virtual machine I have...where r3-alpha gets this time for a rather simple parse operation:</p>
+<pre><code>r3-alpha&gt;&gt; delta-time [
+     parse "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [
+         some [opt "c" opt "b" opt "a"]
+     ]
+ ]
+ == 0:00:00.000020  ; averages around here on 
+</code></pre>
+<p>UPARSE was written with design consideration only; it wasn't even optimized usermode code.  Performance was no object.  And of course, that shows:</p>
+<pre><code>uparse-on-day-zero&gt;&gt; delta-time [
+     uparse "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [
+         some further [opt "c" opt "b" opt "a"]  ; here UPARSE needs FURTHER
+     ]
+ ]
+ == 0:00:00.014000  ; averages around here
+</code></pre>
+<p>The performance varies a lot because there's so much stuff happening the GC gets triggered, so you have to eyeball it.</p>
+<p>But it shows we're talking a ballpark of around 700x slower.  This didn't surprise me at all...running usermode code for all parts of the operation...specializing functions and making frames on so many steps... in a completely general architecture.  <strong>I'm actually surprised it wasn't even slower!</strong></p>
+<p>I began chipping away at the infrastructure for combinators to make more of it native.  Generally not the combinators themselves yet (actually only OPT has been changed here...)</p>
+<pre><code>basics-plus-opt&gt;&gt; delta-time [
+     uparse "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [
+         some further [opt "c" opt "b" opt "a"]
+     ]
+]
+== 0:00:00.006000  ; averages around here
+</code></pre>
+<p>So that cuts it from 700x down to around 300x slower.  This is actually not bad for a beginning!</p>
+<p><em>In fact</em>, right here in real-time I'm going to use the techniques I've established to make the combinator that matches TEXT! native and see how much that moves the needle.</p>
+<pre><code>with-text&gt;&gt; delta-time [
+     uparse "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [
+         some further [opt "c" opt "b" opt "a"]
+     ]
+]
+== 0:00:00.005000  ; averages around here
+</code></pre>
+<p>Just then I'd estimate an hour of work just took it from 300x slower to 250x slower.</p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/4a17795c153ff45d8477387987fe8e15e7a2480b/src/mezz/uparse.reb#L846">Here is the usermode form of the original TEXT! combinator</a></p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/4a17795c153ff45d8477387987fe8e15e7a2480b/src/core/functionals/c-combinator.c#L367">Here is the native form that I compiled, tested, and measured in about an hour on a slow-compiling machine...</a></p>
+<p>Since I just succeeded so quickly, <a href="https://github.com/metaeducation/ren-c/commit/608286c941889a36c70fbdec984f9d5ccd0d00a7">I just hacked up SOME and FURTHER as natives...they're easier than TEXT!</a></p>
+<p>And with that it dips down to around 0:00:00.004000.  <em>A total of an hour and a half of work for three combinators and we went from 300x slower down to a mere 200x slower!</em>  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>It might seem for this example we've run out of combinators to make native.  But there's one combinator you're missing that might not be obvious...that's the BLOCK! combinator which orchestrates the sequencing of the OPT clauses.  It's quite a high value case to optimize!</p>
+<p>Doing that optimization would mean that with any luck, we'd get to 150x slower than R3-Alpha PARSE for this (or any other) apples-to-apples comparison task.  But I have some things I need to do first, and it would take longer than I want before I finish this post.  But I think you got the idea.</p>
+<h2>Even With The High Multiplier, I'm Optimistic About The Endgame</h2>
+<p>There's still a bunch of infrastructure besides the combinators to attack where much of the cost exists.  Most of the combinators themselves are pretty simple, but the logic that does the "combinating" itself is not!</p>
+<p>But let's imagine that at the end of optimizing <em>all</em> the usermode pieces into native pieces it hits a wall of being 20x or so slower than traditional PARSE.  What then?</p>
+<p>Let me give you several reasons why I'm optimistic:</p>
+<ul>
+<li>
+<p><strong>The UPARSE concept is built around fundamental mechanics that are used everywhere by the system.</strong>  For example: there's no special "parse stack", it's using function calls on the same stack as everything else.  It uses clever mechanisms to hook which levels are parsing so you can get UPARSE trace output which doesn't mix up regular function calls with the combinators, but those mechanisms are generic too.</p>
+<p>This has plenty of good implications.  Improvements to the function call stack become improvements to the "UPARSE stack" automaticlly (e.g. stacklessness).  Any work we do on making parse recursions faster are likely to make all function calls faster.  Think about all the other aspects this applies to as well.</p>
+<p><em>(Of course I'll just restate that all of this is in service of one of the big goals...of letting users pick their own mixes of combinators and write their own.  It wasn't just about reusing work, it was about designing the protocol in a way that the native code wouldn't be locked into a monolithic blob just to save on optimizing some switch() statement.  Everything can be teased out and reconfigured as a mash-up of natives and usermode code.)</em></p>
+</li>
+<li>
+<p><strong>UPARSE is vastly more powerful, so chasing performance parity with any given laborious piece of historical parse code may not be the point.</strong>  Let's say you can express something briefly and eloquently as an idiomatic UPARSE expression and that code runs in 1 second.  Then does it matter that when you write it the convoluted way in historical PARSE it takes 3 seconds, when that convoluted code would run in UPARSE in 5?</p>
+</li>
+<li>
+<p><strong>People with performance-sensitive scenarios who hit a bottleneck can attack that with a combinator specific to their purpose.</strong>  If you write <strong><code>opt some ["a" | "b"]</code></strong> so often that it's bothering you to pay for all the generalized protocols where OPT talks to SOME talks to BLOCK! talks to TEXT!... you could natively write the OPT-SOME-A-OR-B combinator and plug it in.</p>
+<p>In addition: there could be ways to make a semi-optimized version of an OPT-SOME-A-OR-B by just asking to pre-combinate those things together.  This would cost you some flexibility... in the past I've talked about <a href="https://forum.rebol.info/t/when-should-parse-notice-changes/1528/3">when PARSE notices rule changes"</a> and that's the kind of phenomenon that might come into play.</p>
+<p><em>(Note: Building a CHAIN of functions like <strong>negated-multiply: chain [:multiply | :negate]</strong> have a similar aspect.  They are faster but if what's assigned to the word MULTIPLY or NEGATE change they won't see it...as they commit to the definitions from the time of the CHAIN.)</em></p>
+</li>
+<li>
+<p><strong>The code is organized so much better with responsibility isolated so clearly that I think clever optimizations will be much easier to try.</strong>  There was little you could do with R3-Alpha PARSE without worrying about breaking it.</p>
+</li>
+</ul>
+<h2>I Hope I'm Right</h2>
+<p>It's a challenge but an interesting one to make UPARSE perform.  Let's see where this goes...</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/progress-on-nativizing-parser-combinators/1636">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/progress-on-nativizing-parser-combinators/1636</link>
+          <pubDate>Mon, 19 Jul 2021 05:07:33 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1636</guid>
+          <source url="https://forum.rebol.info/t/progress-on-nativizing-parser-combinators/1636.rss">Progress on Nativizing Parser Combinators</source>
+        </item>
+        <item>
+          <title>PARSE (and FIND) Behavior on Empty Series</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>Historically searching for empty series in a series would fail:</p>
+<pre><code>rebol2&gt;&gt; find "abc" ""
+== none
+</code></pre>
+<p>This seems inconsistent with what it would seem you would want, e.g. in PARSE when a string is empty:</p>
+<pre><code>&gt;&gt; parse "abc" ["" "abc"]
+== "abc"
+</code></pre>
+<p>Of course, when PARSE had the "must make progress rule" it wouldn't work.  But the fact that FIND didn't support it provided a reason why it wouldn't work even without that rule in place!</p>
+<h2>Conceptually Why You Should Always FIND an Empty Series</h2>
+<p>You can think of a string as being any number of empty strings glued together...</p>
+<pre><code>&gt;&gt; unspaced ["" "" "" "a" "" "" "b" "" "" "" "c" "" ""]
+== "abc"
+</code></pre>
+<p>So it doesn't seem that strange to say that you can "find" an empty string at any point you wish to look.</p>
+<p>(The same reasoning applies to finding empty blocks in blocks, etc.)</p>
+<h2>Feature-Wise Why You Should Always FIND an Empty Series</h2>
+<p>It seems that the ability to uniquely express the intent of BLANK! vs. empty string gives FIND the ability to discern the two, offering a means of opting out (never find the target, always return null) -and- a means of opting in (always find the target, returning original series):</p>
+<pre><code>&gt;&gt; find "abc" _
+; null
+
+&gt;&gt; find "abc" ""
+== "abc"
+</code></pre>
+<h2>This Changes PARSE and FIND for the Better...</h2>
+<p>Red doesn't embrace the FIND feature:</p>
+<pre><code>red&gt;&gt; find "abc" ""
+== none
+</code></pre>
+<p>But they do accept that "" is a match in PARSE:</p>
+<pre><code>red&gt;&gt; parse "abc" ["" "abc"]
+== true
+</code></pre>
+<p>Which seems inconsistent.  Either there's an empty string you can match at the head of "abc", or there isn't!</p>
+<p><em>This is another one of the benefits to implementing PARSE in usermode, and forming a consistent model across the routines.</em></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/parse-and-find-behavior-on-empty-series/1628">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/parse-and-find-behavior-on-empty-series/1628</link>
+          <pubDate>Sun, 20 Jun 2021 15:49:19 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1628</guid>
+          <source url="https://forum.rebol.info/t/parse-and-find-behavior-on-empty-series/1628.rss">PARSE (and FIND) Behavior on Empty Series</source>
+        </item>
+        <item>
+          <title>UPARSE In Mezzanine: Use Experimentally (but sparingly)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>I've made UPARSE part of the mezzanine to make it easier to use in the web build.</p>
+<p>It's a reminder that <em>zero</em> performance work has been done on it, and it is glacially slow.</p>
+<p>But here it is extracting information from a GitLab URL</p>
+<pre><code>uparse port.spec.path [
+    "/"
+    emit user: between &lt;here&gt; "/"
+    emit repo: between &lt;here&gt; "/"
+    [opt "-/"]
+    "raw/"
+    emit branch: between &lt;here&gt; "/"
+    emit file_path: between &lt;here&gt; &lt;end&gt;
+] then x -&gt; [
+    replace/all x.file_path "/" "%2F"  ; API uses slashes for its delimiting
+
+    if port.spec.scheme = 'http [
+        port.spec.scheme: 'https
+        write log:type=warn ["Converting non-HTTPS URL to HTTPS:" x.url]
+    ]
+
+    port.spec.path: join-all [
+        "/api/v4/projects/"
+        x.user "%2F" x.repo  ; surrogate for numeric id, use escaped `/`
+        "/repository/files/" x.file_path "/raw?ref=" x.branch
+    ]
+]
+</code></pre>
+<p>Anyway, this is just an example of some fun usage of BETWEEN and a generated object.  It avoids the <strong>to "/" skip</strong> or <strong>to "/" "/"</strong> pattern that's so annoying.  And it means you can avoid naming locals for all the things you are extracting in a parse.</p>
+<p>I'm thinking that <strong>use x</strong> would be changed to a construct that would pull all x's fields into scope.  Right now there's an experiment for that called "using" but I like USE.</p>
+<p>I'll do some performance work at some point, here.  But I'm packing to relocate today, so I might be busy for a little bit...</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/uparse-in-mezzanine-use-experimentally-but-sparingly/1610">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/uparse-in-mezzanine-use-experimentally-but-sparingly/1610</link>
+          <pubDate>Tue, 18 May 2021 07:54:52 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1610</guid>
+          <source url="https://forum.rebol.info/t/uparse-in-mezzanine-use-experimentally-but-sparingly/1610.rss">UPARSE In Mezzanine: Use Experimentally (but sparingly)</source>
+        </item>
+        <item>
+          <title>DO [INSERT/ONLY ...] is Gone. What About PARSE [INSERT ONLY ...]</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>For reasons that I imagine were performance-oriented, the original design of PARSE did not use PATH!s.  So instead of INSERT/ONLY the sequence of INSERT ONLY was two keywords.  This resulted in a kind of variadic behavior <em>(which is more awkward for the UPARSE combinators, because of the consistency of their patterns in argument gathering)</em>.</p>
+<p>With UPARSE, I didn't see any real reason why a combinator couldn't have refinements.  So I went ahead and threw an /ONLY on.</p>
+<pre><code>&gt;&gt; uparse [[a b] [c d]] [
+      collect [some [
+          keep/only ([keeping a block])
+          keep/only block!
+      ]]
+   ]
+== [[keeping a block] [a b] [keeping a block] [c d]]
+</code></pre>
+<p>But <a href="https://forum.rebol.info/t/the-long-awaited-death-of-only/1607">/ONLY is on its way out</a>.  The concept is you quote things, using a new "arsenal of quoting mechanics".</p>
+<p>So what can you do?</p>
+<p>I'd already had it so that <strong>^[rule]</strong> would act just like <strong>[rule]</strong> but literalize the result.</p>
+<pre><code>&gt;&gt; uparse [a] [^[word!]]
+== 'a
+</code></pre>
+<p>But I was using ^word, ^pa/th, ^tu.p.le, and ^(gr o up) to mean "match the literal thing".</p>
+<pre><code> &gt;&gt; pattern: [some integer!]
+
+ &gt;&gt; did uparse [[some integer!] [some integer!]] [some '[some integer!]]
+ == #[true]
+
+ &gt;&gt; did uparse [[some integer!] [some integer!]] [some ^pattern]
+ == #[true]
+</code></pre>
+<p>If you squint, it sort of lines up.  There's quoting involved; but it adds a level to the rule, not the synthesized result.</p>
+<p>But it would be a waste to have the careted <strong>^[a block]</strong> mean literally match [a block], since that's already what the quoted <strong>'[a block]</strong> means.  So I'd gone with this other meaning.</p>
+<p>Going back to our example, it forces us to use blocks around the rules in order to get the caret benefit:</p>
+<pre><code>&gt;&gt; uparse [[a b] [c d]] [
+      collect [some [
+          keep ^[([keeping a block])]
+          keep ^[block!]
+      ]]
+   ]
+== [[keeping a block] [a b] [keeping a block] [c d]]
+</code></pre>
+<p>That's obnoxious.  <strong>So I changed it to where ^ always means to quote the synthesized rule product.</strong></p>
+<pre><code>&gt;&gt; uparse [[a b] [c d]] [
+      collect [some [
+          keep ^([keeping a block])
+          keep ^block!
+      ]]
+   ]
+== [[keeping a block] [a b] [keeping a block] [c d]]
+</code></pre>
+<p>Due to the ability to <a href="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608">use plain ACTION!s as combinators by ending in /</a>, you have that option...as well as to put your quotes inside a GROUP! if you're running code:</p>
+<pre><code>&gt;&gt; uparse [[a b] [c d]] [
+      collect [some [
+          keep (quote [keeping a block])
+          keep quote/ block!
+      ]]
+   ]
+== [[keeping a block] [a b] [keeping a block] [c d]]
+</code></pre>
+<p>And we can always make QUOTE a combinator so the / isn't needed, if we think that's worthwhile.</p>
+<p>(While we're on the subject, doesn't it really seem like <strong>keep quote block!</strong> makes more sense than <strong>keep only block!</strong>?  It's like it means what it says, and the mechanics all tie it together.)</p>
+<h2>We'll Need Something Else for Lookup and Match Exactly</h2>
+<p>I still think the @ variants seem palatable for the purpose:</p>
+<pre><code> &gt;&gt; pattern: [some integer!]
+
+ &gt;&gt; did uparse [[some integer!] [some integer!]] [some @pattern]
+ == #[true]
+</code></pre>
+<p>It could be a named combinator like EXACT, but the issue there is it would need to either quote its argument or it becomes inconvenient:</p>
+<pre><code> &gt;&gt; did uparse [[some integer!] [some integer!]] [some exact (pattern)]
+ == #[true]
+</code></pre>
+<p>This is one of the nice things about using the datatype as a combinator, in that it can break outside the rhythm of what plain expressions do and seem to justify it.  It's not that we <em>can't</em> take the arguments literally and fetch a variable without a GROUP!, but explaining that <strong>some exact pattern</strong> and <strong>some exact [pattern]</strong> aren't identical becomes a tax.  :-/</p>
+<p>What makes me nervous about this is if @[...] is used for datatypes, and I wouldn't like the overlap there.  It may be that datatypes really just use something else, not yet designed.  I dunno.</p>
+<h2>Seems Like Clearly the Right Adjustment</h2>
+<p>Having all of the ^ family of operators act consistently and give the quoting really makes it nice for living in a post-ONLY world.</p>
+<p>The way I've done it is neat because it's dynamic and inherits whatever the base is.  So if you change the combinator for BLOCK! or WORD!, the ^[...] and ^xxx combinators will change to quote whatever they do.  But you can also override these combinators if you want as well.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/do-insert-only-is-gone-what-about-parse-insert-only/1609">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/do-insert-only-is-gone-what-about-parse-insert-only/1609</link>
+          <pubDate>Tue, 18 May 2021 04:09:28 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1609</guid>
+          <source url="https://forum.rebol.info/t/do-insert-only-is-gone-what-about-parse-insert-only/1609.rss">DO [INSERT/ONLY ...] is Gone. What About PARSE [INSERT ONLY ...]</source>
+        </item>
+        <item>
+          <title>If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>Have you ever been parsing and wanted to call a plain old function on a value?</p>
+<p>Let's say you are collecting some numbers, and you want to negate them.</p>
+<pre><code>&gt;&gt; uparse [1 2 3] [collect some [
+      num: integer! (num: negate num) keep (num)
+   ]]
+== [-1 -2 -3]
+</code></pre>
+<p>You're stuck having to name it, transform it, and then (possibly) reference the name again.</p>
+<p>UPARSE's mechanics actually make this a bit better already, since GROUP! results can be used directly:</p>
+<pre><code>&gt;&gt; uparse [1 2 3] [collect some [
+       num: integer! keep (negate num)
+   ]]
+== [-1 -2 -3]
+</code></pre>
+<p>But you still have to cross over into a GROUP! if you want to do any negation, and use a name to move the parsed value into the domain of DO.</p>
+<h2>Meet A New Trick: ACTION! Combinators</h2>
+<p>You can pick whatever syntax you like for it (UPARSE is customizable, remember?)</p>
+<p>But I'm using <strong>paths that end in slash</strong> to mean "call a normal function but acquire its arguments via the synthesized result of PARSE rules".</p>
+<pre><code>&gt;&gt; uparse [1 2 3] [collect some [
+       keep negate/ integer!
+   ]]
+== [-1 -2 -3]
+</code></pre>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/exploding_head.png?v=9" title=":exploding_head:" class="emoji only-emoji" alt=":exploding_head:"></p>
+<p>You can call any function this way normally by providing each argument in a group.</p>
+<pre><code>&gt;&gt; x: 510
+&gt;&gt; uparse [] [multiply/ (1 + 1) (x)]
+== 1020
+</code></pre>
+<p>But that's easier read as <strong><code>((1 + 1) * x)</code></strong>.  You of course don't want to do it unless at least some of your arguments come from a rule that's not a GROUP!:</p>
+<pre><code>&gt;&gt; data: copy ""
+&gt;&gt; uparse ["a" "b"] [some [append/dup/ (data) text! (2)]]
+&gt;&gt; data
+== "aabb"
+</code></pre>
+<p><strong>I think the primary usefulness is for functions without side-effects where you just want to do a quick transformation on some information you are assigning or collecting.</strong></p>
+<p>But that doesn't mean you can't write some interesting machines.</p>
+<pre><code>&gt;&gt; data: copy ""
+
+&gt;&gt; uparse ["abc" &lt;reverse&gt; "DEF" "ghi"] [
+       while [
+           append/ (data) [
+               '&lt;reverse&gt; reverse/ copy/ text!
+               | text!
+           ]
+       ]
+   ]
+
+&gt;&gt; data
+== "abcFEDghi"
+</code></pre>
+<p><strong>The foundations of Ren-C are strong, which is why such things can be made.</strong>  All that stuff about MAKE FRAME! and ADAPT and AUGMENT etc. are about giving control of time and space to the users to build such combinators.</p>
+<h2>Does This Mean Fewer Combinators Needed?</h2>
+<p>Anything that doesn't advance the series position doesn't need to speak the combinator interface.</p>
+<p>So, for instance, ELIDE.</p>
+<pre><code>&gt;&gt; uparse ["a" "b" &lt;c&gt;] [collect [some keep text!] elide/ tag!]
+== ["a" "b"]
+</code></pre>
+<p>But ELIDE is rather useful, so aliasing it as a combinator to invoke it without the slash seems nice.  However, this aliasing process should be cheap and easy... to "combinatorize" a function.</p>
+<p>But as I say, a plain function doesn't know anything about advancing input and speaking the combinator protocol.  <em>What's great is how close I've made combinator protocol to ordinary functions.</em>  I'm kind of gloating a lot about it, because it's neat.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<h2>Can We Generalize a Rollback Mechanism?</h2>
+<p>COLLECT is set up so that if you do some KEEPs in a rule that ultimately fails, the keeps roll back.</p>
+<p>One of the things limiting the usefulness of this mechanism for functions with side effects (APPEND as opposed to NEGATE) is that they don't get rolled back on failure.</p>
+<p>I've wondered if there could be some kind of DEFER operation which captures GROUP! operations and only runs them if a certain point is reached.  Being able to defer any rule that can have side effects might be nice, so that would include these ACTION! combinators.  Worth thinking about.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608</link>
+          <pubDate>Tue, 18 May 2021 01:48:38 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1608</guid>
+          <source url="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608.rss">If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</source>
+        </item>
+        <item>
+          <title>`||` as an Inline Sequencing Operator for UPARSE</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>Let's say you have a rule like <strong>["a" | "b"]</strong>, but you want to change it to sequence a "C" after it...like this:</p>
+<pre><code>&gt;&gt; parse? "ac" [["a" | "b"] "c"]
+== #[true]
+
+&gt;&gt; parse? "bc" [["a" | "b"] "c"]
+== #[true]
+</code></pre>
+<p>Tacking on that "C" seems like more work than it should be.  You have to go a long way back to find the place to put the start of the block.</p>
+<p>So... how about an operator that acts like "everything on the left" is in a block?  Let's call it <strong>||</strong>:</p>
+<pre><code>&gt;&gt; parse? "ac" ["a" | "b" || "c"]
+== #[true]
+
+&gt;&gt; parse? "bc" ["a" | "b" || "c"]
+== #[true]
+</code></pre>
+<p>Slick.</p>
+<p>I don't feel bothered by the fact that | means "or" and || means "then", because they're both being picked due to the same property of creating a clean line of parts.</p>
+<p>This illustration explains why I think <strong>||</strong> is an okay notation, because it kind of evokes <strong>][</strong>.</p>
+<pre><code>["a" | "b" || "c"] &lt;=&gt; [[ "a" | "b" ][ "c" ]]
+</code></pre>
+<p>There's a performance consequence to having this operator, because it means that a successful alternate match inside of a BLOCK! combinator doesn't mean you're done.  You have to scan ahead and make sure there isn't a sequencing operator coming up...in which case the block still has processing to do.</p>
+<p>I'm not that concerned about the performance issue.  You could ask to use a block combinator that supports it or not...it's your choice.  The default being more expressive is fine.  And truthfully this really just makes sequencing success perform with parity to matching failure...when a rule fails it has to seek to the end of the block for <code>|</code>.</p>
+<h2>And Guess What... It's In UPARSE Right Now!</h2>
+<p>I actually noticed a bug in a rewrite of some command line argument processing I'd suggested for Giulio's webserver:</p>
+<pre><code>["-h" | "-help" | "--help" (-help, quit)]
+</code></pre>
+<p>It would only print the help and quit for "--help", not for "-help" or "-h".</p>
+<p>Inline sequencing to the rescue!</p>
+<pre><code>["-h" | "-help" | "--help" || (-help, quit)]
+</code></pre>
+<p>It's really nice for editing to be able to just throw in the <strong><code>||</code></strong> right where you mean it, instead of needing to put the individual <strong><code>[</code></strong> and <strong><code>]</code></strong> at different locations.</p>
+<p>The hits just keep coming, don't they?</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/as-an-inline-sequencing-operator-for-uparse/1594">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/as-an-inline-sequencing-operator-for-uparse/1594</link>
+          <pubDate>Mon, 03 May 2021 21:29:07 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1594</guid>
+          <source url="https://forum.rebol.info/t/as-an-inline-sequencing-operator-for-uparse/1594.rss">`||` as an Inline Sequencing Operator for UPARSE</source>
+        </item>
+        <item>
+          <title>FURTHER as its own separate UPARSE combinator</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>So UPARSE design is really clicking along now, and here's a new idea that helps address the loss of the advancement behaviors traditionally built into old ANY/SOME when using the new WHILE/SOME</p>
+<p>The idea is to break out a test for advancing as a rule of its own:</p>
+<pre><code>&gt;&gt; uparse "a" [further [opt "a" opt "b"] (&lt;at least one!&gt;)]
+== &lt;at least one!&gt;
+
+&gt;&gt; uparse "b" [further [opt "a" opt "b"] (&lt;at least one!&gt;)]
+== &lt;at least one!&gt;
+
+&gt;&gt; uparse "" [further [opt "a" opt "b"] (&lt;at least one!&gt;)]
+; null
+</code></pre>
+<p><em>(Note: I had originally called this ADVANCING, but FURTHER is less likely to be used as a variable name to track an advancing state, e.g. <code>advancing: true</code>.  And ADVANCES sounds like it might actually be taking an action.  FURTHER is a shorter word that is a strange part of speech that is unlikely to be a variable or misunderstood as taking action.  Feedback welcome.)</em></p>
+<p>You wouldn't have to use it with loops.  But if you use it with a loop, it's quite clear, and stops you from infinite looping when everything "opts out" yet still succeeds a rule:</p>
+<pre><code>&gt;&gt; uparse "abba" [
+       while further [opt ["a" (print "A")] opt ["b" (print "B")]]
+   ]
+A
+B
+B
+A
+; null-2
+</code></pre>
+<p><em>OOO...So much beauty, I cannot take it.</em></p>
+<p>                    <a href="https://sinfest.xyz/btphp/comics/2000-09-17.gif" target="_blank" rel="noopener" class="onebox">
+            <img src="https://sinfest.xyz/btphp/comics/2000-09-17.gif" width="677" height="276">
+          </a>
+
+</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/further-as-its-own-separate-uparse-combinator/1593">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/further-as-its-own-separate-uparse-combinator/1593</link>
+          <pubDate>Mon, 03 May 2021 12:17:44 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1593</guid>
+          <source url="https://forum.rebol.info/t/further-as-its-own-separate-uparse-combinator/1593.rss">FURTHER as its own separate UPARSE combinator</source>
+        </item>
+        <item>
+          <title>UPARSE RETURN Subtleties</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1561">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"><a href="https://forum.rebol.info/t/how-to-simplify-extracting-results-from-uparse/1561/1">How To Simplify Extracting Results From UPARSE?</a>
+</div>
+<blockquote>
+<p>I'm a little hazy on the precise complete argument for dropping RETURN...<strong><a href="https://github.com/metaeducation/ren-c/pull/898">here was the commit from over 2 years ago that did it.</a></strong></p>
+</blockquote>
+</aside>
+<p>So one little annoyance about RETURN usage has come up, in that seemingly convenient casual usages of it require you to specify END or you may be missing something:</p>
+<pre><code>&gt;&gt; uparse [1 2 &lt;gotcha!&gt;] [return collect [some keep integer!]]
+== [1 2]
+</code></pre>
+<p>With COLLECT, Red switches the overall mode of the parse into "collect mode" so the result will be the result of the collect.  That seems like an opportunity to not miss out on the "didn't reach end" constraint...but...they don't take advantage of that:</p>
+<pre><code>red&gt; parse [1 2 &lt;gotcha!&gt;] [collect [some keep integer!]]
+== [1 2]
+</code></pre>
+<p>In fact, you can't even force failure outside the COLLECT, seemingly:</p>
+<pre><code>red&gt; parse [1 2 &lt;gotcha!&gt;] [collect [some keep integer!] not tag!]
+== [1 2]
+
+red&gt; parse [1 2 &lt;gotcha!&gt;] [collect [some keep integer!] fail]
+== [1 2]
+</code></pre>
+<p>Worse, they don't even seem to fail if you put the END inside the collect:</p>
+<pre><code>red&gt; parse [1 2 &lt;gotcha!&gt;] [collect [some keep integer! end]]
+== [1 2]
+</code></pre>
+<p>So I don't know what they're smoking.  At least UPARSE gets it right if the END is inside the COLLECT rule:</p>
+<pre><code>&gt;&gt; uparse [1 2 &lt;gotcha!&gt;] [return collect [some keep integer!, end]]
+; null
+
+&gt;&gt; uparse [1 2] [return collect [some keep integer!, end]]
+== [1 2]
+</code></pre>
+<h2>Is Having the END Implicit a Wrong Turn?</h2>
+<p>Well, here we are back to <a href="https://forum.rebol.info/t/the-parse-of-progress/1349">"The PARSE of /PROGRESS" Question</a> again.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>If people are used to the idea that parse returns partial results by default, then this behavior of RETURN would be less surprising.</p>
+<p>I've also wondered if UPARSE should return the last value of the rule:</p>
+<pre><code>&gt;&gt; uparse [1 2] [some integer!]
+== 2
+</code></pre>
+<p>Then, we might say that END is invisible:</p>
+<pre><code>&gt;&gt; uparse [1 2] [some integer!, end]
+== 2
+</code></pre>
+<p>And if people wanted to get the parse position at the end of the parse as the result, they could just use HERE (cc <a class="mention" href="/u/rgchris">@rgchris</a>):</p>
+<pre><code>&gt;&gt; uparse [1 2 &lt;tag&gt;] [some integer!, here]
+== [&lt;tag&gt;]
+</code></pre>
+<p>The invisibility of END would make it easier to use things like COLLECT:</p>
+<pre><code>&gt;&gt; uparse [1 2] [collect [some keep integer!], end]
+== [1 2]
+</code></pre>
+<p>Which allows for failure with a fairly clean-looking answer to the problem I started this post with:</p>
+<pre><code>&gt;&gt; uparse [1 2 &lt;gotcha!&gt;] [collect [some keep integer!], end]
+; null
+</code></pre>
+<h2>What About Rules That Succeed and Return Null ?</h2>
+<p>There's a bit of a problem here as successful rules could currently return NULL:</p>
+<pre><code>&gt;&gt; uparse "aaa" [some "a", opt "b", end]
+; null
+</code></pre>
+<p>Because OPT "B" can succeed without actually matching the "B" rule.  So returning "B" seems wrong.  Giving back NULL while still succeeding makes the most sense for OPT.</p>
+<p>You could override that by tacking on LOGIC! true, which continues parsing and synthesizes #[true]:</p>
+<pre><code>&gt;&gt; uparse "aaa" [some "a", opt "b", true, end]
+== #[true]
+</code></pre>
+<p>...or really any other value you wanted via GROUP!</p>
+<pre><code>&gt;&gt; uparse "aaa" [some "a", opt "b", (&lt;whatever&gt;) end]
+== &lt;whatever&gt;
+</code></pre>
+<h2>Interesting Thought... Worth Keeping In Mind</h2>
+<p>A lot of new things are in play with UPARSE.</p>
+<p>Maybe this calls for different operations.  I dunno.</p>
+            <p><small>4 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/uparse-return-subtleties/1589">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/uparse-return-subtleties/1589</link>
+          <pubDate>Sun, 18 Apr 2021 07:53:45 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1589</guid>
+          <source url="https://forum.rebol.info/t/uparse-return-subtleties/1589.rss">UPARSE RETURN Subtleties</source>
+        </item>
+        <item>
+          <title>Cheap UPARSE Returns: Rule or Item?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>The new concept behind UPARSE rules is that all rules (besides a few invisibles like ELIDE) give back values.  Then BLOCK! rules that match evaluate to the last rule result.</p>
+<p>The catch is that we don't want rules commonly used for matching and seeking to synthesize complicated results.  What they give back should be cheap...either something they already have on hand, or a void/bad-word.</p>
+<p>Imagine a BINARY! that has a lot of leading zeros, like maybe a megabyte's worth, and you want to skip that:</p>
+<pre><code>parse giant-binary-leading-zeroes [some #{00}, data: copy to end]
+</code></pre>
+<p>It would be annoying if SOME #{00} returned a megabyte-long binary of zeros, that just got discarded.  So it has to return something else.</p>
+<p>I mentioned that one useful thing that can be returned by a rule like #{00} is the value itself:</p>
+<pre><code> &gt;&gt; uparse #{00} [x: #{00}]
+ &gt;&gt; x
+ == #{00}
+</code></pre>
+<p>The reason this isn't useless is that it gives you at least information about what match you might have in cases like this:</p>
+<pre><code> &gt;&gt; uparse #{00} [x: [#{00} | #{FF}]]
+ &gt;&gt; x
+ == #{00}
+</code></pre>
+<p>That could fit into the puzzle of being something helpful to know.  What's neat though is that you can override this if you like, just as you would in any other evaluation:</p>
+<pre><code> &gt;&gt; uparse #{00} [x: [#{00} (&lt;zero&gt;) | #{FF} (&lt;max&gt;)]]
+ &gt;&gt; x
+ == &lt;zero&gt;
+</code></pre>
+<p>So now... what should SOME return?  Right now I'm thinking the last match:</p>
+<pre><code> &gt;&gt; uparse #{00FF} [x: some [#{00} | #{FF}]]
+ &gt;&gt; x
+ == #{FF}
+</code></pre>
+<p>Notice that it is returning the #{FF} from the rule... because it can't return the #{FF} in #{00FF} since generically that series could stretch arbitrarily on past the rule.</p>
+<p><strong>However</strong>...it would be possible to return information from the input data if it were matching a block input:</p>
+<pre><code> &gt;&gt; uparse [#{00} #{FF}] [x: some [#{00} | #{FF}]]
+ &gt;&gt; x
+ == #{FF}  ; There's a choice of which #{FF} to return
+</code></pre>
+<p>This is a bit of a conundrum.  It seems that the more useful thing to capture would be the data from the input, though that would be inconsistent with what we are forced to do when matching string and binary series.</p>
+<p>If we went the consistent route, then getting the input value becomes more complex:</p>
+<pre><code> &gt;&gt; uparse [#{00} #{FF}] [x: some [ahead #{00} skip | ahead #{FF} skip]]
+ &gt;&gt; x
+ == #{FF}  ; This would be the #{FF} from the input, not the rule
+</code></pre>
+<p>(There could be an operator that encapsulates the AHEAD RULE SKIP pattern more succinctly.)</p>
+<p>Alternatively, there could be an acceptance of the inconsistency: block rules captures an item from input, string and binary rules get the series out of the rule itself.  I'm leaning against this, however...I prefer consistent.</p>
+<p>Hopefully getting more experience will inform this...I just wanted to mention the issue.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/cheap-uparse-returns-rule-or-item/1588">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/cheap-uparse-returns-rule-or-item/1588</link>
+          <pubDate>Sat, 17 Apr 2021 11:20:58 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1588</guid>
+          <source url="https://forum.rebol.info/t/cheap-uparse-returns-rule-or-item/1588.rss">Cheap UPARSE Returns: Rule or Item?</source>
+        </item>
+        <item>
+          <title>UPARSE Parameter Conventions: How Flexible?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>UPARSE is shaping up to be mostly uniform, in that most arguments to parsers take parsers...which are functions (that in turn take other parsers)</p>
+<p>The job of the parse engine is to take sequences of words and symbols and turn them into these functions.  This is why you can write <strong>some keep integer!</strong> or <strong>some [keep integer!]</strong> or <strong>some [keep [integer!]]</strong>.  It's not the job of SOME or KEEP or INTEGER! to worry about these blocks.</p>
+<p>There are not a lot of cases of breaking this rule.  But the Redbol emulator has to, in order to get things like:</p>
+<pre><code>set x integer!
+</code></pre>
+<p>Here we see that X is basically being "quoted" by SET.  It is not a parser in its own right.  While the second parameter (integer!) is a parser, and could just as easily be <strong>[some integer!]</strong>.</p>
+<p>Right now the way I'm dealing with this is to say that arguments which are not parser functions, like the variable here, are quoted arguments.  If in the combinator spec it sees a quoted argument, it just gets it literally.</p>
+<p>So clearly that's important for legacy features.  But does it have a place in the harmonious parse world going forward?</p>
+<p>Well, right now the SEEK rule is using it.</p>
+<pre><code> x: here  ; here is a rule...which is value-bearing with the current position
+ some "a"
+ seek x  ; hm, here we are at another one of those quoting non-rule variables
+</code></pre>
+<p>Should this be shuffled around to where SEEK takes a rule?  If so, this would be:</p>
+<pre><code> x: here
+ some "a"
+ seek (x) 
+</code></pre>
+<p>Because GROUP! is set up as a rule that always succeeds, and bears the value of its evaluation.</p>
+<p>This kind of formulation would imply you could also do something like:</p>
+<pre><code> seek [some "a", let pos: here, some "b", (pos)]
+</code></pre>
+<p>So GROUP! would not be the only thing you could put there.  Whereas if we went with the quoting-variable-option, you'd be locked into only putting words there.</p>
+<h2>...But it's a Bigger Question Than Just SEEK</h2>
+<p>I've talked about maybe having a parse exposure of enbin and debin.  Could they look like:</p>
+<pre><code> uparse #{1020} [x: debin [BE + 2]]  ; BE + 2 block is obviously not a "rule"
+</code></pre>
+<p>Might the DEBIN take a BLOCK! to not mean a rule at all, but be literal dialect data to tell it to be "big-endian, unsigned, 2 bytes"?  Or would such values always need to be passed to rules via GROUP! ...so you know they're not rules?</p>
+<pre><code> uparse #{1020} [x: debin ([BE + 2])]
+</code></pre>
+<p><strong>As I say, the ability to read arguments quoted literally will be there, else we could not implement Redbol SET and COPY emulation.</strong>  The feature of combinators taking arguments by quote is a given.</p>
+<p><em>But is it a good idea to have anything in the box that does this, and encourage the practice?</em></p>
+<h2>I Think Flexibility Should Be Taught (Possibly (?) Encouraged?)</h2>
+<p>This reminds me a lot of the questions raised over <strong><a href="https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359">speaking with Tics</a></strong>.</p>
+<p>There I asked if there should be expressions <strong>type of x</strong> instead of <strong>'type of x</strong>, or if it was setting a bad example.</p>
+<p>When something is so common and you get stuck making it ugly...when it would be very learnable and natural to make it nicer, I don't see why you would want the ugly version.</p>
+<p>It's debatable how much of this applies to DEBIN.  You're more likely to want to make a rule for uint16:</p>
+<pre><code> uint16: [debin ([BE + 2])]
+ uparse #{1020} [x: uint16]
+</code></pre>
+<p>Which may even challenge my "does this need to be a combinator anyway":</p>
+<pre><code> uint16: [let data: across 2 skip, (debin [BE + 2] data)]
+ uparse #{1020} [x: uint16]
+</code></pre>
+<p>Though that's less efficient, as it has to create a new series vs. decoding the binary input directly.  But at least these things are becoming <em>possible</em>.  It's a step up.</p>
+<p>The bigger point remains: I think if someone has an idiom that they like, telling them <em>"all BLOCK!s in PARSE must be rules, and you have to put them in GROUP!s to pass as arguments"</em> feels like a restriction on par with saying that you must pass QUOTED! values to any regular functions...that there are no implicitly quoted arguments.</p>
+<p>Implicitly quoted arguments seem to me to be one of the things that makes the language able to shapeshift to let you build syntaxes on par with coming up with a new language.  It's not something we want to overuse, but not using it at all seems misguided.</p>
+<p>So I think this same thing happens with PARSE.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/uparse-parameter-conventions-how-flexible/1586">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/uparse-parameter-conventions-how-flexible/1586</link>
+          <pubDate>Wed, 14 Apr 2021 07:24:25 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1586</guid>
+          <source url="https://forum.rebol.info/t/uparse-parameter-conventions-how-flexible/1586.rss">UPARSE Parameter Conventions: How Flexible?</source>
+        </item>
+        <item>
+          <title>UPARSE Value-Bearing Control vs. Rule Success/Failure Control</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Parsing</category>
+          <description><![CDATA[
+            <p>When <strong>@(...)</strong> was value-bearing, and <strong>(...)</strong> was not, I had the interesting idea that <strong>@(...)</strong> would consider the rule to have failed if it produced a NULL.</p>
+<p>Because the only reason it could fail was producing NULL, you could hygienically turn it into a rule that succeeded on null just by saying <strong>opt @(...)</strong></p>
+<p>Cool as that is, I didn't feel comfortable transferring it over to plain GROUP! when it took over the role of "bearing a value" in a rule.  What if a group incidentally returns NULL, like this?</p>
+<pre><code>&gt;&gt; verbosity: 1
+
+&gt;&gt; did parse "aaa" [some "a" (if verbosity &gt; 2 [print "found an A"])]
+== #[false]
+</code></pre>
+<p>Oops... you had an IF that vanished and returned NULL.  But then that triggered failure for the (...) rule.  That seems unfriendly.  While I'm okay with saying that BLOCK! rule's evaluative result is NULL because the group made a null, it doesn't seem the rule should <em>fail to match</em>.</p>
+<p>But I feel like something got lost in the shuffle here.  Like what I'd managed with generators:</p>
+<pre><code>gen: func [&lt;static&gt; n (0)] [
+    if n &lt; 3 [return n: n + 1]
+    return null
+]
+
+
+&gt;&gt; uparse "a" ["a", data: some @(gen)]  ; old @(...) semantics (non-matching)
+== "a"
+
+&gt;&gt; data
+== [1 2 3]
+</code></pre>
+<p>How could you make something like a GROUP! that <em>would</em> fail if it were NULL, but return its value otherwise?</p>
+<p>This also calls to attention that there is a choice in constructs like WHILE to react to the success or failure, and not the value a rule produces.  This made me wonder if we could do it the other way...if all succeeding rules returned non-null, and failing rules returned null...then the WHILE/SOME could be driven by the result and not whether it matched or not.  Then you could have a rule that matched and produced NULL, but stopped a WHILE or SOME anyway.</p>
+<p>But there's a problem with that if any interesting matching rules return NULL, e.g. opt:</p>
+<pre><code>&gt;&gt; did uparse "aaa" [while ["a" opt "b"]]
+== #[false]
+</code></pre>
+<p>The problem is that if OPT "B" matches and returns NULL, and WHILE looks at that NULL instead of the success, the rule is run just once.  So OPT would have to succeed and bear a value other than NULL (perhaps the elusive NULL-2...that seems like it might work)</p>
+<p>That solves things like that OPT, but still throws a wrench in:</p>
+<pre><code>&gt;&gt; did uparse "aaa" [while ["a" opt "b" (if debug [print "Still have this."])]]
+== #[false]
+</code></pre>
+<p>That detour examined...we can conclude it is probably the case that WHILE and SOME should not be looking at the "value bearing" result.  They should only look at if the rule matched or not...and whether it returned NULL is not relevant (only relevant to what it returns as its value, if it bears the value of its last matching run).</p>
+<pre><code>&gt;&gt; did uparse "aaa" [x: while ["a" opt "b"]]
+== #[true]
+
+&gt;&gt; x
+; null - because `opt "b"` was null so ["a" opt "b"] as a whole was null
+
+&gt;&gt; did uparse "aaa" [x: while ["a" elide opt "b"]]
+== #[true]
+
+&gt;&gt; x
+== "a"  ; because you ELIDE'd the opt
+
+&gt;&gt; did uparse "aaa" [x: while ["a" opt "b" (1020)]]
+== #[true]
+
+&gt;&gt; x
+== 1020  ; arbitrary value from GROUP!
+</code></pre>
+<p><strong>But still, I feel there should be some way to branch or react on the value bearing bit.</strong>  Maybe it's a refinement to while?  WHILE/VALUE ?  Maybe it's a new operator?  <strong>while [non-null (gen)]</strong>  Or an arity-2 operator <strong>while [non (null) (gen)]</strong> ?</p>
+<p>I'm not sure.  Just wanted to document my feeling something was lost when @(...) failing on NULL was folded into a (...) that doesn't do that.</p>
+<p>Maybe the answer is we just get more careful with (...) and understand that if it evaluates to NULL the rule fails, so you throw in some non null thing at the end of your ():</p>
+<pre><code>uparse "aaa" [some "a" (if verbosity &gt; 2 [print "found an A"], true)]
+</code></pre>
+<p>But that seems to bias it the wrong way.</p>
+<p>Maybe if you want the optionality you say <strong>/(rule)</strong> and that's a signal to fail if it's NULL?</p>
+<p>Or an operator like <strong>must (rule)</strong>?</p>
+<p>Not sure.  But still, I think matters are heading in a positive direction for the flexibility of PARSE.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/uparse-value-bearing-control-vs-rule-success-failure-control/1585">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/uparse-value-bearing-control-vs-rule-success-failure-control/1585</link>
+          <pubDate>Tue, 13 Apr 2021 18:56:14 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1585</guid>
+          <source url="https://forum.rebol.info/t/uparse-value-bearing-control-vs-rule-success-failure-control/1585.rss">UPARSE Value-Bearing Control vs. Rule Success/Failure Control</source>
+        </item>
+  </channel>
+</rss>

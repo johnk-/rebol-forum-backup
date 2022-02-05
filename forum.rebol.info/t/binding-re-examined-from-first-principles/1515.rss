@@ -1,0 +1,386 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Binding Re-Examined from First Principles</title>
+    <link>https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515</link>
+    <description>Probably the best way to understand Rebol&#39;s &quot;weird proposition&quot; is by looking closely at the very basic implementation of the IF construct.
+
+I&#39;ll go back to R3-Alpha just to have the simplest form possible.  I&#39;ve omitted the /ELSE and /ONLY refinements, which were ultimately dropped.  (`//` comments mine):
+
+    // D_ARG(1) is argument 1 (the condition)
+    // D_ARG(2) is argument 2 (the branch)
+    //
+    REBNATIVE(if)  // macro for declaring a C function that permits D_ARG(n) access
+    {
+        if (IS_TRUE(D_ARG(1)))  // test argument 1 cell for &quot;truthiness&quot;
+            DO_BLK(D_ARG(2));  // push result of running block in argument 2 slot
+            return R_TOS1;  // signal to look for return cell at top of stack
+        }
+        return R_NONE;  // signal to fabricate a NONE! cell as the result
+    }
+
+* `D_ARG(1)` is the condition, which has undergone an evaluation prior to when this C code for the native gets dispatched.  (So **`if 1 &gt; 2 [...]`** has already run the `1 &gt; 2` and turned that into a LOGIC! argument cell by the point this dispatcher runs.)
+
+* `D_ARG(2)` is presumed to be a BLOCK! in this iteration of the IF implementation.
+
+* If the condition is &quot;truthy&quot; (neither a LOGIC! false cell nor a NONE! cell), then the block is run with the DO mechanics.  Evaluation leaves a result on the stack (TOS =&gt; &quot;Top Of Stack&quot;), which is then returned.
+
+* If the condition is false, then a NONE! is returned.
+
+
+# !!! The Most Important Observation To Make is...
+
+**...that the only parameter to DO_BLK() is a pointer to the cell containing the block to execute.**  The BLOCK! value alone somehow encapsulates enough information to run it...just as if it were a function with no parameters.  How??  The block is symbolic data, and yet there are no &quot;lookup contexts&quot; or attribute-grammar-y stuff being passed as additional parameters to the evaluation.
+
+Let&#39;s say the BLOCK! you pass holds **[print [x + 20]]**.  That&#39;s all it has in its hand when running.  *So where is the contextual information coming from--e.g. how does it know the value of X?*
+
+You might guess the evaluator itself holds some state like a &quot;dictionary of variables in effect at this moment&quot;.  Perhaps a table of what is in the current &quot;scope&quot;.
+
+If that were the case, then how could this work?
+
+    x: 10  ; &quot;outer x&quot;, something that looks like a &quot;global&quot;
+    y: 20
+    code: [print [x + y]]
+
+    foo: func [x block] [  ; &quot;inner x&quot;, a function argument
+        if x &gt; 10 block
+    ]
+
+    r3-alpha&gt;&gt; foo 1000 code
+    == 30  ; not 1020
+
+When the IF native gets called, it&#39;s being called during an invocation of the FOO function.  That function has an argument of its own called X...whose passed in value is 1000.
+
+But when the DO_BLK() in the C code for REBNATIVE(if) gets called with `[print [x + 20]]` as the D_ARG(2), it apparently finds 10 as the value for X... not 1000.  And it finds Y as 20.
+
+So X was NOT &quot;the most recent X encountered on the stack&quot;.  And Y was not &quot;undefined because the function has no Y&quot;.  The block retained information, coming from persistent connections in the BLOCK! as it&#39;s passed around.
+
+
+## How Would The Example Above Look In JavaScript?
+
+Pretty much every other system uses the currency of functions to handle passing code around.
+
+In JavaScript:
+
+    let x = 10
+    let code = function() {
+        console.log(x + 20)  // &quot;captures&quot; the X visible to its scope here
+    }
+
+    let foo = function(x, runnable) {
+        if (x &gt; 10) { runnable() } 
+    }
+
+    &gt; foo(1000, code)
+    30
+
+**A function is hardened into a blob, where its meanings have been finalized, and where you call it *from* doesn&#39;t affect the meaning when it runs**.  While BLOCK!s are still in limbo regarding their full meaning.
+
+
+## BLOCK!s Are Malleable In Their Interpretation
+
+When a BLOCK! is used as a branch in an IF as an arity-0 function, their meaning seemed &quot;hardened&quot;, like a function.  But it didn&#39;t have to be.
+
+We know that if we had literally written `if x &gt; 10 [print [x + y]]` in the body of the function, then the printed X would have been the same X in the comparison and in the block.  You&#39;d get 1020 output.
+
+If what you want is the &quot;same result as if you&#39;d written it there&quot;, you&#39;d need to use COMPOSE on the body *before* FUNC runs.
+
+    x: 10  ; &quot;outer x&quot;
+    y: 20
+    code: [print [x + y]]
+
+    foo: func [x] compose/only [
+        if x &gt; 10 (code)
+    ]
+
+    r3-alpha&gt;&gt; foo 1000
+    == 1020  ; not 30
+
+We might argue that if FUNC was *not* allowed to overrule the binding of X in an embedded block, then the currency of a block wouldn&#39;t be useful.  It would be acting like a black-box...much as an arity-0 function would.
+
+*Yet it&#39;s important to note that composing a block does not necessarily get you the same thing as if you wrote the block right there.*  Only some overrides apply.  Consider:
+
+    x: 10
+    y: 20
+
+    bar: func [] [
+         make object! [
+             y: 200
+             return [print [x + y]]
+          ]
+    ]
+    code: bar
+
+    foo: func [x] compose/only [
+        if x &gt; 10 (code)
+    ]
+
+    r3-alpha&gt;&gt; foo 1000
+    == 1200  ; not 1020
+
+There&#39;s an important point to be made here: **COMPOSE does not act &quot;as if&quot; you had written the code at the site it is composed into**.  It&#39;s acts with the bindings it had where it was originally written, and *only bindings that are actively overridden are changed*.
+
+In this case, FUNC is the entity which overrides the binding for X.  So only that is overridden before execution.
+
+
+## What Is The Value Proposition Of Working in This Way?
+
+The basic value proposal is that computational intent can be framed as mixtures of code and data in a freeform way.
+
+If someone is going to create a &quot;dialect&quot; in JavaScript, they could approximate it with arrays.  Let&#39;s imagine trying to express the following PARSE rule:
+
+    num-a: 0
+    rule: [some &quot;a&quot; (print &quot;Found an A&quot;, num-a: me + 1)]
+
+In JavaScript you&#39;d need to make some identities for the new keywords, so let&#39;s say there&#39;s an object named **p** which contains some fields like **some** which resolve to objects with unique identities.
+
+    let num_a = 0
+    let rule = [p.some, &quot;a&quot;, function () { console.log(&quot;Found an A&quot;); ++num_a }]
+
+Just speaking to the code portion: Rebol has the advantage of a way to denote code without repeating the boilerplate for constructing functions (e.g. **`function () { ... }`** or lambda&#39;s **`() =&gt; { ... }`**) every time code is to be captured.
+
+But this idea of seeing blocks as containing the material for *&quot;functions to be&quot;* helps us understand the bias for preserving their bindings.  If it did not do so, then the invocation would be responsible for providing *all* of the binding information.
+
+**The bias for preserving bindings is thus driven by the idea that dialects want to be able to capture mixtures of executable code and data without giving advance notice specifically on which portions that represent code.**
+
+
+## What Can You Do To Code Blocks Without Breaking Them?
+
+I&#39;ve pointed out the basic rule that DO of a BLOCK! acts like an arity-0 function.  But once you start changing a block, what can you do to it?
+
+In the *fully-general* case, there is basically *nothing* you can do to a BLOCK! of arbitrary code the user writes without introducing the potential for breaking it.
+
+This is especially true about Rebol code, because the meaning is so fluid.  You can&#39;t know that any words mean anything in particular.
+
+**So the crux of the value proposition of Rebol&#39;s medium of BLOCK!s-as-currency is to keep the focus on *constructing new blocks from doing surgery on other blocks whose format you &quot;understand by contract&quot;*.**
+
+(I&#39;ll stop here because I think I&#39;ve kind of drawn up the contrast between blocks and bindings vs. traditional functions.  I&#39;ll add on if I think of more that fits in this train of thought)</description>
+    
+    <lastBuildDate>Wed, 27 Oct 2021 04:06:50 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Binding Re-Examined from First Principles</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1515">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>The bias for preserving bindings is thus driven by the idea that dialects want to be able to capture mixtures of executable code and data without giving advance notice specifically on which portions that represent code.</p>
+</blockquote>
+</aside>
+<p>As a data point here, I thought I'd add a note on what seems to be working in UPARSE so far.</p>
+<p><strong>What's notably NOT happening is that UPARSE does not try to wedge handling of its keywords into the binding model.</strong></p>
+<h2>How UPARSE Dispatches Combinators</h2>
+<p>The implementation of UPARSE shows that the dialect doesn't look at binding first.  Instead it consults a MAP!, which has a default set of combinators...but that you can change with a refinement to UPARSE by giving it a different map.</p>
+<p>This doesn't just handle "key-WORD!s".  If it encounters a value like a TAG! then it will look in the map for the TAG! datatype and first call the tag-datatype-combinator parameterized with the specific tag data.  This can then elect to sub-dispatch to look again in the map to see if there is a combinator filed under that specific tag.  (The idea being that if you had some other idea for tags...like that they would look for literally the text of the tag, you could do that instead with different entries in the map.)</p>
+<p>If specifically a WORD! is found to have no combinator in the map (e.g. no keyword), then it <em>falls back</em> on using the binding to look up the variable.  If the result of that lookup is something like a BLOCK! then it is run as a rule.  If it is a function created with COMBINATOR, then it is accepted as a rule.</p>
+          <p><a href="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515/4</link>
+        <pubDate>Wed, 27 Oct 2021 04:06:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1515-4</guid>
+        <source url="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515.rss">Binding Re-Examined from First Principles</source>
+      </item>
+      <item>
+        <title>Binding Re-Examined from First Principles</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1515">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>This fabricated a word anew from a string, and that word starts life unbound.</p>
+</blockquote>
+</aside>
+<p>I got tied up in this problem last week; I'd wager that a particular class of dialects would bump into this issue constantly.</p>
+          <p><a href="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515/3</link>
+        <pubDate>Fri, 27 Aug 2021 12:14:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1515-3</guid>
+        <source url="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515.rss">Binding Re-Examined from First Principles</source>
+      </item>
+      <item>
+        <title>Binding Re-Examined from First Principles</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><em>(This is just a binding note that I found sitting as an incomplete draft.  It's not a fully vetted thought, but I'm publishing it on this thread so it does not get lost.)</em></p>
+<p>It is known that binding is <em>not</em> driven by formalism, but rather a sort of crude idea of what would be useful to those writing scripty code and building things out of material gathered from different places.</p>
+<p>The idea is that the material not be completely "dead" when you get it, but that it carry some amount of information about the definitions that were in place wherever it was declared.  You're certainly not going to get any theoretically sound compositional behavior out of that...but...maybe you can find out what references meant in a useful way.</p>
+<p>Looking at something like this:</p>
+<pre><code>make-good: func [x] [
+    let block: copy []
+    append block 'x
+    append block '+
+    append block 1
+    return block
+]
+</code></pre>
+<p>The current expectation is that would give you back a block <strong>[n + 1]</strong> that you could do.</p>
+<pre><code>&gt;&gt; b: make-good 10
+== [x + 1]
+
+&gt;&gt; do b
+== 11
+</code></pre>
+<p>That's nice.  Okay, but what if you'd written a slightly different function:</p>
+<pre><code>make-bad: func [x] [
+    let block: copy []
+    append block to word! "x"
+    append block '+
+    append block 1
+    return block
+]
+</code></pre>
+<p>This fabricated a word anew from a string, and that word starts life unbound.  It won't be the same:</p>
+<pre><code>&gt;&gt; b: make-bad 10
+== [x + 1]
+
+&gt;&gt; do b
+** Script Error: x word is not bound to a context
+</code></pre>
+<p><strong>While that's status quo, it's not the only answer possible.</strong>  It could be that words themselves don't have unique bindings, rather blocks do.  Blocks could belong to a chain of contexts, and force their meaning on individual words.</p>
+<p>So the <strong>copy []</strong> could have created a block that understands the meaning of <code>x</code>, because it was copied out from underneath a function body block that knew what X is.  And then all X you'd put into that block would mean the same thing.</p>
+          <p><a href="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515/2</link>
+        <pubDate>Fri, 27 Aug 2021 00:14:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1515-2</guid>
+        <source url="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515.rss">Binding Re-Examined from First Principles</source>
+      </item>
+      <item>
+        <title>Binding Re-Examined from First Principles</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Probably the best way to understand Rebol's "weird proposition" is by looking closely at the very basic implementation of the IF construct.</p>
+<p>I'll go back to R3-Alpha just to have the simplest form possible.  I've omitted the /ELSE and /ONLY refinements, which were ultimately dropped.  (<code>//</code> comments mine):</p>
+<pre><code>// D_ARG(1) is argument 1 (the condition)
+// D_ARG(2) is argument 2 (the branch)
+//
+REBNATIVE(if)  // macro for declaring a C function that permits D_ARG(n) access
+{
+    if (IS_TRUE(D_ARG(1)))  // test argument 1 cell for "truthiness"
+        DO_BLK(D_ARG(2));  // push result of running block in argument 2 slot
+        return R_TOS1;  // signal to look for return cell at top of stack
+    }
+    return R_NONE;  // signal to fabricate a NONE! cell as the result
+}
+</code></pre>
+<ul>
+<li>
+<p><code>D_ARG(1)</code> is the condition, which has undergone an evaluation prior to when this C code for the native gets dispatched.  (So <strong><code>if 1 &gt; 2 [...]</code></strong> has already run the <code>1 &gt; 2</code> and turned that into a LOGIC! argument cell by the point this dispatcher runs.)</p>
+</li>
+<li>
+<p><code>D_ARG(2)</code> is presumed to be a BLOCK! in this iteration of the IF implementation.</p>
+</li>
+<li>
+<p>If the condition is "truthy" (neither a LOGIC! false cell nor a NONE! cell), then the block is run with the DO mechanics.  Evaluation leaves a result on the stack (TOS =&gt; "Top Of Stack"), which is then returned.</p>
+</li>
+<li>
+<p>If the condition is false, then a NONE! is returned.</p>
+</li>
+</ul>
+<h1>!!! The Most Important Observation To Make is...</h1>
+<p><strong>...that the only parameter to DO_BLK() is a pointer to the cell containing the block to execute.</strong>  The BLOCK! value alone somehow encapsulates enough information to run it...just as if it were a function with no parameters.  How??  The block is symbolic data, and yet there are no "lookup contexts" or attribute-grammar-y stuff being passed as additional parameters to the evaluation.</p>
+<p>Let's say the BLOCK! you pass holds <strong>[print [x + 20]]</strong>.  That's all it has in its hand when running.  <em>So where is the contextual information coming from--e.g. how does it know the value of X?</em></p>
+<p>You might guess the evaluator itself holds some state like a "dictionary of variables in effect at this moment".  Perhaps a table of what is in the current "scope".</p>
+<p>If that were the case, then how could this work?</p>
+<pre><code>x: 10  ; "outer x", something that looks like a "global"
+y: 20
+code: [print [x + y]]
+
+foo: func [x block] [  ; "inner x", a function argument
+    if x &gt; 10 block
+]
+
+r3-alpha&gt;&gt; foo 1000 code
+== 30  ; not 1020
+</code></pre>
+<p>When the IF native gets called, it's being called during an invocation of the FOO function.  That function has an argument of its own called X...whose passed in value is 1000.</p>
+<p>But when the DO_BLK() in the C code for REBNATIVE(if) gets called with <code>[print [x + 20]]</code> as the D_ARG(2), it apparently finds 10 as the value for X... not 1000.  And it finds Y as 20.</p>
+<p>So X was NOT "the most recent X encountered on the stack".  And Y was not "undefined because the function has no Y".  The block retained information, coming from persistent connections in the BLOCK! as it's passed around.</p>
+<h2>How Would The Example Above Look In JavaScript?</h2>
+<p>Pretty much every other system uses the currency of functions to handle passing code around.</p>
+<p>In JavaScript:</p>
+<pre><code>let x = 10
+let code = function() {
+    console.log(x + 20)  // "captures" the X visible to its scope here
+}
+
+let foo = function(x, runnable) {
+    if (x &gt; 10) { runnable() } 
+}
+
+&gt; foo(1000, code)
+30
+</code></pre>
+<p><strong>A function is hardened into a blob, where its meanings have been finalized, and where you call it <em>from</em> doesn't affect the meaning when it runs</strong>.  While BLOCK!s are still in limbo regarding their full meaning.</p>
+<h2>BLOCK!s Are Malleable In Their Interpretation</h2>
+<p>When a BLOCK! is used as a branch in an IF as an arity-0 function, their meaning seemed "hardened", like a function.  But it didn't have to be.</p>
+<p>We know that if we had literally written <code>if x &gt; 10 [print [x + y]]</code> in the body of the function, then the printed X would have been the same X in the comparison and in the block.  You'd get 1020 output.</p>
+<p>If what you want is the "same result as if you'd written it there", you'd need to use COMPOSE on the body <em>before</em> FUNC runs.</p>
+<pre><code>x: 10  ; "outer x"
+y: 20
+code: [print [x + y]]
+
+foo: func [x] compose/only [
+    if x &gt; 10 (code)
+]
+
+r3-alpha&gt;&gt; foo 1000
+== 1020  ; not 30
+</code></pre>
+<p>We might argue that if FUNC was <em>not</em> allowed to overrule the binding of X in an embedded block, then the currency of a block wouldn't be useful.  It would be acting like a black-box...much as an arity-0 function would.</p>
+<p><em>Yet it's important to note that composing a block does not necessarily get you the same thing as if you wrote the block right there.</em>  Only some overrides apply.  Consider:</p>
+<pre><code>x: 10
+y: 20
+
+bar: func [] [
+     make object! [
+         y: 200
+         return [print [x + y]]
+      ]
+]
+code: bar
+
+foo: func [x] compose/only [
+    if x &gt; 10 (code)
+]
+
+r3-alpha&gt;&gt; foo 1000
+== 1200  ; not 1020
+</code></pre>
+<p>There's an important point to be made here: <strong>COMPOSE does not act "as if" you had written the code at the site it is composed into</strong>.  It's acts with the bindings it had where it was originally written, and <em>only bindings that are actively overridden are changed</em>.</p>
+<p>In this case, FUNC is the entity which overrides the binding for X.  So only that is overridden before execution.</p>
+<h2>What Is The Value Proposition Of Working in This Way?</h2>
+<p>The basic value proposal is that computational intent can be framed as mixtures of code and data in a freeform way.</p>
+<p>If someone is going to create a "dialect" in JavaScript, they could approximate it with arrays.  Let's imagine trying to express the following PARSE rule:</p>
+<pre><code>num-a: 0
+rule: [some "a" (print "Found an A", num-a: me + 1)]
+</code></pre>
+<p>In JavaScript you'd need to make some identities for the new keywords, so let's say there's an object named <strong>p</strong> which contains some fields like <strong>some</strong> which resolve to objects with unique identities.</p>
+<pre><code>let num_a = 0
+let rule = [p.some, "a", function () { console.log("Found an A"); ++num_a }]
+</code></pre>
+<p>Just speaking to the code portion: Rebol has the advantage of a way to denote code without repeating the boilerplate for constructing functions (e.g. <strong><code>function () { ... }</code></strong> or lambda's <strong><code>() =&gt; { ... }</code></strong>) every time code is to be captured.</p>
+<p>But this idea of seeing blocks as containing the material for <em>"functions to be"</em> helps us understand the bias for preserving their bindings.  If it did not do so, then the invocation would be responsible for providing <em>all</em> of the binding information.</p>
+<p><strong>The bias for preserving bindings is thus driven by the idea that dialects want to be able to capture mixtures of executable code and data without giving advance notice specifically on which portions that represent code.</strong></p>
+<h2>What Can You Do To Code Blocks Without Breaking Them?</h2>
+<p>I've pointed out the basic rule that DO of a BLOCK! acts like an arity-0 function.  But once you start changing a block, what can you do to it?</p>
+<p>In the <em>fully-general</em> case, there is basically <em>nothing</em> you can do to a BLOCK! of arbitrary code the user writes without introducing the potential for breaking it.</p>
+<p>This is especially true about Rebol code, because the meaning is so fluid.  You can't know that any words mean anything in particular.</p>
+<p><strong>So the crux of the value proposition of Rebol's medium of BLOCK!s-as-currency is to keep the focus on <em>constructing new blocks from doing surgery on other blocks whose format you "understand by contract"</em>.</strong></p>
+<p>(I'll stop here because I think I've kind of drawn up the contrast between blocks and bindings vs. traditional functions.  I'll add on if I think of more that fits in this train of thought)</p>
+          <p><a href="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515/1</link>
+        <pubDate>Sat, 20 Feb 2021 21:36:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1515-1</guid>
+        <source url="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515.rss">Binding Re-Examined from First Principles</source>
+      </item>
+  </channel>
+</rss>

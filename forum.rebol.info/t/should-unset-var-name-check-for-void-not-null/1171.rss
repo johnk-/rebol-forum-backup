@@ -1,0 +1,301 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should UNSET? &#39;VAR-NAME check for VOID!, not NULL?</title>
+    <link>https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171</link>
+    <description>**Due to [some upcoming changes](https://forum.rebol.info/t/null-first-class-values-and-safety/895/8?u=hostilefork), accessing NULL variables through a plain WORD! will not cause an error.  Hence we&#39;re shifting to where most VOID!s you&#39;ll encounter in the wild are going to relate to variables that are conceptually &quot;not set&quot;.  This will cause the necessary errors on typos, not-yet-assigned local variables, etc.**
+
+So here we might ask ourselves: *What is an unset variable, if not a variable that errors when you try to access it via a WORD! ?*
+ 
+As a talking point on why UNSET? tests for nullness today, consider this behavior with nulls:
+
+    ren-c-upcoming&gt;&gt; for-each [a b] [1 2 3] [print mold compose [(a) (b)]] 
+    [1 2]
+    [3]
+
+That code assumes the new world where you don&#39;t have to use **:b** to defuse the error of accessing the nulled **b** on the second iteration.
+
+For comparison, Rebol2/R3-Alpha/Red wouldn&#39;t have errored either...but that&#39;s because they would use NONE!:
+
+    rebol2&gt;&gt; foreach [a b] [1 2 3] [print mold compose [(a) (b)]]
+    [1 2]
+    [3 #[none]]  ; actually renders as [3 none]
+
+That&#39;s misleading, because it&#39;s the same result you would have gotten if a NONE! had literally been in the block:
+
+    &gt;&gt; foreach [a b] [1 2 3 #[none]] [print mold compose [(a) (b)]]
+    [1 2]
+    [3 #[none]]
+
+Rebol2/R3-Alpha/Red&#39;s only other choice for the variable would be #[unset], which just misleads in another direction.
+
+**Ren-C clearly has the edge here, so no complaints on the implementation.  The reasoning is sound, and NULL is the right name for the state.  But do we have to say a null variable is &quot;unset&quot;?**
+
+## e.g. could we just be content saying the variable is &quot;nulled&quot;?
+
+It takes a bit of linguistic trickery to say:
+
+&gt; A variable can be &quot;set to null&quot; (or &quot;nulled&quot;).  Rebol considers such variables to be technically &quot;set&quot; (e.g. returning true from **set? &#39;var-name**...yet still *they hold no value*.  By contrast, a variable is &quot;unset&quot; *when it holds a value of type VOID!*.
+&gt;
+&gt; This means Rebol&#39;s definition of setness or unsetness thus does not have to do with a variable holding a value (such as one that can be put in a block).  It is a pragmatic point on *whether errors are triggered when the variable is accessed via a plain WORD! or PATH!, or if the fetched value errors when tested for truth/falsehood, or assigned via a SET-WORD!*
+&gt;
+&gt; Thus we speak of *nulled* variables (holding no value) and *unset* variables (holding a VOID! value).
+
+Does that sound convincing?  :-/  It seems tenuous to me...
+
+## ...but IF voids were UNSET?, why not call the datatype UNSET! ?
+
+**I&#39;d still feel firmly that *variables are unset, not values*.**
+
+I like **set? var** and **unset? var** as the tests to see if a variable is set through its name.  But if UNSET! returned as the name of the data type itself, then by Rebol conventions you really couldn&#39;t have UNSET? be anything other than a direct test of a value for that type... e.g. **unset? :var-name**.  Seems like a step back to me.
+
+I&#39;m hypothesizing a world where &quot;unsetness&quot; is the condition of a variable holding a void.  But it&#39;s not so sensible to say that the void value inertly living in a block is unset...you only get an unset condition when that void makes it into a variable.
+
+VOID! seems short and punchy.  One letter less than UNSET!, and a number of letters less than something like UNDEFINED! (JavaScript&#39;s name choice for a similar idea).
+
+VOID! being the return type of functions that have no sensible return value lines up nicely with C.
+
+## I don&#39;t know what I think, here.
+
+I kind of feel like null owns unsetness, not void.  &quot;unset variables hold no value&quot; seems a complete sentence.  So **unset? var** as a shorthand for **null? get var** seems appropriate to me.  I think that will be a lot more common than wanting to know if a variable-you-have-the-name-of holds void.
+
+But that could just be **nulled?**.  And **unset var** or **unset &#39;word** are helpful shorthands for when **set var void** won&#39;t work, and you&#39;d have to say **set/any var void**.  You don&#39;t get as much of a leg up for null, because **word: null** now works, and **set var null** works.
+
+Another practical matter is what do you want the error message on void values to be.  Rebol2&#39;s would be outright misleading in Ren-C:
+
+    rebol2&gt;&gt; asdf
+    ** Script Error: asdf has no value
+
+It *does* have a value (only NULL variables have no value, e.g. are not holding an ANY-VALUE! type).  But what are the other options, here?
+
+* &quot;asdf is void&quot;
+* &quot;asdf is VOID!&quot;
+* &quot;asdf holds a void value&quot;
+* &quot;asdf is not set&quot;
+* &quot;asdf is unset&quot;
+* &quot;asdf is undefined&quot;
+
+I feel like &quot;asdf is VOID!&quot; is the most uncontroversial thing.  But it may confuse people who make typos and wonder how it is that this mystery variable holds a void.  If you could say it&#39;s &quot;unset&quot; or &quot;not set&quot; and keep a separation between nullness and unsetness, it might hold together.  And you&#39;d have more compatibility with the historical UNSET function.
+
+It&#39;s definitely something to think about.  But I mostly wanted to lay out understanding of why even if VOID! is creeping back to being almost identical to UNSET!, that the name should not go back!  I much prefer saying that an unset *variable* is one holding a #[void] *value*.</description>
+    
+    <lastBuildDate>Mon, 21 Jun 2021 13:56:23 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should UNSET? &#39;VAR-NAME check for VOID!, not NULL?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1171">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I like <strong>set? var</strong> and <strong>unset? var</strong> as the tests to see if a variable is set through its name. But if UNSET! returned as the name of the data type itself, then by Rebol conventions you really couldn't have UNSET? be anything other than a direct test of a value for that type... e.g. <strong>unset? :var-name</strong>. Seems like a step back to me.</p>
+</blockquote>
+</aside>
+<aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1171">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>What I'm going to do is put these branches aside for a bit and work on something else. People can feel free to throw in their observations.</p>
+</blockquote>
+</aside>
+<h2>...Two Years Later...</h2>
+<p>A lot of things have changed to bring the definitions in line.</p>
+<p>The BAD-WORD! isotope state of <strong>~unset~</strong> is not a value you can put into a block.  Only the non-isotope state can be.</p>
+<pre><code>&gt;&gt; var: second [1 ~unset~ 2]
+== ~unset~
+
+&gt;&gt; var
+== ~unset~
+</code></pre>
+<p>So much as you can have the WORD! of (<strong>set-word!</strong>) or (<strong>unset</strong>) you can also have the BAD-WORD! of <strong>~unset~</strong>.  In the non-isotope state, there's nothing any more not-set about the ~unset~ BAD-WORD! than the string <strong>"unset"</strong> or anything else.</p>
+<p><em>(Well, to say there's nothing more unset about a non-isotope ~unset~ than the string "unset" is clearly an exaggeration, it's supposed to draw your attention due to its alarming appearance and being one step away in evaluation from making an ~unset~ isotope, but still it's not itself an unset state.)</em></p>
+<p>But in the <em>isotope</em> state, the system ascribes a special meaning of unsetness to variables holding it.  You can make an isotope of unset by evaluating the BAD-WORD! of it:</p>
+<pre><code>&gt;&gt; ~unset~
+== ~unset~  ; isotope
+
+&gt;&gt; var: ~unset~
+== ~unset~  ; isotope
+
+&gt;&gt; var
+** Script Error: var is ~unset~ isotope (see ^(...) and GET/ANY)
+</code></pre>
+<p>As the error suggests (though it could be improved), we can just test for unsetness by accessing through a ^META operation.</p>
+<pre><code>&gt;&gt; ^var
+== ~unset~
+</code></pre>
+<p>That's not an isotope, and hence we can compare against it using functions like =</p>
+<pre><code> &gt;&gt; '~unset~ = ^var
+ == #[true]
+</code></pre>
+<p>This is a generic facility that works with other isotopes.  Which makes it rather powerful, and it also means we probably don't want to waste a nice word like <strong><code>unset?</code></strong> to be a more obscure way of saying <strong>'~unset~ =</strong>.</p>
+<p>(Remember the problem is that if we say <strong>unset? ~unset~</strong> is true--e.g. UNSET? takes a meta parameter--then we couldn't say <strong>unset? x</strong> because if x were an unset isotope it would error on fetch.  We'd have to write out <strong>unset? get/any 'x</strong>, longer and more obtuse than <strong>'~unset~ = ^x</strong>)</p>
+<p>Preferable seems to be able to use it to shorten this intent:</p>
+<pre><code>&gt;&gt; var: 'x
+
+&gt;&gt; '~unset~ = ^ get/any var  ; a mouthful...
+== #[true]
+
+&gt;&gt; unset? var  ; now we're saving some space
+== #[true]
+</code></pre>
+<p>The issue is that when the name of the variable you want to get at is stored in a variable, you don't have the convenient <strong>^x</strong> notation.  And GET is reluctant to let you get isotopes--that's on purpose--you need /ANY.</p>
+<p>Of course you can use it on quoted words as well:</p>
+<pre><code>&gt;&gt; unset? 'x
+== #[true]
+</code></pre>
+<p><strong>This seems rather coherent to me.</strong>  But notice it doesn't apply to the non-isotope form:</p>
+<pre><code>&gt;&gt; x: '~unset~
+== ~unset~
+
+&gt;&gt; unset? 'x
+== #[false]
+</code></pre>
+<p>And notice that it doesn't apply to other isotopes, only ~unset~:</p>
+<pre><code>&gt;&gt; x: ~asdf~
+== ~asdf~  ; isotope
+
+&gt;&gt; unset? 'x
+== #[false]
+</code></pre>
+<h2>So What Do We Call Variables That Hold NULL?</h2>
+<p>I guess we just say they are "Nulled" or "Set to Null".</p>
+<p>BAD-WORD! isotopes and NULL aren't considered "values".  But the query for value-ness itself fails on isotopes, so it won't even answer the question for them:</p>
+<pre><code>&gt;&gt; value? 1020
+== #[true]
+
+&gt;&gt; value? null
+== #[false]
+
+&gt;&gt; print "makes none isotope"
+makes none isotope
+== ~none~  ; isotope
+
+&gt;&gt; value? print "won't work"
+won't work
+** Script Error: value? needs optional as ^META for ~none~ isotope
+</code></pre>
+<p>So if you ever ask if something is a VALUE? and it says no without erroring, it's a NULL.</p>
+<h2>What About The Problematic Object Cloning Code?</h2>
+<p>I presented something that was hard to think about in its time, something that was trying to clone an object:</p>
+<pre><code>for-each [key val] system/contexts/user [
+    if set? 'val [
+       append libuser reduce [key :val]
+    ]
+]
+</code></pre>
+<p>I fretted about how this would fail on NULL, since it couldn't be put in the block.  Isotopes make this even worse.</p>
+<p>But today the tech is much more sophisticated.</p>
+<pre><code>for-each [key val] system.contexts.user [
+    if set? 'val [
+        append libuser reduce [key ^val]
+    ]
+]
+</code></pre>
+<p><strong>This gets you a perfect clone, isotopes...nulls...functions...and all!!!</strong></p>
+<p>In today's world that's somewhat vulnerable to typos. So if you typed ^vall instead of ^val everything you added would wind up being unset.  However, Sea of Words intends to fix this...with a behavior more like JavaScript's Strict Mode.</p>
+<p>Nevertheless, I'm considering you might even ask FOR-EACH to META the values for you:</p>
+<pre><code>for-each [key ^val'] system.contexts.user [
+    append libuser reduce [key val']
+]
+</code></pre>
+<p>Quoting or un-isotoping the values for you being done at the iterator level.</p>
+<h2>Quite a difference two years makes, huh?</h2>
+<p>It's nice to see both the terminology demons and technical demons getting tamed here.  A lot of coherence, and it's all owed to persistence in pursuing core mechanisms.</p>
+          <p><a href="https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171/3</link>
+        <pubDate>Sun, 20 Jun 2021 00:23:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1171-3</guid>
+        <source url="https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171.rss">Should UNSET? &#39;VAR-NAME check for VOID!, not NULL?</source>
+      </item>
+      <item>
+        <title>Should UNSET? &#39;VAR-NAME check for VOID!, not NULL?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Here's a piece of code to consider I just looked at, from HELP:</p>
+<pre><code>    for-each [key val] system/contexts/user [
+        if set? 'val [
+           append libuser reduce [key :val]
+        ]
+    ]
+</code></pre>
+<p>For this code if #[void]s are unset, and NULL variables are to be considered "set" then you're not going to get things added verbatim.  That's because REDUCE's only design options here are to produce a BLOCK! that has to force the value to a BLANK! or a VOID! (or error).</p>
+<p>This shows some of the real core benefit we've been getting from making NULL the "unset", not VOID!.  :-/</p>
+<p>I'm really pretty torn about this.  It may be in the scheme of things that <code>&lt;opt&gt;</code> refinements...a special case where you say you want NULL and not BLANK! when a refinement is not used...is actually the best compromise.  (Which is what I did to start with.)</p>
+<p>What I'm going to do is put these branches aside for a bit and work on something else.  People can feel free to throw in their observations.</p>
+          <p><a href="https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171/2</link>
+        <pubDate>Sun, 02 Jun 2019 06:59:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1171-2</guid>
+        <source url="https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171.rss">Should UNSET? &#39;VAR-NAME check for VOID!, not NULL?</source>
+      </item>
+      <item>
+        <title>Should UNSET? &#39;VAR-NAME check for VOID!, not NULL?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>Due to <a href="https://forum.rebol.info/t/null-first-class-values-and-safety/895/8">some upcoming changes</a>, accessing NULL variables through a plain WORD! will not cause an error.  Hence we're shifting to where most VOID!s you'll encounter in the wild are going to relate to variables that are conceptually "not set".  This will cause the necessary errors on typos, not-yet-assigned local variables, etc.</strong></p>
+<p>So here we might ask ourselves: <em>What is an unset variable, if not a variable that errors when you try to access it via a WORD! ?</em></p>
+<p>As a talking point on why UNSET? tests for nullness today, consider this behavior with nulls:</p>
+<pre><code>ren-c-upcoming&gt;&gt; for-each [a b] [1 2 3] [print mold compose [(a) (b)]] 
+[1 2]
+[3]
+</code></pre>
+<p>That code assumes the new world where you don't have to use <strong>:b</strong> to defuse the error of accessing the nulled <strong>b</strong> on the second iteration.</p>
+<p>For comparison, Rebol2/R3-Alpha/Red wouldn't have errored either...but that's because they would use NONE!:</p>
+<pre><code>rebol2&gt;&gt; foreach [a b] [1 2 3] [print mold compose [(a) (b)]]
+[1 2]
+[3 #[none]]  ; actually renders as [3 none]
+</code></pre>
+<p>That's misleading, because it's the same result you would have gotten if a NONE! had literally been in the block:</p>
+<pre><code>&gt;&gt; foreach [a b] [1 2 3 #[none]] [print mold compose [(a) (b)]]
+[1 2]
+[3 #[none]]
+</code></pre>
+<p>Rebol2/R3-Alpha/Red's only other choice for the variable would be #[unset], which just misleads in another direction.</p>
+<p><strong>Ren-C clearly has the edge here, so no complaints on the implementation.  The reasoning is sound, and NULL is the right name for the state.  But do we have to say a null variable is "unset"?</strong></p>
+<h2>e.g. could we just be content saying the variable is "nulled"?</h2>
+<p>It takes a bit of linguistic trickery to say:</p>
+<blockquote>
+<p>A variable can be "set to null" (or "nulled").  Rebol considers such variables to be technically "set" (e.g. returning true from <strong>set? 'var-name</strong>...yet still <em>they hold no value</em>.  By contrast, a variable is "unset" <em>when it holds a value of type VOID!</em>.</p>
+<p>This means Rebol's definition of setness or unsetness thus does not have to do with a variable holding a value (such as one that can be put in a block).  It is a pragmatic point on <em>whether errors are triggered when the variable is accessed via a plain WORD! or PATH!, or if the fetched value errors when tested for truth/falsehood, or assigned via a SET-WORD!</em></p>
+<p>Thus we speak of <em>nulled</em> variables (holding no value) and <em>unset</em> variables (holding a VOID! value).</p>
+</blockquote>
+<p>Does that sound convincing?  :-/  It seems tenuous to me...</p>
+<h2>...but IF voids were UNSET?, why not call the datatype UNSET! ?</h2>
+<p><strong>I'd still feel firmly that <em>variables are unset, not values</em>.</strong></p>
+<p>I like <strong>set? var</strong> and <strong>unset? var</strong> as the tests to see if a variable is set through its name.  But if UNSET! returned as the name of the data type itself, then by Rebol conventions you really couldn't have UNSET? be anything other than a direct test of a value for that type... e.g. <strong>unset? :var-name</strong>.  Seems like a step back to me.</p>
+<p>I'm hypothesizing a world where "unsetness" is the condition of a variable holding a void.  But it's not so sensible to say that the void value inertly living in a block is unset...you only get an unset condition when that void makes it into a variable.</p>
+<p>VOID! seems short and punchy.  One letter less than UNSET!, and a number of letters less than something like UNDEFINED! (JavaScript's name choice for a similar idea).</p>
+<p>VOID! being the return type of functions that have no sensible return value lines up nicely with C.</p>
+<h2>I don't know what I think, here.</h2>
+<p>I kind of feel like null owns unsetness, not void.  "unset variables hold no value" seems a complete sentence.  So <strong>unset? var</strong> as a shorthand for <strong>null? get var</strong> seems appropriate to me.  I think that will be a lot more common than wanting to know if a variable-you-have-the-name-of holds void.</p>
+<p>But that could just be <strong>nulled?</strong>.  And <strong>unset var</strong> or <strong>unset 'word</strong> are helpful shorthands for when <strong>set var void</strong> won't work, and you'd have to say <strong>set/any var void</strong>.  You don't get as much of a leg up for null, because <strong>word: null</strong> now works, and <strong>set var null</strong> works.</p>
+<p>Another practical matter is what do you want the error message on void values to be.  Rebol2's would be outright misleading in Ren-C:</p>
+<pre><code>rebol2&gt;&gt; asdf
+** Script Error: asdf has no value
+</code></pre>
+<p>It <em>does</em> have a value (only NULL variables have no value, e.g. are not holding an ANY-VALUE! type).  But what are the other options, here?</p>
+<ul>
+<li>"asdf is void"</li>
+<li>"asdf is VOID!"</li>
+<li>"asdf holds a void value"</li>
+<li>"asdf is not set"</li>
+<li>"asdf is unset"</li>
+<li>"asdf is undefined"</li>
+</ul>
+<p>I feel like "asdf is VOID!" is the most uncontroversial thing.  But it may confuse people who make typos and wonder how it is that this mystery variable holds a void.  If you could say it's "unset" or "not set" and keep a separation between nullness and unsetness, it might hold together.  And you'd have more compatibility with the historical UNSET function.</p>
+<p>It's definitely something to think about.  But I mostly wanted to lay out understanding of why even if VOID! is creeping back to being almost identical to UNSET!, that the name should not go back!  I much prefer saying that an unset <em>variable</em> is one holding a #[void] <em>value</em>.</p>
+          <p><a href="https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171/1</link>
+        <pubDate>Sun, 02 Jun 2019 05:49:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1171-1</guid>
+        <source url="https://forum.rebol.info/t/should-unset-var-name-check-for-void-not-null/1171.rss">Should UNSET? &#39;VAR-NAME check for VOID!, not NULL?</source>
+      </item>
+  </channel>
+</rss>

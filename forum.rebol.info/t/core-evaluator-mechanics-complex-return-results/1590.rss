@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Core Evaluator Mechanics: Complex Return Results</title>
+    <link>https://forum.rebol.info/t/core-evaluator-mechanics-complex-return-results/1590</link>
+    <description>I mention in [&quot;The Cliffs of Complexity&quot;](https://forum.rebol.info/t/the-cliffs-of-complexity-how-much-is-too-much/1241) that every nice-seeming feature brings along with it a ton of issues...where something formerly simple no longer has a simple answer.
+
+For instance: invisible functions are fantastic.  But in trying to implement invisible combinators in UPARSE, the parse engine has to invoke a function and know whether the result was invisible or not.  How can you be sure?
+
+One (bad) workaround would be to have some unique identity the function couldn&#39;t know about:
+
+     unique-identity: []  ; say this BLOCK! can&#39;t be known to the function
+     result: (unique-identity, some-func arg1 arg2)
+     if same? result unique-identity [
+         print &quot;It must have been invisible...&quot;
+     ]
+
+But what if you had a FRAME! for the function, and you used DO?  Is it good for DO to be able to act invisibly?
+
+    &gt;&gt; f: make frame! :comment
+
+    &gt;&gt; f.discarded: &quot;the commented thing&quot;
+
+    &gt;&gt; 1 + 2 do f
+    ; null
+
+Today, the answer is no... DO of a frame for an invisible function just returns NULL.
+
+I don&#39;t know if acting invisible is a good idea, or raising an error and making it so you have to use a special function for DO to be invisible, or what.  The point is just that once you come up with a cool feature it has ripples all over the system.
+
+**My opinion is that invisibles are a good example of being worth their disruptiveness.**  Too many good ideas build on these features, so figuring out how to get the rough edges off of them is important.
+
+## Recent Thought: Every Function Is A MACRO?
+
+When I think about &quot;The Evaluator&quot;, I imagine it being a very mechanical and regular thing.
+
+So it kind of felt dirty to **[add MACRO in a somewhat ad-hoc fashion](https://forum.rebol.info/t/for-better-or-worse-macro/1410)**.  Yet it seemed necessary.  Not having the ability to specify a function as what it &quot;expands&quot; into seemed weak.
+
+Something that came to be on my mind was that with generic quoting, there could be a sort of generalized concept...where the &quot;grind&quot; of the mechanical evaluator would always receive back &quot;what to splice into the evaluation feed&quot;.  An ordinary function would simply always return a QUOTED! value of what it wanted to return...which would have one quote level dropped by the evaluator.
+
+Then, an invisible would simply be an empty block of material to splice.  A &quot;true NULL&quot; could be NULL, while a &quot;valued NULL&quot; could be simply a QUOTED! null.
+
+e.g.:
+
+     null =&gt; null
+     &#39; =&gt; &quot;null-2&quot;, e.g. although it&#39;s a NULL still triggers THEN
+     [] =&gt; invisible
+     &#39;7 =&gt; just the number 7
+     [7] =&gt; also just the number 7, but more costly representation
+     [1 +] =&gt; more complex macro splice, partial expression
+
+If this were the sort of &quot;core&quot; protocol for return values, then FUNC would give you a layer on top of it where you didn&#39;t have to worry about issues like invisibility.  But if you wanted to write something that was sometimes invisible, you&#39;d make a macro...so you could return an empty block as a way of saying to splice nothing into the stream.
+
+We could imagine this level of protocol also having other non-quoted types like ERROR!...to signal the propagation of errors up the stack.
+
+## Neat Unification, Does It Buy Us Anything?
+
+There are still tough questions.  The average person calling DO on a FRAME! doesn&#39;t want to have to deal with the result being a BLOCK! representing a macro expansion.  But some clients (like UPARSE) would like to have the full information on things like invisibility.
+
+So maybe a **`DO*`** as a lower-level DO, that the higher level DO is built on.
+
+     &gt;&gt; f: make frame! :add
+     &gt;&gt; f.value1: 10
+     &gt;&gt; f.value2: 20
+     &gt;&gt; do* f
+     == &#39;30  ; asking for &quot;core&quot; result gets it quoted
+
+     &gt;&gt; f: make frame! :comment
+     &gt;&gt; f.discarded: &quot;argument to comment&quot;
+     &gt;&gt; do* f
+     == []  ; asking for &quot;core&quot; result reveals empty expansion, e.g. invisible
+
+I guess we could create different types for ACTION! and MACRO!, and say you couldn&#39;t even try to call a macro with plain DO.  But what if the expression is only sometimes partial or invisible?  If the person making the frame thought of the particular parameterization as something they could use *as if it were a function*, why shouldn&#39;t that be permitted?
+
+## Multiple Return Values Are Going To Likely Just Have Limits
+
+How I&#39;ve been framing multiple return values is really just syntactic sugar on passing variables to refinements.  But they&#39;re very limited...they look immediately to the right of the SET-BLOCK! for the function to search for multiple return results.  Just throwing in a GROUP! breaks that:
+
+    [data header]: load %some-file.reb  ; this works
+
+    [data header]: (print &quot;won&#39;t work&quot;, load %some-file.reb)
+
+If you tried to dig into the group to interact with the first expression, you get something very incongruous with how the overall result usually comes from the last expression.  And there&#39;s no a-priori way of knowing when you&#39;re interacting with the last expression.
+
+I think this is...just okay.  It&#39;s just a notation for convenience.  If it doesn&#39;t help you, don&#39;t use it, and pass things by refinements like you would historically
+
+    data: (print &quot;this works&quot;, load/header %some-file.reb &#39;header)
+
+There&#39;s no current smart behavior for trying to use multiple returns with invisible function.  [I&#39;ve challenged **x: comment &quot;hi&quot; 10**](https://forum.rebol.info/t/non-interstitial-invisibles-more-trouble-than-theyre-worth/1582).  But then, what about:
+
+    [x]: comment &quot;hi&quot; 10
+
+My opinion is that **[x]: ...** and **x: ...** should act the same, or if they don&#39;t act the same then [x]: should error.
+
+Anyway...the key point relevant to this post is that multiple returns are mostly separate from the main &quot;return&quot; protocol.  That&#39;s probably for the best.
+
+## Mostly Just Wanted To Write Up The MACRO Unification
+
+So I just wanted to kind of get down this concept of a core evaluation mechanic that could represent invisibility, NULL, and &quot;NULL-2&quot; in a way that was more clear...in particular that idea that an empty block could communicate a &quot;splice of nothing&quot;, hence invisibility.
+
+When I envision how the evaluator works, that feels more regular...that it sees expressions and keeps expanding them and collapsing them until it finishes a frame.  I&#39;ve talked about how the expansions mean that once you start evaluating a block, you leave the domain of block representation...and so your EVALUATE steps are actually on a frame...so that&#39;s important to contemplate as well:
+
+https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/4</description>
+    
+    <lastBuildDate>Sun, 18 Apr 2021 09:57:14 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/core-evaluator-mechanics-complex-return-results/1590.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Core Evaluator Mechanics: Complex Return Results</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I mention in <a href="https://forum.rebol.info/t/the-cliffs-of-complexity-how-much-is-too-much/1241">"The Cliffs of Complexity"</a> that every nice-seeming feature brings along with it a ton of issues...where something formerly simple no longer has a simple answer.</p>
+<p>For instance: invisible functions are fantastic.  But in trying to implement invisible combinators in UPARSE, the parse engine has to invoke a function and know whether the result was invisible or not.  How can you be sure?</p>
+<p>One (bad) workaround would be to have some unique identity the function couldn't know about:</p>
+<pre><code> unique-identity: []  ; say this BLOCK! can't be known to the function
+ result: (unique-identity, some-func arg1 arg2)
+ if same? result unique-identity [
+     print "It must have been invisible..."
+ ]
+</code></pre>
+<p>But what if you had a FRAME! for the function, and you used DO?  Is it good for DO to be able to act invisibly?</p>
+<pre><code>&gt;&gt; f: make frame! :comment
+
+&gt;&gt; f.discarded: "the commented thing"
+
+&gt;&gt; 1 + 2 do f
+; null
+</code></pre>
+<p>Today, the answer is no... DO of a frame for an invisible function just returns NULL.</p>
+<p>I don't know if acting invisible is a good idea, or raising an error and making it so you have to use a special function for DO to be invisible, or what.  The point is just that once you come up with a cool feature it has ripples all over the system.</p>
+<p><strong>My opinion is that invisibles are a good example of being worth their disruptiveness.</strong>  Too many good ideas build on these features, so figuring out how to get the rough edges off of them is important.</p>
+<h2>Recent Thought: Every Function Is A MACRO?</h2>
+<p>When I think about "The Evaluator", I imagine it being a very mechanical and regular thing.</p>
+<p>So it kind of felt dirty to <strong><a href="https://forum.rebol.info/t/for-better-or-worse-macro/1410">add MACRO in a somewhat ad-hoc fashion</a></strong>.  Yet it seemed necessary.  Not having the ability to specify a function as what it "expands" into seemed weak.</p>
+<p>Something that came to be on my mind was that with generic quoting, there could be a sort of generalized concept...where the "grind" of the mechanical evaluator would always receive back "what to splice into the evaluation feed".  An ordinary function would simply always return a QUOTED! value of what it wanted to return...which would have one quote level dropped by the evaluator.</p>
+<p>Then, an invisible would simply be an empty block of material to splice.  A "true NULL" could be NULL, while a "valued NULL" could be simply a QUOTED! null.</p>
+<p>e.g.:</p>
+<pre><code> null =&gt; null
+ ' =&gt; "null-2", e.g. although it's a NULL still triggers THEN
+ [] =&gt; invisible
+ '7 =&gt; just the number 7
+ [7] =&gt; also just the number 7, but more costly representation
+ [1 +] =&gt; more complex macro splice, partial expression
+</code></pre>
+<p>If this were the sort of "core" protocol for return values, then FUNC would give you a layer on top of it where you didn't have to worry about issues like invisibility.  But if you wanted to write something that was sometimes invisible, you'd make a macro...so you could return an empty block as a way of saying to splice nothing into the stream.</p>
+<p>We could imagine this level of protocol also having other non-quoted types like ERROR!...to signal the propagation of errors up the stack.</p>
+<h2>Neat Unification, Does It Buy Us Anything?</h2>
+<p>There are still tough questions.  The average person calling DO on a FRAME! doesn't want to have to deal with the result being a BLOCK! representing a macro expansion.  But some clients (like UPARSE) would like to have the full information on things like invisibility.</p>
+<p>So maybe a <strong><code>DO*</code></strong> as a lower-level DO, that the higher level DO is built on.</p>
+<pre><code> &gt;&gt; f: make frame! :add
+ &gt;&gt; f.value1: 10
+ &gt;&gt; f.value2: 20
+ &gt;&gt; do* f
+ == '30  ; asking for "core" result gets it quoted
+
+ &gt;&gt; f: make frame! :comment
+ &gt;&gt; f.discarded: "argument to comment"
+ &gt;&gt; do* f
+ == []  ; asking for "core" result reveals empty expansion, e.g. invisible
+</code></pre>
+<p>I guess we could create different types for ACTION! and MACRO!, and say you couldn't even try to call a macro with plain DO.  But what if the expression is only sometimes partial or invisible?  If the person making the frame thought of the particular parameterization as something they could use <em>as if it were a function</em>, why shouldn't that be permitted?</p>
+<h2>Multiple Return Values Are Going To Likely Just Have Limits</h2>
+<p>How I've been framing multiple return values is really just syntactic sugar on passing variables to refinements.  But they're very limited...they look immediately to the right of the SET-BLOCK! for the function to search for multiple return results.  Just throwing in a GROUP! breaks that:</p>
+<pre><code>[data header]: load %some-file.reb  ; this works
+
+[data header]: (print "won't work", load %some-file.reb)
+</code></pre>
+<p>If you tried to dig into the group to interact with the first expression, you get something very incongruous with how the overall result usually comes from the last expression.  And there's no a-priori way of knowing when you're interacting with the last expression.</p>
+<p>I think this is...just okay.  It's just a notation for convenience.  If it doesn't help you, don't use it, and pass things by refinements like you would historically</p>
+<pre><code>data: (print "this works", load/header %some-file.reb 'header)
+</code></pre>
+<p>There's no current smart behavior for trying to use multiple returns with invisible function.  <a href="https://forum.rebol.info/t/non-interstitial-invisibles-more-trouble-than-theyre-worth/1582">I've challenged <strong>x: comment "hi" 10</strong></a>.  But then, what about:</p>
+<pre><code>[x]: comment "hi" 10
+</code></pre>
+<p>My opinion is that <strong>[x]: ...</strong> and <strong>x: ...</strong> should act the same, or if they don't act the same then [x]: should error.</p>
+<p>Anyway...the key point relevant to this post is that multiple returns are mostly separate from the main "return" protocol.  That's probably for the best.</p>
+<h2>Mostly Just Wanted To Write Up The MACRO Unification</h2>
+<p>So I just wanted to kind of get down this concept of a core evaluation mechanic that could represent invisibility, NULL, and "NULL-2" in a way that was more clear...in particular that idea that an empty block could communicate a "splice of nothing", hence invisibility.</p>
+<p>When I envision how the evaluator works, that feels more regular...that it sees expressions and keeps expanding them and collapsing them until it finishes a frame.  I've talked about how the expansions mean that once you start evaluating a block, you leave the domain of block representation...and so your EVALUATE steps are actually on a frame...so that's important to contemplate as well:</p>
+<aside class="quote quote-modified" data-post="4" data-topic="1496">
+  <div class="title">
+    <div class="quote-controls"></div>
+    <img alt="" width="20" height="20" src="/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar">
+    <a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496/4">Pivotal Design Question: Is Evaluator State Just A Block?</a> <a class="badge-wrapper  bullet" href="/c/usage/philosophy/31"><span class="badge-category-parent-bg" style="background-color: #3AB54A;"></span><span class="badge-category-bg" style="background-color: #3AB54A;"></span><span style="" data-drop-close="true" class="badge-category clear-badge" title="How does Rebol differ from other computer languages and what makes code Rebolish and functional vs procedural coding.">Philosophy</span></a>
+  </div>
+  <blockquote>
+    So this actually exposes another point: should all evaluative steps be forced as a model into being steps on the original series at all. 
+For instance, let's imagine I write a macro: 
+macro: twothings [x] [
+   return [print "Hi!" 1 +]
+]
+
+The concept behind MACRO is to splice code into the execution stream.  But how can you single step across that? 
+
+
+We can argue such features are not worth their complexity and forbid them.  Such splicing is disallowed, because a step of execution no longer cor…
+  </blockquote>
+</aside>
+
+          <p><a href="https://forum.rebol.info/t/core-evaluator-mechanics-complex-return-results/1590/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/core-evaluator-mechanics-complex-return-results/1590/1</link>
+        <pubDate>Sun, 18 Apr 2021 09:57:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1590-1</guid>
+        <source url="https://forum.rebol.info/t/core-evaluator-mechanics-complex-return-results/1590.rss">Core Evaluator Mechanics: Complex Return Results</source>
+      </item>
+  </channel>
+</rss>

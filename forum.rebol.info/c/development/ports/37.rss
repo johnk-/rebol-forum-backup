@@ -1,0 +1,2410 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Ports - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/ports/37</link>
+    <description>Topics in the &#39;Ports&#39; category To discuss the port model and also the implementation of ports with respect to networking.</description>
+    
+      <lastBuildDate>Thu, 07 Oct 2021 20:48:08 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/ports/37.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>Rethinking READ</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>My recent mantra has been <em>"callbacks are bad, mmmkay?"</em>  They should be looked at as a low-level mechanic on par with mutexes...used internally to implement other abstractions.  A modern script language should provide infrastructure to allow people to code their algorithms in what <em>looks</em> like a mostly-synchronous style.  Languages like Go do this by design (though they do have mutexes for special low-level features), and languages like JavaScript began to shun callbacks for being able to write code synchronously via async/await.</p>
+<p>This means I've come to the same conclusion as the author of <a href="https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/">"what color is your function"</a>...that Go's methodology is the closest-to-right one.  <em>(And here is a <a href="https://kristoff.it/blog/zig-colorblind-async-await/">talk from the creator of Zig</a> who feels that Go left out an easy way to get the result from a gofunction; it's not hard to make a closure and send it to a channel, but he has a point that Go lacks typechecking to tell you about the unused result.  And not being as easy as it should be is a valid critique too.)</em></p>
+<p>Anyway: all READ operations should <em>look</em> synchronous.  It's just that when they are holding up the code ("blocking"), other code will be able to run.  Long term this would be by means of stackless "green threads"...but I don't have that many qualms about using regular old threads until that time.  <em>(libuv offers a thread abstraction layer that participates with the event loop, we could use that...but stackless isn't really all <em>that</em> far off, I've been bending things toward it for a year now.)</em></p>
+<p>I've mentioned the <a href="https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733/2">catharsis of getting rid of what was there before</a>.  But chopping out a lot of awkward and brittle stuff has still left behind a semantic soup.</p>
+<h2>READ's Historical Properties</h2>
+<p>Let's start with how it has worked:</p>
+<ol>
+<li>
+<p>If you passed READ a URL! or FILE!, it did an OPEN... then what Go would call a <a href="https://pkg.go.dev/io#ReadAll">"ReadAll()"</a> to get everything until the end of input.  Then it CLOSEd the port.  It gives back the data that was read.  This has always been synchronous.</p>
+</li>
+<li>
+<p>If you passed READ an opened (non-filesystem) PORT!, it would immediately return that PORT! right back.  You could keep running other code...but at some point you would call WAIT.  With that WAIT on the stack, the port's AWAKE handler would be called with an EVENT! labeled "read"...and find some (fairly arbitrary) amount of data in the <code>port.data</code> field.  If your handler felt the amount of data in <code>port.data</code> wasn't enough, then it could issue another READ request and return false ("not awake yet").  The next callback would have additional data at the tail of <code>port.data</code>.</p>
+<ul>
+<li>A filesystem port which had READ called on it would return everything to the end.  This is because there was no such thing as asynchonous file I/O.  <em>(Though libuv has that: the idea is that it might take time for a file request to be fulfilled--disk access is by no means instantaneous relative to CPU cycles.  And if the file is on a network file system it could be as long as any other network request, with all the potential for failures that go with it.)</em>
+</li>
+</ul>
+</li>
+<li>
+<p>If you passed READ a /PART this would give back <em>at most</em> that amount of data.  This was only offered on synchronous sources... so it would work on file ports, and on literal FILE! (which opened a file port).  But it wasn't supported by the network ports...so there was no asynchronous semantic.</p>
+<ul>
+<li>If you wanted to know if you hit the end of file before your request was filled, you'd have to check the length of what you got back and ask if it was the same as the /PART request you made.  If it was less, then you hit the end.</li>
+</ul>
+</li>
+</ol>
+<h2>I'm Clearly Saying That (2) Is Out...</h2>
+<p>What about the rest?</p>
+<p>It's weird to have a 1-arg call to READ sometimes mean <em>"read all"</em> and sometimes mean <em>"read as much as the underlying data source feels like giving us at this moment"</em>.  Since people (including myself) are attached to <code>read url</code> giving back all the data...then I think that means plain READ needs to always mean read all.</p>
+<p>READ/PART (3) on the surface looks like Go's basic Read()...in the sense that you're passing in a maximum amount to read and you might get less than that.  But on file ports (the only place this worked) it was historically guaranteed to read either that amount or be truncated at EOF.  So you would feel confident that if you asked for a READ/PART of 100 and got only 50 back that you must have reached the end of the file.  That's not the semantics of a stream Read() in Go.... you can ask for 100 and get 50 back, but there may be more coming later.</p>
+<p>I think that the /PART operations giving you truncation without any signal saying so is something that is systemically bad.  It's bad on READ/PART, it's bad on COPY/PART, and there should be some way through requesting another return result to say that truncation is okay.</p>
+<p>There's nothing in these operations for <em>"read at least n bytes"</em>, like Go's <a href="https://pkg.go.dev/io#ReadAtLeast">ReadAtLeast()</a>.</p>
+<h2>Who Wants "Give Me As Much As You've Got, Right Now"?</h2>
+<p>I explained in the comparison with Go that the "give me as much as you've got right now, up to some limit" was tailored to the convenience for those <em>implementing new data sources</em>.</p>
+<p>End users of streams don't want that.  If you get more than you want for a particular call, you have to worry about what to do with the excess.  If you get less than you want, you have to call it again.</p>
+<p><strong>But piped sources want to move in chunks, and they may not know intrinsically how big a chunk to go by.</strong></p>
+<p>Let's say you are the HTTP protocol.  Assume you've read a TCP connection enough to get to the Content-Length in the header of a transfer.  It says the ensuing transfer will be two gigabytes in size.</p>
+<p>As the person writing the HTTP protocol, you now know how much to ask for.  But do you want to say READ/PART of 2GB from the TCP connection?  That might seem okay if you were going to return the 2GB to the client if they asked for <strong>read url</strong> all at once.  But if you're running that through another pipe like something that compresses or encrypts then you want to be able to get started on that sooner.</p>
+<p>You might say it's the job of that client to ask for a /PART that's a good chunk size for them.  But what if they don't particularly care, and want to be as efficient as possible?  Making up an arbitrary /PART number that forces the creation of a binary of exactly that size could be inefficient...when compared to just letting the http layer pass through a blob that's as big as it got.</p>
+<p>So this motivates why one would have a /PART that means "as much as you feel like giving me"... where that implies "as much as your buffering chunk size considers to be efficient".  The expectation is that a networking layer would not treat "as much as I feel like" as implying 2 GB would be acceptable...but it seems there's no way to avoid that besides picking an arbitrary number.</p>
+<p>I'll keep thinking about it.  The good news is that we have a lot of streaming-capable stuff hanging around to wire together (the ciphers and hashes in mbedTLS are streaming, zlib does streaming compression and decompression...)</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/rethinking-read/1741">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/rethinking-read/1741</link>
+          <pubDate>Thu, 07 Oct 2021 20:48:08 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1741</guid>
+          <source url="https://forum.rebol.info/t/rethinking-read/1741.rss">Rethinking READ</source>
+        </item>
+        <item>
+          <title>Semantics of READ and TCP Streams: Past And Future</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>First things first: If you want to work on network protocols at all--in the Redbolverse or elsewhere--please heed this warning!</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/biohazard.png?v=9" title=":biohazard:" class="emoji" alt=":biohazard:"> <strong>There's a really big potential misunderstanding about TCP when you offer someone a plain READ operation.</strong> <img src="https://forum.rebol.info/images/emoji/twitter/biohazard.png?v=9" title=":biohazard:" class="emoji" alt=":biohazard:"></p>
+<p>You may get the impression that the other side of the connection is sending "messages" with specific lengths.  This is not the case!</p>
+<p>Let's imagine you could say:</p>
+<pre><code>&gt;&gt; read tcp-port
+== #{1FFEC02A}  ; 4 bytes
+
+&gt;&gt; read tcp-port
+== #{E0C1}  ; 2 bytes
+</code></pre>
+<p>Just because you got two chunks of information from that connection does not mean that there were 2 sends from the other side.  The other side might have sent 100 bytes and this is just how you are getting the first 6.  Or it could have done 6 individual 1 byte writes, along with any number of 0 byte writes (which are legal).</p>
+<p><strong>This means all understanding of the data you receive has to be in terms of a protocol.  The only number that matters is <em>how much data you are certain that you can expect</em>... never in any particular length you get from a chunk of data you are provided.</strong></p>
+<h2>Note Today's READ On TCP:// Doesn't Work Like That</h2>
+<p>Rebol hasn't historically let you READ a TCP connection in the way shown above.</p>
+<p><em>( Though honestly, the code for everything would have been more understandable if you could have just done that!  All the convoluted WAITs and AWAKE handlers were in service of some asynchronous nirvana that never materialized.  So what ended up emerging was the most convoluted and poorly engineered way to write ultimately synchronous protocols the world has likely ever seen.  <img src="https://forum.rebol.info/images/emoji/twitter/angry.png?v=9" title=":angry:" class="emoji" alt=":angry:"> )</em></p>
+<p>What happens instead is that READ basically just makes a request, and returns nothing.  If you want anything back, you have to poke an AWAKE handler function onto the port as a function to receive the data.  If you WAIT on the port...then eventually during the course of that wait you should get an EVENT! passed to the AWAKE handler specified.</p>
+<p><a href="https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724">The only thing that event holds is the word "READ"</a>, so the place you need to look for the data would be in the port's DATA member.  That data member would just get bigger with each READ.  So it was the responsibility of the user of the port to clear that data out, or it would just accrue indefinitely.</p>
+<p>If a READ didn't come back with the number of bytes you wanted, you'd have to call READ again...and then return FALSE from your port's AWAKE handler to say you were not done yet.  Returning TRUE from the port's AWAKE handler would indicate that enough progress had been made that something which was performing a WAIT on that port should be unblocked from the WAIT.</p>
+<h2>Can We Improve This?  <em>(rhetorical question)</em>
+</h2>
+<p>If we were only judging R3-Alpha PORT! vs. the low-level unix recv() function, we might say that it's an improvement.  It doesn't concern you with the dynamic memory management of having to pass small fixed size buffers to the recv() and stitch them together into a large blob.  The BINARY! grows on its own, and you take what you want from it.</p>
+<p>The truth is somewhat more complex.  The BINARY! lives in the port and the semantics of how you interact with it are traditionally not clear.  What if you increment the index?</p>
+<pre><code>tcp-port.data: skip tcp-port.data 100
+</code></pre>
+<p>Should the next time the buffer is added to slide the buffer forward to use the unused space at the head?  Or should those 100 bytes at the beginning be preserved indefinitely?</p>
+<p>The way most languages would resolve such questions about "buffered IO" would be to narrow the interface through something like <a href="https://github.com/golang/go/blob/master/src/bufio/bufio.go#L207">GoLang's Reader interface</a>.  You are given specific APIs to "peek" at the data without removing it.  Or if you do remove it, then it's always slid forward to the front of the buffer.</p>
+<h2>Attacking Asynchronousness In A Modern Fashion</h2>
+<p>Empirically people must have noticed that R3-Alpha never delivered the goods on its promised asynchronousness.  I've pointed out some of the reasons, and how "WAIT" has lacked a semantic definition of what it is you're "waiting for" on ports.</p>
+<p>By building on libuv, the nuts and bolts at the systems/C level of being able to make requests and then get a callback is now available...with reasonable handling of errors.  But it would be a big mistake to expose that mechanism by replacing the PORT!/AWAKE mire with some kind of READ/CALLBACK situation where you pass a function that gets called with either the data you asked for or an error.  <em>No one wants to code like that...</em> which is why Node.JS callbacks are all being replaced by async/await patterns.</p>
+<p>My feeling is that if you want to disentangle users of a scripting-class language with the problems that come with threads and mutexes and the like, there have emerged modern answers.  And Go is one of the better examples of this:</p>
+<p><strong><a href="https://www.itechart.com/blog/art-philosophy-and-science-golang-development/"><em>"Do not communicate by sharing memory.  Share memory by communicating."</em></a></strong></p>
+<p>Code would get clearer if we rolled it back to where you write things as if they are synchronous.  And often that's probably going to be fine for people.  But if it's not, then you use channels to split off what you are doing.</p>
+<p><strong>So I think the likely right answer is just to <a href="https://forum.rebol.info/t/switching-to-stackless-why-this-why-now/1247">push forward on stacklessness</a> as the basis for green threading, used to implement asynchronousness as it is needed.</strong></p>
+<p>This would mean that I think all the asynchronous port stuff that exists so far should just be scrapped.  <code>#andnothingofvaluewaslost</code></p>
+<h2>So... READ on a TCP PORT! Should Give Back BINARY!, then?</h2>
+<p>Okay we're back to this:</p>
+<pre><code>&gt;&gt; read tcp-port
+== #{1FFEC02A}  ; 4 bytes
+
+&gt;&gt; read tcp-port
+== #{E0C1}  ; 2 bytes
+</code></pre>
+<p>As I just said, synchronous reading like this is more in line of how we express ourselves...and we get asynchronousness by virtue of some scheduler that can rearrange things as a master of stack-time-and-stack-space.  <em>(I will point out pretty well developed experiments with that scheduler have been reached in the past, and can be reached again...with more insight now.)</em></p>
+<p>But I think we like the concept of READ as a default of "give me all you've got until the EOF" as a default.</p>
+<p>Multi-returns can help us here.  Remember that a function knows how many returns you requested, so it can selectively invoke a behavior when you do so.</p>
+<pre><code>&gt;&gt; [data eof]: read tcp-port  ; asking for EOF means don't force read to EOF
+== #{1FFEC02A}
+
+&gt;&gt; eof
+== false
+
+&gt;&gt; [data @]: read tcp-port  ; remember "circling" and other neat tricks..
+== #[true]  ; asked for eof to be the main return result
+
+&gt;&gt; data
+== #{E0C1}
+
+-- or --
+
+&gt;&gt; read tcp-port  ; don't ask for EOF means read until EOF
+== #{1FFEC02AE0C1}
+</code></pre>
+<p>This feels much more solid.</p>
+<h2>Weird Concept Idea: Buffer As BLOCK! ?</h2>
+<p>Cleansing ourselves of the dead-end of R3-Alpha's asynchronous plan, there are some areas we might look to to play to language strengths.</p>
+<p>I've mentioned the importance of being able to "push things back" into the buffer after having read them...and that it's <a href="https://forum.rebol.info/t/parsing-giant-streams-without-consuming-tons-of-memory-how/1698">likely the best way of doing PARSE on streams</a></p>
+<p>So I began to wonder if the thing that ports would accrue might be a BLOCK! instead of a BINARY!?</p>
+<p>Imagine a TCP port would be feeding in little blobs of BINARY! at the tail.  But when you got the chance to process it, you could make the decision to fold that into some kind of structure.  Then you could emit this higher level processed structure to something that listens down the "pipe".</p>
+<p>These are the kinds of novel directions I'd like to see...where we can do streamed block PARSE on a PORT! that feeds arbitrary values, that was decoded from binary, that was decompressed from a streaming codec on top of a TLS decoder...</p>
+<p>So this might lead to some weird stuff.  Like if you start asking to look into the buffer you'd see that it's a block and see the blobs it plans on giving you in the next READs:</p>
+<pre><code>&gt;&gt; peek/part tcp-port 2
+== [#{1FFEC02A} #{E0C1}]
+</code></pre>
+<p>Anyway, long post...but I feel slightly optimistic that it points toward some of how to dig out of the R3-Alpha port debacle.</p>
+            <p><small>4 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733</link>
+          <pubDate>Sat, 02 Oct 2021 10:49:51 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1733</guid>
+          <source url="https://forum.rebol.info/t/semantics-of-read-and-tcp-streams-past-and-future/1733.rss">Semantics of READ and TCP Streams: Past And Future</source>
+        </item>
+        <item>
+          <title>Fringe UDP Support Archiving</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>UDP is supported by libuv, but it's different enough that code pertaining to it would need redoing.  Right now it's a distraction, so I'm removing it.  Assuming everything else gets working, it shouldn't be too hard to add back.  But until more foundational things are working, it has to go.</p>
+<p>But in working on some code for messing with little $100 drones, we had added some functions they needed for UDP.  Here are two weird functions I'm putting aside here for now, in case we someday need to remember what they were.</p>
+<pre><code>//
+//  export set-udp-multicast: native [
+//
+//  {Join (or leave) an IPv4 multicast group}
+//
+//      return: &lt;none&gt;
+//      port [port!]
+//          {An open UDP port}
+//      group [tuple!]
+//          {Multicast group to join (224.0.0.0 to 239.255.255.255)}
+//      member [tuple!]
+//          {Member to add to multicast group (use 0.0.0.0 for INADDR_ANY)}
+//      /drop
+//          {Leave the group (default is to add)}
+//  ]
+//
+REBNATIVE(set_udp_multicast)
+//
+// !!! This was originally the kind of thing that SET-MODES though of using
+// RDC_MODIFY for.  But that was never standardized or implemented for
+// R3-Alpha (nor was RDC_MODIFY written.  With the networking broken out to
+// an extension, it is less of a concern to be including platform-specific
+// network calls here (though sockets are abstracted across Windows and POSIX,
+// one still doesn't want it in the interpreter core...e.g. when the WASM
+// build doesn't use it at all.)
+{
+    NETWORK_INCLUDE_PARAMS_OF_SET_UDP_MULTICAST;
+
+    SOCKREQ *sock = Sock_Of_Port(ARG(port));
+
+    if (not (sock-&gt;transport == TRANSPORT_UDP))  // !!! other checks?
+        rebJumps("fail {SET-UDP-MULTICAST used on non-UDP port}");
+
+    struct ip_mreq mreq;
+    Get_Tuple_Bytes(&amp;mreq.imr_multiaddr.s_addr, ARG(group), 4);
+    Get_Tuple_Bytes(&amp;mreq.imr_interface.s_addr, ARG(member), 4);
+
+    int result = setsockopt(
+        sock-&gt;fd,
+        IPPROTO_IP,
+        REF(drop) ? IP_DROP_MEMBERSHIP : IP_ADD_MEMBERSHIP,
+        cast(char*, &amp;mreq),
+        sizeof(mreq)
+    );
+
+    if (result &lt; 0)
+        rebFail_OS (result);
+
+    return rebNone();
+}
+
+
+//
+//  export set-udp-ttl: native [
+//
+//  {Set the TTL of a UDP port}
+//
+//      return: &lt;none&gt;
+//      port [port!]
+//          {An open UDP port}
+//      ttl [integer!]
+//          {0 = local machine only, 1 = subnet (default), or up to 255}
+//  ]
+//
+REBNATIVE(set_udp_ttl)
+//
+// !!! See notes on SET_UDP_MULTICAST
+{
+    NETWORK_INCLUDE_PARAMS_OF_SET_UDP_TTL;
+
+    SOCKREQ *sock = Sock_Of_Port(ARG(port));
+
+    if (not (sock-&gt;transport == TRANSPORT_UDP))  // !!! other checks?
+        rebJumps("fail {SET-UDP-TTL used on non-UDP port}");
+
+    int ttl = VAL_INT32(ARG(ttl));
+    int result = setsockopt(
+        sock-&gt;fd,
+        IPPROTO_IP,
+        IP_TTL,
+        cast(char*, &amp;ttl),
+        sizeof(ttl)
+    );
+
+    if (result &lt; 0)
+        rebFail_OS (result);
+
+    return rebNone();
+}
+</code></pre>
+<p>There's also this comment on why UDP sockets go through the "listening" process, which is really just to bind...this is more obvious in libuv:</p>
+<pre><code>    // !!! This modification was made to support a UDP application which
+    // wanted to listen on a UDP port, as well as make packets appear to
+    // come from the same port it was listening on when writing to another
+    // UDP port.  But the only way to make packets appear to originate
+    // from a specific port is using bind:
+    //
+    // https://stackoverflow.com/q/9873061
+    //
+    // So a second socket can't use bind() to listen on that same port.
+    // Hence, a single socket has to be used for both writing and for
+    // listening.  This tries to accomplish that for UDP by going ahead
+    // and making a port that can both listen and send.  That processing
+    // is done during CONNECT.
+</code></pre>
+<p>I'll mention also that I don't know what this is about; removing it unless a good example comes up:</p>
+<pre><code>// Prevent sendmsg/write raising SIGPIPE the TCP socket is closed:
+// https://stackoverflow.com/q/108183/
+// Linux does not support SO_NOSIGPIPE
+//
+#ifndef MSG_NOSIGNAL
+    #define MSG_NOSIGNAL 0
+#endif
+
+#if defined(SO_NOSIGPIPE)
+  //
+  // Prevent sendmsg/write raising SIGPIPE if the TCP socket is closed:
+  // https://stackoverflow.com/q/108183/
+  //
+  int on = 1;
+  if (setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &amp;on, sizeof(on)) &lt; 0) {
+      return false;
+  }
+#endif
+
+// Set non-blocking mode. Return TRUE if no error.
+#ifdef FIONBIO
+  unsigned long mode = 1;
+  return IOCTL(sock, FIONBIO, &amp;mode) == 0;
+#else
+   int flags;
+   flags = fcntl(sock, F_GETFL, 0);
+   flags |= O_NONBLOCK;
+   return fcntl(sock, F_SETFL, flags) &gt;= 0;
+#endif</code></pre>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/fringe-udp-support-archiving/1730">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/fringe-udp-support-archiving/1730</link>
+          <pubDate>Fri, 01 Oct 2021 18:27:52 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1730</guid>
+          <source url="https://forum.rebol.info/t/fringe-udp-support-archiving/1730.rss">Fringe UDP Support Archiving</source>
+        </item>
+        <item>
+          <title>The Weirdness of WAIT</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>I never understood R3-Alpha's EVENT! / WAIT / AWAKE functionality.</p>
+<p>The main reason for this is <em>it didn't make sense</em>.  Let me try and explain what I've learned.</p>
+<h1>EVENT!</h1>
+<p>The main concept of EVENT! centered around the idea of being able to avoid creating an OBJECT! in order to have a notification.</p>
+<p>Rebol cells were 4 platform pointers in size, and events packed in every bit you could use on a 32-bit system:</p>
+<ul>
+<li>
+<p>All cells have to surrender some of the first platform pointer for header bits (e.g. a byte to signal that it's a REB_EVENT, whether it has a new-line flag on it for when it's displayed in blocks, etc.)</p>
+</li>
+<li>
+<p>EVENT! used one pointer for the <em>recipient</em> of the event...this was a pointer to a PORT! or a GOB! or whatever.</p>
+</li>
+<li>
+<p>Just enough bits were used to store an integer in a table of event names for the event type (e.g. <code>make event! [type: 'lookup ...]</code>).  You couldn't put any name you wanted there for the type, only a fixed list of terms that were in a built-in list.</p>
+</li>
+<li>
+<p>Every event had room for an X and Y coordinate (which may or may not be supplied) as well as a keycode and modifiers (Ctrl, Alt, etc.)</p>
+</li>
+</ul>
+<p>When you tie all this back to something like an http PORT!, you notice that it's like most ports in that the only thing it can use out of all of this is that TYPE word.  Because the event that is sent to the port serves the purpose of saying which port the event is for...and if the port gets it, it knows "that's me".</p>
+<h2>If EVENT! Carries One (limited) WORD!, Where's the Data?</h2>
+<p>Good question.</p>
+<p>If the event label is WROTE (which should probably be called SENT), how do you know which write you're being notified about?  If it's asynchronous there could have been several.</p>
+<p>If the event label is READ (which should probably be called RECEIVED), how do you know which READ?</p>
+<p>It seems it would be nice if a READ event came along not just saying "a read is done, and it was done on <em>you</em>, port!" but carried.. <em>the data that was read</em>.  And some sort of labeling the caller was able to put on to identify the request, so they could know what the response was in regards to?</p>
+<p>But as it stood, the port has nowhere to look but itself.  The only thing you can do is hope the operations you submit on are guaranteed to run sequentially and report their results in order.  You'll be doing all the bookkeeping yourself...and EVENT! won't help you!</p>
+<p>In the case that your port operations aren't sequential or guaranteed to complete in the order you sent them, there's truly no way to manage it.</p>
+<h2>So What is "WAIT-ing on a PORT!"</h2>
+<p>Okay now this raises a next big question in the semantic soup.  Let's say a port is asynchronous and I say:</p>
+<pre><code>write netport "alpha"  ; asynchronous, write notification coming later
+read netport           ; also asynchronous, read notification coming later
+write port "beta"      ; yet again asynchronous
+
+wait port
+</code></pre>
+<p>What is the WAIT actually waiting for?  One of the requests?  All three of them?</p>
+<p>The way it was working was that the wait actually was waiting on was a "pending" flag.  If you tried to call WAIT on a port that didn't have the pending flag set, it would be ignored entirely.</p>
+<p>The pending flag would become set whenever an asynchronous request was issued.  But it could be cleared by any awake processing on events...and it was haphazard as to whether or not the events would be processed partially and clear the pending flag with some still going...leading a WAIT to not process the pending queue.</p>
+<h2>Long Story Short: All Of This Is Getting Replaced</h2>
+<p>For things to work, they have to have clear semantic models.  There has to be a way to line up requests with responses.  If you're going to WAIT on something, there has to be a sense of what it is you are waiting <em>for</em> and how you can meaningfully react to it.</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji only-emoji" alt=":man_shrugging:"></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/the-weirdness-of-wait/1703">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-weirdness-of-wait/1703</link>
+          <pubDate>Fri, 03 Sep 2021 21:30:46 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1703</guid>
+          <source url="https://forum.rebol.info/t/the-weirdness-of-wait/1703.rss">The Weirdness of WAIT</source>
+        </item>
+        <item>
+          <title>COPY and PORT!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>As it so happens, the network and file ports seem to want to make COPY "get data out of the port's buffer".</p>
+<p>The idea is that you ask for a READ, asynchronously.  Then you wait for a wake up event.  This event arrives with no information other than it was a "receive" event that happened on that port...so the data does not live in the event (it can't, EVENT! is too small to hold both the port it is notifying and the pointer to data).</p>
+<p>So in the code you write for processing the read event, it's time to get the data out of the port.  This was done with COPY.</p>
+<p>I think this is a bad way to think about the internal mechanics of asynchronous requests (and I have an unfinished post where I critique the whole thing).</p>
+<p>Either way: from the perspective of a synchronous file user, this distinction doesn't exist.  So <strong>copy %foo</strong> and <strong>read %foo</strong> are the same thing...get the data out of the file as a BINARY!.</p>
+<h2>Should PORT! Be Able To Overload COPY?</h2>
+<p>There are some things I feel like PORT! probably should not be overriding.  TYPE OF, for instance.</p>
+<pre><code>&gt;&gt; type of %foo.jpg
+== #[datatype file!]
+</code></pre>
+<p>I'm pretty sure this is an example of where we'd like to know that's a stringish proxy for a FILE! port, vs making a port and having it come back with something else:</p>
+<pre><code>&gt;&gt; type of %foo.jpg
+== 'JPEG
+</code></pre>
+<p>Is COPY another one of these "reserved things" that you don't really get to redefine in any sense other than "make another instance of yourself"?</p>
+<pre><code>&gt;&gt; copy %hello.txt
+== %hello.txt  ; as opposed to reading the contents of %hello.txt
+</code></pre>
+<p>One could certainly imagine the argument that not only does FILE! override COPY, but it adds an argument...the filename of the file to copy to:</p>
+<pre><code>&gt;&gt; copy %source.dat %destination.dat
+</code></pre>
+<p>In any case, COPY's days are numbered as the method for extracting things from internal buffers in ports.  But that doesn't answer the question: Can ports override COPY, and if they do, are there rules about it?</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/copy-and-port/1699">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/copy-and-port/1699</link>
+          <pubDate>Thu, 02 Sep 2021 11:11:03 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1699</guid>
+          <source url="https://forum.rebol.info/t/copy-and-port/1699.rss">COPY and PORT!</source>
+        </item>
+        <item>
+          <title>Implicit Ports Are Easy, But Are They *TOO* Easy?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>I've proposed changing FILE! and URL! to be more "systemically magical", that they are not strings but true proxies for the resource they represent.</p>
+<p>But if you take something that can either be a FILE! or a TEXT!, and you think you are doing a textual manipulation with an APPEND... you could wind up writing to the file instead of adding to the string.  And this is something that can happen very easily.  :-/</p>
+<p>For instance:</p>
+<pre><code>for-each [file description] [
+    %some-file.dat "Random Numbers"
+    %unimportant-file.exe "Red 0.6.4" "oops"
+    %very-important-file.dat "Photographic Proof of Bigfoot"
+][
+   append description " (2021)"
+]
+</code></pre>
+<p>The stray "oops" caused it to get off by one.  Hence instead of appending the date to the description it's corrupted your very important file!</p>
+<p>Uh oh.</p>
+<h2>Are Some Words Not "Alarming" Enough For Implicit I/O?</h2>
+<p>When something is in a variable and you APPEND to it, it might feel surprising to see that interacting with files and network when no "charged" word like WRITE was being used.</p>
+<p><strong>An annoying conclusion one would reach would be that we have to taxonomize words into those which are involved in I/O, and not have them overlap with words we use more casually for manipulation of local state.</strong></p>
+<p>This would suggest that the introduction of a plain APPEND port action in R3-Alpha was a mistake.  It was from the wrong taxonomy, and needed to at minimum piggy-back on WRITE as WRITE/APPEND so you'd know you weren't looking at a string operation if you were reading:</p>
+<pre><code>write/append blackbox data
+</code></pre>
+<p><strong>The less extreme conclusion would be that the limitation only applies to the <em>implicit</em> port actions.</strong></p>
+<p>This would draw a distinction between these two functions:</p>
+<pre><code>foo: func [value [port! text!]] [... append value data ...]
+
+bar: func [value [file! text!]] [... append value data ...]
+</code></pre>
+<p>The argument here would be that in the former case...the only way to get a PORT! is if you've already gone through one of the taxonomized "I/O words" such as OPEN.  You've thus greenlit the idea that remote impacts will happen to that resource.  You didn't know when it would happen, but you knew that wherever you passed that port off to had that approval.</p>
+<p>But with FILE! as a casual lexical element appearing in lists, you might miss this greenlight step.  So the green light has to be baked into the word itself... a word like WRITE.</p>
+<h2>Are There Other Options for "I/O Greenlighting"?</h2>
+<p>My proposal on taking the OPEN and CLOSE out of the implicit port process suggested that if you make a port out of something then every action you do on the port would be run implicitly, unless you did some kind of operation (like an OPEN or CLOSE) on that port that would batch the operations up.</p>
+<p>This means the creation of the PORT! itself would thus serve your greenlighting act.</p>
+<pre><code>var: %foo.txt
+append (make port! var) "some data"
+</code></pre>
+<p>Some shorthand for that could be made.  We could do like Haskell's notation for "putting things in the IO monad" and say that the decoration IO will MAKE PORT! on something that isn't already a port:</p>
+<pre><code>for-each file [%a.txt %b.txt] [
+    append (IO file) "some stuff"
+]
+
+for-each file [%a.txt %b.txt] [
+    append IO file "some stuff"
+]
+</code></pre>
+<p>Or you could greenlight through some parameter convention that port actions understand, like giving an @ argument:</p>
+<pre><code>var: %foo.txt
+append @var "some data"
+
+vars: [%foo.txt %bar.txt]
+append @(second vars) "some data"
+</code></pre>
+<p>Though I don't think I like that much...the IO concept is clearer.</p>
+<h2>Regardless, I Still Think FILE! Should Not Be An ANY-STRING!</h2>
+<p>What we're encountering here is a safety issue with implicit ports, and I think it would be an overreaction to say "don't do them at all, and let's go back to making APPEND on a file treat it like a string".</p>
+<p>Notably the problem only applies when you're using variables or expressions.  There's nothing to worry about if the argument is literally a FILE! or a URL!:</p>
+<pre><code>append/line %foo.txt "some data"
+</code></pre>
+<p>That feels expressive, not unsafe.  The evaluator can tell the difference, and we can say that it's okay when you've given a literal path like that to accept that you know it's going to be I/O.</p>
+<p>And I've mentioned that there are words that carry the greenlight in them... with examples like WRITE and READ:</p>
+<pre><code>for-each file [%a.txt %b.txt] [
+    write file "some stuff"
+]
+</code></pre>
+<p>I feel it would be a step back to require you to decorate that.  Write means write.</p>
+<p>So... is it just a flag on a word, to say there are "IO-greenlit words" and "not-necessarily-IO words"?</p>
+<p>Food for thought.  What do <strong>you</strong> think of all this?  :-/</p>
+            <p><small>6 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697</link>
+          <pubDate>Wed, 01 Sep 2021 14:59:35 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1697</guid>
+          <source url="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697.rss">Implicit Ports Are Easy, But Are They *TOO* Easy?</source>
+        </item>
+        <item>
+          <title>The Only Real Design Point in PORT!: Implicit PORT!s</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>Thanks to what I've been finally getting around to looking at...I can guarantee you that <em>I now officially know more about Rebol PORT!s than anyone in the world</em>.  <sub>(Which is not really anything to brag about.)</sub></p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/worried.png?v=9" title=":worried:" class="emoji only-emoji" alt=":worried:"> <img src="https://forum.rebol.info/images/emoji/twitter/globe_with_meridians.png?v=9" title=":globe_with_meridians:" class="emoji only-emoji" alt=":globe_with_meridians:"> <img src="https://forum.rebol.info/images/emoji/twitter/see_no_evil.png?v=9" title=":see_no_evil:" class="emoji only-emoji" alt=":see_no_evil:"></p>
+<p>Due to what I've learned, I can tell you that my long-ago suspicions turned out to be completely correct.  There is only one idea to salvage: <em>implicit ports</em>.</p>
+<h2>Though It's Only One Idea, It's a Pretty Good One</h2>
+<p>This feature is PORT!s saving grace.  So why would we settle for this wimpy behavior?</p>
+<pre><code>r3-alpha&gt;&gt; append %foo.txt "abc"
+== %foo.txtabc
+</code></pre>
+<p>That's lackluster!  So it needs to act like:</p>
+<pre><code>let p: open/write/new %foo.txt
+append p "abc"
+close p
+</code></pre>
+<p>But not every operation that receives a FILE! as a first argument would turn it into a PORT!.  For instance, JOIN would not:</p>
+<pre><code>&gt;&gt; join %foo/ "abc.txt"
+== %foo/abc.txt
+</code></pre>
+<p>Unlike APPEND, JOIN doesn't take PORT!s as a first argument.  And it would explicitly take FILE! as an argument.  Hence the rule doesn't apply... <em>the enforcement of implicit port behavior only applies when an argument can be a PORT!, e.g. port actions.</em></p>
+<p>Does this mean you can't write a PORT! action called JOIN?  I think you could write one if you wanted.  But that's not what comes in the box... the JOIN you get in LIB is just a function.</p>
+<h2>Complexities of the OPEN and CLOSE Keywords</h2>
+<p>A rather important detail that is overlooked (most of the time) in the discussions of implicit ports is that they're not just [OPEN -&gt; ACTION -&gt; CLOSE].  The OPEN call is different based on the action!</p>
+<p>When you say <strong><code>read %foo.txt</code></strong> what you are actually saying is equivalent to:</p>
+<pre><code>port: open/read %foo.txt  ; notice the /READ
+data: read port
+close port
+data
+</code></pre>
+<p>While if you say <strong><code>append %foo.txt "appendme"</code></strong> you're saying:</p>
+<pre><code>port: open/write %foo.txt  ; notice the /WRITE
+append port "appendme"
+close port
+</code></pre>
+<p>When you say <strong><code>write %foo.txt "writeme"</code></strong> what you are actually saying is:</p>
+<pre><code>port: open/write/new %foo.txt   ; notice the /WRITE *and* the /NEW
+write port "writeme"
+close port
+</code></pre>
+<p>This was bumming me out a bit, because it means that every port action gets wound up in having to implement the implicit port behavior.</p>
+<p><strong>The involvement of the actions in their decisions about what to do in implicit port behavior seems inevitable.  But I think we have to look at things a slightly different way.</strong></p>
+<p>Let's instead say operations like APPEND and WRITE and READ are always ready to operate on PORT!s that have only gone through MAKE PORT!, and do the opening and closing themselves. Then we get something that looks like this:</p>
+<pre><code>read %foo.txt
+=&gt;
+port: make port! %foo.txt
+read port
+
+write %foo.txt
+=&gt;
+port: make port! %foo.txt
+write port "writeme"
+
+append %foo.txt "appendme
+=&gt;
+port: make port! %foo.txt
+append port "appendme"
+</code></pre>
+<p>Arguably even more satisfying, this reduces down to:</p>
+<pre><code>read %foo.txt
+=&gt;
+read (make port! %foo.txt)
+
+write %foo.txt
+=&gt;
+write (make port! %foo.txt) "writeme"
+
+append %foo.txt "appendme
+=&gt;
+append (make port! %foo.txt) "appendme"
+</code></pre>
+<h2>This Formulation Has a Perk!</h2>
+<p><strong>The verbs OPEN and CLOSE have been removed from the picture for implicit ports.</strong></p>
+<p>Here it says that if a port has gone through MAKE and it's specified, it's ready to use...and it's those who have an interest in doing longer-spanning operations who get involved with concepts like OPEN or LOOKUP or CONNECT or CLOSE.</p>
+<p>Maybe you have a <code>door://</code> scheme, and OPEN and CLOSE mean something completely different.  When the implicit port formulation has dropped the idea of involving open and close, then there's no real reason you can't say <strong>close door://garage</strong> and have that be able to mean actually closing the garage door...without tripping up the implicit ports.</p>
+<h2>Pitfalls Of Operating on "Merely Made" PORT!s?</h2>
+<p>Looked at this way, we see implicit ports as being the willingness of various port types to interpret actions on a port that has been specified, but not opened.</p>
+<p>This could cause confusion:</p>
+<pre><code>&gt;&gt; write %hello.txt "Hello World"
+
+&gt;&gt; p: make port! %hello.txt
+
+; the port has gone through MAKE and not OPEN
+; so a READ is interpreted as opening the file, reading, closing
+;
+&gt;&gt; read/part p 5
+== "Hello"
+
+&gt;&gt; read/part p 5
+== "Hello"  ; did not remember its position as an opened port would
+</code></pre>
+<p>If we allow you to do READ or WRITE from a port that is not opened and forget the state every time, that provides a good mechanic for implicit ports...but could be confusing.</p>
+<p>We could say that if a port goes through an implicit opening and closing, it keeps its current position as an offset. Whereas going through CLOSE and OPEN would reset that.</p>
+<p>It's something to think about. Generally speaking, I don't know how many cycles of concern should be spent on people using low level MAKE PORT! operations instead of OPEN.</p>
+<h2>Could We Generalize This Beyond PORT! Actions?</h2>
+<p>We might be tempted to say that <em>any</em> function argument that can take a PORT! would be able to harness implicit port semantics.  What about this:</p>
+<pre><code>read-two-lines: func [p [port!]] [
+    collect [
+        keep read/line p
+        keep read/line p
+    ]
+]
+</code></pre>
+<p>Wouldn't it be nice if you could say:</p>
+<pre><code>read-two-lines %some-file.txt
+</code></pre>
+<p>...and if the opening and closing were handled for you automatically?</p>
+<p>There's some friction there, if the port is designed to be returned.  Consider this:</p>
+<pre><code>read-line-and-wait: func [
+    return: [port!]
+    p [port!]
+][
+    line: read/line p
+    wait 10
+    return p
+]
+</code></pre>
+<p>So if you say <code>read-line-and-wait %some-file.txt</code>, then if the implicit-port mechanic closed the port after the READ-LINE-AND-WAIT call was over, the port given back would wind up being closed.</p>
+<p>Besides being returned, the port could have been put anywhere...a global variable, poked into some object.  Closing it upon return from READ-LINE-AND-WAIT may not be what was wanted.</p>
+<p><em>You can't really get good automatic behavior in these situations unless you have some kind of good <strong>"RAII"</strong> mechanic</em>.</p>
+<aside class="onebox wikipedia">
+  <header class="source">
+      <a href="https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization" target="_blank" rel="noopener">en.wikipedia.org</a>
+  </header>
+  <article class="onebox-body">
+    
+
+<h3><a href="https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization" target="_blank" rel="noopener">Resource acquisition is initialization</a></h3>
+
+<p>Resource acquisition is initialization (RAII) is a programming idiom used in several object-oriented, statically-typed programming languages to describe a particular language behavior.  In RAII, holding a resource is a class invariant, and is tied to object lifetime: resource allocation (or acquisition) is done during object creation (specifically initialization), by the constructor, while resource deallocation (release) is done during object destruction (specifically finalization), by the  RAII ...</p>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p><strong>Rebol's very loose language semantics really make it tough to do good features in this vein.</strong></p>
+<p>Of course no language is perfect here, you often have to break the paradigm to solve real problems.  Not everything in Rust can be done under the purview of the borrow-checker, for example, so you end up with atomic reference-counted <a href="https://doc.rust-lang.org/std/sync/struct.Arc.html">"Arc"</a>...and get cycles, etc.</p>
+<p>But Rebol is down in the dumps with the worst languages in this regard.  Which is something I've said is worth stopping to think about.  BLOCK!s and WORD!s and such could be handled differently from OBJECT!s and PORT!s...and we could have a borrow checker too!  If it's a good idea it should be thought about.</p>
+<h2>Moral of the Story Is: Implicit Ports Are A Keeper</h2>
+<p>By hook or by crook, we should make them work...because having the choice to operate with them implicitly or explicitly is a good idea.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/the-only-real-design-point-in-port-implicit-port-s/1696">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-only-real-design-point-in-port-implicit-port-s/1696</link>
+          <pubDate>Wed, 01 Sep 2021 06:35:24 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1696</guid>
+          <source url="https://forum.rebol.info/t/the-only-real-design-point-in-port-implicit-port-s/1696.rss">The Only Real Design Point in PORT!: Implicit PORT!s</source>
+        </item>
+        <item>
+          <title>Contemplating the GENERIC Mechanism</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>In traditional object-oriented languages you put the thing to act on to the left of a dot:</p>
+<pre><code>whatever.append("thing to append")
+</code></pre>
+<p>Rebol syntactically turns this around:</p>
+<pre><code>append whatever "thing to append"
+</code></pre>
+<p>When code was styled this way, things like APPEND were what historical Rebol called "ACTIONS".  I have called these "GENERICS" to align with the same concept coming from Lisp:</p>
+<p><a href="https://en.wikipedia.org/wiki/Generic_function" class="inline-onebox">Generic function - Wikipedia</a></p>
+<h2>Are These Just Two Ways of Saying the Same Thing?</h2>
+<p><strong>In practice, no.</strong></p>
+<p>Rebol's way means the intepreter encounters the word APPEND first.  And it could look up to a variable, or to a so-called "free function"...a global function that's not a member of any object.</p>
+<p>So how does the intepreter know whether to dispatch APPEND to a method in WHATEVER, or to call a global function APPEND that takes a WHATEVER as a parameter?</p>
+<p>It doesn't know.  This means an extra global function called APPEND that takes a WHATEVER parameter has to be made...that re-dispatches the call to the method in the WHATEVER.</p>
+<p><strong>Hence (whatever.append ...) vs (append whatever ...) is NOT just a syntax difference.</strong></p>
+<p>If you add a new method to your <code>whatever</code> object, then <strong>whatever.newmethod</strong> will find it.  But <strong>newmethod whatever</strong> won't work automatically.  There has to be an additional generic definition for NEWMETHOD...a global function that the evaluator finds, and uses to do the dispatch to the object/port/datatype's method.</p>
+<h2>A Deadly Cost To Evolution and Agility</h2>
+<p>Having to add this extra global declaration to forward to the port or type method isn't just added work.  It has been impossible work: <em>there has never been a means of adding a new generic definition in Rebol.</em></p>
+<p>Not only that, how can you say up front on a general definition of APPEND what all targets will consider to be legal things to append to?  Maybe you can APPEND a GOB! to a GOB!, but it seems like it should be an error to add one to a file.  And adding a PORT! to a string seems like it should error.  The type signatures become unmaintainable and meaningless...everything has to take ANY-VALUE!.</p>
+<p>Then there's refinements.  Historically Rebol has been in a lose-lose situation... if a refinement is not on the generic's interface, then no PORT! or series or class could add it.  But if there were a bunch of premade refinements on the generic definition, then there's no way of a caller knowing if the recipient actually paid attention to it or not... (see R3-Alpha's no-op of adding /LINES to READ on URL!s)</p>
+<p>No doubt about it: <strong>This aesthetic syntax twist to put the verb in the driver's seat has wound up holding Rebol back tremendously.</strong></p>
+<p>New nouns come up constantly, and verbs are interpreted differently and parameterized differently for each.  The object.method syntax has handled this just fine.  <em><strong>But hardcoding a table of verbs has been a dead-end street.</strong></em></p>
+<h2>Can We Keep The Syntax, But Lose The Downsides?</h2>
+<p>Err.  Well....</p>
+<p>We <em>could</em> say that we try to do an evaluation step, and if it fails, we don't report the error immediately.  Instead, we evaluate the next thing and see if it is a PORT!, a FILE!, or a URL!.</p>
+<p>Hence let's start from the idea that there is no definition at all for READ:</p>
+<pre><code>&gt;&gt; read
+** Script Error: read word is attached to a context, but unassigned
+</code></pre>
+<p>This would mean that historically if you put something after it, that would make no difference:</p>
+<pre><code>&gt;&gt; read http://example.com
+** Script Error: read word is attached to a context, but unassigned
+</code></pre>
+<p>But what if it would make a difference.  Instead of reporting an error, the evaluator would do another evaluation step...to come back with <code>http://example.com</code>.  It would look in the HTTP scheme and see the READ was available.  So it would create a frame for that READ method (with whatever arguments and refinements the HTTP READ offered) and fill its arguments from there.</p>
+<h2>Is Doing Another Evaluation Like That Safe?</h2>
+<p>One thing that kind of sucks about this is that any undefined word couldn't report an error immediately, it would have to go through another step to decide if it was <em>really</em> an error.</p>
+<p>A pathological bad case for that:</p>
+<pre><code>&gt;&gt; ensure-safe-to-delete: does [  ; function with no arguments
+       ... else fail "not safe to delete global-file"
+   ]
+
+&gt;&gt; ensure-safe-to-delte delete global-file  ; typo...
+** Error: file port has no ENSURE-SAFE-TO-DELTE method
+    ^-- but the DELETE happened!
+</code></pre>
+<p>Here I'm assuming that DELETE FILE returns a file port.  So the evaluator actually even had a PORT! to try to look the action up in.  But regardless of what it returned, you'd get an error.</p>
+<p>This problem can be thought of as "picking the verb first, before you know if the noun is available...when the generation of the noun to check can have side effects".</p>
+<p>We can come up with pathologies the other way, too...picking the noun first doesn't save you in any general sense:</p>
+<pre><code>// reactor will overhead and explode if it runs for more than 10 seconds
+getNuclearReactorAndStartTimer().stoppReactorTimer(10);
+</code></pre>
+<p><em>(Note: Using security/safety oriented examples like these is silly, as it's a pretty ridiculous suggestion to make that baseline Rebol evaluation--or JavaScript evaluation, or Python evaluation--is the kind of thing people interested in rigor would use.  It's playing with fire like coding by hand in assembly is playing with fire, and that's just how it is.  You might build a secure dialect on top of it by controlling when and how evaluation is done, but...probably not.)</em></p>
+<p>A more relevant issue is that if we're running things out of sequence, that people might wonder about the order of errors:</p>
+<pre><code>&gt;&gt; negtae multiplyy 10 20
+** Error: multiplyy not bound and INTEGER! has no multiplyy method
+</code></pre>
+<p>Why did you find out about the multiplyy before knowing that there's no negtae?  Because it was busy trying to figure out if there was a negtae method on the thing it was receiving.</p>
+<h2>What About HELP and Discoverability?</h2>
+<p>The port schemes are registered in a list the system knows about.  So the error could say, instead of "I don't know what READ is", it could mention that "READ is available for the following object types and port schemes"</p>
+<p>You could also get that list when you say <strong>help read</strong>.  And you could get the specific entry when you say <strong>help [read file://]</strong> or <strong>help read 'file</strong> or <strong>help read file</strong> or whatever winds up being the syntax supported for that question (HELP READ would presumably tell you what to type to get at the specific READ help you were interested in from the list).</p>
+<p>The issue comes up with HELP APPEND as well.  You're now in a situation where the APPEND for series could be entirely different from the APPEND for FILE! ports, etc.</p>
+<p>This triggers all kinds of design issues, like how would you be able to make actions that apply to <em>sets</em> of types... like ANY-SERIES!, vs having to make separate actions for each individual datatype.</p>
+<h2>How Would You Do Something Like APPLY a READ Method?</h2>
+<p>Um.  Hmm.  Well, here we see the problem with magic.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>So APPLY has the same problem as HELP.  It has to know what kind of READ you are talking about before it can pick the frame it's specializing.</p>
+<pre><code>apply ['read 'file] [/source %foo.txt /seek 10]
+</code></pre>
+<p>But remember it's worse than that, because this would hit anything that was a GENERIC...that means APPEND and many other things people are used to "treating like functions".</p>
+<p>This shows something those GENERIC definitions bought us...the ones that forward-define the number of arguments something like APPEND would take.  It served as a sort of minimum contract that you could use for things like APPLY.  It's like an interface definition, which says anything that is "applyable" obeys the contract.</p>
+<p>Without these generic definitions, you have to say things like:</p>
+<pre><code> apply :any-series!.append [...]
+</code></pre>
+<p><em>I don't know if that's so terrible...</em> but it does make it seem appealing to be able to have something that can act as a common denominator to do the dispatch automatically.</p>
+<h2>Main Thrust on this Post Is "How Do We Eliminate the Liability"</h2>
+<p>I just want to emphasize how this verb-first has been hurting things, and that it has to be mitigated.</p>
+<p>No answers yet.  Please feel free to throw in thoughts.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/contemplating-the-generic-mechanism/1695">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/contemplating-the-generic-mechanism/1695</link>
+          <pubDate>Wed, 01 Sep 2021 05:24:25 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1695</guid>
+          <source url="https://forum.rebol.info/t/contemplating-the-generic-mechanism/1695.rss">Contemplating the GENERIC Mechanism</source>
+        </item>
+        <item>
+          <title>libuv Integration Has Started...an I/O Renaissance</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>So I put together a build with libuv, and...</p>
+<h2>...It's Gone Extremely Well!</h2>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/flight_departure.png?v=9" title=":flight_departure:" class="emoji only-emoji" alt=":flight_departure:"></p>
+<p>As a first step, I decided I'd try using libuv for all of our filesystem calls.  They're based on the POSIX filesystem APIs, so with a not-impossible amount of work I was able to change our POSIX code over to libuv calls.</p>
+<p><strong>Once I did so, I could throw out the Windows-specific code...so all of <a href="https://github.com/metaeducation/ren-c/blob/6770b69f9539d26da4fd2ff664332f2ba36386ad/extensions/filesystem/file-windows.c">%posix-windows.c</a> could be deleted!</strong></p>
+<p>Of course, now we have to link in libuv.  But there's a lot of good news on that front:</p>
+<ul>
+<li>
+<p>I was able to integrate libuv into our build without using any special build system, it was easy enough.</p>
+</li>
+<li>
+<p>libuv has care and concern for weird platforms...more than we do!  So all the FreeBSD/OpenBSD/NetBSD/BSDi are covered, Haiku, etc. are covered.</p>
+</li>
+<li>
+<p>libuv is pure C and it builds with TCC...so the <a href="https://github.com/metaeducation/ren-c/runs/3466060617?check_suite_focus=true#step:23:19">Rebol-built-with-TCC-and-libuv can still build itself</a> and bootstrap!</p>
+</li>
+<li>
+<p>I haven't done a formal study of the exact size impact but it's in the 100s of ks not the 10s of megabytes range; for what it offers it's light and it seems they care.</p>
+</li>
+</ul>
+<h2>While I Was Unifying The Code, I Made... TESTS!</h2>
+<p>There were basically no tests of the filesystem.  Features like /SEEK came late in the game, and there were lots of bugs and design holes.  <em>No one knew how buggy it was because I think no one really used anything besides READ and WRITE of entire files!</em></p>
+<p>Getting the semantics for ports hammered out is a tall order, and beyond the scope of these first steps with libuv integration.  But to get things on the right foot, I've started with some tests!</p>
+<p><strong><a href="https://github.com/metaeducation/ren-c/blob/master/tests/file/file-port.test.reb">https://github.com/metaeducation/ren-c/blob/master/tests/file/file-port.test.reb</a></strong></p>
+<p><strong>I'll put in my usual tearful plea for others to try kicking the tires here...</strong> but, well.  People are busy I guess.  <img src="https://forum.rebol.info/images/emoji/twitter/cry.png?v=9" title=":cry:" class="emoji" alt=":cry:"></p>
+<p>Technique-wise, there are just some really cool things even right there in those tests.  There's a fuzz tester which creates an adaptation FUZZWRITE that will mimic what the write is being asked to do to the file to a buffer.</p>
+<h2>So One File Was Deleted...What Else Do We Get?</h2>
+<p>Deleting <code>%posix.windows.c</code> was actually a bigger deal than it sounds.  Even though I'd whittled it way down from its Device-Model hairiness, it was still a small amount of bad code.  And I'm sort of glossing over the kind-of-Herculean level of pain tolerance it takes to dot the i's, cross the t's, and write the tests for the new code to replace the old buggy stuff.</p>
+<p>But it's just the beginning.  <strong>We're about to get a lot.</strong></p>
+<p>Many libuv functions are able to take a pointer to a function to call when an operation is done.  If you pass in nullptr for that callback, then the operation runs synchronously.</p>
+<p>For my first task with the filesystem, I just passed in NULL to all the file-reading and file-writing routines for the callback.  So we are doing the same blocking I/O as always.</p>
+<p>Being able to do asynchronous <em><strong>file</strong></em> I/O isn't a priority right now.  But if we need it, it's there.</p>
+<p>The real benefit will be having vetted asynchronous <strong>network</strong> I/O.  It will take the place of buggy garbage we had, that was nigh undebuggable.  We should be able to write working timers and other interesting things.</p>
+<h2>Modify With Confidence: I/O Edition</h2>
+<p>I had said that a goal of Ren-C was that if there was something we thought up, the limit to doing it would be the limit of being able to articulate the design... not having murky code.</p>
+<p>I'd claimed that point had been reached, and the new goal was just to "elevate the art" of the language.</p>
+<p>But that conveniently overlooked the fact that the device layer and I/O were all still horrible murk.  I'd kind of blocked it out of my mind, since I'd thrown it over the wall...and been able to make a WebAssembly build without it.  It "didn't count".</p>
+<p><strong>Now the Windows/Mac/Linux/Haiku/etc. builds are back in the game, and The Design Handcuffs Are Off</strong></p>
+<p>I'd actually said at one point that if we wanted Network I/O to be any good we should just take Node.js's code for interfacing with V8.  I didn't realize they'd actually made it a goal for that to be reusable and factored it out as a C library.  I thought we'd have to rip out some C++ code and do the work ourselves.  But libuv is that work already done, and we seem in good company as far as the Amish-oriented goals go!</p>
+<p>Anyway, change is coming.  So for starters...if you have ideas or complaints about files...now would be the time to speak up!  The real turning point will be on improved networking, so stay tuned.</p>
+            <p><small>4 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/libuv-integration-has-started-an-i-o-renaissance/1694">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/libuv-integration-has-started-an-i-o-renaissance/1694</link>
+          <pubDate>Tue, 31 Aug 2021 03:37:40 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1694</guid>
+          <source url="https://forum.rebol.info/t/libuv-integration-has-started-an-i-o-renaissance/1694.rss">libuv Integration Has Started...an I/O Renaissance</source>
+        </item>
+        <item>
+          <title>Devices are gone. (But what were they?)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>Something in R3-Alpha that has been a major tax and holding back interesting development is "The Device Layer".</p>
+<h2>What Was the Device Layer, Anyway?</h2>
+<p>Carl wanted what most developers of a language would want: to factor out the logic of the language from the details of any particular operating system.</p>
+<p>Thus you need some kind of abstraction.</p>
+<p>One might think that PORT! is this level of abstraction for Rebol.  You would develop a TCP PORT! for POSIX, and a TCP PORT! for Windows.  Each would implement the same READ and WRITE and OPEN methods as appropriate for the operating system.</p>
+<p>But instead, he wanted to have there be one codebase for the TCP PORT! (or the file PORT!, or whatever) and it would talk to an "abstracted OS".  This abstracted OS was a placeholder for any operating system that knew nothing about Rebol datatypes or values, and you could only communicate with it using raw C datatypes and structures.</p>
+<p><strong>This actually isn't a terrible idea, in theory.</strong> And it's kind of what libuv is.</p>
+<p><strong>But in practice, it was a bad implementation.</strong>  Rebol paid the price in stagnant development due to its obfuscating and limiting nature.</p>
+<h2>A Layer Entirely Of Make-Work</h2>
+<p>Communicating with the device layer was done with a structure called a REBREQ.  A REBREQ was basically a bag of anything that might be interesting to any request.  So the prototypes for absolutely everything looked the same.</p>
+<pre><code>DEVICE_CMD Open_Socket(REBREQ *sock)
+
+DEVICE_CMD Read_File(REBREQ *file)
+
+DEVICE_CMD Query_Event(REBREQ *event)
+</code></pre>
+<p>etc.</p>
+<p>A REBREQ was a giant mystery box--a structure filled with fields and flags.  It was both input and output.  Some were relevant to whatever it was you were trying to do...some not.  There were barely any invariants or asserts to keep it sane.</p>
+<p>So if you were implementing something like the READ operation on a file port:</p>
+<ul>
+<li>
+<p>you would have to dissect the Rebol arguments in order to pack them all into a REBREQ, guessing and hoping which fields or flags you should pay attention to.</p>
+</li>
+<li>
+<p>Then you'd have to go over to the Windows implementation for the device layer of Read_File and unpack those parameters--all pure C structs--and call the windows ReadFile() function.</p>
+</li>
+<li>
+<p>Then you'd have to do the same with the POSIX calling read(), or any other OS</p>
+</li>
+<li>
+<p>You'd also for each OS have to proxy whatever you read back into the REBREQ--again remembering you can't assemble any Rebol values yet...because that is done once you get back to the PORT!'s READ.</p>
+</li>
+</ul>
+<h2>But did it Do <em>Anything</em> Useful?</h2>
+<p>So this is where the problem is.  For synchronous operations, no.  It was entirely make-work. And the asynchronous code was a mire.</p>
+<p>The reason it didn't get ripped out sooner was because it was playing a role in asynchronous operations.  A weird and nearly impossible to see role, that tried to implement a generic linked list that could handle the needs of any interface.</p>
+<p>I think it's much clearer to have each extension maintain its own linked lists if it wants to.</p>
+<h2>Was Carl Not Serious About Simplicity?</h2>
+<p>Well, it was a couple of decades ago, so one should cut some slack.  If one were to be generous, one might say he was aiming to accomplish something like libuv.</p>
+<p>But big picture, I think this is what happened:</p>
+<p>Carl knew that to get performance, you'd have to be close to the core of Rebol...knowing the internals of the bits of the values etc.  And he wasn't intending to publish the source for that.  But he wanted the platform support to be implementable by third parties.</p>
+<p>Hence the concept became <em>"in the port implementation, we'll efficiently strip it down to the bit layer with the knowledge we have...and the device layer will be that little last bit, devices won't really do anything."</em></p>
+<p>In truth, devices do a lot.  They are what you get when people with computers want to do things.  And you wind up in a mess when the 7 verbs you thought of with READ, WRITE, CONNECT, OPEN, CLOSE are missing huge swaths of what you want to do with a GPS or anything else that comes down the pipe.</p>
+<p>So anyway, it's in a better direction now...without the make-work.  All the usermode code for TLS and HTTP seem to still be working, but report any problems.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/devices-are-gone-but-what-were-they/1692">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/devices-are-gone-but-what-were-they/1692</link>
+          <pubDate>Sun, 29 Aug 2021 04:19:18 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1692</guid>
+          <source url="https://forum.rebol.info/t/devices-are-gone-but-what-were-they/1692.rss">Devices are gone. (But what were they?)</source>
+        </item>
+        <item>
+          <title>Semantics of PORT!s vs. Streams vs. Iterators</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>I've complained often about PORT! seeming to try and serve two masters... it tries to act as something of an OBJECT!, but also a stream.</p>
+<p>Here is the definition of system.standard.port...the template object from which PORT!s are created:</p>
+<pre><code>system.standard.port: make object! [
+    spec: '
+    scheme: '
+    actor: '
+    awake: ~unset~
+    state: '
+    data: '
+    locals: '
+
+    connections: '  ; currently used only by TCP ports
+]
+</code></pre>
+<p>That's an OBJECT!, but the underlying datatype is switched to PORT! when the port is created.</p>
+<h2>How Do You Interact With This Object as an Object?</h2>
+<p>The <a href="https://forum.rebol.info/t/what-is-a-port/617">"What is a Port"</a> document says this:</p>
+<blockquote>
+<p>Specific <em>action functions</em> can be applied to a port. Some common actions are:</p>
+<ul>
+<li>
+<strong>make</strong> - create a new port</li>
+<li>
+<strong>open</strong> - initialize the port</li>
+<li>
+<strong>close</strong> - finalize the port</li>
+<li>
+<strong>read</strong> - read data from port</li>
+<li>
+<strong>write</strong> - write data to port</li>
+<li>
+<strong>query</strong> - get other information from port</li>
+<li>
+<strong>update</strong> - detect external changes to the port</li>
+</ul>
+<p>But, there are many other actions as well, as generally defined by Rebol datatypes.</p>
+</blockquote>
+<p>What else qualifies as these "many other actions?"</p>
+<ul>
+<li>
+<p><a href="http://www.rebol.com/docs/database.html">Rebol2's ODBC</a> suggests <strong>PICK (FIRST)</strong>, <strong>INSERT</strong>, and <strong>COPY</strong> as choices.</p>
+</li>
+<li>
+<p>Source code for <a href="https://github.com/rebol/rebol/blob/master/src/core/p-file.c">File Port in R3-Alpha</a> shows <strong>APPEND</strong>, <strong>DELETE</strong>, <strong>RENAME</strong>, <strong>MODIFY</strong>, <strong>OPEN?</strong>, <strong>LENGTH?</strong>, <strong>HEAD</strong>, <strong>TAIL</strong>, <strong>NEXT</strong>, <strong>BACK</strong>, <strong>SKIP</strong>, <strong>HEAD?</strong>, <strong>TAIL?</strong>, <strong>PAST?</strong>, <strong>CLEAR</strong>.</p>
+</li>
+</ul>
+<p><em>This is awfully saturated, and it seems nothing is off the table for what this abstract idea of a PORT! might want to react to.</em></p>
+<p>So how do you get at these object fields safely?  How do you PICK the SPEC field?  How do you POKE the AWAKE function?</p>
+<h2>More Problems: PORT and 1:1 with STREAM Correspondence</h2>
+<p>When you're working with a TCP connection, you supposedly think of that as a bidirectional PORT!.  You don't open a connection for your input, and one for your output--you read and write to the same port.</p>
+<p>If so, why is there <strong>system.ports.input</strong> and <strong>system.ports.output</strong> instead of <strong>system.ports.stdio</strong>?</p>
+<p>One technical good reason there is that there are actually two stdio output streams: the stdout and the stderr for error messages.  Often these are directed to the same place, but not always.</p>
+<p>So here you see that maybe something like stdio would like to be an object aggregating three data streams: 1 for input and two for output.</p>
+<h2>Difference Between Ports and User Defined Datatypes?</h2>
+<p>It doesn't really seem like anything is off the table for what you can override on a PORT!.</p>
+<p>Can you define what it means to ADD to a PORT!?  If not, why not?</p>
+<p>What about path selection on a PORT! (or today's field access via TUPLE!, another option).</p>
+<p>Once you get into this "anything goes" attitude you are essentially talking about an implementation for user-defined datatypes.</p>
+<p>This points out an important aspect of the articulation of any design: <strong>You need to be able to say what it isn't, or there's no meaningful definition of what it is.</strong></p>
+<h2>Streaming/Iterating Is Narrower And Needs a Protocol</h2>
+<p>While PORT! is slippery, I'm going to be attacking just the more basic questions of streaming and iteration.</p>
+<p>We want to be able to say <code>parse some-100-mb-file ["FOO" &lt;stop&gt;]</code> and not have to read 100 megabytes just to know if it started with "FOO"</p>
+<p>And we want to be able to do that with something like FOR-EACH as well...</p>
+<pre><code> for-each [x y z] some-100-mb-file [
+     all [x = #f, y = #o, z = #o] then [break]
+ ]
+</code></pre>
+<p>That shouldn't need to have all 100 megabytes in memory.  And a generic solution to this which puts iteration in the mix should allow for streams to be piped and connected to each other to do filtering, encryption/decryption, compression, etc...</p>
+<p>So I'm going to focus on the narrower question of how to do that, vs. the muddle of "What is a PORT!", at this time.  Wishful thinking isn't going to solve that problem, but rational adaptation of the methods used by other languages that do this might.</p>
+            <p><small>3 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689</link>
+          <pubDate>Fri, 27 Aug 2021 07:50:35 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1689</guid>
+          <source url="https://forum.rebol.info/t/semantics-of-port-s-vs-streams-vs-iterators/1689.rss">Semantics of PORT!s vs. Streams vs. Iterators</source>
+        </item>
+        <item>
+          <title>(Archival) Writing a network scheme for Rebol 3</title>
+          <dc:creator><![CDATA[gchiu]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <h1>Writing a network scheme for Rebol 3</h1>
+<p>Graham Chiu<br>
+version 1.4, 1 April 2013</p>
+<p>This document is a distillation of what I have read and understood regarding networking and URI schemes as defined for Rebol 3. The sources are the Rebol websites along with info obtained in chatting with other Rebol users. Any incorrect information contained herein is entirely due to my own misunderstandings. As an illustration I will talk about creating a basic Scripting Layer For Android (SL4A) scheme from the ground up.</p>
+<h1>Opening a Port Concepts</h1>
+<p>When you open a network scheme you are returned a port! object. The port! object contains the functions, objects, and other variables that allow you to track state, and process network events. One of those objects is the underlying sockets-level TCP port which interacts with the TCP device. In Rebol 2, this was generally referred to as the sub-port while Rebol 3 schemes such as HTTP call it conn or a similar name. Make a note as this can be a source of confusion. And if the scheme is anything other than a TCP scheme using a spec block, the underlying TCP port is not opened and will require a second call to open.</p>
+<h1>Simple Example</h1>
+<p>To illustrate how the built-in TCP scheme works, we can look at a basic interaction with a SL4A server at network address 192.168.1.103 on port 4321. I will discuss line by line what happens.<br>
+basic tcp example with event handler</p>
+<pre><code>android-request: {{"params": ["Hello, Android!"], "id":1, "method": "makeToast"}^/}
+
+android-port: make port! tcp://192.168.103:4321
+; android-port: make port! [ scheme: 'tcp host: 192.168.1.103 port-id: 4321 ]
+android-port/awake: func [event /local tcp-port] [
+        tcp-port: event/port
+        print ["port equality?" equal? tcp-port android-port]
+        print ["==TCP-event:" event/type]
+        switch/default event/type [
+                lookup [
+                        ; this happens when we use a url!, and the IP address has to be resolved
+                        ; using DNS, or when using a specification block and the host is provided
+                        ; as a name
+
+                        print "opening tcp port"
+                        open tcp-port
+                ]
+                connect [
+                        ; these next two lines are equivalent since we are using a basic tcp scheme.
+                        ; write tcp-port android-request
+                        write android-port android-request
+                ]
+                wrote [
+                        print "have a wrote event, so read response from server"
+                        read tcp-port
+                ]
+                read [
+                        ; data has arrived
+                        print ["^\read:" length? tcp-port/data]
+                        return true
+                ]
+        ] [
+                ; returns if receives other events like done, close, error, custom
+                true
+        ]
+]
+
+open android-port
+either port! = type? wait [android-port 3] [
+        print to string! android-port/data
+] [
+        print "Port timed out!"
+]
+close android-port
+</code></pre>
+<p>First, we define the string android-request to hold the JSON representation of the SL4A function call makeToast, with a parameter of "Hello, Android". The terminating newline is needed as the API appears to be line oriented.</p>
+<pre><code>android-port: make port! tcp://192.168.103:4321
+</code></pre>
+<p>Next, we create a new port! based on the URL of tcp://192.168.103:4321. If we now examine android-port, we have this output from <code>probe android-port</code></p>
+<pre><code>make port! [
+    spec: make object! [
+        title: "TCP Networking"
+        scheme: 'tcp
+        ref: tcp://192.168.103:4321
+        path: none
+        host: "192.168.103"
+        port-id: 4321
+    ]
+    scheme: make object! [
+        name: 'tcp
+        title: "TCP Networking"
+        spec: make object! [
+            title: none
+            scheme: none
+            ref: none
+            path: none
+            host: none
+            port-id: 80
+        ]
+        info: make object! [
+            local-ip: none
+            local-port: none
+            remote-ip: none
+            remote-port: none
+        ]
+        actor: make native! [[port!]]
+        awake: make function! [[event][print ['TCP-event event/type] true]]
+    ]
+    actor: make native! [[port!]]
+    awake: make function! [[event][print ['TCP-event event/type] true]]
+    state: none
+    data: none
+    locals: none
+]
+</code></pre>
+<p>We can see that the port! object contains a spec object derived from the URL, tcp://192.168.1.103:4321. This was created by the parse-url function which in turn was called by the make-port function. The spec object is filled in with all URI scheme components parsed as per RFC 3986 (e.g. tcp://user:password@hostname:port).</p>
+<p>Next we see the scheme object based on the Rebol TCP scheme, followed by actor which is currently a port! (it can also be a block holding actors such as read, write, etc.), the awake function, state, data and locals. The data field will hold any data returned by the tcp port during a read.</p>
+<p>The awake function by default just prints the event to the console, and then by return true, exits any wait function that might have passed the event to it. The next lines in our example do something more useful defining an awake function that handles all the different type of events that a port can receive. The events we have not named such as close, error, done will cause our switch statement to return true by default.</p>
+<p>We have ordered the events in the switch statement according to the order that we expect them to happen but you might find it more efficient to re-order them in descending order of frequency of use. Now, let’s step through each event to see what happens<br>
+Lookup</p>
+<p>The lookup event is generated when either the TCP device has to do a DNS lookup to resolve a name, or, if a URL has to be decoded by decode-url. Here we used the url! construction form to create the port!, but with the block form [ scheme: 'tcp host: 192.168.1.103 port-id: 4321 ] the lookup event would not be needed and would not occur as a tuple! is provided for the IP address.<br>
+Connect</p>
+<p>Here, our TCP device has connected with the server, and a connect event is returned. When handling protocols like POP3, and SMTP, we would want to read the welcome string from the server here, but with other protocols like HTTP and SL4A there wouldn’t be a welcome string so the request is sent immediately.</p>
+<h2>Wrote</h2>
+<p>Having written our request to the tcp-port aka android-port, we now get a wrote event. Under normal conditions the server would respond to our request, so we issue an immediate read tcp-port.</p>
+<h2>Read</h2>
+<p>The TCP device has received some data which is made available in the android-port/data field, and a read event generated. We print the data and return true since we don’t need to deal with any other events. This allows us to exit the wait function.<br>
+Rest of Code</p>
+<p>Now, let’s look at the remaining code.</p>
+<pre><code>open android-port
+</code></pre>
+<p>passes the port! to the open function. The open function in this instance does not actually open the TCP port, but issues a lookup event which is stored in a system block which holds all events.</p>
+<p>If we had done the following instead:</p>
+<pre><code>android-port: open tcp://192.168.1.103:4321
+</code></pre>
+<p>then open would have called make-port to first create the port! structure, and then issued the lookup event as above.</p>
+<p>But if we had done this instead</p>
+<pre><code>android-port: open [ scheme: 'tcp host: 192.168.1.103 port-id: 4321 ]
+</code></pre>
+<p>then the same thing happens as above except no lookup event is generated. In this last instance the underlying TCP port is actually opened. The difference is due to the fact that when using the url! form the host address is converted to a string! i.e. "192.168.1.103" instead of a tuple! by the decode-url function and so still needs to be resolved using a DNS lookup.</p>
+<pre><code>either port! = type? wait [android-port 3]
+</code></pre>
+<p>The wait function adds the android-port to the list of system ports, and then does a wake-up android-port lookup, i.e. it sends the lookup event to the android-port’s awake handler. In this case our awake handler on receipt of the lookup event now opens the tcp-port with open tcp-port. Each subsequent event is passed to the port! where they are handled as follows:</p>
+<pre><code>connect - We write to the port
+
+wrote - Next, we read the port
+
+read - Finally, we print the data and return true
+</code></pre>
+<p>On receipt of the true value, the wait function removes the port! from the system list of ports, and then returns from the wait returning a port! A timeout is specified so that if the port! fails to return within 3 seconds the wait will exit. If we get a port! returned from the wait, we know we completed without timing out and have data, so we can print it out.</p>
+<h2>Custom Schemes</h2>
+<p>It would be tedious to write out the above code each time we wanted to write something to a port when we could do something like this:</p>
+<pre><code>result: write sl4a://192.168.1.103 {{"params": ["Hello, Android!"], "id":1, "method": "makeToast"}^/}
+</code></pre>
+<p>The sl4a scheme would handle the opening of the TCP port, set the default port-id and async handler, take our data, write it to the TCP port on connect, and return the data. Since we do not have any reference to the port!, it would then be closed for us by the garbage collector.</p>
+<p>In the ideal code above, we have a write function that takes two arguments, a url!, and a string! and returns a result. How do we do this when write is a built-in, native function which knows nothing about our custom sl4a scheme? This is where the magic of the port! actors comes into play. When write, or any of the built-in functions that take a port! as a parameter are called, the port! actor block is examined to see if there is a function of the same name present. If so, it is executed in preference to the built-in function, passing the port! as the first argument, followed by any additional arguments if present.</p>
+<p>You will remember from before that we had the following when we inspected the port! object created for the built-in TCP scheme:</p>
+<pre><code>actor: make native! [[port!]]
+</code></pre>
+<p>In a typical custom scheme, the signatures of the actor functions would instead look something like this:</p>
+<pre><code>actor: [
+        write: func [ port [port!] data ][ ... write actions ...]
+        read: func [ port [port!]][ ... read actions ...]
+        open: [ port [port!]][ ... open actions ... ]
+        open?: [ port [port!]][ .. returns a truthy value if open ... ]
+        close: [ port [port!]][ .. closes the port ...]
+]
+</code></pre>
+<p>and the custom scheme write actor is invoked instead of lib/write. So, the first thing we need to do is write our port! actors. We can have here create, delete, open, close, read, write, open?, query, update, and rename and all these functions take a port! as an argument. We can also add series functions such as length?, append, insert to the actor block, but these function can only take a port! object as the argument, and can not take a url! or spec object.</p>
+<p>So, instead of</p>
+<pre><code>insert sl4a://192.168.1.103 "some data"
+</code></pre>
+<p>we need to write it something like this:</p>
+<pre><code>android: open sl4a://192.168.1.103
+insert android "some data"
+</code></pre>
+<p>The minimum actors we need for our scheme example are write, open, open? and close, so let’s start!</p>
+<h2>Open?</h2>
+<p>This just needs to return the port/state. When the port! is first created, it should be none, as seen in the probe output above. Once the port! is opened, the port/state is set to an empty string by open. So, when we close the port!, we need to set this back to none.</p>
+<pre><code>open?: func [ sl4a-port [port!]][
+    sl4a-port/state
+]
+</code></pre>
+<h2>Close</h2>
+<p>We need to close the tcp-port, and also set the sl4a-port/state to none. The tcp-port is going to be held in the sl4a-port/state/tcp-port.</p>
+<pre><code>close: func [ sl4a-port [port!]][
+    close sl4a-port/state/tcp-port
+    sl4a-port/state: none
+]
+</code></pre>
+<h2>Write</h2>
+<p>Our write actor is going to first check if the sl4a-port is open. If it is not open, it will open the sl4a-port using the sl4a-port open actor (since it is opening a sl4a-port). Once the sl4a-port is opened, we will write the data to the sl4a-port. You will recall from the TCP scheme example that we actually write to the tcp-port in the connect event. We will use function named sync-write that assigns a custom async handler to do this for us. We also need to return some data. Again, recalling the basic TCP scheme, data is returned to the tcp-port/data, or sl4a-port/state/tcp-port/data in the current code. The problem is that this might not be safe if we have more than one read since interleaving reads and writes clears this field. We could store it in sl4a-port/data, but we may not necessarily have a reference to that from the tcp-port, so we will create an additional tcp-port spec field, JSON, to hold this data. We are naming it JSON since we know the SL4A api returns JSON strings.</p>
+<pre><code>write: func [sl4a-port [port!] data] [
+        if not open? sl4a-port [
+                open sl4a-port
+        ]
+        sync-write sl4a-port data
+        ; and this is the data placed here by the sync-write function which we now return
+        sl4a-port/state/tcp-port/spec/JSON
+]
+</code></pre>
+<h2>Open</h2>
+<p>Our open actor has the task of setting up the sl4a-port/state object which is going to hold our tcp-port, our JSON data field which is part of our port spec(ification), and perhaps other fields we might need later on as we expand our scheme functionality. If the sl4a-port is already open, it is simply returned. If a host address is not specified, we create an error. We then create our tcp-port here using make port! as with the TCP scheme, using a spec block, and make port! creates the scheme and spec objects.</p>
+<p>Before opening the tcp-port, we set the awake handler to none. Normally we would set it to the scheme’s awake handler, but we haven’t defined one yet. It won’t matter yet because even though we then open the tcp-port, there wouldn’t be any events to process until we call wait on the tcp-port. Note that since we are now using open on a tcp-port rather than a sl4a port, Rebol will use the open function appropriate for a TCP port. Otherwise we would have a stack overflow.</p>
+<pre><code>open: func [
+    sl4a-port [port!]
+    /local tcp-port
+] [
+    if sl4a-port/state [return sl4a-port]
+    if none? sl4a-port/spec/host [make-sl4a-error "Missing host address"]
+    sl4a-port/state: context [
+            tcp-port: none
+    ]
+    sl4a-port/state/tcp-port: tcp-port: make port! [
+            scheme: 'tcp
+            host: sl4a-port/spec/host
+            port-id: sl4a-port/spec/port-id
+            timeout: sl4a-port/spec/timeout
+            ref: rejoin [tcp:// host ":" port-id]
+            port-state: 'init
+            json: none
+    ]
+    comment {
+            port/state/tcp-port now looks like this
+            [ spec [object!] scheme [object!] actor awake state data locals ]
+    }
+    tcp-port/awake: none
+    open tcp-port
+    sl4a-port
+]
+</code></pre>
+<h2>Sync-write</h2>
+<p>You will recall we called function sync-write inside the write function but have not defined it. sync-write takes the sl4a-port and a JSON string as arguments. It needs to set up the awake handler for the tcp-port so that a connect event sends the JSON string, then gets data back and stores it in the sl4a-port/state/tcp-port/spec/JSON field. It then kicks off event handling by doing a wait on the tcp-port. If a lookup event occurs, we know we need to open the tcp-port.</p>
+<p>If we want to do another write on the port, we can no longer do it on the connect event as that only occurs when we first open the tcp-port. Therefore, we need to check if the tcp-port has been connected. If so, we write to it and then wait to restart the event handler. To track the port state, a flag, port-state, is created in the spec object.</p>
+<pre><code>sync-write: func [sl4a-port [port!] JSON-string
+    /local tcp-port
+] [
+    unless open? sl4a-port [
+            open sl4a-port
+    ]
+    tcp-port: sl4a-port/state/tcp-port
+    tcp-port/awake: :awake-handler
+    either tcp-port/spec/port-state = 'ready [
+            write tcp-port to binary! JSON-string
+    ][
+            tcp-port/locals: copy JSON-string
+    ]
+    unless port? wait [tcp-port sl4a-port/spec/timeout] [
+            make-sl4a-error "SL4A timeout on tcp-port"
+    ]
+]
+</code></pre>
+<h2>Awake Handler</h2>
+<p>We used an awake-handler in the sync-write function, and define it now. In the connect state, we set the port-state flag to 'ready; in other states we can set it as as appropriate. It is very similar to our prototype awake handler that we discussed at the beginning, but we are also going to use a structured exit at the bottom instead of using returning true, to make things clearer. The value left at the end is the value of the switch statement.</p>
+<pre><code>awake-handler: func [event /local tcp-port] [
+    print ["=== Client event:" event/type]
+    tcp-port: event/port
+    switch/default event/type [
+            error [
+                    print "error event received"
+                    tcp-port/spec/port-state: 'error
+                    true
+            ]
+            lookup [
+                    open tcp-port
+                    false
+            ]
+            connect [
+                    print "connected "
+                    write tcp-port tcp-port/locals
+                    tcp-port/spec/port-state: 'ready
+                    false
+            ]
+            read [
+                    print ["^\read:" length? tcp-port/data]
+                    tcp-port/spec/JSON: copy to string! tcp-port/data
+                    clear tcp-port/data
+                    true
+            ]
+            wrote [
+                    print "written, so read port"
+                    read tcp-port
+                    false
+            ]
+            close [
+                    print "closed on us!"
+                    tcp-port/spec/port-state: 'ready
+                    true
+            ]
+    ] [true]
+]
+
+comment {
+        the awake handler should return false unless we want to exit the wait
+        which we do either as the default condition ( ie. unspecified event ),
+        or with Error, Read and Close.
+}
+</code></pre>
+<h2>Wrapping Up</h2>
+<p>So we are nearly ready to wrap this up into a scheme. We have to set up the scheme header and define any missing functions that we have used so far without having defined them.<br>
+SL4A scheme</p>
+<pre><code>Rebol [
+    System: "REBOL [R3] Language Interpreter and Run-time Environment"
+    title: "R3 SL4A"
+    file: %prot-demo.r
+    author: ["Graham"]
+    name: 'sl4a
+    type: 'module
+    version: 0.0.1
+    Date: [26-Mar-2013]
+    Purpose: "R3 send and receive from Scripting Layer 4 Android"
+]
+
+make-sl4a-error: func [
+    message
+] [
+    ; the 'do arms the error!
+    do make error! [
+            type: 'Access
+            id: 'Protocol
+            arg1: message
+    ]
+]
+
+awake-handler: func [event /local tcp-port] [
+    print ["=== Client event:" event/type]
+    tcp-port: event/port
+    switch/default event/type [
+            error [
+                    print "error event received"
+                    tcp-port/spec/port-state: 'error
+                    true
+            ]
+            lookup [
+                    open tcp-port
+                    false
+            ]
+            connect [
+                    print "connected "
+                    write tcp-port tcp-port/locals
+                    tcp-port/spec/port-state: 'ready
+                    false
+            ]
+            read [
+                    print ["^\read:" length? tcp-port/data]
+                    tcp-port/spec/JSON: copy to string! tcp-port/data
+                    clear tcp-port/data
+                    true
+            ]
+            wrote [
+                    print "written, so read port"
+                    read tcp-port
+                    false
+            ]
+            close [
+                    print "closed on us!"
+                    tcp-port/spec/port-state: 'ready
+                    true
+            ]
+    ] [true]
+]
+
+sync-write: func [sl4a-port [port!] JSON-string
+    /local tcp-port
+] [
+    unless open? sl4a-port [
+            open sl4a-port
+    ]
+    tcp-port: sl4a-port/state/tcp-port
+    tcp-port/awake: :awake-handler
+    either tcp-port/spec/port-state = 'ready [
+            write tcp-port to binary! JSON-string
+    ] [
+            tcp-port/locals: copy JSON-string
+    ]
+    unless port? wait [tcp-port sl4a-port/spec/timeout] [
+            make-sl4a-error "SL4A timeout on tcp-port"
+    ]
+]
+
+sys/make-scheme [
+    name: 'sl4a
+    title: "SL4A Protocol"
+    spec: make system/standard/port-spec-net [port-id: 4321 timeout: 5]
+
+    actor: [
+            open: func [
+                    sl4a-port [port!]
+                    /local tcp-port
+            ] [
+                    if sl4a-port/state [return sl4a-port]
+                    if none? sl4a-port/spec/host [make-sl4a-error "Missing host address"]
+                    sl4a-port/state: context [
+                            tcp-port: none
+                    ]
+                    sl4a-port/state/tcp-port: tcp-port: make port! [
+                            scheme: 'tcp
+                            host: sl4a-port/spec/host
+                            port-id: sl4a-port/spec/port-id
+                            timeout: sl4a-port/spec/timeout
+                            ref: rejoin [tcp:// host ":" port-id]
+                            port-state: 'init
+                            json: none
+                    ]
+                    tcp-port/awake: none
+                    open tcp-port
+                    sl4a-port
+            ]
+            open?: func [sl4a-port [port!]] [
+                    sl4a-port/state
+            ]
+            write: func [sl4a-port [port!] data] [
+                    if not open? sl4a-port [
+                            open sl4a-port
+                    ]
+                    sync-write sl4a-port data
+                    sl4a-port/state/tcp-port/spec/JSON
+            ]
+            close: func [sl4a-port [port!]] [
+                    close sl4a-port/state/tcp-port
+                    sl4a-port/state: none
+            ]
+    ]
+]
+</code></pre>
+<h1>Testing</h1>
+<p>We can test that it works with the following code, using no port! reference:</p>
+<pre><code>android-request: {{"params": ["Hello, Android!"], "id":1, "method": "makeToast"}^/}
+result: write sl4a://192.168.1.103 android-request
+</code></pre>
+<p>The output:</p>
+<h2>console trace</h2>
+<pre><code>&gt;&gt; result: write sl4a://192.168.1.103 android-request
+=== Client event: lookup
+=== Client event: connect
+connected
+=== Client event: wrote
+written, so read port
+=== Client event: read
+?read: 36
+== {{"error":null,"id":1,"result":null}
+</code></pre>
+<p>If we want to hold on to the port! we can run this code:</p>
+<pre><code>&gt;&gt; android: open sl4a://192.168.1.103
+&gt;&gt; result: write android android-request
+=== Client event: lookup
+=== Client event: connect
+connected
+=== Client event: wrote
+written, so read port
+=== Client event: read
+?read: 36
+== {{"error":null,"id":1,"result":null}
+}
+
+&gt;&gt; result: write android android-request
+=== Client event: wrote
+written, so read port
+=== Client event: read
+?read: 36
+== {{"error":null,"id":1,"result":null}
+}
+</code></pre>
+<p>This should provide you with enough information to write your own Rebol 3 network schemes.</p>
+<h2>References</h2>
+<ul>
+<li>
+<p><a href="http://www.rebol.net/wiki/Ports:_Synchronous_and_Asynchronous_Operations">http://www.rebol.net/wiki/Ports:_Synchronous_and_Asynchronous_Operations</a></p>
+</li>
+<li>
+<p><a href="http://www.rebol.net/wiki/TCP_Port_Open_Issue">http://www.rebol.net/wiki/TCP_Port_Open_Issue</a></p>
+</li>
+<li>
+<p><a href="http://www.rebol.net/wiki/Schemes:Notes">http://www.rebol.net/wiki/Schemes:Notes</a></p>
+</li>
+</ul>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/archival-writing-a-network-scheme-for-rebol-3/1668">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/archival-writing-a-network-scheme-for-rebol-3/1668</link>
+          <pubDate>Mon, 16 Aug 2021 04:00:00 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1668</guid>
+          <source url="https://forum.rebol.info/t/archival-writing-a-network-scheme-for-rebol-3/1668.rss">(Archival) Writing a network scheme for Rebol 3</source>
+        </item>
+        <item>
+          <title>Expanding Opportunity (by Dropping PORT!s from the pure C Build)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>I was closing and resolving all the rebol-issues tickets related to PARSE...considering them "resolved" if they are solved by UPARSE.  <em>Quite a lot of them were!</em>  <img src="https://forum.rebol.info/images/emoji/twitter/partying_face.png?v=9" title=":partying_face:" class="emoji" alt=":partying_face:"></p>
+<p>Among the few tickets that weren't resolved was an old one in which BrianH talks about adding an /IGNORE flag to PARSE:</p>
+<p><strong><a href="https://github.com/metaeducation/rebol-issues/issues/1080">Rebol Issue #1080</a></strong></p>
+<p>But to me... <strong>this sounds like a generalized feature being narrowly articulated as a PARSE wish.</strong></p>
+<p>What he's asking for is there to be a kind of iterator over a series which does not show some of its content.  The closest concept that Rebol has potentially had for this would be a PORT!.</p>
+<p>Here's some random imaginary pseudocode:</p>
+<pre><code>&gt;&gt; input: [1 2 3 4 5 6 7 8]
+
+&gt;&gt; port: make-filtering-port input :even?
+== #[port! [...]]
+
+&gt;&gt; read/part port 2
+== [2 4]
+
+&gt;&gt; read/part port 2
+== [6 8]
+</code></pre>
+<p>Ideally you could do this kind of filtering on a file on disk, a series in memory, a network stream, etc.  Even if the file were gigabytes in size you wouldn't wind up creating a huge amount of data just to iterate over the even numbers in it.</p>
+<h2>This Kind of Mechanic Has Prior Art</h2>
+<p><em>(Well, at least when I assume you're not asking for the impossible.  e.g. the data you're filtering is read only.  And you're not expecting to be able to have some automatic way of inserting things in the middle of a disk file and sliding the contents up...writing back over only the even values.  Sane requests here only, please.)</em></p>
+<p>In the past I've often brought up <a href="http://think-async.com/Asio/">Boost.ASIO, the C++ Asynchronous I/O library</a>.  It's for wiring up streams and layering them...dealing with buffering and disconnection exceptions and multi-platform eventing.  The whole nine yards.</p>
+<p>The filtering example I give above is actually one of the textbook examples of something you can do in Boost by building on streaming iterators:</p>
+<pre><code>struct is_even {
+    bool operator()( int x ) const { return x % 2 == 0; }
+};
+
+std::vector&lt;int&gt; input;
+input += 1,2,3,4,5,6,7,8,9;
+
+boost::copy(
+    input | filtered(is_even()),
+    std::ostream_iterator&lt;int&gt;(std::cout, ","));
+</code></pre>
+<p>That gives the output <strong>2,4,6,8,</strong></p>
+<p>But it goes much further than that.  You really can stack a streaming decompressor on top of a network port, and then stick a TCP processor and a TLS layer and an HTTP layer on top of that: <a href="https://dens.website/tutorials/cpp-asio/ssl-tls">https://dens.website/tutorials/cpp-asio/ssl-tls</a></p>
+<p>There's a library for WebSockets in Boost.ASIO, and I've already talked about how I think it's important for the desktop executable to be able to speak to the browser automation APIs.</p>
+<h2>Plan: Strip PORT! Out of The Pure C Build</h2>
+<p>There's no reason that the pure C build can't read files into memory in one fell swoop, and be able to bootstrap itself.  But I can say without a doubt that with the PORT! implementation behind the scenes today: <em>"There's no gold in them thar hills."</em></p>
+<p>So why not leave the pure C build with the basics of reading and writing files in their entirety... very simple and without any need for a PORT! model.  Then start from scratch on ports embracing existing work as much as possible, and building on proven and tested code?</p>
+<p>We'll keep the CALL facility written in pure C for now.  That way the basic executables can always reach out to curl or wget or whatever, if they want to trigger something like a network request.</p>
+<h2>Starting From Scratch Can Advance Rapidly</h2>
+<p>It should be clear from UPARSE that when I start out tackling a problem anew with the stored up knowledge and experience from seeing the previous problems, the results can be good.</p>
+<p>I've not really worked much on the port model, because there was no model there.  But in keeping the code adjusted to stay running and be more convenient over time, a ton of design points on the core have been stressed.  So as bad as much of the code is, it's been a proving ground for various pieces of the system.</p>
+<p>But now...it's time.  I think that basically wiping out pretty much all the PORT! code and starting again can go nowhere but up!</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661</link>
+          <pubDate>Sat, 14 Aug 2021 08:34:45 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1661</guid>
+          <source url="https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661.rss">Expanding Opportunity (by Dropping PORT!s from the pure C Build)</source>
+        </item>
+        <item>
+          <title>Dropping the SERIAL PORT!, for now...</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>Carl first demonstrated a serial port interface from Rebol in Montreal, as a simple project he undertook for controlling a water heater:</p>
+<div class="onebox lazyYT lazyYT-container" data-youtube-id="Axus6jF6YOQ" data-youtube-title="Carl Sassenrath: Insteon Automation with Rebol" data-parameters="feature=oembed&amp;wmode=opaque">
+  <a href="https://www.youtube.com/watch?v=Axus6jF6YOQ" target="_blank" rel="noopener">
+    <img class="ytp-thumbnail-image" src="https://i.ytimg.com/vi/Axus6jF6YOQ/maxresdefault.jpg" title="Carl Sassenrath: Insteon Automation with Rebol" width="690" height="388">
+  </a>
+</div>
+
+<p><a class="mention" href="/u/kealist">@kealist</a> then took this on to bring to R3-Alpha, and Ren-C.</p>
+<p>In the intervening time, I learned more about the device model and ports (mostly that there wasn't much of a design there).  Experiences with trying to factor this code contributed to that knowledge.</p>
+<p>It was an early aggressive user of the libRebol API, as non-essential code was untangled from the low-level core APIs.  So it has had an impact.</p>
+<p>But to try and rein in the project's sprawling scope, I think it's time to say that the serial code is something that we can put aside.  Especially since we don't have a great way to test it in CI.</p>
+<p>I won't even try to lobby <a class="mention" href="/u/kealist">@kealist</a> to get a serial device out of the closet to spin more cycles on it...and instead point to the more interesting efforts (like <a href="https://forum.rebol.info/t/introducing-uparse-the-hackable-usermode-parse/1529">UPARSE</a>, or Blazor interop...)</p>
+<p>Once a port model is implemented that can accommodate websockets and other interesting things, I'm sure the serial port code could be wired up by a sufficiently-motivated-individual.</p>
+<p>Archived repository at: <a href="https://github.com/metaeducation/rebol-serial">https://github.com/metaeducation/rebol-serial</a></p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/dropping-the-serial-port-for-now/1539">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/dropping-the-serial-port-for-now/1539</link>
+          <pubDate>Thu, 04 Mar 2021 05:14:03 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1539</guid>
+          <source url="https://forum.rebol.info/t/dropping-the-serial-port-for-now/1539.rss">Dropping the SERIAL PORT!, for now...</source>
+        </item>
+        <item>
+          <title>Letting go of ZeroMQ, for now...</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>At one point <a class="mention" href="/u/gchiu">@gchiu</a> asked me to port the R3-Alpha ZeroMQ extension that Andreas had made to Ren-C.  I did so, even though I didn't know much about it.</p>
+<p>He never used it.  But, it did give more experience with writing extensions...and became the first to switch over to using libRebol instead of core APIs.  It also was the first "C99 only" extension, where it was accepted that you didn't have to put <code>rebEND</code> on the end of libRebol API calls.</p>
+<p>There's really nothing profound about this particular integration, and no one uses it.  It does create headaches in terms of the build process.  That means we're being held back in rewriting Rebmake because every one of these extensions that has to be worried about contributes problems.</p>
+<p>It's not a terribly complex extension, and it wouldn't be hard to resurrect in its current state of functionality if anyone wanted it.  The real problem it has is defining what that functionality is and how Rebol can make it meaningful.</p>
+<p>Given that it doesn't have an active owner...I don't want the trouble of keeping it working.  So I'm moving it to an archived repository.</p>
+<p><a href="https://github.com/metaeducation/rebol-zeromq">https://github.com/metaeducation/rebol-zeromq</a></p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/letting-go-of-zeromq-for-now/1538">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/letting-go-of-zeromq-for-now/1538</link>
+          <pubDate>Thu, 04 Mar 2021 04:50:04 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1538</guid>
+          <source url="https://forum.rebol.info/t/letting-go-of-zeromq-for-now/1538.rss">Letting go of ZeroMQ, for now...</source>
+        </item>
+        <item>
+          <title>Streaming Mental Blocks, and some Haskell Streaming Research</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>Beyond just network reads and writes, there's a lot of internals with unexposed streaming-potential:</p>
+<ul>
+<li>
+<p>zlib can do streaming compression and decompression <em>(it has been able to all along, its just never been wired to anything)</em></p>
+</li>
+<li>
+<p>now that all the encryption is coming from mbedTLS, every hash and cipher is streaming <em>(this would permit computing the SHA256 of a multi-terabyte file without loading it all into memory at once... IF we knew what the interface for that was supposed to be)</em></p>
+</li>
+<li>
+<p>CALL gets its stdout and stderr as it comes along...that could be passed to some kind of streaming handler (interactive PARSE of shell commands to react with input?)</p>
+</li>
+</ul>
+<p>One of the reasons none of this cool stuff is used is it has been waiting on designs for PORT! and/or "CODEC".  Of course those designs won't invent themselves.</p>
+<p>Let's just take the concept of calculating a sha256 hash in streaming fashion.  You could "stream" via a plain old object interface:</p>
+<pre><code> hasher: make-hasher 'sha256
+ hasher/add-data "some data"
+ hasher/add-data #{00DECAFBAD00}
+ sha256: hasher/finish
+</code></pre>
+<p><em>(Note: the AES streaming cipher from Saphirion had even less-frills than this.  It didn't take care of building up a buffer for you, so each call assumed you wanted one block of output.  Adding one byte at a time gave you different results from sending them cumulatively.)</em></p>
+<p>Defining some one-off objects for these functions doesn't seem appealing.  To use it, that puts you in the position of looping through a file, and breaking it into chunks yourself.  Having a protocol for the hasher would hopefully let it plug in to something that would drive the process for you once you wired it up.</p>
+<p>Are PORT!s the answer?</p>
+<pre><code> hashport: open sha256://
+ write hashport "some data"  ; treated as data
+ write hashport #{00DECAFBAD00}  ; also treated as data
+ write hashport &lt;done&gt;  ; acts as an instruction?
+ sha256: read hashport  ; only legal if finalizing instruction received?
+</code></pre>
+<p>Here I've done something whimsical by using a TAG! to indicate when input is done.   Files don't have a <code>&lt;done&gt;</code> on them, so you'd have to stick that on somewhere.</p>
+<p>Being further whimsical, let's imagine using some kind of universal CONNECT to put things together, and show two hashes being done by the same pipeline:</p>
+<pre><code> hashport: open sha256://
+ readhashport: connect [
+     open %/some/fileA.txt +&gt; [&lt;done&gt;] +&gt; open %/some/fileB.txt +&gt; [&lt;done&gt;]
+     &gt;&gt; hashport
+ ] 
+ sha256-fileA: read/part readhashport 1
+ sha256-fileA: read/part readhashport 1
+</code></pre>
+<p>The weird suggestion here is that <strong>+&gt;</strong> might join together input sources, and <strong>&gt;&gt;</strong> to pipe the output of a source (in this case a composite source) to a sink.  If you don't like that, maybe it's blocks:</p>
+<pre><code>connect [
+     [open %/some/fileA.txt | [&lt;done&gt;] | open %/some/fileB.txt | [&lt;done&gt;]]
+     [hashport]
+]
+</code></pre>
+<p>Anyway <em>I don't know what I'm talking about in particular, but I do know these types of things DO exist</em>.</p>
+<p>One of the more documented streaming answers in the Haskell world is something called "Conduit", so I've been looked around at that.  (Note: <a href="https://www.tweag.io/blog/2017-10-05-streaming2/" rel="nofollow noopener">this is a good article for anyone wanting details of alternatives</a>)</p>
+<h2>Conduit</h2>
+<p>A couple slides from <a href="https://www.snoyman.com/reveal/conduit-yesod#/5" rel="nofollow noopener">a presentation</a></p>
+<blockquote>
+<h3>What is streaming data?</h3>
+<ul>
+<li>Process a sequence of values of the same type</li>
+<li>Produce a sequence of values of the same type</li>
+<li>Don't keep all the data in memory at once</li>
+<li>Perform some actions in-between</li>
+<li>Probably more common than you'd think</li>
+</ul>
+</blockquote>
+<p>Notice the wording there of <strong>values of the same type</strong>.  Basically every language's streaming or piping mechanisms seem to ask you to put a type on things (e.g. Go's <code>channel</code> which I have hacked up a simulation of in stackless.)</p>
+<blockquote>
+<h3>Common Examples</h3>
+<ul>
+<li>Read data from/write data to a file</li>
+<li>Communicate over a socket</li>
+<li>Read data from a database</li>
+<li>Traverse a deep directory structure</li>
+<li>Implement a job queue</li>
+<li>Generate large HTTP response bodies</li>
+<li>Parsing</li>
+</ul>
+</blockquote>
+<p>Conduit sets up the terminology that there is a superclass (<strong>"Pipe"</strong>).  When you establish a Pipe type you say what the input and output datatypes are.</p>
+<ul>
+<li>If you only specify an output type, that Pipe is considered a <strong>"Source"</strong>
+</li>
+<li>If you only specify an input type, that Pipe is considered a <strong>"Sink"</strong>
+</li>
+<li>If you specify both, the Pipe is considered a <strong>"Conduit"</strong>
+</li>
+</ul>
+<p>The <a href="https://github.com/snoyberg/conduit/blob/0a035103190608f9bcc12d333971a20e15d98882/conduit/src/Data/Conduit/Internal/Pipe.hs#L63" rel="nofollow noopener">Pipe definition</a> in <code>Data.Internal.Conduit.Pipe</code> is complicated to read, but the author tends to be descriptive in comments so that helps.</p>
+<p>Something to notice is that Pipe has a concept of a "result type" distinct from its "output type".... and an "upstream result type".  It also mentions the concept that pipes can be able to be defined as having "leftovers", which if it has them will be the same as the input type and are automatically provided to the "next Pipe in the monadic chain".</p>
+<p>(To see why leftovers might be useful, imagine you are parsing data from a network and you get a HTTP stream with a header and a body, which you then are digesting into some output.  Your "Source" is a network, and let's say your "Sink" is a file.  But in between them you have a "Conduit" that is sometimes processing header and then sometimes processing body...which may be implemented in two different pieces of code that are chained together.  If the source is producing BINARY! blobs, it might straddle the line between header and body...so your header parser would want to take just the part it wanted, and then pass on the remainder to the body in the same conceptual conduit layer.  More generally you can think of this as being like having a composed parser that is passing on remainders as it goes...)</p>
+<p>The comments say:</p>
+<blockquote>
+<p>A basic intuition is that every Pipe produces a stream of output values<br>
+(of type <strong>o</strong>) and eventually indicates that this stream is terminated by sending a<br>
+(of type <strong>r</strong>) . On the receiving end of a Pipe, these become the <strong>i</strong> and <strong>u</strong><br>
+parameters.</p>
+</blockquote>
+<p>It defines some type constructors which look like function calls or signals the implementation of a pipe would raise:</p>
+<ul>
+<li>
+<p><strong>HaveOutput (Pipe l i o u m r) o</strong> - Provide new output to be sent downstream. This constructor has two fields: the next Pipe to be used and the output value.</p>
+</li>
+<li>
+<p><strong>NeedInput (i -&gt; Pipe l i o u m r) (u -&gt; Pipe l i o u m r)</strong> - Request more input from upstream. The first field takes a new input value and provides a new Pipe. The second takes an upstream result value, which indicates that upstream is producing no more results.</p>
+</li>
+</ul>
+<p>(Translation: this passes two callbacks.  If there's more data, the first callback will be invoked with the new single item's worth of input.  If there's an error or the upstream is finished, the second callback gets called and is passed that result.)</p>
+<ul>
+<li>
+<p><strong>Done r</strong> - Processing with this Pipe is complete, providing the final result.</p>
+</li>
+<li>
+<p><strong>PipeM (m (Pipe l i o u m r))</strong> - Require running of a monadic action to get the next Pipe.</p>
+</li>
+</ul>
+<p>(Translation: <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"> )</p>
+<ul>
+<li>
+<strong>Leftover (Pipe l i o u m r) l</strong> - Return leftover input, which should be provided to future operations.</li>
+</ul>
+<p>Modulo the "require running of a monadic action", it seems fairly clear.</p>
+<h2>The Setup-And-Go Model</h2>
+<p>Something about Conduit and systems like it (boost::asio) is that they generally look to be about setting up connections and then saying "okay, run it".  This is a bit akin to setting up a server and then saying <strong>wait</strong> for the entire program.</p>
+<p>You can see some nice examples of these "flow" chains like in <a href="https://gist.github.com/michaelt/6c6843e6dd8030e95d58#file-examples-hs-L21" rel="nofollow noopener">this example from another library called "Streaming"</a>:</p>
+<pre><code>import qualified Data.ByteString.Streaming.Char8 as Q
+
+-- Send the first n lines to stdout. 
+-- Note that this streams even if it hits a 10 terabyte "line"
+head n file = withFile file ReadMode $ \h -&gt; 
+  Q.stdout
+  $ Q.unlines
+  $ takes n
+  $ Q.lines
+  $ Q.fromHandle h
+</code></pre>
+<p>Which I could translate into wishful-thinking pseudocode like:</p>
+<pre><code> h: open/read file
+ run-stream [
+     (make-stream-fromHandle h)
+         |
+     :deline/lines  ; e.g. deline/lines "a^/b^/c" =&gt; [a b c]
+         |
+     :(specialize 'take [part: n])  ; take N lines
+         |
+     :(specialize 'delimit [delimiter: newline])  ; add newlines back in
+         |
+     :write-stdout
+ ]
+</code></pre>
+<p>The guts of those natives have no streaming ability, of course.  <strong>But let me point something out about the streaming example:</strong> Haskell has a <a href="http://hackage.haskell.org/package/base-4.14.0.0/docs/Data-String.html#v:unlines" rel="nofollow noopener">built in UNLINES</a> which acts like DELIMIT with newline, it's a very simple recursive formulation.  Empty input is empty output, otherwise it takes the first element and sticks a '\n' onto it and appends the result of UNLINES on the rest:</p>
+<pre><code>unlines [] = []
+unlines (l:ls) = l ++ '\n' : unlines ls 
+</code></pre>
+<p><em>But that is not what this example is using.</em>  The <strong>Q.unlines</strong> is <a href="https://github.com/michaelt/streaming-bytestring/blob/398d67e11882f8fd8534244000914064674821b5/Data/ByteString/Streaming/Char8.hs#L540" rel="nofollow noopener">the Streaming library's own implementation</a>.  It only works with this particular Streaming library (e.g. not with Conduit or other varied implementations).  The source is clearly much more complex.  Same applies for <strong>Q.lines</strong>.</p>
+<h2>What about random access IO?</h2>
+<p>C++ is an example where the definition of the <strong>std::istream</strong> and <strong>std::ostream</strong> types account for being able to seek to arbitrary positions.  It's up to the implementer of the stream who writes these interfaces to say whether that's legal or not.</p>
+<p>It seems that at least in these examples I've looked at, the streaming abstractions are independent universes.  You import file handles or other things into the streams to get them to conform to the interface, which is limited to just the operations given.</p>
+<h2>How do Streams map to PORT! and/or CODEC?</h2>
+<p>Codecs are simply objects with three entry points:</p>
+<ul>
+<li>Ask if BINARY data contains magic numbers to be a recognized type</li>
+<li>Translate a BINARY! into a Rebol value</li>
+<li>Convert a Rebol value into a binary.</li>
+</ul>
+<p>It seems any such thing would benefit from being able to stream--you may not need to load the entirety of an input into memory at once just to get the item loaded.  These would fit into the "conduit" category of pipes.</p>
+<p>PORT!s have tried to apply in many contexts of <em>"object you talk to that takes data in and gives data out"</em>.  It's framed as the way that you would talk to a SQL database, as well as a random-access file, or internet connection.  These things share so little in common that the generality of "involves I/O" has been of little assistance and mostly muddied the waters.</p>
+<p>PORT!s have acted as a source, a sink, or both.  There are cases of PORT!s incorporating each other for their implementation...e.g. the TLS port instantiates a TCP port and controls it.  And the HTTP port instantiates either a TLS or TCP port depending on whether it's http or https.  But these embeddings are very manual (and not well understood, at least not by me).  They use each other in their implementations but there is no general architecture for such reuse.  So nothing is being "wired" together.</p>
+<p><strong>When we look at questions like wanting to expose CALL's functionality, then CALL wants us to hook it up to a source and two sinks.</strong>  One PORT! doesn't give us that.  Should it be three?</p>
+<p>One piece of good news in all the questions is that stackless is offering hope for more experimentation with chains of processing, that can retain their memory/state and yield information across the pipe.  I've shown one <a href="https://forum.rebol.info/t/yielder-and-generator-and-thinking-about-coroutines/1311/3">primordial example with channels</a>, and if things can solidify a bit more then it may be a good way to research seeing if some of these streaming features can be exposed.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/streaming-mental-blocks-and-some-haskell-streaming-research/1325">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/streaming-mental-blocks-and-some-haskell-streaming-research/1325</link>
+          <pubDate>Mon, 31 Aug 2020 14:01:44 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1325</guid>
+          <source url="https://forum.rebol.info/t/streaming-mental-blocks-and-some-haskell-streaming-research/1325.rss">Streaming Mental Blocks, and some Haskell Streaming Research</source>
+        </item>
+        <item>
+          <title>PARSE on PORT! and avoiding generic behavior w.r.t. ANY-SERIES!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>If you look at Rebol2, R3-Alpha, and Red they all do the same thing with FILE! that they would with text (STRING!) when you pass as the first argument to PARSE:</p>
+<pre><code>rebol2&gt;&gt; parse %aaa.txt [some "a" ".txt"]
+== true
+
+r3-alpha&gt;&gt; parse %aaa.txt [some "a" ".txt"]
+== true
+
+red&gt;&gt; parse %aaa.txt [some "a" ".txt"]
+== true
+</code></pre>
+<p>I've always had the ambition that you be able to PARSE a PORT!.  If that's possible, it seems that you should be able to shortcut actually opening and closing the port yourself by saying something like:</p>
+<pre><code>parse %some-200-megabyte-file.txt [
+     some "a" end (print "Your giant file was all the letter A")
+]
+
+parse http://example.com/some-net-data/ [
+    thru &lt;title&gt; copy title to &lt;/title&gt; (print ["Title was" title])
+]
+</code></pre>
+<p>The vision would be that PARSE would assume when you gave it a FILE! or URL! that you meant to operate on that as a PORT!...opening it, parsing it, and closing it.  If you gave it a regular PORT! it would assume you would take care of closing it yourself.</p>
+<p>Furthermore, it would be efficient so that it didn't need to load all of it into memory at once.  (There could be some heuristic on a "chunk size" it picked automatically, paging in only as much of the file as it needed at a time.  But you could perhaps tweak that manually by opening the port yourself and doing some settings.  This seems to be a property of the PORT! and not of PARSE, though there may be PARSE-specific settings.  Perhaps those settings would be looked for on the port itself as an extensible set of headers, vs. being some strange refinement you'd pass.)</p>
+<p>In any case, the appeal of having that work for FILE! and URL! certainly seems to suggest that it's a much better use of the type variety than as a synonym for:</p>
+<pre><code>&gt;&gt; did parse as text! %aaa.txt [some "a" ".txt" end]
+== #[true]
+</code></pre>
+<p>There's clear need for PARSE to run on TEXT!, BINARY!, and BLOCK! input.  I'm not sure how this applies to INTO.  There also might be a <strong>parse/only</strong> (or <strong>parse/into</strong>? which would be type-preserving?)</p>
+<h2>Not just for PARSE: a General Philosophy of ANY-SERIES!</h2>
+<p>This ties into what I think should be a very restrained tendency to use ANY-STRING! types in ways that make them equivalent to the behavior on TEXT!.</p>
+<p>I've said similar things about why <strong>type of first ['''a]</strong> should not be conflated with plain WORD!.  There should be a default of discernment; leaving the room open for distinct meanings.</p>
+<p>So be on the lookout for cases where a datatype is being underused, even if it's not able to do the ideal magic today.  Seeing PARSE run on PORT! is a pretty big wishlist item for me, so maybe it's not impossible that it could happen... (!)</p>
+            <p><small>15 posts - 5 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/parse-on-port-and-avoiding-generic-behavior-w-r-t-any-series/1276">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/parse-on-port-and-avoiding-generic-behavior-w-r-t-any-series/1276</link>
+          <pubDate>Sun, 26 Apr 2020 00:26:48 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1276</guid>
+          <source url="https://forum.rebol.info/t/parse-on-port-and-avoiding-generic-behavior-w-r-t-any-series/1276.rss">PARSE on PORT! and avoiding generic behavior w.r.t. ANY-SERIES!</source>
+        </item>
+        <item>
+          <title>Input/Output/Error Ports</title>
+          <dc:creator><![CDATA[rgchris]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>A fundamental Rebol 2 feature lacking from Rebol 3 (and by extension, Ren-C) is the concept of Input/Output ports (and missing from Rebol 2 was an Error port).</p>
+<p>In Rebol 2, the Console scheme was used for both Input/Output when the interpreter was invoked without argument (thus entering the REPL loop), whereas when invoked with argument (at least on Mac/Linux), Input/Output used the File scheme on what I assume to be a virtual file.</p>
+<p>That Rebol 3 uses the Console scheme for Input and no scheme (or port) for output reveal some limitiations, such as the bleeding of console logic and decoration in shell scripts, or redirecting output to a hard file, and the awkward workaround that is WRITE-STDOUT. The first case there is especially notable for me as I primarily develop and deploy scripts as shell scripts and the Console scheme should never be a consideration in that mode.</p>
+<p>I understand that the whole Port model could use a fair degree of scrutiny—and I certainly can't speak to the rectitude of using FILE as the default I/O scheme (I don't have that systemic understanding), but it seems that the long arc of Rebol 3/Ren-C development has kind-of skirted this core concern.</p>
+            <p><small>10 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/input-output-error-ports/1248">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/input-output-error-ports/1248</link>
+          <pubDate>Fri, 06 Dec 2019 18:28:03 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1248</guid>
+          <source url="https://forum.rebol.info/t/input-output-error-ports/1248.rss">Input/Output/Error Ports</source>
+        </item>
+        <item>
+          <title>&quot;SECURE is disabled&quot;...?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>Rebol2 had a useful feature of layering on top of the OS's traditional file permissions model, with an extra set of permissions that apps were allowed to have.  A script couldn't necessarily assume it could delete files just because the account that ran it had privileges to do so.  This was configured via the SECURE function, and it also had command-line switches.</p>
+<p>R3-Alpha attempted to push a certain amount of the SECURE dialect into usermode.  <a href="http://www.rebol.net/r3blogs/0197.html" rel="nofollow noopener">Carl wrote about the motivation</a>, saying the usermode function was <em>"about a page of source code. One of the largest functions in REBOL"</em></p>
+<p><a href="https://github.com/rebol/rebol/blob/master/src/mezz/mezz-secure.r" rel="nofollow noopener">https://github.com/rebol/rebol/blob/master/src/mezz/mezz-secure.r</a></p>
+<p>But the infamous "SECURE is disabled" message is there because it wasn't ready.  R3-Alpha was released with the SECURE function overwritten <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/base-funcs.r#L122" rel="nofollow noopener">with a no-op during boot</a>.</p>
+<h2>I think it's time to mothball it, for now</h2>
+<p>I'm a huge fan of the <a href="https://en.wikipedia.org/wiki/Principle_of_least_privilege" rel="nofollow noopener">principle of least privilege</a>, and have always advocated for these kinds of features in OSes...long before I'd seen Rebol.  So I'd not deleted it because it seemed like food for thought...serving as a reminder of the issue.  (<em>"Before one does some kind of thing you might think privilege escalation would be necessary for, there might should be a call to Check_Security()..."</em>)</p>
+<p>But I'm going to strike it for now, here are some reasons:</p>
+<ul>
+<li>
+<p>The feature was unfinished and there's no time to work on it.  There's really not much code there at all (such as there is no facility for asking you to escalate the privileges.)</p>
+</li>
+<li>
+<p>I don't know what level of testing it ever received for making sure people aren't doing weird things with non-canonized file paths to get around any limits you tried to set.  (e.g. "You can't access %/c/foo/* but you can write to %/c/bar/*, so you write to %/c/bar/../foo/hack.exe")</p>
+</li>
+<li>
+<p>On that point, it's extremely difficult to get security right, and using a term like "SECURE" runs the risk of looking amateurish.  Especially when it's a bunch of commented out code that no one has run.  And Rebol has a lot to answer for as far as security goes.  <em>(See the <a href="https://forum.rebol.info/t/the-philosophy-of-security-in-rebol/172">"Philosophy of Security in Rebol"</a> if you want to chime in on that.)</em>  Launching a feature with such a name carries along with it the suggestion of a lot of development and testing that there is no developers or testers chomping at the bit to volunteer time for.</p>
+</li>
+<li>
+<p>If you're just trying to help people avoid shooting themselves in the foot, there are some completely-usermode ways of tackling this kind of thing today in Ren-C, using function compositions and HIJACK.  You can create a screened version of READ or WRITE or GET-ENV and expose that with creative limits that the SECURE dialect wasn't going to implement (e.g. only allow reading from certain URLs with a given throttle rate, or between certain hours).  Ren-C is trying to address <em>these</em> kinds of modifications and the binding/isolation that would make it work, vs. try and box in a feature that any other language might be able to offer just as easily.</p>
+</li>
+<li>
+<p>Every OS (or browser) is tackling privileges as they apply to its own domain.  While the SECURE of R3-Alpha's era may have only needed to think about integrating with a filesystem privilege model, designing a truly holistic cross-platform security dialect is probably a pretty big task.  A concept based on the idea of bit-masks in tuples would need revisiting to mesh with modern systems (and I think TUPLE! needs serious review as a type and use of periods)</p>
+</li>
+<li>
+<p>Pretty much all the calls are in code that's slated for replacement, and they kind of just complicate the picture with extra parameters.  It's illusory that shuffling the commentary-code-that-doesn't-run with the parameters-that-aren't-used does any good in bringing about a better design.  The only thing that brings about better designs is sitting down and actually thinking them all the way through.</p>
+</li>
+</ul>
+<h2>But mainly, it's a tangent there's no time for...</h2>
+<p>It's hard to argue that Rebol has specific relevance to this problem area moreso than any other language does.  Really, it's trying to take on what should be the OS's job.  Because if an OS in this day and age doesn't do this kind of thing, what <em>is</em> it doing?</p>
+<p><em>(Where the OS sadly lacks, third-party apps or tools can pick up the slack.  One particularly good one UI-wise for Mac as far as the network goes I once used was <a href="https://www.obdev.at/products/littlesnitch/index.html" rel="nofollow noopener">Little Snitch</a>.  That doesn't help with things internal to the interpreter like having privilege to use debug routines...but can pick up some of the slack if it's really an issue, and likely do a better job of sandboxing all angles of access--e.g. calls through DLLs that aren't beholden to making Check_Security() calls inside the r3.exe)</em></p>
+<p>This isn't a priority item for getting to a "Minimum Viable Product" <em>(a term the WebAssembly people keep using)</em>.  No one is not using the system because this feature isn't there, and no one would start using it merely because it was.  It's a "nice-to-have" feature that would need significant design and testing cycles that aren't available.</p>
+<p>So in the interest of clearing the air and making sure all the code in the system that's there has a reasonable reason to be there, it goes.  Since no development has happened on it, the R3-Alpha GitHub snapshot is as good a place as any for someone who thinks that's the place to start looking into this...</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/secure-is-disabled/890">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/secure-is-disabled/890</link>
+          <pubDate>Sun, 04 Nov 2018 10:04:54 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-890</guid>
+          <source url="https://forum.rebol.info/t/secure-is-disabled/890.rss">&quot;SECURE is disabled&quot;...?</source>
+        </item>
+        <item>
+          <title>Rebol3 ports for porting</title>
+          <dc:creator><![CDATA[gchiu]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>We've been asked to collect all examples of Rebol3 ports for ideas on a rewrite to Ren-c, or, to see how they can be completely rewritten with a new model.</p>
+<p>These are mine from a long time ago.</p>
+<p><code>https://github.com/gchiu/Rebol3/tree/master/protocols</code></p>
+<p>Includes:</p>
+<ul>
+<li>daytime</li>
+<li>dns</li>
+<li>email</li>
+<li>fax</li>
+<li>ftp</li>
+<li>imap</li>
+<li>pop3</li>
+<li>smtp</li>
+<li>time</li>
+<li>sl4a</li>
+</ul>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/rebol3-ports-for-porting/640">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/rebol3-ports-for-porting/640</link>
+          <pubDate>Wed, 23 May 2018 23:57:33 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-640</guid>
+          <source url="https://forum.rebol.info/t/rebol3-ports-for-porting/640.rss">Rebol3 ports for porting</source>
+        </item>
+        <item>
+          <title>Places to Look for PORT! Prior Art</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>It's probably useful to gather some resources on places to look for comparison/contrast/inspiration for I/O designs.  So post here if you have them.  I'll list a few:</p>
+<h3>Boost.ASIO</h3>
+<p>The C++ world has a powerful offering of Boost.ASIO, which stands for "Asynchronous I/O".</p>
+<p><a href="https://www.boost.org/doc/libs/1_66_0/doc/html/boost_asio/overview/core/basics.html" rel="nofollow noopener">Boost.ASIO Overview</a></p>
+<p>The focus is to link up various "easily leaky" C-style things into the C++ world, where things can be wired together more robustly.  Of course, to take advantage of that, one must be able to read source that looks like these examples:</p>
+<p><a href="https://www.boost.org/doc/libs/1_63_0/doc/html/boost_asio/examples.html" rel="nofollow noopener"><code>https://www.boost.org/doc/libs/1_63_0/doc/html/boost_asio/examples.html</code></a></p>
+<p>...which aren't necessarily all that complex when you boil down the syntax.  But I haven't really used it.  I feel like sitting down with it might be educational for me, and perhaps how they've broken down the problem could have easier-to-read parallels.  One might even imagine using C++ in the implementation, at least for starters, if it demonstrated benefit.</p>
+<h3>Node.JS</h3>
+<p>JavaScript is single-threaded, Node.JS was sort of rapidly put together, and people seem to have been hacking up Node.JS programs fine.  As far as I recall, Node didn't try to attack every kind of I/O through some kind of uniform interface.  You just have objects that you pass callbacks to when they got the information you requested.  Here's a description of how to do file I/O:</p>
+<p><a href="https://docs.nodejitsu.com/articles/file-system/how-to-read-files-in-nodejs/" rel="nofollow noopener">How to read files in Node.JS</a></p>
+<p>It raises the question of how wise it is to try and pipe everything through one kind of READ and WRITE, vs <strong>clip: make clipboard! ...</strong> then <strong>clip/read</strong>, where the parameterization and data return types can all be customized by that object.</p>
+<h3>0MQ</h3>
+<p>I don't know a ton about <a href="http://zeromq.org/" rel="nofollow noopener">0MQ</a>, but when I think about the idea of what some kind of unified-futuristic-I/O-model might do for someone, it's the kind of idea that comes up.  What if PORT! always spat out blobs of Rebol values?</p>
+<p>One scenario I think is interesting to model is two Rebol apps on a network, where one is able to send Rebol-styled data at a certain rate, and the other end can receive it and process it with PARSE.  What might that look like?</p>
+<h3>Uniserve</h3>
+<p>I've never used Uniserve:</p>
+<p><a href="https://www.softinnov.org/rebol/uniserve.shtml" class="onebox" target="_blank" rel="nofollow noopener">https://www.softinnov.org/rebol/uniserve.shtml</a></p>
+<p>But supposedly it was a driving factor in creating Red.  Yet Red lacks I/O.</p>
+<p>It was created to address a perceived deficiency in Rebol2.  Did it?  Was it in competition with R3-Alpha ports?  Does anyone who's used it have good things to say about it, bad?</p>
+            <p><small>4 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/places-to-look-for-port-prior-art/621">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/places-to-look-for-port-prior-art/621</link>
+          <pubDate>Tue, 15 May 2018 08:05:58 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-621</guid>
+          <source url="https://forum.rebol.info/t/places-to-look-for-port-prior-art/621.rss">Places to Look for PORT! Prior Art</source>
+        </item>
+        <item>
+          <title>What were Rebol2 Ports Like?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>The <a href="https://forum.rebol.info/t/what-is-a-port/617/6">What is a PORT!</a> post says something that is often said in things written by (presumably) Carl:</p>
+<blockquote>
+<p>"In Rebol 2, ports were built on a pure series model. However, we found this approach to be problematic because ports are not pure series. They also embody state (information)."</p>
+</blockquote>
+<blockquote>
+<p>"Rebol 3 moves away from the pure series model of Rebol 2 and more toward an I/O stream model. Now it is closer to the concept found in other programming environments and languages."</p>
+</blockquote>
+<blockquote>
+<p>The pure series model is gone. Ports are more pragmatic now, and this has resulted in a port system that is cleaner, smaller, faster, and more extensible than ever before.</p>
+</blockquote>
+<p>But that doesn't seem to be people's experience.  I haven't heard this newfound "smaller/faster/more-extensible" pleasing anyone in particular.  Mostly just people complain that they didn't have the ports they used to have.</p>
+<p>My questions:</p>
+<ul>
+<li>
+<p>What about Rebol2 port code made it a "pure series"?  You couldn't PARSE a PORT! in Rebol2, I don't think.  How was it "pure" or "impure"?</p>
+</li>
+<li>
+<p>Is there any case of something that didn't work in Rebol2 that was suddenly able to work in R3-Alpha?  e.g. an example of Rebol2 code where the R3-Alpha is better?</p>
+</li>
+<li>
+<p>Does anyone have an example of going backwards?  Where Rebol2 code was good and R3-Alpha seems wrong?</p>
+</li>
+</ul>
+<p>cc: <a class="mention" href="/u/gchiu">@gchiu</a> <a class="mention" href="/u/rgchris">@rgchris</a> <a class="mention" href="/u/brett">@Brett</a></p>
+            <p><small>5 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-were-rebol2-ports-like/620">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-were-rebol2-ports-like/620</link>
+          <pubDate>Tue, 15 May 2018 07:14:35 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-620</guid>
+          <source url="https://forum.rebol.info/t/what-were-rebol2-ports-like/620.rss">What were Rebol2 Ports Like?</source>
+        </item>
+        <item>
+          <title>What is a Port?</title>
+          <dc:creator><![CDATA[rgchris]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>From the <a href="https://github.com/revault/rebol-wiki/wiki/Ports#basic-concepts" title="Ports: Basic Concepts, Using Ports, Port Details, Error Handling" rel="nofollow noopener">Rebol 3 Project Wiki</a>:</p>
+<hr>
+<h1>Basic Concepts</h1>
+<p><a href="https://github.com/revault/rebol-wiki/wiki/Ports#introduction" title="Ports: Introduction" rel="nofollow noopener">As stated above</a>, a port is used to transfer data. However, the basic port definition is a bit more general than that. A port is actually more like a <em>stream of data</em> that undergoes some type of exchange, transformation, or effect.</p>
+<p>For example, a port is often used for I/O functions such as:</p>
+<ul>
+<li>
+<strong>console</strong> input and output</li>
+<li>
+<strong>file</strong> reading and writing</li>
+<li>
+<strong>directories</strong> of files</li>
+<li>
+<strong>network</strong> transferring of data</li>
+<li>
+<strong>event handling</strong>, such as mouse clicks or keyboard input</li>
+<li><strong>database access</strong></li>
+</ul>
+<p>But, a port can also be used for other types of functions:</p>
+<ul>
+<li>
+<strong>image conversion</strong> - such as encoding or decoding a JPEG file.</li>
+<li>
+<strong>sound conversion</strong> - such as encoding or decoding an audio file</li>
+<li>
+<strong>checksum computation</strong> - keeping a running checksum</li>
+<li>
+<strong>compression and decompression</strong> of data</li>
+<li>
+<strong>encryption and decryption</strong> of data</li>
+<li>
+<strong>other codecs</strong> for encoding and decoding data formats</li>
+</ul>
+<h2>Related to Series</h2>
+<p>As you know, Rebol is built on the concept of a <a href="http://www.rebol.com/docs/core23/rebolcore-6.html" rel="nofollow noopener">Series</a>.</p>
+<p><strong>A series is a set of values arranged in a specific order. It is a sequence.</strong></p>
+<p>A port is a special type of series. Not only is it a sequence, but it can also hold <em>state information</em> like an object, and access <a href="https://github.com/revault/rebol-wiki/wiki/Devices" rel="nofollow noopener">external devices</a> for I/O or other high-speed operations, such as image conversion or encryption.</p>
+<p>In Rebol 2, ports were built on a pure series model. However, we found this approach to be problematic because ports are not pure series. They also embody state (information).</p>
+<p>For example, a file can be thought of as a stream of bytes. But, a file also has other important attributes such a file name, a location within a directory, creation and modification dates, permissions like read-only or allow execution, and ownership information. These attributes fall outside of a pure series model.</p>
+<h2>New Definition</h2>
+<p>Rebol 3 moves away from the pure series model of Rebol 2 and more toward an I/O stream model. Now it is closer to the concept found in other programming environments and languages.</p>
+<p>So, a port can be defined as:</p>
+<ul>
+<li>
+<strong>a series of values</strong> - such as a sequence of bytes</li>
+<li>
+<strong>holds state information</strong> - such as file attributes</li>
+<li>can <strong>access the external world</strong> - network communication, for example</li>
+<li>
+<strong>can have side effects</strong> - internal changes, such as compression</li>
+</ul>
+<p>The pure series model is gone. Ports are more pragmatic now, and this has resulted in a port system that is cleaner, smaller, faster, and more extensible than ever before.</p>
+<h2>Main Components</h2>
+<p>A port consists of these main ideas:</p>
+<ol>
+<li>
+<strong>A name</strong> that specifies the general type of port (scheme)</li>
+<li>
+<strong>An object</strong> that holds information (state of port)</li>
+<li>
+<strong>A set of functions</strong> that are applied to that object (actions)</li>
+</ol>
+<p>The name of a port is called a <strong>'scheme'</strong>. Example schemes are:</p>
+<ul>
+<li><strong>console</strong></li>
+<li><strong>file</strong></li>
+<li>
+<strong>dir</strong> - file directory</li>
+<li>
+<strong>event</strong> - gui events (mainly)</li>
+<li>
+<strong>TCP</strong> - networking</li>
+<li>
+<strong>HTTP</strong> - web connections</li>
+<li>
+<strong>clipboard</strong> - cut and paste</li>
+<li>
+<strong>sound</strong> - for audio output</li>
+<li>
+<strong>system</strong> - system state changes</li>
+</ul>
+<p>Many other types of schemes can exist, and they are often built on top of lower level schemes. For example, FTP for file transfer is built on the TCP networking scheme.</p>
+<p>Here is an example. In this line:</p>
+<pre><code class="lang-auto">port: open tcp://www.rebol.net
+data: read http://www.rebol.com
+</code></pre>
+<p>the first scheme is TCP; the second is HTTP. (Note that this is consistent with the definition of a URL.)</p>
+<p>The object holds information such as:</p>
+<ul>
+<li>the type of the port (file, network, database, etc.)</li>
+<li>the name and location (path) of a file</li>
+<li>the URI of a network connection</li>
+<li>a network host name and port number</li>
+<li>a buffer of data being transferred</li>
+<li>date and time info</li>
+<li>structures used by external devices</li>
+</ul>
+<p>This object is of a specific Rebol <em>datatype</em>, called a <em>PORT!</em></p>
+<p>Specific <em>action functions</em> can be applied to a port. Some common actions are:</p>
+<ul>
+<li>
+<strong>make</strong> - create a new port</li>
+<li>
+<strong>open</strong> - initialize the port</li>
+<li>
+<strong>close</strong> - finalize the port</li>
+<li>
+<strong>read</strong> - read data from port</li>
+<li>
+<strong>write</strong> - write data to port</li>
+<li>
+<strong>query</strong> - get other information from port</li>
+<li>
+<strong>update</strong> - detect external changes to the port</li>
+</ul>
+<p>But, there are many other actions as well, as generally defined by Rebol datatypes.</p>
+<h1>Using Ports</h1>
+<h2>Two Basic Methods</h2>
+<p>There are two basic methods to use a port: <strong>implicit</strong> and <strong>explicit</strong>.</p>
+<p>When you write code such as:</p>
+<pre><code class="lang-auto">write %index.html read http://www.rebol.net
+</code></pre>
+<p>you are using <strong>implicit</strong> ports. This is a shortcut notation to keep simple code simple. You are only using a single port action, such as <strong>read</strong> or <strong>write</strong> and all the other details are hidden behind those functions.</p>
+<p>However, if you write code such as:</p>
+<pre><code class="lang-auto">file: open %data.dat
+write file data1
+write file data2
+...
+close file
+</code></pre>
+<p>then you are using <strong>explicit</strong> ports. Here you specify each action separately. You <strong>open</strong> the port, then <strong>read</strong> and <strong>write</strong> to the port, and then <strong>close</strong> the port. Each action must be specified.</p>
+<h2>Fast and Easy</h2>
+<p>Implicit ports are the fast and easy way to perform various I/O actions in Rebol.</p>
+<p>A few examples are:</p>
+<pre><code class="lang-auto">data: read %todo.dat
+write %plans.r data
+query %docs.txt
+page: read http://www.rebol.net
+result: write http://rebol.net/cgi/act.r data
+data: read ftp://www.rebol.net/projects.dat
+host: read dns://www.rebol.net
+</code></pre>
+<p>This type of usage depends on the type of port (the scheme). The example above uses the file, http, ftp, and dns schemes. Those schemes have been designed to support implicit actions.</p>
+<p>Notice that for local files, the file datatype is used to indicate usage of the file scheme. The line:</p>
+<pre><code class="lang-auto">data: read file://todo.dat
+</code></pre>
+<p>is equally valid. Think of the file datatype as an abbreviation for that. Both methods use the same file scheme to perform the I/O.</p>
+<p>Other schemes do not support implicit usage. For example:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; data: read tcp://www.rebol.com
+** Access error: Port is not open: tcp://www.rebol.com
+** Where: read
+** Near: read tcp://www.rebol.com
+</code></pre>
+<p>This error occurs because TCP does not support an implicit <strong>read</strong> action. That's because TCP is a lower level scheme that requires a higher level protocol in order to be useful.</p>
+<h2>Full Control</h2>
+<p>Explicit ports give you full control over each I/O action.<br>
+For example, let's say you want to read a large file in small 20000 byte chunks. You might use these steps:</p>
+<pre><code class="lang-auto">file: open %bigdata.dat
+while [not zero? data: read/part file 20000] [
+    process data
+]
+close file
+</code></pre>
+<p>This common method will be familiar to most programmers. The file is opened, reads are done, and the file is closed. Each action is done separately.</p>
+<p>This type of explicit I/O is common for large files that would consume a lot of memory if you read them with implicit I/O. For example, if the <em>bigdata.dat</em> file is 10 GB, you would not be able to read it all into memory at one time.</p>
+<p>Explicit I/O is also used when you need strict control over each action. This is often done if you need to seek to different locations within a file or write your own network protocol.</p>
+<p>For example, let's say you need to read data from three different parts of a large file. In that case you would use read to seek to each part of the file to do the read:</p>
+<pre><code class="lang-auto">file: open %bigdata.dat
+da-head: read/part file 4000
+da-body: read/seek/part file 12000 10000
+da-tail: read/seek/part file 56000 4000
+close file
+</code></pre>
+<h1>Port Details</h1>
+<p>This section describes some of the important concepts you need to know about ports.</p>
+<h2>Port Datatype</h2>
+<p>A port is a Rebol datatype. If you use explicit ports, you will need to use the port datatype as <em>a type of handle</em> to access the port. If you've used handles before in other languages, that concept is probably familiar to you already.</p>
+<p>In Rebol a port is very similar to an object because it stores information in named fields. We often call these fields <em>the state</em> of the port. When various actions are performed, the state will change, depending on the action. A port differs from an object in that it responds in a special way to specific datatype actions such as <strong>open</strong>, <strong>read</strong>, <strong>write</strong>, and several others.</p>
+<h2>Port Schemes</h2>
+<p>A <em>scheme</em> is a type of port.</p>
+<p>You will use schemes to identify the type of port access you need as well as the protocol to use.</p>
+<p>For example, when you access a local file, you are using the <strong>file</strong> scheme. When you read a web page, you use the <strong>http</strong> scheme, which is a higher level protocol built on top of the <strong>tcp</strong> scheme.</p>
+<p>Each scheme has a unique name that is used to identify it. For example, <strong>file</strong>, <strong>http</strong>, and <strong>tcp</strong> are the scheme names shown above. A scheme name can be used as part of a URL, or separately, depending on requirements.</p>
+<p>The Rebol system manages a list of available schemes. These schemes can be built-in, can be loaded separately, or can even be user defined within a script.</p>
+<p>A lot more about schemes can be found in the <a href="https://github.com/revault/rebol-wiki/wiki/Port-Implementation" rel="nofollow noopener">Port Implementation</a> section.</p>
+<h2>Making Ports</h2>
+<p>All ports are made from a <em>spec</em> -- a specification of the port's attributes. As you have seen above, the spec can be something quite simple, such as a file name or URL. But, a port spec can also be a block that includes many fields to indicate various options for the port.</p>
+<p>All of these can be used as port specs:</p>
+<pre><code class="lang-auto">%file.txt  ; a file name
+tcp://www.rebol.com ; a URL
+[scheme: 'tcp host: "www.rebol.net"] ; a block
+'tcp  ; just the port's scheme name
+object ; an object that specifies the port
+port ; a existing port
+</code></pre>
+<p>There are a couple ways to make a port, depending on your required level of control.</p>
+<p>One method is to use the <strong>make</strong> action, as you would for any datatype. The general form is:</p>
+<pre><code class="lang-auto">port: make port! spec
+</code></pre>
+<p>Where <strong>port!</strong> is the port datatype itself, and spec is the specification as described above.</p>
+<p>Here are some examples:</p>
+<pre><code class="lang-auto">port1: make port! %file.txt
+port2: make port! tcp://www.rebol.net
+port3: make port! [scheme: 'tcp host: "www.rebol.net"]
+</code></pre>
+<p>These examples will create a port object and initialize its various fields.</p>
+<p>One of the most common methods to create a port is with the <strong>open</strong> function. Unlike <strong>make</strong> the <strong>open</strong> function does not require a port! datatype. It knows that it is being provided with a spec. For example:</p>
+<pre><code class="lang-auto">port: open tcp://www.rebol.net
+</code></pre>
+<p>will create a new port and also perform initializations associated with the <strong>open</strong> action.</p>
+<p>More details about <strong>open</strong> are discussed later.</p>
+<h2>Port Actions</h2>
+<p>Port actions can be thought of as functions that act on ports.</p>
+<p>More precisely, port actions are <em>polymorphic datatype actions</em> similar to those used on all other datatypes. If you're not sure what that means, don't worry about it here. Just think of ports like objects that have a well-defined set of methods that act on them.</p>
+<p>The actions defined for ports are:</p>
+<dl>
+<dt>make</dt>
+<dd>make a new port object</dd>
+<dt>to</dt>
+<dd>special (convert an object to a port)</dd>
+<dt>open</dt>
+<dd>initialize external operations</dd>
+<dt>close</dt>
+<dd>conclude external operations</dd>
+<dt>write</dt>
+<dd>transfer data to the port</dd>
+<dt>read</dt>
+<dd>transfer data from the port</dd>
+<dt>query</dt>
+<dd>get information about the port</dd>
+<dt>update</dt>
+<dd>update the port's state</dd>
+<dt>create</dt>
+<dd>create an external object of port type</dd>
+<dt>delete</dt>
+<dd>delete an external object of port type</dd>
+<dt>rename</dt>
+<dd>rename an external object of port type</dd>
+<p>Note that not all port actions can be used on all port schemes. For example, the <strong>rename</strong> action has no purpose when used on a <em>sound</em> port scheme.</p>
+<p>Ports also allow basic equality comparisons:</p>
+<dl>
+<dt>equal?</dt>
+<dd>ports are the same object</dd>
+<dt>not-equal?</dt>
+<dd>ports are not the same object</dd>
+</dl>
+<p>For the exact usage of each action use Rebol's built-in help function. (In this way the action information is always accurate.)</p>
+<pre><code class="lang-nohighlight">&gt;&gt; ? open
+USAGE:
+        OPEN spec /new /read /write /seek /allow access
+
+DESCRIPTION:
+        Opens a port. Makes a new port from a specification, if necessary.
+        OPEN is an action value.
+
+ARGUMENTS:
+        spec (port! file! url! block!)
+
+REFINEMENTS:
+        /new -- Create new file - if it exists, reset it (truncate)
+        /read -- Open for read access
+        /write -- Open for write access
+        /seek -- Optimize for random access
+        /allow -- Specifies protection attributes
+                access (block!)
+</code></pre>
+<p>All of the port actions are provided with the port (or spec in the case of implicit port usage) as their first argument.</p>
+<p>See the <a href="https://github.com/revault/rebol-wiki/wiki/Port-Examples" rel="nofollow noopener">Port Examples</a> section for various examples of how to use port actions.</p>
+<h2>Asynchronous Usage</h2>
+<p>Actions on a port can be <em>synchronous</em> or <em>asynchronous</em>.</p>
+<p>In general:</p>
+<ul>
+<li>
+<strong>Synchronous actions</strong> will not return until the requested function has completed.</li>
+<li>
+<strong>Asynchronous actions</strong> will return as soon as possible, even if the function is still being performed.</li>
+</ul>
+<p>Both modes are useful, depending on program requirements.</p>
+<p>Whether an action happens asynchronously depends on a few things. Here are the basic rules:</p>
+<ul>
+<li>Implicit port usage is synchronous. This provides ease-of-use.</li>
+<li>Explicit port usage is asynchronous, but only if the port scheme supports it and an awake handler has been provided.</li>
+<li>Some actions are synchronous, even when applied to an asynchronous port.</li>
+</ul>
+<p>Note that it is possible to operate an asynchronous port in a synchronous manner, when so desired. But, it is not possible to operate a synchronous port in an asynchronous manner. (To do so, you must use a Rebol task as an asynchronous thread.)</p>
+<p>See the <a href="https://github.com/revault/rebol-wiki/wiki/Port-Examples" rel="nofollow noopener">Port Examples</a> page for examples of both modes of operation.</p>
+<h1>Error Handling</h1>
+<p>In general, port actions can generate errors in the same way as other Rebol functions, and you can catch and process these <em>error exceptions</em> in the same way.</p>
+<p>For example, if you want to handle an error during an <strong>open</strong> action, you can wrap the code with an error handling function such as <strong>try</strong>:</p>
+<pre><code class="lang-auto">if error? err: try [port: open spec] [
+    handle-error err
+]
+</code></pre>
+<p>A shorthand method is to use <strong>attempt</strong>:</p>
+<pre><code class="lang-auto">either port: attempt [open spec] [
+    perform-io...
+][
+    print ["Cannot open" spec]
+]
+</code></pre>
+<p>So, you can wrap each separate port action in an error handler, or you can wrap all of your port actions together in a single error handler:</p>
+<pre><code class="lang-auto">err: try [
+    file: open %bigdata.dat
+    da-head: read/part file 4000
+    da-body: read/seek/part file 12000 10000
+    da-tail: read/seek/part file 56000 4000
+]
+close file
+
+if error? err [
+    print ["Port error:" form err]
+]
+</code></pre>
+<p>For asynchronous port operation, error handling can be a bit more complicated. <em>(And more work is needed here.)</em></p>
+</dl>
+            <p><small>12 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-is-a-port/617">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-is-a-port/617</link>
+          <pubDate>Mon, 14 May 2018 03:17:22 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-617</guid>
+          <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+        </item>
+        <item>
+          <title>About the Ports category</title>
+          <dc:creator><![CDATA[gchiu]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <p>To discuss the port model and also the implementation of ports with respect to networking.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/about-the-ports-category/593">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/about-the-ports-category/593</link>
+          <pubDate>Wed, 18 Apr 2018 06:32:47 +0000</pubDate>
+          <discourse:topicPinned>Yes</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-593</guid>
+          <source url="https://forum.rebol.info/t/about-the-ports-category/593.rss">About the Ports category</source>
+        </item>
+        <item>
+          <title>(Archival) Notes on Network Event Handling</title>
+          <dc:creator><![CDATA[gchiu]]></dc:creator>
+          <category>Ports</category>
+          <description><![CDATA[
+            <blockquote>
+<p><em>From May 2017</em><br>
+<em>This is just to record the documents I have written in the past on the subject.</em></p>
+</blockquote>
+<hr>
+<p>When working with a network, we have to deal with a flow of data across a (half duplex) network port. To initiate that flow we can open, write and read the port. These actions are defined in the C code and interact with the network stack provided by the operating system. Once we complete such an action, a network EVENT is generated, and needs to be processed by user code so that the flow of data can continue.</p>
+<p>Network events are associated with a port, and are handled by a function that is assigned to the awake field of the port. This is known as the awake handler and takes a form like this:</p>
+<pre><code class="lang-auto">awake-handler: func [event /local tcp-port] [
+    print ["=== RH Client event:" event/type]
+    tcp-port: event/port
+    switch/default event/type [
+        error [
+            print "error event received"
+            tcp-port/spec/port-state: 'error
+            true
+        ]
+        lookup [
+            open tcp-port
+            false
+        ]
+        connect [
+            tcp-port/spec/port-state: 'ready
+            print "reading from port"
+            read tcp-port
+            false
+        ]
+        read [
+            print ["^\Read Handler read:" length tcp-port/data]
+            tcp-port/spec/data: copy tcp-port/data
+            clear tcp-port/data
+            true
+        ]
+        wrote [
+            read tcp-port
+            false
+        ]
+        close [
+            print "closed on us!"
+            tcp-port/spec/port-state: _
+            close tcp-port
+            true
+        ]
+    ] [true]
+]    
+</code></pre>
+<p>As you can see the EVENT has a field which contains the PORT where the EVENT was generated. The events are kept in an event queue and they are passed to their respective ports and awake handlers during a WAIT.</p>
+<pre><code class="lang-auto">unless port? wait [tcp-port port/spec/timeout] [
+        FAIL "timeout on tcp-port"
+]
+</code></pre>
+<p>So here WAIT takes the block of a port, and a timeout value. If an event is not generated for that port within the timeout period, it returns _ and an error is created. Otherwise a port is returned, and the port? function is satisfied.</p>
+<p>The awake handler can use the PORT field to extract the TCP subport associated with this EVENT.</p>
+<pre><code class="lang-auto">tcp-port: event/port
+</code></pre>
+<p>Now once we connect to the remote host what we do next depends on what the remote host does on a connection. If the remote host is a SMTP server, or a POP3 server, then they will send some form of greeting text. So, in our CONNECT event we need to do a read on the port to see what that text is, and to make sure that the remote host is ready.</p>
+<pre><code class="lang-auto">        connect [
+            tcp-port/spec/port-state: 'ready
+            print "reading from port"
+            read tcp-port
+            false
+        ]
+</code></pre>
+<p>But when connecting to a web server, there is no greeting. So, instead on CONNECT we do a write to the host and this is usually in the form of our HTTP request</p>
+<pre><code class="lang-auto">        connect [
+            tcp-port/spec/port-state: 'ready
+            print "writing to port"
+            write tcp-port to binary! {GET / ... rest of request}
+            false
+        ]
+</code></pre>
+<p>If you look at each EVENT, you will see it ends in a boolean value.</p>
+<pre><code class="lang-auto">        close [
+            print "closed on us!"
+            tcp-port/spec/port-state: _
+            close tcp-port
+            true
+        ]
+</code></pre>
+<p>That value is returned by the awake function, and if the value is true ( i.e. not false or blank) then the WAIT function exits and the event queue is no longer processed. To restart processing new events, you have to WAIT again on the port, which is still connected. WAIT is done outside the awake handler not inside otherwise you risk recursion and a stack overflow.</p>
+<p>So the question arises, how do you decide when to exit with a TRUE, and when to exit with a FALSE.</p>
+<p>The CLOSE event is clearly one you need to exit with a TRUE since the remote port is not going to send you any more events.</p>
+<p>In the other above examples, we don't exit a CONNECT event because on receipt of that event we either wrote a request and expect data to be returned, or, we read the greeting from the port, and want to send something to the server such as a login sequence. When data is received we get a READ (should be RECEIVED as READ is confusing) event, and when we have completed a write, we get a WROTE event. We can then decide inside those EVENTs whether we need to keep reading (eg. downloading a large email), or keep writing (sending a large file upload to our web server).</p>
+<p>So, looking at our POP3 protocol, we see how a READ is handled.</p>
+<pre><code class="lang-auto">read [
+    print ["^\Write Handler read:" length tcp-port/data]
+    append tcp-port/spec/data copy tcp-port/data
+    clear tcp-port/data
+    ; now decide if we need to exit the write-awake-handler
+    case [
+        tcp-port/spec/cmd = 'RETR 
+        [
+            either findeofpop tcp-port/spec/data [
+                tcp-port/spec/cmd: _
+                true
+            ][
+                read tcp-port
+                false
+            ]
+        ]
+        true [true]
+    ]
+]
+</code></pre>
+<p>We don't know if we have a 1 Kb email being downloaded, or a 10 Mb email. So, what we do here is first copy the data that has arrived in the common read/write buffer (tcp-port/data) so that it's safe. Now we know that pretty much every read will have all the data returned in one read event. But that's not the case when we retrieve an email. So, we have a placed a 'RETR flag in tcp-port/spec/cmd, and if we're in that state, then we need to see if the end of the email has arrived (signified by a trailing 5 octet CRLF . CRLF sequence). If we find that sequence, we return true. Otherwise, we keeping doing a read on the port, and return false so that more events will be processed by the awake handler.</p>
+<p>Note that exiting the awake handler after each read event, checking to see if we have the end of email sequence, and if not, doing another WAIT with a read tcp-port has the dual problems of being inefficient and not working.</p>
+<p>In summary, we can say that after the initial open and connect sequences we are basically in a write data, and receive a response sequence. So, we only exit the awake function with a true after a READ event, and only when we have decided we have received all the data that we are expecting. The only other times to exit the awake handler is after an ERROR or CLOSE event.</p>
+<p>One additional point needs mentioning. The remote host can close their side of the connection at any time even when we are in the middle of a read or write operation. If we receive a CLOSE event, it won't be processed until after we have finished our eg. write and this is going to cause an error.</p>
+<p><em>A lost connection at the socket level is detected by recv() or by a send() error.</em></p>
+<p>So, therefore to improve the robustness of our software, we need to trap both network reads and writes.</p>
+<pre><code class="lang-auto">    wrote [
+        either empty? port/locals [
+            close port
+        ][
+            if trap? [send-chunk port][
+                print ["Closed in wrote event " now/precise]
+                close port
+            ]
+        ]
+    ]
+</code></pre>
+<p>So, in this example from a tiny <a href="https://github.com/r3n/renclib/blob/master/scripts/mini-shttpd.reb">webserver</a> we are sending out 32 kb chunks of data. We introduce the trap? check to make that the remote connection has not closed since we last wrote out some data.</p>
+<p>Notes: A lower level explanation of the write and read functions are found in the list below.</p>
+<p>Links:</p>
+<ul>
+<li><a href="https://github.com/revault/rebol-wiki/wiki/TCP-Port-Details">TCP Port details</a></li>
+<li><a href="https://github.com/revault/rebol-wiki/wiki/TCP-Port-Examples">TCP Port examples</a></li>
+<li><a href="https://github.com/revault/rebol-wiki/wiki/TCP-Port-Open-Issue">TCP Port open details</a></li>
+</ul>
+<blockquote>
+<p>Correction from <a href="http://chat.stackoverflow.com/transcript/message/36724050#36724050">Shixin</a>: If the awake of any port returns true, the port is added to waked list, which makes awake of system port return true, and then Awake_System returns 1, Wait_Ports then stops waiting and returns true‌​, finally, WAIT returns the waked port</p>
+</blockquote>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/archival-notes-on-network-event-handling/163">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/archival-notes-on-network-event-handling/163</link>
+          <pubDate>Tue, 27 Jun 2017 05:54:53 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-163</guid>
+          <source url="https://forum.rebol.info/t/archival-notes-on-network-event-handling/163.rss">(Archival) Notes on Network Event Handling</source>
+        </item>
+  </channel>
+</rss>

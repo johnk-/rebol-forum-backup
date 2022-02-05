@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</title>
+    <link>https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231</link>
+    <description>The ability to pick up a Rebol executable and move it to another system has been a hallmark of the project.
+
+**Setting up the build process in the modern world to enable this is not trivial:** even if the OS itself tries to remain backwards-compatible to run older executables, modern installations of that OS (or its dev tools) refuse to maintain switches that let you build for older platforms.
+
+e.g. *You might think you&#39;re building on the &quot;same&quot; platform, but in effect you are cross-compiling...a lot like trying to build a Windows executable on Linux or a Mac.  Cross-compilation is rarely easy on most systems...and the powers-that-be certainly don&#39;t think cross-compiling from Ubuntu 10.20 back to Ubuntu 3.04 (or whatever) is interesting enough to make easy.*
+
+## A Real Example From Yesterday To Help Illustrate
+
+Suppose you have Ubuntu 18.10 (&quot;cosmic&quot;) installed.  This distribution was released in October 2018.
+
+The C standard libraries--and their associated files in `/usr/include`--are defined in such a way that the library function [`fcntl()`](http://man7.org/linux/man-pages/man2/fcntl.2.html) now no longer compiles to link to a standard library function called `fcntl`.  Instead, the header files redefine it to compile to something called `fcntl64`.  That function was introduced in GLIBC 2.28...which was [announced in August 2018](https://savannah.gnu.org/forum/forum.php?forum_id=9205).
+
+This means if you call `fcntl()` anywhere in your code and compile it on this October 2018 cosmic distribution, your resulting binary &quot;cannot possibly&quot; run on a distribution released before August 2018.  **There are no compiler switches, linker switches, or `#defines` to turn back that clock.**
+
+## What Can Be Done About This?
+
+When a toolchain only compiles for itself-or-newer...and each distribution enforces use of a toolchain that is paired with its release...*you are stuck keeping copies of the old OS and toolchain around if you want to keep this classic transferability property intact on such a platform*.
+
+...and keeping old ones around is what we&#39;re actually doing.  It&#39;s easier now with virtual machines--on Travis we can pick an archaic Linux, Windows, or old OS X to build with.  But it does create a level of overhead that most people won&#39;t want.  And in Travis&#39;s case, they expire these old images when they feel like it.
+
+The implication may (or may not) be clear: **While Rebol core developers may try to keep old VMs around to build executables with good transferability properties on older or newer systems...the Rebol that an average person builds themselves on a recent Mac/Linux/Ubuntu download PROBABLY can&#39;t be made to have those properties to be able to run on older platforms.**
+
+I say &quot;probably&quot; because [in the fcntl() case, I managed to hack around it](https://stackoverflow.com/questions/58472958/how-to-force-linkage-to-older-libc-fcntl-instead-of-fcntl64/58472959#58472959).  So your Rebol built on cosmic or whatever can still run on older systems.  *This time.* :face_with_raised_eyebrow: 
+
+Another option: you could use your own header files.  Don&#39;t `#include &lt;fcntl.h&gt;` where the devious `#define fcntl fcntl64` lives.  Maintain your own headers that speak to just the libc functions you want.  (This is essentially what Red has to do, as they mechanically *can&#39;t* `#include &lt;fcntl.h&gt;` in Red/System).  Not necessarily easier than snapshotting old toolchains in their entirety, and neither approach can protect you from when those old APIs are deemed not relevant on newer platforms.
+
+## What About Static Linking?
+
+One answer that might come to mind is that if you were willing to ask a build of Rebol to be a little bigger, then you could bundle up the functions that you use into the executable.  A cosmic distribution of Linux could pack up its fcntl64() code and use that embedded version instead of the one in the system, letting it run on older Linuxes that only have fcntl().
+
+To address the question of why this may be problematic, here&#39;s one guy&#39;s writeup:
+
+[Static Linking Considered Harmful](https://akkadia.org/drepper/no_static_linking.html)
+
+&gt; &quot;The often used argument about statically linked apps being more portable (i.e., can be copied to other systems and simply used since there are no dependencies) is not true since every non-trivial program needs dynamic linking at least for one of the reasons mentioned above. And dynamic linking kills the portability of statically linked apps.&quot;
+
+His main points are:
+
+* Static linking means you&#39;re freezing your code in time so it doesn&#39;t get security updates from the platform it is running on
+* Memory is used less efficiently since your app isn&#39;t sharing the same code pages all the other programs on the system are
+* In the GLIBC world, several features of non-trivial programs simply won&#39;t work with static linking; they are mechanically dependent on dynamic linking.  *(Other libc implementations [like musl](https://elinux.org/images/e/eb/Transitioning_From_uclibc_to_musl_for_Embedded_Development.pdf) are designed differently so that they CAN be static linked, and it may well be that we should consider using them instead... [Rust does](https://doc.rust-lang.org/edition-guide/rust-2018/platform-and-target-support/musl-support-for-fully-static-binaries.html).)*
+
+## Where Does This Leave Rebol?
+
+Picking the one case I mention as a sort of focal point: The absence of the ability to say &quot;I don&#39;t want this new fcntl&quot; reveals that the GNU libc developers do not consider this to be a matter of much concern.  I&#39;m skeptical they&#39;d be very interested in hearing &quot;fringe&quot; thoughts on the matter; and have their own agenda.
+
+So one likely has to go outside of the Linux community to find the sort of people who this doesn&#39;t sit well with.  And that wouldn&#39;t be Apple (*cough* &lt;sub&gt;[Catalina](https://www.forbes.com/sites/ewanspence/2019/10/10/apple-macos-catalina-update-broken-32bit-mac-imac-macbook-pro-fix-mistake/)&lt;/sub&gt; *cough*)
+
+One point of view would be [Carl&#39;s idea that Rebol needed a &quot;phase two&quot; of an operating system to complete the vision](https://forum.rebol.info/t/back-to-personal-computing/186).  But, no, there are not resources for that.
+
+Without a culture shift from OS developers to think that the reverse direction is important, it&#39;s simply not going to be practical (or even &quot;possible&quot;) to make sure building with a newer OS will get you a binary that will run on an older OS.  *The best we can do here is make sure that when the OS developers who care about this show up, we can be up and building on their platform right away.*  We don&#39;t have to **be** them, we just have to **be ready** for them! :alien:
+
+**Hence I propose thinking of the C source code as Rebol&#39;s formal means of exchange--with binaries being secondary.**  The most important thing is that the Rebol source code of today still builds on old systems (allowing for a potential &quot;prep&quot; step that must be done on a newer system for bootstrap).
+
+If you find you really need a recent build for an older machine, let&#39;s do everything in our power to make sure that if you have a C compiler of that era on that machine that you can still build it.  And if there comes a time where being a distributor of binaries is relevant again, we can use various old virtual machines to make ones that are likely to run on newer ones too.  Though for now I want to not get too tied down being an .EXE distributor, and stay focused on the web build!  :globe_with_meridians: :globe_with_meridians: :globe_with_meridians:</description>
+    
+    <lastBuildDate>Mon, 21 Oct 2019 18:17:58 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>The naming of maps or folders in NixOS is wrong. Should start with the name followed by that hashkeystuff. And how are you gonna find the right ones for all the dependencies?</p>
+          <p><a href="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/6</link>
+        <pubDate>Mon, 21 Oct 2019 18:17:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1231-6</guid>
+        <source url="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231.rss">Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</source>
+      </item>
+      <item>
+        <title>Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</title>
+        <dc:creator><![CDATA[salotz]]></dc:creator>
+        <description><![CDATA[
+            <p>Hadn't thought about NixOS (and <a href="https://guix.gnu.org/" rel="nofollow noopener">GuixSD</a>) in terms of building, but that actually might actually solve a lot of problems. I know of at least one project (<a href="https://www.monte-language.org/" rel="nofollow noopener">https://www.monte-language.org/</a>) that uses Nix (the standalone package manager) for it's toolchain (<a href="https://github.com/monte-language/typhon" rel="nofollow noopener">https://github.com/monte-language/typhon</a>). I am looking at one of them in the somewhat near future just to save me from losing my hair in configuring and administering Ubuntu or Arch.</p>
+          <p><a href="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/5</link>
+        <pubDate>Mon, 21 Oct 2019 15:53:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1231-5</guid>
+        <source url="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231.rss">Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</source>
+      </item>
+      <item>
+        <title>Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1231">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><strong>Hence I propose thinking of the C source code as Rebol's formal means of exchange--with binaries being secondary.</strong> The most important thing is that the Rebol source code of today still builds on old systems (allowing for a potential "prep" step that must be done on a newer system for bootstrap).</p>
+</blockquote>
+</aside>
+<p>Right. Building is not the problem on older systems, the only problem one has is to get the building done on that older version of the OS. Which is fine, but with current building needing a recent R3 could become a chicken and egg kind of a problem.</p>
+          <p><a href="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/4</link>
+        <pubDate>Mon, 21 Oct 2019 10:29:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1231-4</guid>
+        <source url="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231.rss">Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</source>
+      </item>
+      <item>
+        <title>Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1231">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/salotz/40/244_2.png" class="avatar"> salotz:</div>
+<blockquote>
+<p>As far as greenfield OSes that might take the right approach, the Genode system looks very promising.</p>
+</blockquote>
+</aside>
+<p><a href="https://genode.org/" rel="nofollow noopener">Genode</a> looks interesting.</p>
+<p>Something I'd also like to make time to look at is <a href="https://nixos.org/" rel="nofollow noopener">NixOS</a> to see what the implications of that are.</p>
+<blockquote>
+<p>I agree that the web build is more important than the mainline OS build.</p>
+</blockquote>
+<p>Yep.  And the more the emphasis is on the "timeless" elements of the language, the more likely an incarnation of it will be of interest on any platform that comes up...</p>
+          <p><a href="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/3</link>
+        <pubDate>Sat, 19 Oct 2019 23:26:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1231-3</guid>
+        <source url="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231.rss">Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</source>
+      </item>
+      <item>
+        <title>Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</title>
+        <dc:creator><![CDATA[salotz]]></dc:creator>
+        <description><![CDATA[
+            <p>I agree that the web build is more important than the mainline OS build. As far as greenfield OSes that might take the right approach, the Genode system looks very promising. It's not replacing Mac or windows any time soon (or even Ubuntu) but it has potential in other spaces. Right now their C runtime is dependent on a kind of Linux subsystem, but they are close to factoring it out to the essentials.</p>
+          <p><a href="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/2</link>
+        <pubDate>Sat, 19 Oct 2019 15:10:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1231-2</guid>
+        <source url="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231.rss">Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</source>
+      </item>
+      <item>
+        <title>Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The ability to pick up a Rebol executable and move it to another system has been a hallmark of the project.</p>
+<p><strong>Setting up the build process in the modern world to enable this is not trivial:</strong> even if the OS itself tries to remain backwards-compatible to run older executables, modern installations of that OS (or its dev tools) refuse to maintain switches that let you build for older platforms.</p>
+<p>e.g. <em>You might think you're building on the "same" platform, but in effect you are cross-compiling...a lot like trying to build a Windows executable on Linux or a Mac.  Cross-compilation is rarely easy on most systems...and the powers-that-be certainly don't think cross-compiling from Ubuntu 10.20 back to Ubuntu 3.04 (or whatever) is interesting enough to make easy.</em></p>
+<h2>A Real Example From Yesterday To Help Illustrate</h2>
+<p>Suppose you have Ubuntu 18.10 ("cosmic") installed.  This distribution was released in October 2018.</p>
+<p>The C standard libraries--and their associated files in <code>/usr/include</code>--are defined in such a way that the library function <a href="http://man7.org/linux/man-pages/man2/fcntl.2.html" rel="nofollow noopener"><code>fcntl()</code></a> now no longer compiles to link to a standard library function called <code>fcntl</code>.  Instead, the header files redefine it to compile to something called <code>fcntl64</code>.  That function was introduced in GLIBC 2.28...which was <a href="https://savannah.gnu.org/forum/forum.php?forum_id=9205" rel="nofollow noopener">announced in August 2018</a>.</p>
+<p>This means if you call <code>fcntl()</code> anywhere in your code and compile it on this October 2018 cosmic distribution, your resulting binary "cannot possibly" run on a distribution released before August 2018.  <strong>There are no compiler switches, linker switches, or <code>#defines</code> to turn back that clock.</strong></p>
+<h2>What Can Be Done About This?</h2>
+<p>When a toolchain only compiles for itself-or-newer...and each distribution enforces use of a toolchain that is paired with its release...<em>you are stuck keeping copies of the old OS and toolchain around if you want to keep this classic transferability property intact on such a platform</em>.</p>
+<p>...and keeping old ones around is what we're actually doing.  It's easier now with virtual machines--on Travis we can pick an archaic Linux, Windows, or old OS X to build with.  But it does create a level of overhead that most people won't want.  And in Travis's case, they expire these old images when they feel like it.</p>
+<p>The implication may (or may not) be clear: <strong>While Rebol core developers may try to keep old VMs around to build executables with good transferability properties on older or newer systems...the Rebol that an average person builds themselves on a recent Mac/Linux/Ubuntu download PROBABLY can't be made to have those properties to be able to run on older platforms.</strong></p>
+<p>I say "probably" because <a href="https://stackoverflow.com/questions/58472958/how-to-force-linkage-to-older-libc-fcntl-instead-of-fcntl64/58472959#58472959" rel="nofollow noopener">in the fcntl() case, I managed to hack around it</a>.  So your Rebol built on cosmic or whatever can still run on older systems.  <em>This time.</em> <img src="https://forum.rebol.info/images/emoji/twitter/face_with_raised_eyebrow.png?v=9" title=":face_with_raised_eyebrow:" class="emoji" alt=":face_with_raised_eyebrow:"></p>
+<p>Another option: you could use your own header files.  Don't <code>#include &lt;fcntl.h&gt;</code> where the devious <code>#define fcntl fcntl64</code> lives.  Maintain your own headers that speak to just the libc functions you want.  (This is essentially what Red has to do, as they mechanically <em>can't</em> <code>#include &lt;fcntl.h&gt;</code> in Red/System).  Not necessarily easier than snapshotting old toolchains in their entirety, and neither approach can protect you from when those old APIs are deemed not relevant on newer platforms.</p>
+<h2>What About Static Linking?</h2>
+<p>One answer that might come to mind is that if you were willing to ask a build of Rebol to be a little bigger, then you could bundle up the functions that you use into the executable.  A cosmic distribution of Linux could pack up its fcntl64() code and use that embedded version instead of the one in the system, letting it run on older Linuxes that only have fcntl().</p>
+<p>To address the question of why this may be problematic, here's one guy's writeup:</p>
+<p><a href="https://akkadia.org/drepper/no_static_linking.html" rel="nofollow noopener">Static Linking Considered Harmful</a></p>
+<blockquote>
+<p>"The often used argument about statically linked apps being more portable (i.e., can be copied to other systems and simply used since there are no dependencies) is not true since every non-trivial program needs dynamic linking at least for one of the reasons mentioned above. And dynamic linking kills the portability of statically linked apps."</p>
+</blockquote>
+<p>His main points are:</p>
+<ul>
+<li>Static linking means you're freezing your code in time so it doesn't get security updates from the platform it is running on</li>
+<li>Memory is used less efficiently since your app isn't sharing the same code pages all the other programs on the system are</li>
+<li>In the GLIBC world, several features of non-trivial programs simply won't work with static linking; they are mechanically dependent on dynamic linking.  <em>(Other libc implementations <a href="https://elinux.org/images/e/eb/Transitioning_From_uclibc_to_musl_for_Embedded_Development.pdf" rel="nofollow noopener">like musl</a> are designed differently so that they CAN be static linked, and it may well be that we should consider using them instead... <a href="https://doc.rust-lang.org/edition-guide/rust-2018/platform-and-target-support/musl-support-for-fully-static-binaries.html" rel="nofollow noopener">Rust does</a>.)</em>
+</li>
+</ul>
+<h2>Where Does This Leave Rebol?</h2>
+<p>Picking the one case I mention as a sort of focal point: The absence of the ability to say "I don't want this new fcntl" reveals that the GNU libc developers do not consider this to be a matter of much concern.  I'm skeptical they'd be very interested in hearing "fringe" thoughts on the matter; and have their own agenda.</p>
+<p>So one likely has to go outside of the Linux community to find the sort of people who this doesn't sit well with.  And that wouldn't be Apple (<em>cough</em> <sub><a href="https://www.forbes.com/sites/ewanspence/2019/10/10/apple-macos-catalina-update-broken-32bit-mac-imac-macbook-pro-fix-mistake/" rel="nofollow noopener">Catalina</a></sub> <em>cough</em>)</p>
+<p>One point of view would be <a href="https://forum.rebol.info/t/back-to-personal-computing/186">Carl's idea that Rebol needed a "phase two" of an operating system to complete the vision</a>.  But, no, there are not resources for that.</p>
+<p>Without a culture shift from OS developers to think that the reverse direction is important, it's simply not going to be practical (or even "possible") to make sure building with a newer OS will get you a binary that will run on an older OS.  <em>The best we can do here is make sure that when the OS developers who care about this show up, we can be up and building on their platform right away.</em>  We don't have to <strong>be</strong> them, we just have to <strong>be ready</strong> for them! <img src="https://forum.rebol.info/images/emoji/twitter/alien.png?v=9" title=":alien:" class="emoji" alt=":alien:"></p>
+<p><strong>Hence I propose thinking of the C source code as Rebol's formal means of exchange--with binaries being secondary.</strong>  The most important thing is that the Rebol source code of today still builds on old systems (allowing for a potential "prep" step that must be done on a newer system for bootstrap).</p>
+<p>If you find you really need a recent build for an older machine, let's do everything in our power to make sure that if you have a C compiler of that era on that machine that you can still build it.  And if there comes a time where being a distributor of binaries is relevant again, we can use various old virtual machines to make ones that are likely to run on newer ones too.  Though for now I want to not get too tied down being an .EXE distributor, and stay focused on the web build!  <img src="https://forum.rebol.info/images/emoji/twitter/globe_with_meridians.png?v=9" title=":globe_with_meridians:" class="emoji" alt=":globe_with_meridians:"> <img src="https://forum.rebol.info/images/emoji/twitter/globe_with_meridians.png?v=9" title=":globe_with_meridians:" class="emoji" alt=":globe_with_meridians:"> <img src="https://forum.rebol.info/images/emoji/twitter/globe_with_meridians.png?v=9" title=":globe_with_meridians:" class="emoji" alt=":globe_with_meridians:"></p>
+          <p><a href="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231/1</link>
+        <pubDate>Sat, 19 Oct 2019 09:49:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1231-1</guid>
+        <source url="https://forum.rebol.info/t/dynamic-linking-static-linking-and-the-march-of-progress/1231.rss">Dynamic Linking, Static Linking, and the March of &quot;Progress&quot;</source>
+      </item>
+  </channel>
+</rss>

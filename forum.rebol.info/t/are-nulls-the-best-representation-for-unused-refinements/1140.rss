@@ -1,0 +1,430 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Are nulls the best representation for unused refinements?</title>
+    <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140</link>
+    <description>The [Refinements are their own arguments](https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120) change is in.  And it&#39;s a good thing, whose goodness I cannot overstate.  It&#39;s paying off now and will pay off in the future.
+
+But unifying the refinement and argument has one hitch: what if you want a refinement to be literally BLANK!?  I&#39;d hoped it wouldn&#39;t be common.  But @giuliolunati is using BLANK! to represent a NaN (not-a-number) state...[which I have advocated for](https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954).
+
+There&#39;s a way to do it, though it&#39;s kind of ugly.  When you say a refinement is **`[&lt;opt&gt; blank! ...]`** you are asking for the refinement to be null if unused.  This way, blank can be passed as having meaning.
+
+But... that&#39;s a bit sketchy.  And there&#39;s something sketchy about unused refinements being BLANK! in the first place.  MAKE FRAME! creates an empty frame with all nulls...for a reason.  And those clearly should mean &quot;not specified&quot;.  For refinements that means not provided.  We wind up having to mutate nulls into blanks when the function runs...and it&#39;s an &quot;unclean&quot;-feeling thing.
+
+## What if /REFINEMENT was used to access refinements?
+
+What&#39;s not very likeable is having to use GET-WORD!s all the time, to avoid errors through access of an unset variable:
+
+    foo: function [a /ref [integer!]] [
+        if :ref [
+            print &quot;This is annoying&quot;
+            print [&quot;But you only need it for checking&quot; ref]
+        ]
+    ]
+
+But something that I&#39;ve thought about often is the idea that accessing a refinement might look good if it were done with the refinement itself:
+
+    foo: function [a /ref [integer!]] [
+        if /ref [
+            print &quot;This makes sense and actually adds value&quot;
+            print [&quot;Still not needed on *every* access&quot; ref]
+        ]
+    ]
+
+This might fit into a form of GET that is explicitly for the purpose of NULL checking.  We then might make GET-WORD! error on NULLs, so it would be clearer what the purpose of the GET was for (e.g. specifically to suppress function execution).  This is something I&#39;ve felt is pretty necessary for a while because you can&#39;t tell at first glance exactly what the point of a GET-WORD! usage is...and here we&#39;d know when it was trying to tell us that the variable may be null.
+
+So to be clear--it wouldn&#39;t really have anything to do with refinements.  You would be able to use **/foo** on any word, and have it gloss over the NULL-ness.  It would basically be like a GET-WORD! of today.   It looks a bit cleaner, if you ask me, and you can type it without shift.  :-)
+
+It would mean losing refinements as an inert class.  But as they are PATH!s now, it&#39;s not obvious that they should be inert.  And with @word, @at/path, @(at group), @[at block] on the horizon...there&#39;s several other more clearly inert value options coming.
+
+One downside of making PATH! with blank at the head evaluate would be incompatibility with historical Rebol&#39;s inertness of REFINEMENT!.  There&#39;s no way for Redbol to subvert the evaluator for that.  Code would have to be changed to QUOTE the refinement.  Changing the way GET-WORD! worked to not allow NULL would similarly be something emulation couldn&#39;t override.
+
+Another thing that would be a bit annoying would be using this with a new APPLY syntax, where you wanted to use refinements pass-thru in the expression itself, you&#39;d have to put the refinement in a GROUP!
+
+    foo: function [... /dup [integer!]] [
+        ...
+        apply append [... /dup (/dup) ...]
+        apply append [... /dup :/dup ...]  ; or maybe this?
+    ]
+
+That&#39;s if you didn&#39;t know if it was used or not, since you could use plain **dup** if by that point you knew it was used.  It&#39;s not a deal-breaker by any means...pretty easy workaround as such things go.  But it&#39;s something to bear in mind.</description>
+    
+    <lastBuildDate>Sat, 08 Feb 2020 14:44:57 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="9" data-topic="1140">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I think Ren-C is leading the way here, and that it's not worth getting bent out of shape over NULL accesses not triggering errors.</p>
+</blockquote>
+</aside>
+<p>Having had a fair amount of time to reflect on the evolution of things, I think we need to make undecorated word fetches not produce an error with NULL.  I've outlined the history of why they were erroring at the outset, and walking through it I think there's a coherent plan for when there is tolerance and when there is not (e.g. function arguments by default).</p>
+<p>But today I realized something particularly pleasing about this.  We had a concept that BLANK!...due to its non-erroring status, would be the way of "disarming" a null assignment to a variable.  It's still going to be a way of disarming parameters for "blank in, null out", but not needed for a plain assignment.</p>
+<p><strong>That frees up blank for dialect uses distinct from NULL.</strong></p>
+<p>In particular, it recovers it for something that was tried for a time... being synonymous with space (<strong><code>#" "</code></strong>).  The concept emerged when it was called into question whether PRINT should default to adding implicit spaces, and how you should avoid it doing so.  <strong>print ["It" _ was _ "ugly"]</strong> if the common case didn't have implicit spaces, so ultimately we went with SPACED by default and you could write <strong>print unspaced [...]</strong> if that's what you wanted.</p>
+<p>Yet <code>_</code> was deemed to need to behave just as NULL did, as you couldn't put a NULL in a variable.  So when you needed to, you would use blank, and it would be the non-erroring synonym.  It was a sad loss for when you wanted a nice way to note spaces, but seemed to be the way it had to be.</p>
+<h2>Well, not any more!</h2>
+<p>With non-erroring NULLs, dialects are free to distinguish the behavior of blanks and nulls.  NULL being the most obvious "nothing".  So why not bring back BLANK! as being a synonym for space?</p>
+<p>It still has the "no delimiters applied" status of a CHAR!.  So <strong>spaced ["a" _ _ "b"]</strong> would still be just two spaces between the <strong>a</strong> and the <strong>b</strong>... not five.</p>
+<p>Looking good!</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/10</link>
+        <pubDate>Thu, 06 Feb 2020 23:32:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-10</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I asked <strong><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140">Are nulls the best representation for unused refinements?</a></strong>, and made a case for it.</p>
+<p>There were some puzzles and cognitive blocks to be reasoned through.  Ren-C had undergone hard-fought battles to confront problems like:</p>
+<pre><code>rebol2&gt;&gt; foo: func [/ref arg] [print ["ref:" mold ref "arg:" mold arg]]
+
+rebol2&gt;&gt; foo
+ref: none arg: none
+
+rebol2&gt;&gt; foo/ref &lt;thing&gt;
+ref: true arg: &lt;thing&gt;
+
+rebol2&gt;&gt; foo/ref none
+ref: true arg: none
+
+rebol2&gt;&gt; condition: false
+rebol2&gt;&gt; foo/ref if condition [&lt;thing&gt;]
+ref: true arg: none
+</code></pre>
+<p>The above pattern made it hard for function authors to know if a refinement was in use.  If they tried to go by the <code>arg</code>, they could be ignoring an inconsistent meaning where the caller literally meant to specify a none.  The situation gets worse with multiple refinement arguments.</p>
+<p><em>(Think about a case where you allow arbitrary values to be interleaved into a block with an /INTERLEAVE refinement, but no values will be inserted if the refinement is not intended.  NONE! is one of the legal values, since it can be anything.  If the function author heeds the refinement by name, then looks at the argument to see if there's a NONE!, it will work.  But that prevents them from using the argument's status as none or not.  The situation is confusing and you'd find functions making ad-hoc policy decisions, which may-or-may-not allow you to pass none as a way of backing out of a refinement when you used the refinement on the callsite.)</em></p>
+<p>Over time, the evaluator was made to keep the refinements' truth or falsehood in sync with the state of the arguments.  Use of a NULL for <em>all</em> of a refinement's arguments at the callsite would make the refinement appear unused to the function, as if the caller had never specified it.  Using NULL for only some of them would raise an error.  And refinement arguments were never allowed to be themselves NULL... they were only nulled when the refinement was unused, and hence trying to access them would be an error.</p>
+<p>Over time, these changes streamlined even further into the unification of the refinement and the argument itself...reducing the number of random words you'd have to come up with, shrinking call frames, eliminating a "gearshift" in the evaluator that opened doors to AUGMENT-ing frames with new normal arguments <em>after</em> a refinement argument.</p>
+<p>But something to point out is that <strong>because these changes were incremental over time, ideas like the necessity of erroring on null accesses were also something that had to be challenged over time.</strong>  I had a bit of uneasiness about things like:</p>
+<pre><code>rebol2&gt;&gt; foreach [x y] [1 2 3] [
+             print ["x is" x "and y is" y]
+         ]
+
+x is 1 and y is 2
+x is 3 and y is none
+</code></pre>
+<p>Something about running off of the edge of the data and not raising so much as a peep was unsetting.  Doubly so because a NONE! might have actually been literally in the array.  It seemed that once you had the power of NULL to distinguish, that not taking advantage of that with error checking would be a waste...</p>
+<p>But such checks have upsides and downsides.  Look at R3-Alpha:</p>
+<pre><code>r3-alpha&gt;&gt; data: [#[none!] #[unset!] 1020]
+== [none unset! 1020]
+
+r3-alpha&gt;&gt; data/1                          
+== none
+
+r3-alpha&gt;&gt; data/2  ; Note: prints nothing in console (and no newline)
+r3-alpha&gt;&gt; data/3
+== 1020
+
+r3-alpha&gt;&gt; data/4
+== none
+</code></pre>
+<p>But how about running Ren-C minus error-on-null (which I am doing right this moment)?</p>
+<pre><code>&gt;&gt; data: [_ #[void] 1020]
+== [_ #[void] 1020]
+
+&gt;&gt; data/1
+== _
+
+&gt;&gt; data/2
+** Script Error: data/2 is VOID!
+
+&gt;&gt; :data/2  ; Note: prints nothing (but does print a newline)
+
+&gt;&gt; data/3
+== 1020
+
+&gt;&gt; data/4
+; null
+</code></pre>
+<p>Is this so bad, not to error on <code>data/4</code> or other null cases?  At least a distinct state is being signaled...that you can tell is out of band of what's in a block.</p>
+<p>I think that when all angles are examined about how things have progressed, this makes sense, as does the unused-refinements-are-null change.  It may feel a little more unsafe, but if we're using JavaScript...</p>
+<pre><code>js&gt;&gt; var data = [null]  // can't put undefined in array literal...
+js&gt;&gt; data.push(undefined)  // ...but you can push it (?)
+js&gt;&gt; data.push(1020)
+
+js&gt;&gt; data
+(3) [null, undefined, 1020]
+
+js&gt;&gt; data[0]
+null
+
+js&gt;&gt; data[1]
+undefined
+
+js&gt;&gt; data[2]
+1020
+
+&gt;&gt; data[3]  // out of bounds (fourth element, indices are 0-based)
+undefined
+</code></pre>
+<p>I think Ren-C is leading the way here, and that it's not worth getting bent out of shape over NULL accesses not triggering errors.  Certain parameters not accepting NULL but opting out of the operation via "blankification" if you TRY the NULL is clever enough.</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/9</link>
+        <pubDate>Fri, 06 Dec 2019 02:35:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-9</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="7" data-topic="1140">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/lkppo/40/239_2.png" class="avatar"> LkpPo:</div>
+<blockquote>
+<p>Also 4 concepts so close (NULL, BLANK!, NONE! and VOID!), make me look for a fundamental problem in the language, or they do not have adequate names.</p>
+</blockquote>
+</aside>
+<p>NONE! was a Rebol2-ism (along with UNSET!), and does not come up in Ren-C except in "Redbol" emulation.</p>
+<p>So what I describe is how these two ideas have become three:</p>
+<ul>
+<li>
+<p><strong>NULL</strong> has properties unlike anything in Rebol2.  It is not a "value" at all (and <strong>type of</strong> a null is also a <strong>null</strong>).  It cannot be put in a BLOCK!.  It is a transitional state representing nothing, like how a C null pointer doesn't point to any memory.  It is conditionally false if it appears in something like an IF statement, and it is the result of any control construct that does not run a branch...or any looping construct that BREAKs.  ELSE and THEN react to their left-hand-side being null or non-null, respectively.</p>
+</li>
+<li>
+<p><strong>BLANK!</strong> is a <a href="https://en.wikipedia.org/wiki/Unit_type" rel="nofollow noopener">unit type</a>...e.g. a value of type blank holds no further information (than that it is of type blank).  Unlike NULL it's something that can appear in a block, and hence can be used as a placeholder--for instance if a block represents a record structure broken into N-element units, it could represent a missing field.  Values of this type are conditionally false.</p>
+</li>
+<li>
+<p><strong>VOID!</strong> is another unit type.  But it is neither true nor false...trying to test it conditionally or assign it via an ordinary SET-WORD! produces an error.  It is the result of routines that deliberately want to say they aren't returning useful information...so it is the return value of things like PRINT (e.g. <code>x: print "Hi"</code> is an error).  Since it is a value type, it is possible that it may appear in blocks.</p>
+</li>
+</ul>
+<p><em>It has turned out that VOID! acts very much like what Rebol2 called UNSET!</em>... and with the suggestion I'm making here it's getting even closer.  I still don't think UNSET! is a good name for it... because to my mind <em>a variable can be unset, but not a value</em>.  Hence it's actually <em>nulled</em> variables that are unset.  But it is converging on almost entirely a terminology point.</p>
+<p>Rebol2's NONE! and Ren-C's BLANK! were always supposed to be quite similar, just a different name.  But NULL has taken over many of the duties of NONE! as an indicator of "soft failure" from a routine...like when a FIND can't find anything, or a conditional statement doesn't run any branches.  BLANK! sticks around as the solution to the problem of neutral placeholders in blocks, as well as to be easily convertible from NULL via TRY in order to <a href="https://github.com/rebol/rebol-issues/issues/1611#issuecomment-385719133" rel="nofollow noopener">signal a conscious desire to opt-out of an operation</a>.</p>
+<aside class="quote no-group quote-modified" data-post="7" data-topic="1140">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/lkppo/40/239_2.png" class="avatar"> LkpPo:</div>
+<blockquote>
+<p><em>(should these types be...)</em> named to make understand to which functionalities of the language they relate (block, value, refinement...)</p>
+</blockquote>
+</aside>
+<p>I think the names work pretty well.  Particularly pleasing is that NULL is exposed in the API as C and JavaScript's NULL.  That has turned out to be very important.</p>
+<p>Rebol2 always had trouble with <code>#[none]</code>-the-unit-value and none-the-word, frequently rendering it as looking like the word:</p>
+<pre><code>rebol2&gt;&gt; find [a b c] 'd
+== none
+</code></pre>
+<p>As mentioned, Ren-C does that with NULL now.  But if you wanted to use TRY to convert it to a blank (e.g. to quietly opt-out of a chain of operations on failure) you get a blank:</p>
+<pre><code>ren-c&gt;&gt; try find [a b c] 'd
+== _
+</code></pre>
+<p>Reserving plain old <strong><code>_</code></strong> so it's the literal form of this value...and having it be named BLANK!...has felt pretty good.  But we're still in that stretch of time for evaluating decisions for their merit...</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/8</link>
+        <pubDate>Sun, 02 Jun 2019 02:42:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-8</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[LkpPo]]></dc:creator>
+        <description><![CDATA[
+            <p>Clarity and brevity are two fundamental qualities of good writing. I think that applies to programming as well. Also 4 concepts so close (NULL, BLANK!, NONE! and VOID!), make me look for a fundamental problem in the language, or they do not have adequate names.</p>
+<p>I do not quite understand the usefulness of these 4 variants but should not there be one, or several but named to make understand to which functionalities of the language they relate (block, value, refinement ...)? Maybe I get it wrong.</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/7</link>
+        <pubDate>Sun, 02 Jun 2019 00:47:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-7</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="1140">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><strong>Problem Observed In Practice:</strong></p>
+<p>It has traditionally been easy to have a PATH! or SET-PATH! in your hand and transform it via <strong>as get-path!</strong> . But because leading-slash paths are not a distinct datatype, you wind up with some complexities when you're trying to produce <strong><code>/..</code></strong> programmatically.</p>
+</blockquote>
+</aside>
+<p>The more I thought about the epicycles of this problem, the more it bothered me.</p>
+<p>When you add it on top of changing how "refinements" (blank-headed PATH!) act in a way that will break Redbol compatibility in a way that can't be worked around, the proposition sinks.</p>
+<p><em>(...and even if it were a good thing, I also don't like shaking things up and requiring function bodies to say <code>if /refine</code> instead of <code>if refine</code> this close to the conference.)</em></p>
+<p><strong>But refinements being null when not used is good and right and true.</strong>  So new plan needed...</p>
+<aside class="quote no-group" data-post="1" data-topic="1140">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>What's not very likeable is having to use GET-WORD!s all the time, to avoid errors through access of an unset variable:</p>
+</blockquote>
+</aside>
+<p>...I now believe that the problem is that "null variables" should be fetched through ordinary WORD! and PATH!... <a href="https://forum.rebol.info/t/null-first-class-values-and-safety/895/8">see explanation here</a>.</p>
+<p>This just means adding a twist onto the responsibility matrix of NULL, BLANK!, and VOID!.  A little less erroring-responsibility on the non-valued NULL state, with more error-causing into the court of the valued-VOID!.  It moves closer to how Rebol2 accomplished the specific end of error messages on variables you mistype, while still being fundamentally reworked about what "unset" variables are.</p>
+<p>I think any illusions of Ren-C being able to bring evaluator "safety" to a fundamentally unsafe language are being stripped away with time.  Instead, what's actually happening is that the features are getting laser-calibrated to where an informed programmer can write short, correct, code easily... the right thing is the short thing, not something riddled with edge-case handling.</p>
+<p>Clarity is a <em>catalyst</em> for safety in a language.  But beyond that, the bias seems tipping ever toward being clean and powerful enough to <a href="https://forum.rebol.info/t/make-your-own-safety/1118">"make your own you-made-a-mistake-catching-safety mechanisms"</a>...</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/6</link>
+        <pubDate>Sat, 01 Jun 2019 17:36:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-6</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="1140">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Historical Rebol made you step outside the bounds of using a SET-WORD! or SET-PATH! and use SET/ANY if you wanted to assign an UNSET!. So who's to say GET-PATH! has to be all things to all people and allow NULL, when SET-PATH! isn't willing to assign a VOID!?</p>
+</blockquote>
+</aside>
+<p>To further my point here, in Rebol2:</p>
+<pre><code>&gt;&gt; unset 'foo
+&gt;&gt; get 'foo
+** Script Error: foo has no value
+</code></pre>
+<p>If <strong><code>get 'foo</code></strong> for an unset variable is an error, why shouldn't <strong><code>do compose [(to get-word! 'foo)]</code></strong> also be an error, with you having to do something "more extreme", like <strong>do [get/any 'foo]</strong>?</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/5</link>
+        <pubDate>Wed, 22 May 2019 01:51:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-5</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><strong>I think this proposal is a good idea.</strong></p>
+</blockquote>
+<p>Consider the following ways to deal with a loop with NEXT, that ultimately returns NULL when it runs out of input:</p>
+<pre><code>while [x] [... x: try next x]  ; (1)
+
+while [:x] [... x: next x]  ; (2) how you had to do it w/o the TRY before
+
+while [/x] [... x: next x]  ; (3) how you'd do it w/o the TRY in new proposal
+</code></pre>
+<p>Since accessing a null variable (unset) through a plain word will give an error, to use such a plain word you have to use TRY.  If you didn't want to do that, you previously would say (2).  But this proposal says that (2) would error now...only disarming functions.  So you'd do it as (3).</p>
+<p><strong>Likeable Points:</strong></p>
+<ul>
+<li>
+<p>I've been uneasy historically with the lack of communicativeness of why a GET-WORD! was being used.  Is it to disarm a function, or is it because the variable may be NULL?  Here you can tell at the callsite...the PATH! starting with a BLANK! means you're specifically asking for null tolerance.</p>
+</li>
+<li>
+<p>The optional-ness of a /refinement visually ties together with the access pattern for optionally-null things.</p>
+</li>
+<li>
+<p>On top of that, I think it looks better (slash is a "cleaner" character to lead with)...as well as being a bit more noticeable.</p>
+</li>
+<li>
+<p>You don't have to hit shift on most keyboards to get the slash</p>
+</li>
+</ul>
+<p><strong>Problem Observed In Practice:</strong></p>
+<p>It has traditionally been easy to have a PATH! or SET-PATH! in your hand and transform it via <strong>as get-path!</strong>.  But because leading-slash paths are not a distinct datatype, you wind up with some complexities when you're trying to produce <strong><code>/..</code></strong> programmatically.</p>
+<p>Among the complexities that arise is the danger of producing a double-slashed path unnecessarily, One imagines a set of transformations running where each one is sticking on an extra leading slash:</p>
+<pre><code>compose '/((some-get-path-that-already-has-a-leading-slash))
+</code></pre>
+<p>Basically, since the GET- and SET- and plain PATH! distinctions are mutually exclusive and cannot compound, they interchange particularly smoothly.  That gets compromised in meta-programming when a GET-PATH! can't give back NULL and you have to futz around with more slashes in the path somehow.</p>
+<p><strong>I don't think this is a deal-breaker - it's just something I observed.</strong>  Historical Rebol made you step outside the bounds of using a SET-WORD! or SET-PATH! and use SET/ANY if you wanted to assign an UNSET!.  So who's to say GET-PATH! has to be all things to all people and allow NULL, when SET-PATH! isn't willing to assign a VOID!?</p>
+<p>Plus, REFINIFY is easy enough to write (following the pattern of -ify meaning "leave it as it is if it was already"), if there's concern about accumulating leading slashes.</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/4</link>
+        <pubDate>Tue, 21 May 2019 23:39:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-4</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>I think this proposal is a good idea.</strong>  Distinguishing blanks from nulls is important.  If we don't make unused arguments null, we aren't using the nullness of null to its full advantage.</p>
+<p>Redbol emulation will be able to give the old behavior by converting unused refinement arguments from nulls to blanks.  People who expect refinements to be evaluatively inert in Redbol will have to use QUOTE...or if they don't care about their code actually still running in Rebol2/Red, they can use apostrophe as <strong>'/refinement</strong>.</p>
+<p>Helping drive my belief is the feeling that "paths with inert things at their head are inert" is the wrong direction.  I'd wondered if <strong><code>&lt;tag&gt;/2</code></strong> should be <code>#"a"</code> or if it should be easier to handle something like that as inert.  But now that we have generalized quoting, you can say <strong><code>'&lt;tag&gt;/2</code></strong> if you need to...or if you want it to be permanently inert you can say <strong><code>@&lt;tag&gt;/2</code></strong>.  Making a plain path inert doesn't feel right...why would <code>(&lt;tag&gt;)/2</code> act any differently from <code>&lt;tag&gt;/2</code>?</p>
+<p>I think the net result will be intuitive.  Switching GET-WORD! to not be null tolerant would line up with the historical behavior of GET not being null tolerant without /ANY, which we <em>might</em> consider re-establishing (though I've pretty much firmly proven that SET-WORD! needs to be null tolerant).</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/3</link>
+        <pubDate>Sat, 04 May 2019 06:43:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-3</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I just noticed I was doing something that wouldn't work in a refinements-are-null world.  It seemed like a problem for a minute, until I realized... it wasn't new, and we now have a pretty good solution.</p>
+<p>The issue was that in COMPOSE, nulls vaporize.  So if you have something doing a code emitter, like:</p>
+<pre><code>emit compose [something/refinement plain-arg (/refinement-arg)]
+</code></pre>
+<p>You'll get an error because there will be a missing arg to /refinement.  There's no way to put a null into a block.</p>
+<p>But...you can get around it with quoting:</p>
+<pre><code>emit compose [something/refinement plain-arg '(/refinement-arg)]
+</code></pre>
+<p>Which you probably want to do anyway with generic content being run through evaluation.  (What if it had been a GROUP!?  What if it was an ACTION!, or WORD!)</p>
+<p>Pretty neat.</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/2</link>
+        <pubDate>Tue, 09 Apr 2019 07:12:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-2</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+      <item>
+        <title>Are nulls the best representation for unused refinements?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The <a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120">Refinements are their own arguments</a> change is in.  And it's a good thing, whose goodness I cannot overstate.  It's paying off now and will pay off in the future.</p>
+<p>But unifying the refinement and argument has one hitch: what if you want a refinement to be literally BLANK!?  I'd hoped it wouldn't be common.  But <a class="mention" href="/u/giuliolunati">@giuliolunati</a> is using BLANK! to represent a NaN (not-a-number) state...<a href="https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954">which I have advocated for</a>.</p>
+<p>There's a way to do it, though it's kind of ugly.  When you say a refinement is <strong><code>[&lt;opt&gt; blank! ...]</code></strong> you are asking for the refinement to be null if unused.  This way, blank can be passed as having meaning.</p>
+<p>But... that's a bit sketchy.  And there's something sketchy about unused refinements being BLANK! in the first place.  MAKE FRAME! creates an empty frame with all nulls...for a reason.  And those clearly should mean "not specified".  For refinements that means not provided.  We wind up having to mutate nulls into blanks when the function runs...and it's an "unclean"-feeling thing.</p>
+<h2>What if /REFINEMENT was used to access refinements?</h2>
+<p>What's not very likeable is having to use GET-WORD!s all the time, to avoid errors through access of an unset variable:</p>
+<pre><code>foo: function [a /ref [integer!]] [
+    if :ref [
+        print "This is annoying"
+        print ["But you only need it for checking" ref]
+    ]
+]
+</code></pre>
+<p>But something that I've thought about often is the idea that accessing a refinement might look good if it were done with the refinement itself:</p>
+<pre><code>foo: function [a /ref [integer!]] [
+    if /ref [
+        print "This makes sense and actually adds value"
+        print ["Still not needed on *every* access" ref]
+    ]
+]
+</code></pre>
+<p>This might fit into a form of GET that is explicitly for the purpose of NULL checking.  We then might make GET-WORD! error on NULLs, so it would be clearer what the purpose of the GET was for (e.g. specifically to suppress function execution).  This is something I've felt is pretty necessary for a while because you can't tell at first glance exactly what the point of a GET-WORD! usage is...and here we'd know when it was trying to tell us that the variable may be null.</p>
+<p>So to be clear--it wouldn't really have anything to do with refinements.  You would be able to use <strong>/foo</strong> on any word, and have it gloss over the NULL-ness.  It would basically be like a GET-WORD! of today.   It looks a bit cleaner, if you ask me, and you can type it without shift.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>It would mean losing refinements as an inert class.  But as they are PATH!s now, it's not obvious that they should be inert.  And with <span class="mention">@word</span>, <span class="mention">@at</span>/path, @(at group), @[at block] on the horizon...there's several other more clearly inert value options coming.</p>
+<p>One downside of making PATH! with blank at the head evaluate would be incompatibility with historical Rebol's inertness of REFINEMENT!.  There's no way for Redbol to subvert the evaluator for that.  Code would have to be changed to QUOTE the refinement.  Changing the way GET-WORD! worked to not allow NULL would similarly be something emulation couldn't override.</p>
+<p>Another thing that would be a bit annoying would be using this with a new APPLY syntax, where you wanted to use refinements pass-thru in the expression itself, you'd have to put the refinement in a GROUP!</p>
+<pre><code>foo: function [... /dup [integer!]] [
+    ...
+    apply append [... /dup (/dup) ...]
+    apply append [... /dup :/dup ...]  ; or maybe this?
+]
+</code></pre>
+<p>That's if you didn't know if it was used or not, since you could use plain <strong>dup</strong> if by that point you knew it was used.  It's not a deal-breaker by any means...pretty easy workaround as such things go.  But it's something to bear in mind.</p>
+          <p><a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140/1</link>
+        <pubDate>Mon, 08 Apr 2019 15:31:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1140-1</guid>
+        <source url="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140.rss">Are nulls the best representation for unused refinements?</source>
+      </item>
+  </channel>
+</rss>

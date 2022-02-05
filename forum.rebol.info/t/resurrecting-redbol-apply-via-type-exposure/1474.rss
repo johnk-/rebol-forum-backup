@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Resurrecting REDBOL-APPLY via Type Exposure</title>
+    <link>https://forum.rebol.info/t/resurrecting-redbol-apply-via-type-exposure/1474</link>
+    <description>At one point, I had a simulation of the Rebol2/R3-Alpha APPLY working...all written in usermode code.
+
+As a refresher: this concept of APPLY required you to line up things positionally--even refinements.  You had to look at the parameter order on the interface, and put &quot;truthy&quot; things in the refinement slots you wanted to enable.  Then if the refinement took argument(s), you would have to put that in the next slot.
+
+So for R3-Alpha&#39;s APPEND, the ordered spec is:
+
+    APPEND series value /part length /only /dup count
+
+Let&#39;s say you wanted to do something equivalent to **append/part/dup [a b c] [d e f] 2 3**.  You would write:
+
+    r3-alpha&gt;&gt; apply :append [[a b c] [d e f] true 2 false true 3]
+    == [a b c d e d e d e]
+
+Here the first TRUE is to say we want to use the /PART...then the length of 2.  Then a FALSE to say we don&#39;t want /ONLY.  And then another TRUE to say we want /DUP, with the count as 3.
+
+It&#39;s fairly convoluted, and brittle with respect to rearrangement.  But it offers you the benefit of being able to calculate whether you want to provide a refinement or not.  The block is reduced by default (with an /ONLY option to ask that it not be).
+
+In the early days of frames, I thought it would be a good test to see if this exact function could be emulated by processing the block... building a FRAME!, and then DO&#39;ing it.  So REDBOL-APPLY was written and added to the tests.
+
+## Then Ren-C Became [Pure and Refined](https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120)...
+
+With the great improvement of refinements becoming their own arguments, came a new puzzle from an interface perspective.  Where it had used to say things like:
+
+    ren-c-before&gt;&gt; parameters of :append
+    == [series value /part length /only /dup count]
+
+It would now say:
+
+    ren-c-after&gt;&gt; parameters of :append
+    == [series value /part /only /dup]
+
+You might notice a piece of information gets lost there: **which refinements take arguments at the callsite, vs. which ones don&#39;t**.  Here the /ONLY looks just like the /PART and /DUP.  If you&#39;re going to have a REDBOL-APPLY that splits out the refinement on/off from the argument, you have to know if there is an argument to fill in.
+
+I&#39;ll emphasize here that **whether or not this particular APPLY primitive is desirable or not isn&#39;t the point.**  It&#39;s a question of whether there&#39;s enough information.  And you have to have more than the parameter list above.
+
+So one place people might have looked to would be the TYPESETS OF reflector, and maybe check to see if the typeset was empty (?)  But the typeset code was never all that good.
+
+## Enter The New AS FRAME! Aliasing Ability
+
+I only just pushed this a bit forward, so it&#39;s not stable yet.  But it was enough to get REDBOL-APPLY working.  Here&#39;s what the frame alias of APPEND looks like:
+
+    &gt;&gt; as frame! :append
+    == #[frame! {append} [
+        return : [any-series! port! map! object! module! bitset!]:
+        series : [any-series! port! map! object! module! bitset!]
+        value : [&lt;opt&gt; any-value!]
+        part : /[any-number! any-series! pair!]
+        only : /[]
+        dup : /[any-number! pair!]
+        line : /[]
+    ]]
+
+The keys can&#39;t hold the information about whether something is a refinement or quoted or not.  So those attributes are moved onto the BLOCK!.  Here we see that PART, ONLY, DUP, and LINE are refinements...while ONLY and LINE have no specified types.
+
+## And Here&#39;s The First Try That Gets The Tests Passing Again
+
+It&#39;s big and pokey.  And it trips over the weird parameter compaction a little bit... there&#39;s still a lot of questions about how you would take something that could either be **&#39;:foo** or **/foo** and extract plain **foo** out of it.  (It&#39;s not as obvious as you might think that &quot;to word! should just do that&quot;.)
+
+There&#39;s plenty of room for improvement.  But clumsy though it is, it shows some of the non-trivial meta-language behavior that I think can be put in the hands of mere mortals...in that Minecraft-of-programming way.  This really is letting people get intimately involved in the design of their own function generators and control structures...
+
+    redbol-apply: func [
+        return: [&lt;opt&gt; any-value!]
+        action [action!]
+        block [block!]
+        /only
+        &lt;local&gt; types arg key frame params mode
+    ][
+        types: as frame! :action  ; exemplar of types
+        frame: make frame! :action  ; frame we are building
+        params: parameters of :action  ; ordered list of parameters
+        mode: &lt;normal&gt;
+
+        ; Rebol2 and R3-Alpha APPLY would fill in NONE for any parameters that
+        ; were not provided in the apply block:
+        ;
+        ;     rebol2/r3-alpha&gt;&gt; apply func [a b c] [reduce [a b c]] []
+        ;     == [none none none]
+        ;
+        ; This means we need to enumerate and fill in the frame as long as there
+        ; are parameters--not as long as there are block values.
+        ;
+        while [not tail? params] [
+            case [
+                not block [
+                    arg: null  ; could also do BLANK! if no more block data
+                ]
+                only [  ; /ONLY means do not evaluate arguments
+                    arg: get/any &#39;block/1
+                    block: next block
+                ]
+                true [  ; evaluate (skipping comments and other invisibles)
+                    until .not.quoted? [[block arg]: evaluate block]
+                ]
+            ]
+
+            key: to word! dequote params/1
+            all [
+                refinement? params/1
+                elide if not block [break]  ; done if refinements w/no more block
+                mode = &lt;normal&gt;
+            ] then [
+                mode: if arg [#]  ; set mode to either use or don&#39;t use next arg
+                if empty? second pick types key [  ; no-arg refine...
+                    set (in frame key) mode  ; ...must be # or NULL
+                ] else [
+                    continue  ; keep param on the refinement, get next arg
+                ]
+            ] else [
+                if mode [  ; normal or # case will set
+                    set (in frame key) get/any &#39;arg
+                ]
+            ]
+
+            mode: &lt;normal&gt;
+            params: next params
+        ]
+
+        ; Too many arguments was not a problem for R3-alpha&#39;s APPLY, it would
+        ; evaluate them all even if not used by the function.  It may or may not
+        ; be better to have it be an error.
+        ;
+        ; https://github.com/metaeducation/rebol-issues/issues/2237
+        ;
+        comment [
+            all [block, not tail? block] then [
+                fail &quot;Too many arguments passed in REDBOL-APPLY block.&quot;
+            ]
+        ]
+
+        do frame
+    ]</description>
+    
+    <lastBuildDate>Mon, 25 Jan 2021 11:50:41 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/resurrecting-redbol-apply-via-type-exposure/1474.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Resurrecting REDBOL-APPLY via Type Exposure</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>At one point, I had a simulation of the Rebol2/R3-Alpha APPLY working...all written in usermode code.</p>
+<p>As a refresher: this concept of APPLY required you to line up things positionally--even refinements.  You had to look at the parameter order on the interface, and put "truthy" things in the refinement slots you wanted to enable.  Then if the refinement took argument(s), you would have to put that in the next slot.</p>
+<p>So for R3-Alpha's APPEND, the ordered spec is:</p>
+<pre><code>APPEND series value /part length /only /dup count
+</code></pre>
+<p>Let's say you wanted to do something equivalent to <strong>append/part/dup [a b c] [d e f] 2 3</strong>.  You would write:</p>
+<pre><code>r3-alpha&gt;&gt; apply :append [[a b c] [d e f] true 2 false true 3]
+== [a b c d e d e d e]
+</code></pre>
+<p>Here the first TRUE is to say we want to use the /PART...then the length of 2.  Then a FALSE to say we don't want /ONLY.  And then another TRUE to say we want /DUP, with the count as 3.</p>
+<p>It's fairly convoluted, and brittle with respect to rearrangement.  But it offers you the benefit of being able to calculate whether you want to provide a refinement or not.  The block is reduced by default (with an /ONLY option to ask that it not be).</p>
+<p>In the early days of frames, I thought it would be a good test to see if this exact function could be emulated by processing the block... building a FRAME!, and then DO'ing it.  So REDBOL-APPLY was written and added to the tests.</p>
+<h2>Then Ren-C Became <a href="https://forum.rebol.info/t/pure-and-refined-simplifying-refinements-to-one-or-zero-args/1120">Pure and Refined</a>...</h2>
+<p>With the great improvement of refinements becoming their own arguments, came a new puzzle from an interface perspective.  Where it had used to say things like:</p>
+<pre><code>ren-c-before&gt;&gt; parameters of :append
+== [series value /part length /only /dup count]
+</code></pre>
+<p>It would now say:</p>
+<pre><code>ren-c-after&gt;&gt; parameters of :append
+== [series value /part /only /dup]
+</code></pre>
+<p>You might notice a piece of information gets lost there: <strong>which refinements take arguments at the callsite, vs. which ones don't</strong>.  Here the /ONLY looks just like the /PART and /DUP.  If you're going to have a REDBOL-APPLY that splits out the refinement on/off from the argument, you have to know if there is an argument to fill in.</p>
+<p>I'll emphasize here that <strong>whether or not this particular APPLY primitive is desirable or not isn't the point.</strong>  It's a question of whether there's enough information.  And you have to have more than the parameter list above.</p>
+<p>So one place people might have looked to would be the TYPESETS OF reflector, and maybe check to see if the typeset was empty (?)  But the typeset code was never all that good.</p>
+<h2>Enter The New AS FRAME! Aliasing Ability</h2>
+<p>I only just pushed this a bit forward, so it's not stable yet.  But it was enough to get REDBOL-APPLY working.  Here's what the frame alias of APPEND looks like:</p>
+<pre><code>&gt;&gt; as frame! :append
+== #[frame! {append} [
+    return : [any-series! port! map! object! module! bitset!]:
+    series : [any-series! port! map! object! module! bitset!]
+    value : [&lt;opt&gt; any-value!]
+    part : /[any-number! any-series! pair!]
+    only : /[]
+    dup : /[any-number! pair!]
+    line : /[]
+]]
+</code></pre>
+<p>The keys can't hold the information about whether something is a refinement or quoted or not.  So those attributes are moved onto the BLOCK!.  Here we see that PART, ONLY, DUP, and LINE are refinements...while ONLY and LINE have no specified types.</p>
+<h2>And Here's The First Try That Gets The Tests Passing Again</h2>
+<p>It's big and pokey.  And it trips over the weird parameter compaction a little bit... there's still a lot of questions about how you would take something that could either be <strong>':foo</strong> or <strong>/foo</strong> and extract plain <strong>foo</strong> out of it.  (It's not as obvious as you might think that "to word! should just do that".)</p>
+<p>There's plenty of room for improvement.  But clumsy though it is, it shows some of the non-trivial meta-language behavior that I think can be put in the hands of mere mortals...in that Minecraft-of-programming way.  This really is letting people get intimately involved in the design of their own function generators and control structures...</p>
+<pre><code>redbol-apply: func [
+    return: [&lt;opt&gt; any-value!]
+    action [action!]
+    block [block!]
+    /only
+    &lt;local&gt; types arg key frame params mode
+][
+    types: as frame! :action  ; exemplar of types
+    frame: make frame! :action  ; frame we are building
+    params: parameters of :action  ; ordered list of parameters
+    mode: &lt;normal&gt;
+
+    ; Rebol2 and R3-Alpha APPLY would fill in NONE for any parameters that
+    ; were not provided in the apply block:
+    ;
+    ;     rebol2/r3-alpha&gt;&gt; apply func [a b c] [reduce [a b c]] []
+    ;     == [none none none]
+    ;
+    ; This means we need to enumerate and fill in the frame as long as there
+    ; are parameters--not as long as there are block values.
+    ;
+    while [not tail? params] [
+        case [
+            not block [
+                arg: null  ; could also do BLANK! if no more block data
+            ]
+            only [  ; /ONLY means do not evaluate arguments
+                arg: get/any 'block/1
+                block: next block
+            ]
+            true [  ; evaluate (skipping comments and other invisibles)
+                until .not.quoted? [[block arg]: evaluate block]
+            ]
+        ]
+
+        key: to word! dequote params/1
+        all [
+            refinement? params/1
+            elide if not block [break]  ; done if refinements w/no more block
+            mode = &lt;normal&gt;
+        ] then [
+            mode: if arg [#]  ; set mode to either use or don't use next arg
+            if empty? second pick types key [  ; no-arg refine...
+                set (in frame key) mode  ; ...must be # or NULL
+            ] else [
+                continue  ; keep param on the refinement, get next arg
+            ]
+        ] else [
+            if mode [  ; normal or # case will set
+                set (in frame key) get/any 'arg
+            ]
+        ]
+
+        mode: &lt;normal&gt;
+        params: next params
+    ]
+
+    ; Too many arguments was not a problem for R3-alpha's APPLY, it would
+    ; evaluate them all even if not used by the function.  It may or may not
+    ; be better to have it be an error.
+    ;
+    ; https://github.com/metaeducation/rebol-issues/issues/2237
+    ;
+    comment [
+        all [block, not tail? block] then [
+            fail "Too many arguments passed in REDBOL-APPLY block."
+        ]
+    ]
+
+    do frame
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/resurrecting-redbol-apply-via-type-exposure/1474/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/resurrecting-redbol-apply-via-type-exposure/1474/1</link>
+        <pubDate>Mon, 25 Jan 2021 11:50:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1474-1</guid>
+        <source url="https://forum.rebol.info/t/resurrecting-redbol-apply-via-type-exposure/1474.rss">Resurrecting REDBOL-APPLY via Type Exposure</source>
+      </item>
+  </channel>
+</rss>

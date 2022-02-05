@@ -1,0 +1,342 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Quoting Ergonomics in the API -- Solved with Terminology?</title>
+    <link>https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050</link>
+    <description>Old questions need to be pinned down.  And a *huge* one in the API--[practically the first question there was](https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371) about the libRebol model--is what this should do:
+
+    rebSpell(&quot;mold&quot;, print_word);   // print_word is the WORD! for PRINT
+
+Should it:
+
+1. Give back the UTF-8 C string &quot;print&quot;
+2. Error, and say &quot;PRINT is missing its LINE parameter&quot;
+
+If you go with option #1, you have to make evaluation explicit when you want it... e.g. with some kind of EVAL operator:
+
+    rebElide(rebEVAL(print_word), &quot;{This only prints if you use rebEVAL}&quot;);
+
+    rebElide(rebE(print_word), &quot;{rebE offered as shorthand for rebEVAL.}&quot;);
+
+If you go with option #2, you&#39;ll be putting a lot of QUOTE operators in:
+
+    rebSpell(&quot;mold&quot;, rebQUOTE(print_word));
+
+    rebSpell(&quot;mold&quot;, rebQ(print_word));
+
+*(Note: In all proposals considered thus far, UTF-8 C text like `&quot;mold&quot;` is scanned and left in place as-is.  It&#39;s only the spliced values to which this question applies.)*
+
+## The API has been defaulting to option #1 (no error)
+
+Which interpretation is most convenient will depend on what you&#39;re looking at.  But just going by the numbers, there are a lot more calls just like **rebSpell(print_word);** than there are invocations of functions stored by WORD! or ACTION! in a C variable.  It seems a shame if they have to be written as **rebSpell(rebQ(print_word));**
+
+I could give a ton of examples where option #1 wins...if you&#39;re running code and loops and branches, it&#39;s perfect.  Yet it&#39;s still very frequent that you get bitten on quoting by default--whenever you&#39;ve got a construct that&#39;s just putting together raw material.  Consider this simple example:
+
+    REBVAL *word = ...;  // code generating some WORD!
+    int i_ten = rebInteger(10);
+    int i_twenty = rebInteger(20);
+
+    REBVAL *result = rebValue(
+        &quot;select [ten&quot;, i_ten, &quot;twenty&quot;, i_twenty, &quot;]&quot;, word
+    );
+
+Now think about it quoting *every* splice.  Sure, that&#39;s good news for `word`.  But `i_ten` and `i_twenty` aren&#39;t getting evaluated to take the quote off.  So your selection product that comes back is going to be either `&#39;10` or `&#39;20`... QUOTED! integers.  :-/  Yuck.
+
+## Naming Quote Manipulators Has Been A Point of Confusion
+
+If you go with the solution described above of rebEVAL() to tell the splice not to quote, you get something that works, but is kind of inelegant:
+
+    REBVAL *result = rebValue(
+        &quot;select [ten&quot;, rebE(i_ten), &quot;twenty&quot;, rebE(i_twenty), &quot;]&quot;, word
+    );
+
+You managed to get the message to rebValue() not to put quotes on.  But you said to do it with...EVAL?  It&#39;s not really like EVAL-the-evaluator-ACTION!, and can&#39;t substitute for it generically.  Its function is narrower...more like rebU for &quot;unquote&quot;:
+
+    REBVAL *result = rebRun(
+        &quot;select [ten&quot;, rebU(i_ten), &quot;twenty&quot;, rebU(i_twenty), &quot;]&quot;, word
+    );
+
+Except...it&#39;s not really that either.  If you try to UNQUOTE things that don&#39;t have quotes on them you get an error in normal evaluation.  The REBVALs you&#39;re talking about--the integers--are unquoted here.
+
+So what you&#39;re actually doing is *un-asking* for a special treatment.  There&#39;s not a great word for asking for the absence of something that is implicit.  *(It reminds me a bit of the struggle we had trying to find a way to name something to use in PRINT to mean &quot;don&#39;t put anything between these components...no space, nothing&quot;.)*
+
+Trying to push the operator out to be something like rebBLOCK() with rebB() and subsuming the brackets loses a nice aspect the brackets offered:
+
+    REBVAL *result = rebValue(
+        &quot;select&quot;, rebB(&quot;ten&quot;, i_ten, &quot;twenty&quot;, i_twenty), word
+    );
+
+That&#39;s fine if you&#39;re trying to optimize--especially if you have no runs of text that would fire up the scanner otherwise.  (It doesn&#39;t cost much to process the brackets if you already need the scanner.)  But I think it loses the clarity the brackets gave.
+
+## Better Living Through Terminology
+
+I propose the rebU() and rebE() operators doing the opposite of what they do today, and having them represent `rebUNEVALUATIVE()` and `rebEVALUATIVE()`
+
+They are not saying what to do with a splice.  *They are describing the environment in which splicing is done.*  Hence you&#39;d do the example above as:
+
+    REBVAL *result = rebRun(
+        &quot;select&quot;, rebU(&quot;[ten&quot;, i_ten, &quot;twenty&quot;, i_twenty, &quot;]&quot;), word
+    );
+
+You are saying &quot;the contents underneath this are intended to be used in an unevaluative sense, so don&#39;t bother trying to quote-escape them&quot;.  This is different from rebUNEVAL(), which was previously a quoting operation...the thought was &quot;if you UNEVAL something, then if you EVAL what you get you&#39;ll get the original thing back&quot;.  It was hacked together in an ugly way that is handled far more elegantly with UNQUOTE and (new) QUOTE.
+
+You can apply rebU() it to a single item or multiple.  You may even be able to apply it across partial spans of arrays:
+
+    REBVAL *result = rebRun(
+        &quot;select&quot;, rebU(&quot;[ten&quot;, i_ten), &quot;twenty&quot;, i_twenty, &quot;]&quot;, word
+    );
+
+If the &quot;unevaluative&quot; doesn&#39;t gel, you can mentally file it under &quot;unquote_splices&quot;.  But I&#39;ve explained why this is misleading, so it&#39;s not what the API operation will be called.  (If there was a rebUNQUOTE, it would error if you passed it a plain INTEGER! like the ones above.)
+
+But now the question is...what about this confusing-looking thing?
+
+    rebRun(rebU(print_word), &quot;{This prints, but you said &#39;unevaluative&#39;}&quot;);
+
+Yep.  Well, an &quot;unevaluative&quot; context would still run if you DO it.  You can&#39;t somehow magically make things never evaluate.
+
+There&#39;s nothing saying rebE() has to be a shorthand for rebEVALUATIVE() just because rebU() is rebUNEVALUATIVE().  Since evaluative is the default you probably don&#39;t *need* a shorthand for it.
+
+What&#39;s more, rebEVAL could be broken out as a separate instruction, which folds the parentheses into the macro itself:
+
+    rebRun(rebEVAL, print_word, &quot;{It&#39;s three characters longer this way...}&quot;);
+    rebRun(rebE(print_word), &quot;{...but likely clearer w.r.t. distinction from rebU()}&quot;);
+
+The extra three characters don&#39;t seem so bad, considering EVAL is something that applies to only the thing directly following it.  And as I say, wanting to EVAL is not as common as you think (once you remove the cases that are now covered by rebU(), which were poorly expressed and thought of as being actual EVALs).  This rebEVAL could be nothing but a clever trick that just folds into not quoting if at a non-BLOCK! level, but injects the EVAL native as an ACTION! if it winds up being inside a scanned block!  *(yes, details I know few people understand the ramifications of what I&#39;m talking about.)*
+
+Anyway...when seen through this lens, I think it all makes sense.  You start out in an EVALUATIVE context, which quotes splices by default.  Then you can rest easy knowing that if you&#39;re in a situation where it&#39;s not what you want, you&#39;re just one rebU() away from having what you need...
+
+## Afterthought...should ACTION!s be &quot;special&quot; and auto-evaluate?
+
+If the concept of the API is to treat the C variable lookup as if it were a WORD! being fetched, and thus give the inert value, there are three notable exceptions in the evaluator:
+
+* a WORD! looking up to an ACTION! evaluates
+* a WORD! looking up to a null errors without a special GET-WORD! exception
+* a WORD! looking up to a VOID! errors without a special GET-WORD! exception
+
+Indeed, most of the rebEVAL examples are on ACTION!s, and the cases where you are passing them by value are few and far between.
+
+But...I&#39;d be very wary of making the behavior at the API level take this on.  There are levels at which the API simply will not work the way the evaluator does...*because it can&#39;t*.  You can&#39;t say **rebRun(&quot;lit&quot;, my_word)** and get back the WORD! `my_word`...as an obvious example.  Do we really want to have to say:
+
+    if (rebDid(&quot;null?&quot;, rebG(maybe_null_or_void_REBVAL)) {
+          // rebG() as in rebGET(), but as in EVAL TO GET-WORD!...?
+    }
+
+That seems pretty insane, when compared to the comfortable &quot;it gets a quote level in evaluative contexts&quot; or &quot;it gets no quote level in unevaluative contexts&quot;.</description>
+    
+    <lastBuildDate>Mon, 25 Oct 2021 03:31:54 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Quoting Ergonomics in the API -- Solved with Terminology?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>This Functionality Has Not Been Used:</h2>
+<aside class="quote no-group quote-modified" data-username="hostilefork" data-post="1" data-topic="1050">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<pre><code>REBVAL *result = rebValue(
+    "select", rebU("[ten", i_ten, "twenty", i_twenty, "]"), word
+);
+</code></pre>
+<p>(...) You can apply rebU() it to a single item or multiple. You may even be able to apply it across partial spans of arrays:</p>
+<pre><code>REBVAL *result = rebValue(
+    "select", rebU("[ten", i_ten), "twenty", i_twenty, "]", word
+);
+</code></pre>
+</blockquote>
+</aside>
+<p>It's hard to know in advance of designing an API what features will be needed.  But when you notice something not getting used that's complex, it's probably just hindering the development of more interesting features.  <strong>And I've felt no shortage of expressiveness in the API without this.</strong></p>
+<h2>So I'm Paring It Back to arity-1 rebQ(v) and rebU(v)</h2>
+<p>Basically you can inject an automatically-self-disposing entry into the API stream that adds 1 level of quoting to the argument, or removes a level.  That's it.</p>
+<p>Here are some headache-inducing comments from the code being deleted:</p>
+<pre><code>// The rebQ instruction was designed such that it doesn't mean "quote", it means
+// "quote any value splices in this section".  And if you turned around and
+// said `rebU(rebQ(...))` that should undo your effect.  The two operations
+// share a mostly common implementation.
+//
+// Note that `rebValue("print {One}", rebQ("print {Two}", ...), ...)` should not
+// execute rebQ()'s code right when C runs it.  If it did, then `Two` would
+// print before `One`.  It has to give back something that provides more than
+// one value when the feed visits it.
+//
+// So what these operations produce is an array.  If it quotes a single value
+// then it will just be a singular array (sizeof(REBSER)).  This array is not
+// managed by the GC directly--which means it's cheap to allocate and then
+// free as the feed passes it by.  which is one of the reasons that a GC has to
+// force reification of outstanding variadic feeds)
+//
+// We lie and say the array is NODE_FLAG_MANAGED when we create it so it
+// won't get manuals tracked.  Then clear the managed flag.  If the GC kicks
+// in it will spool the va_list() to the end first and take care of it.  If
+// it does not kick in, then the array will just be freed as it's passed.
+</code></pre>
+<p>Even scarier:</p>
+<pre><code>// !!! It may be possible to create variations of this which are done in a
+// way that would allow arbitrary spans, `rebU("[, value1), value2, "]"`.
+// But those variants would have to be more sophisticated than this.
+</code></pre>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/face_with_head_bandage.png?v=9" title=":face_with_head_bandage:" class="emoji" alt=":face_with_head_bandage:">  ...or we could <em>not</em> do that.  This also gets rid of the "Quoting Byte", which has the following writeup:</p>
+<hr>
+<blockquote>
+<p>There was significant deliberation over what the following code should do:</p>
+<pre><code>REBVAL *word = rebValue("'print");
+REBVAL *type = rebValue("type of", word);
+</code></pre>
+<p>If the WORD! is simply spliced into the code and run, then that will be an error.  It would be as if you had written:</p>
+<pre><code>do compose [type of (word)]
+</code></pre>
+<p>It may seem to be more desirable to pretend you had fetched word from a variable, as if the code had been Rebol.  The illusion could be given by automatically splicing quotes, but doing this without being asked creates other negative side effects:</p>
+<pre><code>REBVAL *x = rebInteger(10);
+REBVAL *y = rebInteger(20);
+REBVAL *coordinate = rebValue("[", x, y, "]");
+</code></pre>
+<p>You don't want to wind up with <code>['10 '20]</code> in that block.  So automatic splicing with quotes is fraught with problems.  Hence you should use the rebQ() operator to add quoting levels when needed, or use the <code>@</code> operator as part of a string:</p>
+<pre><code>REBVAL *type = rebValue("type of", rebQ(word));
+REBVAL *type = rebValue("type of @", word);
+</code></pre>
+<p>rebQ() and rebU()  are generalized so that one may add and drop quoting from splices on a feed via ranges, countering any additions via rebQ() with a corresponding rebU().  This is kept within reason at up to 255 levels in a byte, and that byte is in the feed flags in the second byte (where it is least likely to be needed to line up with cell bits etc.)  Being in the flags means it can be initialized with them in one assignment if it does not change.</p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050/4</link>
+        <pubDate>Wed, 22 Sep 2021 11:06:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1050-4</guid>
+        <source url="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050.rss">Quoting Ergonomics in the API -- Solved with Terminology?</source>
+      </item>
+      <item>
+        <title>Quoting Ergonomics in the API -- Solved with Terminology?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1050">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p>I really should tinker with that, to clarify this feeling.</p>
+</blockquote>
+</aside>
+<p>Another question to ask: Should libRebol functions in JavaScript be done as e.g. <strong>reb.Run()</strong>, so it can work with JS modules better?  Node.JS would then say <strong>const reb = require('rebol')</strong></p>
+          <p><a href="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050/3</link>
+        <pubDate>Tue, 05 Feb 2019 02:30:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1050-3</guid>
+        <source url="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050.rss">Quoting Ergonomics in the API -- Solved with Terminology?</source>
+      </item>
+      <item>
+        <title>Quoting Ergonomics in the API -- Solved with Terminology?</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>At 1st look I feel comfortable with that proposal.<br>
+I really should tinker with that, to clarify this feeling.</p>
+          <p><a href="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050/2</link>
+        <pubDate>Sun, 03 Feb 2019 19:52:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1050-2</guid>
+        <source url="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050.rss">Quoting Ergonomics in the API -- Solved with Terminology?</source>
+      </item>
+      <item>
+        <title>Quoting Ergonomics in the API -- Solved with Terminology?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Old questions need to be pinned down.  And a <em>huge</em> one in the API--<a href="https://forum.rebol.info/t/should-word-path-function-be-live-by-default-in-rebdo/371">practically the first question there was</a> about the libRebol model--is what this should do:</p>
+<pre><code>rebSpell("mold", print_word);   // print_word is the WORD! for PRINT
+</code></pre>
+<p>Should it:</p>
+<ol>
+<li>Give back the UTF-8 C string "print"</li>
+<li>Error, and say "PRINT is missing its LINE parameter"</li>
+</ol>
+<p>If you go with option <span class="hashtag">#1</span>, you have to make evaluation explicit when you want it... e.g. with some kind of EVAL operator:</p>
+<pre><code>rebElide(rebEVAL(print_word), "{This only prints if you use rebEVAL}");
+
+rebElide(rebE(print_word), "{rebE offered as shorthand for rebEVAL.}");
+</code></pre>
+<p>If you go with option <span class="hashtag">#2</span>, you'll be putting a lot of QUOTE operators in:</p>
+<pre><code>rebSpell("mold", rebQUOTE(print_word));
+
+rebSpell("mold", rebQ(print_word));
+</code></pre>
+<p><em>(Note: In all proposals considered thus far, UTF-8 C text like <code>"mold"</code> is scanned and left in place as-is.  It's only the spliced values to which this question applies.)</em></p>
+<h2>The API has been defaulting to option <span class="hashtag">#1</span> (no error)</h2>
+<p>Which interpretation is most convenient will depend on what you're looking at.  But just going by the numbers, there are a lot more calls just like <strong>rebSpell(print_word);</strong> than there are invocations of functions stored by WORD! or ACTION! in a C variable.  It seems a shame if they have to be written as <strong>rebSpell(rebQ(print_word));</strong></p>
+<p>I could give a ton of examples where option <span class="hashtag">#1</span> wins...if you're running code and loops and branches, it's perfect.  Yet it's still very frequent that you get bitten on quoting by default--whenever you've got a construct that's just putting together raw material.  Consider this simple example:</p>
+<pre><code>REBVAL *word = ...;  // code generating some WORD!
+int i_ten = rebInteger(10);
+int i_twenty = rebInteger(20);
+
+REBVAL *result = rebValue(
+    "select [ten", i_ten, "twenty", i_twenty, "]", word
+);
+</code></pre>
+<p>Now think about it quoting <em>every</em> splice.  Sure, that's good news for <code>word</code>.  But <code>i_ten</code> and <code>i_twenty</code> aren't getting evaluated to take the quote off.  So your selection product that comes back is going to be either <code>'10</code> or <code>'20</code>... QUOTED! integers.  :-/  Yuck.</p>
+<h2>Naming Quote Manipulators Has Been A Point of Confusion</h2>
+<p>If you go with the solution described above of rebEVAL() to tell the splice not to quote, you get something that works, but is kind of inelegant:</p>
+<pre><code>REBVAL *result = rebValue(
+    "select [ten", rebE(i_ten), "twenty", rebE(i_twenty), "]", word
+);
+</code></pre>
+<p>You managed to get the message to rebValue() not to put quotes on.  But you said to do it with...EVAL?  It's not really like EVAL-the-evaluator-ACTION!, and can't substitute for it generically.  Its function is narrower...more like rebU for "unquote":</p>
+<pre><code>REBVAL *result = rebRun(
+    "select [ten", rebU(i_ten), "twenty", rebU(i_twenty), "]", word
+);
+</code></pre>
+<p>Except...it's not really that either.  If you try to UNQUOTE things that don't have quotes on them you get an error in normal evaluation.  The REBVALs you're talking about--the integers--are unquoted here.</p>
+<p>So what you're actually doing is <em>un-asking</em> for a special treatment.  There's not a great word for asking for the absence of something that is implicit.  <em>(It reminds me a bit of the struggle we had trying to find a way to name something to use in PRINT to mean "don't put anything between these components...no space, nothing".)</em></p>
+<p>Trying to push the operator out to be something like rebBLOCK() with rebB() and subsuming the brackets loses a nice aspect the brackets offered:</p>
+<pre><code>REBVAL *result = rebValue(
+    "select", rebB("ten", i_ten, "twenty", i_twenty), word
+);
+</code></pre>
+<p>That's fine if you're trying to optimize--especially if you have no runs of text that would fire up the scanner otherwise.  (It doesn't cost much to process the brackets if you already need the scanner.)  But I think it loses the clarity the brackets gave.</p>
+<h2>Better Living Through Terminology</h2>
+<p>I propose the rebU() and rebE() operators doing the opposite of what they do today, and having them represent <code>rebUNEVALUATIVE()</code> and <code>rebEVALUATIVE()</code></p>
+<p>They are not saying what to do with a splice.  <em>They are describing the environment in which splicing is done.</em>  Hence you'd do the example above as:</p>
+<pre><code>REBVAL *result = rebRun(
+    "select", rebU("[ten", i_ten, "twenty", i_twenty, "]"), word
+);
+</code></pre>
+<p>You are saying "the contents underneath this are intended to be used in an unevaluative sense, so don't bother trying to quote-escape them".  This is different from rebUNEVAL(), which was previously a quoting operation...the thought was "if you UNEVAL something, then if you EVAL what you get you'll get the original thing back".  It was hacked together in an ugly way that is handled far more elegantly with UNQUOTE and (new) QUOTE.</p>
+<p>You can apply rebU() it to a single item or multiple.  You may even be able to apply it across partial spans of arrays:</p>
+<pre><code>REBVAL *result = rebRun(
+    "select", rebU("[ten", i_ten), "twenty", i_twenty, "]", word
+);
+</code></pre>
+<p>If the "unevaluative" doesn't gel, you can mentally file it under "unquote_splices".  But I've explained why this is misleading, so it's not what the API operation will be called.  (If there was a rebUNQUOTE, it would error if you passed it a plain INTEGER! like the ones above.)</p>
+<p>But now the question is...what about this confusing-looking thing?</p>
+<pre><code>rebRun(rebU(print_word), "{This prints, but you said 'unevaluative'}");
+</code></pre>
+<p>Yep.  Well, an "unevaluative" context would still run if you DO it.  You can't somehow magically make things never evaluate.</p>
+<p>There's nothing saying rebE() has to be a shorthand for rebEVALUATIVE() just because rebU() is rebUNEVALUATIVE().  Since evaluative is the default you probably don't <em>need</em> a shorthand for it.</p>
+<p>What's more, rebEVAL could be broken out as a separate instruction, which folds the parentheses into the macro itself:</p>
+<pre><code>rebRun(rebEVAL, print_word, "{It's three characters longer this way...}");
+rebRun(rebE(print_word), "{...but likely clearer w.r.t. distinction from rebU()}");
+</code></pre>
+<p>The extra three characters don't seem so bad, considering EVAL is something that applies to only the thing directly following it.  And as I say, wanting to EVAL is not as common as you think (once you remove the cases that are now covered by rebU(), which were poorly expressed and thought of as being actual EVALs).  This rebEVAL could be nothing but a clever trick that just folds into not quoting if at a non-BLOCK! level, but injects the EVAL native as an ACTION! if it winds up being inside a scanned block!  <em>(yes, details I know few people understand the ramifications of what I'm talking about.)</em></p>
+<p>Anyway...when seen through this lens, I think it all makes sense.  You start out in an EVALUATIVE context, which quotes splices by default.  Then you can rest easy knowing that if you're in a situation where it's not what you want, you're just one rebU() away from having what you need...</p>
+<h2>Afterthought...should ACTION!s be "special" and auto-evaluate?</h2>
+<p>If the concept of the API is to treat the C variable lookup as if it were a WORD! being fetched, and thus give the inert value, there are three notable exceptions in the evaluator:</p>
+<ul>
+<li>a WORD! looking up to an ACTION! evaluates</li>
+<li>a WORD! looking up to a null errors without a special GET-WORD! exception</li>
+<li>a WORD! looking up to a VOID! errors without a special GET-WORD! exception</li>
+</ul>
+<p>Indeed, most of the rebEVAL examples are on ACTION!s, and the cases where you are passing them by value are few and far between.</p>
+<p>But...I'd be very wary of making the behavior at the API level take this on.  There are levels at which the API simply will not work the way the evaluator does...<em>because it can't</em>.  You can't say <strong>rebRun("lit", my_word)</strong> and get back the WORD! <code>my_word</code>...as an obvious example.  Do we really want to have to say:</p>
+<pre><code>if (rebDid("null?", rebG(maybe_null_or_void_REBVAL)) {
+      // rebG() as in rebGET(), but as in EVAL TO GET-WORD!...?
+}
+</code></pre>
+<p>That seems pretty insane, when compared to the comfortable "it gets a quote level in evaluative contexts" or "it gets no quote level in unevaluative contexts".</p>
+          <p><a href="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050/1</link>
+        <pubDate>Sat, 02 Feb 2019 11:12:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1050-1</guid>
+        <source url="https://forum.rebol.info/t/quoting-ergonomics-in-the-api-solved-with-terminology/1050.rss">Quoting Ergonomics in the API -- Solved with Terminology?</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How are limited API entry points going? Great!</title>
+    <link>https://forum.rebol.info/t/how-are-limited-api-entry-points-going-great/689</link>
+    <description>When I first was going about trying to wrangle the ODBC extension to work in Ren-C, it had some C time and date structures that would come back from the database.  These are DATE_STRUCT, TIME_STRUCT, and TIMESTAMP_STRUCT.  Those have to be turned into TIME! and DATE! values.
+
+But there were no functions in the API yet for making TIME! and DATE! values.
+
+Well, there was rebInteger() for taking a C integer and making an INTEGER!.  So to move things along, I went ahead and made functions for taking multiple C integers and making times and dates:
+
+    REBVAL *time = rebTimeHMS(hour, minute, second);
+    REBVAL *date = rebDateYMD(year, month, day);
+    REBVAL *datetime = rebDateTime(date, time);
+
+But the API vision has established clarity about being of limited entry points.  So rather than keep cooking up new C functions taking C arguments, it&#39;s better to build on a more limited facility and call Rebol code!
+
+    REBVAL *time = rebValue(&quot;make time! [&quot;,
+        rebI(hour), rebI(minute), rebI(second),
+    &quot;]&quot;);
+
+    REBVAL *date = rebValue(&quot;make date! [&quot;,
+        rebI(day), rebI(month), rebI(year),
+    &quot;]&quot;);
+
+    REBVAL *datetime = rebValue(&quot;use [date] [&quot;,
+        &quot;date:&quot;, date,
+        &quot;date/time:&quot;, time,
+    &quot;]&quot;);
+
+That third one is a little weird, and anyone who wants to suggest a better way of doing it can chime in on [issue #2313](https://github.com/rebol/rebol-issues#2313).  But the point is to keep pushing on Rebol the language, not chasing down an infinitely long cascade of API entry points.
+
+I&#39;m feeling really good about it.  Though I will re-iterate that it does bring up all those questions of where this stuff is getting bound.  You don&#39;t want some extension deciding to redefine MAKE, or TIME!, and incidentally wind up breaking the ODBC module&#39;s expectations.  There has to be some isolation, very much similar to how modules will be isolated...except (somehow) applying to the C code.
+
+But that&#39;s the vision, and if you haven&#39;t been reading the interesting usages [like in the ZeroMQ extension](https://github.com/hostilefork/rebol/blob/d983fdeb89b40329cf3a570f785fc109e951dc83/src/extensions/zeromq/mod-zeromq.c#L386), please do!  Would be good to hear any thoughts people are having, while watching it materialize...</description>
+    
+    <lastBuildDate>Wed, 26 Jun 2019 14:22:57 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/how-are-limited-api-entry-points-going-great/689.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How are limited API entry points going? Great!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In the "strings are going great" topic...</p>
+<p>I mentioned my concerns about Red's C APIs like <a href="https://doc.red-lang.org/en/libred.html#_redappend" rel="nofollow noopener">redAppend()</a>.  How would you know what refinements to make parameters?  Is there a <code>redAppendPart()</code>, a <code>redAppendPartOnly()</code>, etc?</p>
+<p>Ren-C went with a fully generic string-plus-splicing interface.  Every call invokes the evaluator, and so the only difference between the entry points is based on what kind of result you want...so that you can get atomic C values without worrying about separate steps to pick apart API values.</p>
+<p>And if you just want to ignore the result entirely, there's rebElide()...so...</p>
+<pre><code> rebElide("append/dup", block, value, rebI(num));
+</code></pre>
+<p>But this raises big questions.  Not only where would these strings be bound, but what would it do to performance to have to bind strings every call?  What about the added cost of path dispatch and word lookup to invoke a function?  An explicit API entry point for <code>rebAppendDup()</code> could be <em>orders of magnitude</em> faster.</p>
+<p>I waved my hands a bit and we discussed options which would be a bit like <a href="https://en.wikipedia.org/wiki/Prepared_statement" rel="nofollow noopener">prepared statements</a>.  <strong>But we already have this technology today:</strong></p>
+<pre><code> REBVAL *append_dup = rebValue(":append/dup");
+
+ void rebAppendDup(REBVAL *series, REBVAL *value, REBVAL *count)
+     { rebElide(append_dup, series, value, count); }
+</code></pre>
+<p>Boom.  You specialize the function once in startup, and store it in a global somewhere, release it on shutdown.  And now during the call you have no loading or binding, or path dispatch.  It doesn't need to create a BLOCK! or series to hold these variadic parameters, <em>the evaluator feeds them straight from the C va_list</em>!  It's reading the C stack directly.</p>
+<p>We could make this even easier with a helper that marked a value as something to auto-free on shutdown.  let's imagine rebPrepare() does that:</p>
+<pre><code> void rebAppendDup(REBVAL *series, REBVAL *value, REBVAL *count) {
+      static REBVAL *append_dup; // defaults to null pointer
+      rebPrepare(&amp;append_dup, ":append/dup"); // only update append_dup if null
+
+      rebElide(append_dup, series, value, count);
+ }
+</code></pre>
+<p><code>rebPrepare()</code> can even be an inline function, so the pointer test of <code>append_dup</code> to null wouldn't need to make an extern "C" function call except the first time.</p>
+<p>With a bit of additional cleverness, this could probably just be:</p>
+<pre><code> void rebAppendDup(REBVAL *series, REBVAL *value, REBVAL *count) {
+      static REBVAL *append_dup;
+      rebElide(rebP(&amp;append_dup, ":append/dup"), series, value, count);
+ }
+</code></pre>
+<p>To sum up: Winning!  <img src="https://forum.rebol.info/images/emoji/twitter/zap.png?v=9" title=":zap:" class="emoji" alt=":zap:"></p>
+          <p><a href="https://forum.rebol.info/t/how-are-limited-api-entry-points-going-great/689/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-are-limited-api-entry-points-going-great/689/2</link>
+        <pubDate>Sat, 29 Dec 2018 08:52:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-689-2</guid>
+        <source url="https://forum.rebol.info/t/how-are-limited-api-entry-points-going-great/689.rss">How are limited API entry points going? Great!</source>
+      </item>
+      <item>
+        <title>How are limited API entry points going? Great!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When I first was going about trying to wrangle the ODBC extension to work in Ren-C, it had some C time and date structures that would come back from the database.  These are DATE_STRUCT, TIME_STRUCT, and TIMESTAMP_STRUCT.  Those have to be turned into TIME! and DATE! values.</p>
+<p>But there were no functions in the API yet for making TIME! and DATE! values.</p>
+<p>Well, there was rebInteger() for taking a C integer and making an INTEGER!.  So to move things along, I went ahead and made functions for taking multiple C integers and making times and dates:</p>
+<pre><code>REBVAL *time = rebTimeHMS(hour, minute, second);
+REBVAL *date = rebDateYMD(year, month, day);
+REBVAL *datetime = rebDateTime(date, time);
+</code></pre>
+<p>But the API vision has established clarity about being of limited entry points.  So rather than keep cooking up new C functions taking C arguments, it's better to build on a more limited facility and call Rebol code!</p>
+<pre><code>REBVAL *time = rebValue("make time! [",
+    rebI(hour), rebI(minute), rebI(second),
+"]");
+
+REBVAL *date = rebValue("make date! [",
+    rebI(day), rebI(month), rebI(year),
+"]");
+
+REBVAL *datetime = rebValue("use [date] [",
+    "date:", date,
+    "date/time:", time,
+"]");
+</code></pre>
+<p>That third one is a little weird, and anyone who wants to suggest a better way of doing it can chime in on <a href="https://github.com/rebol/rebol-issues#2313" rel="nofollow noopener">issue #2313</a>.  But the point is to keep pushing on Rebol the language, not chasing down an infinitely long cascade of API entry points.</p>
+<p>I'm feeling really good about it.  Though I will re-iterate that it does bring up all those questions of where this stuff is getting bound.  You don't want some extension deciding to redefine MAKE, or TIME!, and incidentally wind up breaking the ODBC module's expectations.  There has to be some isolation, very much similar to how modules will be isolated...except (somehow) applying to the C code.</p>
+<p>But that's the vision, and if you haven't been reading the interesting usages <a href="https://github.com/hostilefork/rebol/blob/d983fdeb89b40329cf3a570f785fc109e951dc83/src/extensions/zeromq/mod-zeromq.c#L386" rel="nofollow noopener">like in the ZeroMQ extension</a>, please do!  Would be good to hear any thoughts people are having, while watching it materialize...</p>
+          <p><a href="https://forum.rebol.info/t/how-are-limited-api-entry-points-going-great/689/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-are-limited-api-entry-points-going-great/689/1</link>
+        <pubDate>Fri, 15 Jun 2018 05:16:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-689-1</guid>
+        <source url="https://forum.rebol.info/t/how-are-limited-api-entry-points-going-great/689.rss">How are limited API entry points going? Great!</source>
+      </item>
+  </channel>
+</rss>

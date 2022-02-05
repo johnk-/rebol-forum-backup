@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Soft Quoted Branching: Light, Elegant, Fast</title>
+    <link>https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020</link>
+    <description>It&#39;s uncommon to use expressions that evaluate to branches passed to conditionals.  And when you do use one, you probably don&#39;t mind putting it in a GROUP! (especially considering that 99% of the time in the *far* more common cases you were willing to put it in a BLOCK!).
+
+So Ren-C now uses that fact--plus generalized quoting--to allow for a briefer and faster way to evaluate to literals in your conditionals:
+
+    &gt;&gt; if true &#39;[block as data]
+    == [block as data]
+
+Simply pass in a QUOTED! item of any kind, and that item will be what a branch evaluates to.  It will be one less level of quoting than what you pass in:
+
+    &gt;&gt; if true &#39;&lt;tag&gt;
+    == &lt;tag&gt;
+
+Previous attempts to get something like this used an /ONLY refinement.  But this lets you mix and match in the same operator, as opposed to switching the operator into a &quot;mode&quot;:
+
+    &gt;&gt; either true &#39;[1 + 2] [1 + 2]
+    == [1 + 2]
+
+    &gt;&gt; either false &#39;[1 + 2] [1 + 2]
+    == 3
+
+## It Solves Some Problems for CASE
+
+Historically, CASE was more lax in accepting types than the corresponding IFs would be:
+
+    &gt;&gt; case [1 = 1 &lt;foo&gt;]
+    == &lt;foo&gt;
+
+It would allow the by-products of arbitrary evaluation to be used:
+
+    &gt;&gt; word: &lt;foo&gt;
+    &gt;&gt; case [1 = 1 word]
+    == &lt;foo&gt;
+
+Sometimes this resulted in double-evaluation:
+
+    &gt;&gt; word: [print &quot;surprise&quot;]
+    &gt;&gt; case [1 = 1 word]
+    surprise
+    == true
+
+The dodgy nature of this &quot;may be a double evaluation, may be not&quot; with no way to tell at source level raised some concerns, which are laid out in the [&quot;backpedaling on non-block branches&quot;](https://forum.rebol.info/t/backpedaling-on-non-block-branches/476) post.
+
+The combination of soft quoting and generalized quoting lets the same patterns that work for IF work in CASE.  It lowers the risks in a legible way:
+
+    &gt;&gt; case [1 = 1 &#39;&lt;foo&gt;]
+    == &lt;foo&gt;
+
+## It&#39;s Faster and More Efficient
+
+Quoting of up to three levels can be done a cell in place.  So **&#39;[x]** costs less storage (and has better locality with the surrounding cells) than **[[x]]**.
+
+Outside of the reduced storage, it&#39;s also lighter on the evaluator.
+
+## The consequences
+
+There were very few pieces of code in the Ren-C repo that were affected.  One was a help test.  It wanted to generate a real-world block to run, and didn&#39;t want to call DO for some reason:
+
+    for-each w words of lib [
+        dump w
+        if not set? w [continue]
+        if action? get w
+            compose [help (w)]   ; errors now...IF thinks the COMPOSE word! is branch
+        else [
+            help (get w)
+        ]
+    ]
+
+It&#39;s easy enough to change that to `(compose [help (w)])`...this kind of usage is very rare.
+
+The one common case of passing code to a conditional originated from Ren-C...the use of lambdas that could take the argument of what drove the conditional:
+
+     trap [1 / 0] then error =&gt; [print [error]]
+
+So you have to put it in a GROUP!:
+
+     trap [1 / 0] then (error =&gt; [print [error]])
+
+I&#39;m pretty sure this can be rethought to work as before, given the strategy of &quot;right quoting always wins&quot;.  But the evaluator has some kind of strict horse-blinder rules that guide its design, so not all things are possible.  We&#39;ll see.
+
+&gt; **UPDATE 2020**: The required rules have been implemented, and hard quoted left parameters on the right win in this instance, so the group is not necessary.  :sushi:
+
+Even if it couldn&#39;t get fixed, in the scheme of things it&#39;s worth it.  And it isn&#39;t like people aren&#39;t used to putting branches in delimiters for blocks anyway!</description>
+    
+    <lastBuildDate>Tue, 22 Jan 2019 00:44:46 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Soft Quoted Branching: Light, Elegant, Fast</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Here's another great argument for soft quoted branches:</p>
+<pre><code>&gt;&gt; 1 + either true [2] [3] + 4
+== 7
+
+&gt;&gt; 1 + either false [2] [3] + 4
+== 8
+</code></pre>
+<p>If you try that in Rebol2 or Red, you get:</p>
+<pre><code>red&gt; 1 + either true [2] [3] + 4
+** Script Error: + does not allow block! for its value1 argument
+</code></pre>
+<p>In Ren-C you can even use IF/ELSE interchangeably with EITHER.  (This interchangeability now works 99% of the time, so long as you're not trying to get a NULL result out of your truthy branch--nulls will be voidified)</p>
+<pre><code> &gt;&gt; 1 + if true [2] else [3] + 4
+ == 7
+
+ &gt;&gt; 1 + if false [2] else [3] + 4
+ == 8
+</code></pre>
+<p>This might point to using soft quoting for more things in the system where you think it is infrequent that people will be passing constructed meta-code in.</p>
+<pre><code>&gt;&gt; 1 + switch type of #x [issue! [2] tag! [3]] + 4
+;-- wouldn't it be nice if this were 7?
+</code></pre>
+<p>It's a bit touchy-feely to make that call.  You don't want to have to say <strong>compose (reduce [...])</strong> instead of just <strong>compose reduce [...]</strong>, but you're looking to get a <em>block</em> out of it.  How many evaluative infix operators want a block out of their left hand side?  I think if your construct is explicitly used in meta-coding, you want to bias it to fitting in with other meta-coding without needing to put arguments in groups.</p>
+<p>But things like CASE and SWITCH might benefit from soft-quoting their case lists and switch lists, to favor the idea of fitting into more evaluative scenarios for using their product.  While not being "a branch" per se, their lists are a kind of a "proxy for branches".</p>
+          <p><a href="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020/2</link>
+        <pubDate>Tue, 22 Jan 2019 00:44:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1020-2</guid>
+        <source url="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020.rss">Soft Quoted Branching: Light, Elegant, Fast</source>
+      </item>
+      <item>
+        <title>Soft Quoted Branching: Light, Elegant, Fast</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It's uncommon to use expressions that evaluate to branches passed to conditionals.  And when you do use one, you probably don't mind putting it in a GROUP! (especially considering that 99% of the time in the <em>far</em> more common cases you were willing to put it in a BLOCK!).</p>
+<p>So Ren-C now uses that fact--plus generalized quoting--to allow for a briefer and faster way to evaluate to literals in your conditionals:</p>
+<pre><code>&gt;&gt; if true '[block as data]
+== [block as data]
+</code></pre>
+<p>Simply pass in a QUOTED! item of any kind, and that item will be what a branch evaluates to.  It will be one less level of quoting than what you pass in:</p>
+<pre><code>&gt;&gt; if true '&lt;tag&gt;
+== &lt;tag&gt;
+</code></pre>
+<p>Previous attempts to get something like this used an /ONLY refinement.  But this lets you mix and match in the same operator, as opposed to switching the operator into a "mode":</p>
+<pre><code>&gt;&gt; either true '[1 + 2] [1 + 2]
+== [1 + 2]
+
+&gt;&gt; either false '[1 + 2] [1 + 2]
+== 3
+</code></pre>
+<h2>It Solves Some Problems for CASE</h2>
+<p>Historically, CASE was more lax in accepting types than the corresponding IFs would be:</p>
+<pre><code>&gt;&gt; case [1 = 1 &lt;foo&gt;]
+== &lt;foo&gt;
+</code></pre>
+<p>It would allow the by-products of arbitrary evaluation to be used:</p>
+<pre><code>&gt;&gt; word: &lt;foo&gt;
+&gt;&gt; case [1 = 1 word]
+== &lt;foo&gt;
+</code></pre>
+<p>Sometimes this resulted in double-evaluation:</p>
+<pre><code>&gt;&gt; word: [print "surprise"]
+&gt;&gt; case [1 = 1 word]
+surprise
+== true
+</code></pre>
+<p>The dodgy nature of this "may be a double evaluation, may be not" with no way to tell at source level raised some concerns, which are laid out in the <a href="https://forum.rebol.info/t/backpedaling-on-non-block-branches/476">"backpedaling on non-block branches"</a> post.</p>
+<p>The combination of soft quoting and generalized quoting lets the same patterns that work for IF work in CASE.  It lowers the risks in a legible way:</p>
+<pre><code>&gt;&gt; case [1 = 1 '&lt;foo&gt;]
+== &lt;foo&gt;
+</code></pre>
+<h2>It's Faster and More Efficient</h2>
+<p>Quoting of up to three levels can be done a cell in place.  So <strong>'[x]</strong> costs less storage (and has better locality with the surrounding cells) than <strong>[[x]]</strong>.</p>
+<p>Outside of the reduced storage, it's also lighter on the evaluator.</p>
+<h2>The consequences</h2>
+<p>There were very few pieces of code in the Ren-C repo that were affected.  One was a help test.  It wanted to generate a real-world block to run, and didn't want to call DO for some reason:</p>
+<pre><code>for-each w words of lib [
+    dump w
+    if not set? w [continue]
+    if action? get w
+        compose [help (w)]   ; errors now...IF thinks the COMPOSE word! is branch
+    else [
+        help (get w)
+    ]
+]
+</code></pre>
+<p>It's easy enough to change that to <code>(compose [help (w)])</code>...this kind of usage is very rare.</p>
+<p>The one common case of passing code to a conditional originated from Ren-C...the use of lambdas that could take the argument of what drove the conditional:</p>
+<pre><code> trap [1 / 0] then error =&gt; [print [error]]
+</code></pre>
+<p>So you have to put it in a GROUP!:</p>
+<pre><code> trap [1 / 0] then (error =&gt; [print [error]])
+</code></pre>
+<p>I'm pretty sure this can be rethought to work as before, given the strategy of "right quoting always wins".  But the evaluator has some kind of strict horse-blinder rules that guide its design, so not all things are possible.  We'll see.</p>
+<blockquote>
+<p><strong>UPDATE 2020</strong>: The required rules have been implemented, and hard quoted left parameters on the right win in this instance, so the group is not necessary.  <img src="https://forum.rebol.info/images/emoji/twitter/sushi.png?v=9" title=":sushi:" class="emoji" alt=":sushi:"></p>
+</blockquote>
+<p>Even if it couldn't get fixed, in the scheme of things it's worth it.  And it isn't like people aren't used to putting branches in delimiters for blocks anyway!</p>
+          <p><a href="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020/1</link>
+        <pubDate>Fri, 18 Jan 2019 12:56:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1020-1</guid>
+        <source url="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020.rss">Soft Quoted Branching: Light, Elegant, Fast</source>
+      </item>
+  </channel>
+</rss>

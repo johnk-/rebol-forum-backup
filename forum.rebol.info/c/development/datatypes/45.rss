@@ -1,0 +1,1529 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Datatypes - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/datatypes/45</link>
+    <description>Topics in the &#39;Datatypes&#39; category The datatypes category is for the discussion of the specific properties of datatypes themselves.  Sample topics might include:</description>
+    
+      <lastBuildDate>Thu, 02 Dec 2021 16:57:13 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/datatypes/45.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>As we are familiar, DATE! can have a TIME! component:</p>
+<pre><code>&gt;&gt; d: now
+== 21-Nov-2021/18:56:45-5:00 
+
+&gt;&gt; type of d
+== #[datatype! date!]
+
+&gt;&gt; t: d.time
+== 18:56:45
+
+&gt;&gt; type of t
+== #[datatype! time!]
+</code></pre>
+<p>Although TIME! can exist as a separate cell and value type, <em>a DATE! doesn't store a time cell inside of it</em>.  It packs the date and time information into a single cell.</p>
+<p>Hence when you say <strong>d.time</strong> above, a <em>new</em> TIME! value has to be synthesized.  There's not a whole cell worth of time to hand a pointer back to...its woven into the bits of the DATE!.</p>
+<p><strong>That might not sound like much of an issue, but it creates the problem I refer to as <em>"sub-cell addressing"</em>.</strong></p>
+<p><em>If you've missed everything I've griped about with this so far</em>, it means that when you want to see a behavior like the following:</p>
+<pre><code>&gt;&gt; d.time.hour: 12
+== 12
+
+&gt;&gt; date
+== 21-Nov-2021/12:56:45-5:00  ; we want hour updated
+</code></pre>
+<p>We run into the problem that if <strong>d.time</strong> <em>synthesizes</em> a value, then a naive picking process of <strong>(d.time).hour: 12</strong> would only be able to manipulate the bits in the synthesized time.  That wouldn't change <strong>d</strong>.  <em>What the user actually wanted was to update the bits of a time that was folded into the implementation of the date.</em></p>
+<h2>Rebol Lacks The Vocabulary To Do This In An Obvious Way</h2>
+<p>The smallest units that Rebol speaks in terms of are the <strong><code>cell</code></strong> and the <strong><code>node</code></strong>.</p>
+<p><em>(If you need a refresher on these, my <a href="https://www.youtube.com/watch?v=6nsKTpArTCE">conference video tech talk</a> explains them.)</em></p>
+<p><strong>It would appear we could be able to simplify matters if we changed the combination of DATE! and TIME! to point to a 2-cell node.</strong></p>
+<pre><code>DATETIME! cell
+[  ]                DATE!           TIME!
+  --&gt; points to [ 21-Nov-2021 | 18:56:45-5:00 ]  (2 cells)
+</code></pre>
+<p><em>(Whether the "zone" is part of a time or lives in the datetime would depend on whether you wanted to write <code>d.zone: -5:00</code> or <code>d.time.zone: -5:00</code>, I don't know if it ever makes sense to speak of a time with a zone independent of a datetime or not.)</em></p>
+<p>Breaking things up this way, we can say that <strong>d.time</strong> implicates a cell.  And we can have some operation that acts on a cell (let's say POKE) like:</p>
+<pre><code> &gt;&gt; poke 18:56:45 'hour 12
+ == 12:56:45
+</code></pre>
+<h2>Hang On: DATE!, TIME! (and DATETIME!) are IMMEDIATE!</h2>
+<p>We still have a bit of a problem here with our smallest units of representation.  Presumably we don't want this:</p>
+<pre><code> &gt;&gt; d1: 21-Nov-2021/18:56:45-5:00 
+
+ &gt;&gt; d2: d1
+
+ &gt;&gt; d1.time.hour: 12
+ == 12
+
+ &gt;&gt; d1
+ == 21-Nov-2021/12:56:45-5:00
+
+ &gt;&gt; d2
+ == 21-Nov-2021/12:56:45-5:00  ; don't want d2 to change (right?)
+</code></pre>
+<p>But we also don't want to be needlessly copying the 2-cell node each time a date is assigned.  So it would be a <em>copy-on-write</em> mechanic.</p>
+<p>If we're working with a cell-based granularity, then we wind up in a somewhat similar situation to what we had before...where the tuple processing has to propagate backwards.  e.g. when you have the POKE that changes the cell bits for the TIME! to make a new TIME! cell, there has to be some memory going back to the DATETIME! in order to tell it to make a new node and write the cell into the copy.</p>
+<p>Does framing this in terms of cells offer any benefit over letting the DATETIME! be a higher-level entity that does a more specific folding of the TIME! cell into its bits?  This is a question I've been trying to answer, and haven't had an easy time of answering.</p>
+<p><strong>One thing it would do to use a cell-based protocol is that it could generalize properties that had flags on cells, such as being PROTECT'ed.</strong>  Without the picking protocol requiring each step to go through a cell, the system cannot fiddle these bits in a known way.  So just as the DATE! folds the TIME! into it in some arbitrary way, the protect bit would have to go through this through a complex protocol also.</p>
+<p>What I do know is that my current generalized solution is rather complex and slow--and doesn't answer how to do things like PROTECT.  We're seeing a slowdown from many different angles and I am trying to figure out what the best tradeoff is in terms of simplicity and generality.  It's not easy.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765</link>
+          <pubDate>Thu, 02 Dec 2021 16:57:13 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1765</guid>
+          <source url="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765.rss">DATE! + TIME! + DATETIME! (or TIMESTAMP! ?)</source>
+        </item>
+        <item>
+          <title>Tuple Troubles: Version 0.3.01 vs 0.3.1</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>For better or worse, versioning in Rebol has used TUPLE!.  e.g. 0.3.1 is 32-bit Windows, and 0.3.40 is 64-bit Windows</p>
+<p>If you go back and look at the old R3-Alpha file <strong><a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/tools/systems.r#L21">%systems.r</a></strong> you can see that it's pretty typical for Carl to have written the versions out with leading zeros...<em>but only in the third slot</em>.  So <code>0.3.01</code> but not <code>00.03.01</code></p>
+<p>But ultimately the tuple discards this information.  And this has been the way it always worked:</p>
+<pre><code>rebol2&gt;&gt; 0.3.01
+== 0.3.1
+
+red&gt;&gt; 0.3.01
+== 0.3.1
+
+ren-c&gt;&gt; 0.3.01
+== 0.3.1
+</code></pre>
+<p>This leads to problems when you are working with string representations outside of Rebol (say in bash shell, something like "0.3.01") and you pass it into Rebol to process as a tuple.  If bash went and created a directory based on the string...you won't match if you FORM that tuple later.</p>
+<p>You could insist on passing around the tuple as a string, but that undermines the value of having the version be in a tuple in the first place.</p>
+<p>I'd say that the simplest solution is just to stop writing tuples with the leading zeros...instead keeping them in their canon form.  0.3.1 for 32-bit Windows, and 0.3.40 for 64-bit Windows.  Then make the directories reflect this, e.g.:</p>
+<pre><code>https://dd498l1ilnrxu.cloudfront.net/travis-builds/0.3.1/r3-573037b-debug.exe
+</code></pre>
+<p>and not:</p>
+<pre><code>https://dd498l1ilnrxu.cloudfront.net/travis-builds/0.3.01/r3-573037b-debug.exe
+</code></pre>
+<p>That leading zero comes with a whole lot of headaches, so I say hunt them down and get rid of them.  Because non-Rebol systems are going to only operate on them as strings and they'll leak.</p>
+            <p><small>3 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/tuple-troubles-version-0-3-01-vs-0-3-1/1755">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/tuple-troubles-version-0-3-01-vs-0-3-1/1755</link>
+          <pubDate>Wed, 24 Nov 2021 13:28:54 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1755</guid>
+          <source url="https://forum.rebol.info/t/tuple-troubles-version-0-3-01-vs-0-3-1/1755.rss">Tuple Troubles: Version 0.3.01 vs 0.3.1</source>
+        </item>
+        <item>
+          <title>&quot;Raw&quot; Strings</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>I'm now 99% sure that { } best serves its purpose as a string form.</p>
+<p>But there were several talking points that came out of that discussion.  One was a desire for "raw" strings.</p>
+<p>This is the idea that outside of the termination sequence, there's <em>no</em> escaping.  This means you can put pretty much anything in the string.  Backslashes, carets...it's all fair game.</p>
+<h2>Two Very Different String Forms: When Are They Raw?</h2>
+<p>To <em>me</em>, it made the most sense that the raw form be the braced form...because it is so frequently applied to sections of arbitrary documentation text (such as the Description: in module headers).</p>
+<pre><code>Description: {
+    If you call this from C, then write:
+
+        if (a ^ b != 0) {  // bitwise XOR
+            printf("This is an example\n");
+        }
+
+     So there you see carets and backslashes working.
+}
+</code></pre>
+<p>With binding support for string interpolation, we can imagine this getting even more useful for representing snippets of other languages with escaped portions inside of them.</p>
+<p>However, <a class="mention" href="/u/giuliolunati">@giuliolunati</a> favored the idea of making quoted strings <em>mostly-raw</em>, because there was an easy-seeming way to escape quotes using only the quote character.</p>
+<pre><code>&gt;&gt; "This would be ""quotes"" inside a string"
+== {This would be "quotes" inside a string}
+</code></pre>
+<p>How braces are escaped historically ( e.g. <code>^}</code> ) is messier.  That drags caret into it, so now you're worrying about needing to escape carets and braces.  A more uniform approach appealed to Giulio, so he favored the quotes form...and would prefer it to be able to represent characters "as-is" by default, with this exception for embedded quotes.</p>
+<p>But from my point of view, I was seeking to avoid is any need to do search/replace on the embedded information.  So <em>mostly-raw</em> wasn't good enough; e.g. I'd like to copy and paste the C code out of the example above, not have its quotes doubled:</p>
+<pre><code>Description: "
+    if (a ^ b != 0) {  // bitwise XOR
+        printf(""This is an example\n"");   &lt;-- doubled quotes not good
+    }
+"
+</code></pre>
+<p>We also discussed that I'm averse to having ordinary quotes as multi-line strings... though maybe we should allow them.  :-/  But even if we did, it feels unintentionally incomplete to see something like:</p>
+<pre><code>Description: "
+</code></pre>
+<p>So for these reasons I wanted to focus the raw string effort on braced strings.  Yet there are a lot of things that it gets hard to represent in a raw string form when you try to use unmatched braces in the content.</p>
+<p>After thinking about it a bit, we came up with the option of being able to set the delimiter according to a number of braces and a vertical bar.</p>
+<pre><code>{...}  ; expects any { } inside to be matched pairs 
+{|...|}  ; allows internal unpaired and mismatched { }, {| |} matched pairs
+{{|...|}}  ; allows internal unpaired and mismatched {| |}, {{| |}} matched
+</code></pre>
+<p>etc. etc.</p>
+<p>This can handle some pretty sticky strings like <strong><code>{|ab"c"} {"d"ef|}</code></strong> if need be, where the data extracted is:</p>
+<pre><code>ab"c"} {"d"ef
+</code></pre>
+<p>The approach would allow any number of {{ }}, which sounds like it could get ugly.  But it's kind of like generic quoting, where I don't anticipate people using ridiculously high levels like {{{{|...|}}}}.  But having it be a general method has value--especially in generated code scenarios.</p>
+<p>Strings starting or ending with vertical bar forms like <strong>{|}</strong> get sacrificed, so you'll have to use "|" instead.  But you would use "}" so this just moves | into the same category as } and {.</p>
+<p>I also suggested an additional rule...that you don't terminate braced strings except as:</p>
+<ul>
+<li>{...} -space-</li>
+<li>{...} -newline-</li>
+<li>{...}]</li>
+<li>{...})</li>
+</ul>
+<p>If we limit it to these possibilities, you can write things like:</p>
+<pre><code> code: {char c = '}';}
+</code></pre>
+<p>It seems that a lot of unpaired brace cases are single character literals like this, which don't fall under the rule.  You might want to put the bars in for good measure anyway:</p>
+<pre><code> code: {|char c = '}';|}
+</code></pre>
+<p>In any case, the other thing we were leaning toward here was that when quoted strings are escaped, they do so compatibility with the classical C backslashes, based on the idea that caret escaping hadn't done the language any particular favors.</p>
+<p>Just wanted to write this up while I still was thinking about it... <img src="https://forum.rebol.info/images/emoji/twitter/zzz.png?v=9" title=":zzz:" class="emoji" alt=":zzz:"></p>
+            <p><small>16 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/raw-strings/1750">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/raw-strings/1750</link>
+          <pubDate>Sat, 23 Oct 2021 13:33:24 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1750</guid>
+          <source url="https://forum.rebol.info/t/raw-strings/1750.rss">&quot;Raw&quot; Strings</source>
+        </item>
+        <item>
+          <title>Alternate String Forms if {...} Becomes An Array Type</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <blockquote>
+<p>I've brought up in earnest something I call <strong><a href="https://forum.rebol.info/t/rethinking-braces-as-an-array-type/1727">"The FENCE! Proposal"</a></strong>.  It involves retaking <strong>{...}</strong> for an <em>object-like-purpose</em>.</p>
+<p>The twist is that it's really another ANY-ARRAY! type, peer to [...] and (...) - but with the default evaluator behavior of MAKE OBJECT!.  Then as with [...] and (...), dialects would be free to override {...} in their own way.</p>
+<p>A sad consequence of this would be the loss of the alternative string form {...}.  Discussions of what to use instead were lengthier than the discussion of the proposal itself, so I've moved them onto their own thread here...starting with my initial musing...</p>
+</blockquote>
+<h2>What Other Asymmetric String Technique Might Be Used?</h2>
+<p>Some languages have weird techniques, like even letting you make up your own delimiters by whatever you use in front of the quote:</p>
+<pre><code>str: ?"This says "quote followed by question mark" terminates"?
+str: |"This says "quote followed by bar" terminates"|
+str: xyz"This says "quote followed by zyx" terminates"zyx 
+</code></pre>
+<p>(Not making that up.)</p>
+<p>The risk of using a symbol like | is that even if it looks good in isolation, you might not like it in a parse rule, like <strong>rule1 | |"some string"| | rule2</strong>.  A less-used character might be better:</p>
+<pre><code>parse data [rule1 | ~"some string"~ | rule2]
+</code></pre>
+<p>Or perhaps those who really feel the need for another asymmetric string delimiter should assign a couple keys in their editor to unicode:</p>
+<pre><code>str: «Maybe People «who really care» could use "Chevrons"?»
+</code></pre>
+<p>Who knows.  <strong><a href="https://en.wikipedia.org/wiki/Here_document">One place to look is the topic of "HEREDOC"</a></strong></p>
+<p>Another place to look is the <strong><a href="https://stackoverflow.com/questions/13535172/list-of-all-unicodes-open-close-brackets">List of open/close paired braces/brackets/quotes in Unicode</a></strong></p>
+            <p><small>22 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/alternate-string-forms-if-becomes-an-array-type/1743">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/alternate-string-forms-if-becomes-an-array-type/1743</link>
+          <pubDate>Mon, 18 Oct 2021 01:06:43 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1743</guid>
+          <source url="https://forum.rebol.info/t/alternate-string-forms-if-becomes-an-array-type/1743.rss">Alternate String Forms if {...} Becomes An Array Type</source>
+        </item>
+        <item>
+          <title>If {Braced Were Arrays} What Should That Be Called</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>It's early yet in the discussion of <a href="https://forum.rebol.info/t/rethinking-braces-as-an-array-type/1727">whether to make braces a new array type</a>.  But people seem receptive and feel like maybe Rebol has put itself in a bad position by using that particularly valuable piece of keyboard real-estate for something "superficial" like making strings a little cleaner, sometimes.  :-/</p>
+<p><em>(Note: Ultimately braces were decided to keep as strings, though having another array type is still a possibility...and maybe it will need a name.)</em></p>
+<p>For lack of another name I had called it BRACED!.</p>
+<p>But I don't like that much more than I would want to call <em>blocks</em> BRACKETED! (or BRACK! <img src="https://forum.rebol.info/images/emoji/twitter/roll_eyes.png?v=9" title=":roll_eyes:" class="emoji" alt=":roll_eyes:">)... nor call <em>groups</em> PARENTHESIZED! (or PAREN! <img src="https://forum.rebol.info/images/emoji/twitter/face_vomiting.png?v=9" title=":face_vomiting:" class="emoji" alt=":face_vomiting:"> )</p>
+<p>Here is my suggestion for the 3 array types:</p>
+<h1>
+<code>[block]</code> <code>•</code>  <code>(group)</code> <code>•</code> <code>{fence}</code>
+</h1>
+<hr>
+<p>I like that FENCE is five letters...matching GROUP and BLOCK.  I like that it starts with a distinct character.</p>
+<p><strong>I actually think having it be divorced from anything obvious about creating objects can be seen as an asset instead of a liability.</strong>  Because that's only what it's for <em>sometimes</em>.</p>
+<ul>
+<li>
+<p><em>"In the PARSE dialect, blocks are used to represent subrules.  Groups switch over to running ordinary code as with DO.  While fences are used to... (insert your active imagination here)"</em></p>
+</li>
+<li>
+<p><em>"If there's an integer inside of a pair of fences, such as <code>{{10}}</code>, then that represents a citation.  Citations can appear at either the beginning or end of a reference block."</em></p>
+</li>
+</ul>
+<p>It's one of those things that might seem a little weird at first, but as you become accustomed to saying it then it becomes normal...and you're grateful to have such a convenient word at hand.</p>
+<h2>Other Uses of "Fence" in Programming</h2>
+<p>Dictionary definition of fence: <em>a barrier, railing, or other upright structure, typically of wood or wire, enclosing an area of ground to mark a boundary, control access, or prevent escape.</em></p>
+<p>The term <em>fence</em> has only two meanings in programming that jump immediately to mind...the one most people would know are these three-backticks used to format code in MarkDown:</p>
+<pre><code>When you are writing things in **MarkDown**
+The following is a "code fence"
+```
+int main(int argc, char *argv) {
+    printf("I'm not a huge fan of the ```, myself.\n");
+    return EXIT_SUCCESS;
+}
+```
+*(I myself prefer to indent by 4 spaces, instead.)*
+</code></pre>
+<p>Less well-known to the scripting world would be "fencing instructions" which are low-level processor stuff used to mitigate things like Spectre.</p>
+<h2>Other Options?</h2>
+<p><strong>{ CURLY! }</strong> is too goofy, immediate veto from me.</p>
+<p>I've explained why I don't like <strong>{ BRACE! }</strong> or <strong>{ BRACED! }</strong>.  Plus brace has the problem of being singular like PAREN!, while BRACED! seems to talk about the <em>contents</em> vs. the actual structure of the container itself...which I guess might have to be "bracing" or "braces" or something.  FENCE! lets you mentally model it as actually referring to "the container in and of itself".</p>
+<p>For terms that relate to "contained things" there might be the likes of <strong>{ CLAUSE! }</strong>...but that feels a bit more prescriptive to what it's for.  And object-making doesn't line up with that.  FENCE! is more abstract to me, somehow.</p>
+<p>One could argue that <strong>{ CLUSTER }</strong> might sound more like an array that produced an object.  ("Hey, cluster these keys together, into a blob.")  You might similarly argue for <strong>{ AGGREGATE! }</strong> as being "more meaningful".</p>
+<p>But I'm drawn to the viscerality of FENCE!.  It feels learnable within this vocabulary.  Especially when you see it lined up with GROUP! and BLOCK!.  I'm kind of attached to it now.  <img src="https://forum.rebol.info/images/emoji/twitter/two_hearts.png?v=9" title=":two_hearts:" class="emoji" alt=":two_hearts:"></p>
+            <p><small>3 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/if-braced-were-arrays-what-should-that-be-called/1728">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/if-braced-were-arrays-what-should-that-be-called/1728</link>
+          <pubDate>Thu, 30 Sep 2021 11:36:13 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1728</guid>
+          <source url="https://forum.rebol.info/t/if-braced-were-arrays-what-should-that-be-called/1728.rss">If {Braced Were Arrays} What Should That Be Called</source>
+        </item>
+        <item>
+          <title>{ Rethinking Braces }... as an array type?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>I've historically been pretty attached to braces for strings.  They sure can be nice.</p>
+<p><em>But</em> I am increasingly thinking braces might be better applied as a new array type:</p>
+<pre><code>&gt;&gt; bracey: first [{This [would] be @legal}]
+== {This [would] be @legal}
+
+&gt;&gt; length of bracey
+== 4
+
+&gt;&gt; second bracey
+== [would]
+</code></pre>
+<blockquote>
+<p><em>(<strong>UPDATE:</strong> I think this idea received its due consideration over the span of a couple of weeks...but doesn't weigh in as worth it to change what we use for strings.  Explanations laid out in the thread below.  But keeping the proposal intact for historical reference.)</em></p>
+</blockquote>
+<p>So it would act like a BLOCK! or a GROUP! when it was inert.  But the real benefit would be the idea that if this braced form got evaluated, it would effectively do a MAKE MAP! or MAKE OBJECT! (or "something along those lines")</p>
+<pre><code>&gt;&gt; obj: {x: 10 y: 20, z: 30}
+== make object! [  ; whatever this representation is, it's not {x: 10...}
+    x: 10
+    y: 20
+    z: 30
+]
+</code></pre>
+<p>This kills two birds with one stone: <strong>A neat new dialecting part that would also give a better source notation for objects!</strong></p>
+<p>Having its evaluator behavior be "make an object/map" pushes this from "frivolous third form of block" to being clearly useful on day 1.  But I think the block form would soon turn out to not be frivolous.</p>
+<h2>Carl Himself Wants To Move Away From Braced Strings</h2>
+<p>In Carl's "ASON" pitch, he <a href="https://altscript.com/?page_id=16">moves away from Rebol's choice to make braces an asymmetric string delimiter</a>:</p>
+<blockquote>
+<ul>
+<li>
+<p><em>"<strong>Braces {} are used to denote objects</strong>. They are lexical and may be used directly without evaluation (the <code>make</code> constructor is not necessary)."</em></p>
+</li>
+<li>
+<p><em>"<strong>Braces {} are not used for multi-line strings</strong>. A single+double quote format is used for multi-line strings."</em></p>
+</li>
+</ul>
+</blockquote>
+<p>I must admit braced strings can make a lot of situations in the text programming world look better than they typically would.</p>
+<p>But it comes at a cost for taking the asymmetric delimiter, and is a real weakness against JavaScript and JSON.  When rethought as this fun new dialecting part, it actually offers a new edge and plays to Rebol's strengths.</p>
+<p>What might the new <strong>{...}</strong> type do in PARSE?  As a branch type?  In your own dialects?</p>
+<h2>My {...} Proposal Is Arrays, Not Object Literals</h2>
+<p>It might seem like having a source representation of objects that maps directly to the loaded/ in-memory representation would be better.  But in practice, you can't really get the loaded form to ever look completely like the source...there's so many issues with nested cyclical structures or things that just don't mold out.</p>
+<p>It doesn't work in JavaScript either.  Note that you're not supposed to be loading JSON directly in any case into JavaScript...you're always supposed to go through parsers and serializers.  So that should be weighed here when looking at the suggestion of a structural type that happens to evaluate to give you an in-memory representation.</p>
+<h2>Map Representation Via <code>:</code> ?</h2>
+<p>There was another remark in the Altscript on the role of colon:</p>
+<blockquote>
+<p>For JSON compatiblity:</p>
+<ul>
+<li>Keys (word definitions) can be written with quotes (<code>"field":</code>)</li>
+<li>A lone colon (<code>:</code>) will automatically associate to the word/string immediately before it.</li>
+<li>Commas as element separators are allowed as long as they are not directly followed by a non-digit character (to avoid confusion with comma-based decimal values.)</li>
+</ul>
+</blockquote>
+<p>The note about the colon seems like it might be good for maps.</p>
+<pre><code>mapping: {
+    1 : "One"
+    "Two" : 2
+}
+</code></pre>
+<p>This could help avoid the need for SET-INTEGER! or similar.</p>
+            <p><small>10 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/rethinking-braces-as-an-array-type/1727">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/rethinking-braces-as-an-array-type/1727</link>
+          <pubDate>Wed, 29 Sep 2021 00:30:32 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1727</guid>
+          <source url="https://forum.rebol.info/t/rethinking-braces-as-an-array-type/1727.rss">{ Rethinking Braces }... as an array type?</source>
+        </item>
+        <item>
+          <title>Should Different-Typed Comparisons Be Less Friendly?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>I've historically been on the side of saying that I don't think it's good for types of different categories to compare equally, e.g. <strong><code>&lt;foo&gt; = "foo"</code></strong> being true can cause some headaches.</p>
+<p>But these headaches can work the other way as well.  I just had a bug where I was passing something as a string, but the caller was comparing it as a WORD!.</p>
+<pre><code> if info.name = 'startup* [
+     ...  ; it was a string, so actually "startup*"
+ ]
+</code></pre>
+<p>This makes me wonder if different-typed comparisons need some distinction in the comparison, to help say that you know the type you're comparing against is completely different.</p>
+<pre><code>if info.name =T 'startup* [
+   ;
+   ; ugly example... but imagine =T is a way of saying "I know the type
+   ; should be the type on the right (e.g. WORD!), so tell me if it is
+   ; not...
+]
+
+&gt;&gt; 'foo =T 'bar
+== #[false]
+
+&gt;&gt; "foo" =T 'bar
+** Error: =T expected a WORD! on the left but got a TEXT!
+</code></pre>
+<p>It's always the latest such bug to bite you in languages of this nature that make you wish for stricter typing policies.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/should-different-typed-comparisons-be-less-friendly/1726">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/should-different-typed-comparisons-be-less-friendly/1726</link>
+          <pubDate>Thu, 23 Sep 2021 11:17:29 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1726</guid>
+          <source url="https://forum.rebol.info/t/should-different-typed-comparisons-be-less-friendly/1726.rss">Should Different-Typed Comparisons Be Less Friendly?</source>
+        </item>
+        <item>
+          <title>Dissecting R3-Alpha&#39;s EVENT!: What Should We Think?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <h2>Quick Retrospective Look At EVENT!</h2>
+<p>Not everyone had to deal with EVENT!.  But it's relatively easy to understand as a tiny and very-limited OBJECT!.  Here's what one being created looked like in R3-Alpha's %prot-http.r</p>
+<pre><code>make event! [type: 'read port: http-port]
+</code></pre>
+<p>It looks a bit like a MAKE OBJECT!, with SET-WORD!s and expressions.  But what actually happened under the hood?</p>
+<p>Datatypes in R3-Alpha had "MT" functions (e.g. MAKE TYPE).  So if you <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L322">wanted to MT_Event()</a> it would take in a BLOCK! and then immediately call a function called <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L168">Set_Event_Vars()</a>.</p>
+<p>The code is pretty short:</p>
+<pre><code>REBVAL *var;
+REBVAL *val;
+
+while (NOT_END(blk)) {
+    var = blk++;
+    val = blk++;
+    if (IS_END(val))
+        val = NONE_VALUE;
+    else
+        val = Get_Simple_Value(val);
+    if (!Set_Event_Var(evt, var, val))
+        Trap2(RE_BAD_FIELD_SET, var, Of_Type(val));
+}
+</code></pre>
+<p>It walks through the block, gathering two items at a time.  (If it only sees one item without a second, it uses a global NONE! value as the second.)</p>
+<p><strong>Immediately you notice that this is going to be a much more "scant" form of evaluation than in MAKE OBJECT!</strong>.  If you weren't tipped off by the calling of a function named "Get_Simple_Value()" then you could notice that if you are only processing two values at a time, that's going to rule out things like</p>
+<pre><code>make event! [type: second [read write]]
+</code></pre>
+<p>...because it would only see <strong><code>type: second</code></strong> in the first pair, and then <strong><code>[read write] #[none]</code></strong> in the second.</p>
+<p>It's worse than it sounds.  Let's jump directly to <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-do.c#L1858">Get_Simple_Value()</a> to look at its implementation:</p>
+<pre><code>if (IS_WORD(val) || IS_GET_WORD(val))
+    val = Get_Var(val);
+else if (IS_PATH(val) || IS_GET_PATH(val)) { //val = Get_Path_Var(val);
+    REBVAL *v = val;
+    DS_PUSH_NONE;
+    Do_Path(&amp;v, 0);
+    val = DS_TOP;
+}
+return val;
+</code></pre>
+<p>It basically does a "GET" of a WORD! or PATH!.  But there's no evaluation.  So if you say:</p>
+<pre><code>get-type-word: does [either reading ['read] ['write]]
+
+make event! [type: get-type-word port: http-port]
+</code></pre>
+<p>It won't <em>call</em> the GET-TYPE-WORD function.  It will <strong>GET</strong> the GET-TYPE-WORD function, and try to set the TYPE: to that.</p>
+<p>Other values act similarly perplexingly...whether it's a GROUP!, or whether it's a LIT-WORD! that doesn't get evaluated.  So the <strong>Set_Event_Var()</strong> function <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L83">has to accept LIT-WORD!s as well as WORD!s</a>, making things just a little bit more confusing.</p>
+<h2>Why Is MAKE EVENT! So Much "Lousier" Than MAKE OBJECT! ?</h2>
+<p>What MAKE OBJECT! does is it gathers all the SET-WORD!s in a block up and creates an object with those keys.  Then it binds the block you gave it to that object, and runs the code.  Since the set-words are all bound to the object, it just naturally works that the evaluation of ordinary expressions will sink the evaluative results into those words.</p>
+<p>But the idea behind EVENT! was that it would be a very compressed data structure, so small it fit into one value cell.  This means that when it stores that <strong>TYPE:</strong> it isn't storing a pointer to an arbitrary word symbol...it's storing a small number from a finite list.</p>
+<p>So TYPE can't be "bound" in a conventional sense.  There's no cell in a context to bind the word to.  There's just a packed bit pattern in an EVENT! structure.</p>
+<p>You were able to say things like <strong>(<code>event/type: 'read</code>)</strong> because the way path dispatch worked, only the first element of the path was "bound".  It would lookup the event and then send it a message "change the type"...which it would do in its specialized bit packing way.  But you wouldn't be able to say <strong>do (bind [type: 'read] event)</strong> and have that work.</p>
+<h2>In My Opinion Get_Simple_Value() Should Not Exist</h2>
+<p>In truth, R3-Alpha did not have to be so stingy with the evaluator.  It had the ability to DO_NEXT() in a block, and where it used Get_Simple_Value() it could have done an evaluation.  It was there in the pursuit of performance.</p>
+<p>But this kind of opens up a bigger field of questioning for the language, just in terms of "What is setting?" and "What is getting?"  You might argue that Get_Simple_Value() was some weird anomaly, but here was the behavior of GET itself in R3-Alpha:</p>
+<pre><code>r3-alpha&gt;&gt; get (1 + 2)
+== 3
+
+r3-alpha&gt;&gt; get quote (1 + 2)
+== (1 + 2)
+</code></pre>
+<p>I tried to phrase some questions like "Are GET and SET supersets of PICK and POKE, or do they provide different functionality" and there really isn't an articulation of this.</p>
+<p><strong>It's like Rebol made a relatively concrete definition of what a SET-WORD! and a GET-WORD! are, but any understanding of a connection of these things to some functions named SET and GET are kind of unknown.</strong></p>
+<p>It's hard whenever looking at the fun parts of playing with Rebol design to come back and face the fact that it's really kind of sitting on a kind of zero-semantics language model.  I feel like I'm making some progress on it, but drawing clean lines that people can build on reliably often feels out of reach for this particular medium.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724</link>
+          <pubDate>Wed, 22 Sep 2021 20:40:57 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1724</guid>
+          <source url="https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724.rss">Dissecting R3-Alpha&#39;s EVENT!: What Should We Think?</source>
+        </item>
+        <item>
+          <title>A New, More Limited &quot;Word&quot; Type: SYMBOL! ?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p><strong>Recently I decided <a href="https://forum.rebol.info/t/lexical-conflicts-back-to-bite-us-dots-in-tags/1702">it was more important to let TAG! have dots and slashes in it</a>, than it was to let "arrow words" be in paths or tuples.</strong></p>
+<p>This felt a bit uncomfortable because it's creating a second-class citizen of WORD!... things like <strong><code>&lt;</code></strong> and <strong><code>&gt;</code></strong> and <strong><code>&gt;&gt;=</code></strong> and all their bretheren don't have the same abilities.</p>
+<p>Maybe it just feels uncomfortable because it isn't being done more decisively...</p>
+<h2>What If They Weren't WORD!s?</h2>
+<p>If these were in a different category, like SYMBOL!, we could just say that they don't come in GET-WORD! or SET-WORD! or META-WORD! or THE-WORD! variations.  They don't go in TUPLE! and they don't go in PATH!.</p>
+<p>They could still dispatch like WORD!s in the evaluator.  And they'd come in QUOTED! forms, so you could SET and GET them.  But also... look, multi-return can help, with single return!</p>
+<pre><code>[::]: enfix :join
+</code></pre>
+<p>Put it in a SET-BLOCK! and there you go.  GET doesn't really have a parallel, but it's done more rarely and so things like <strong><code>get '::</code></strong> seems it's good enough.</p>
+<h2>Opening Things Up</h2>
+<p>With this new category, it seems like the doors are open to picking things that just don't play well with colons, slashes, or dots.  It wouldn't matter because they wouldn't have to.</p>
+<p>I've been wanting <strong><code>:</code></strong> and <strong><code>::</code></strong> for a while now.  If they didn't have the burden of being WORD!s, then no one would ask questions like <em>"what does the SET-WORD! form of those things look like?"</em></p>
+<p>It would mean that <strong><code>@</code></strong> and <strong><code>^</code></strong> could free up from being their own types, and just be symbols.</p>
+<p>We wouldn't need to worry about the ambiguity of <strong><code>%</code></strong>, and it could be used to make paths...if that seemed like a good idea:</p>
+<pre><code>&gt;&gt; % /some/(reverse "htap")
+== %/some/path
+</code></pre>
+<p>I don't know if bringing <strong>/</strong> and <strong>//</strong> and <strong>.</strong> and <strong>...</strong> in as symbols vs paths/tuples is ideal.  Maybe there's some duality between them, where they're both somehow?  I'd have to think about it.</p>
+<h2>What Should Be A Symbol?  = + - ?</h2>
+<p>The "arrow words" came out of a mixture of <strong>&lt;</strong> and <strong>&gt;</strong> with characters that could be put into WORD!s, like <strong>-</strong> and <strong>+</strong> and <strong>|</strong> and <strong>=</strong>.</p>
+<p>So if we're contemplating <strong><code>::</code></strong>, does that open up things like  <strong><code>:-:</code></strong>   It certainly seems like maybe <strong><code>:=</code></strong> would be more useful as a symbol than as the GET variation of equals.</p>
+<p>But here are some thoughts:</p>
+<ul>
+<li>
+<p>When it comes to mixing with words... I'll say that I've actually found that + in words can be useful, like <strong>file+extension</strong> to name a variable that is composed of more than one part.</p>
+<ul>
+<li>I've never felt tempted to do anything similar with =</li>
+</ul>
+</li>
+<li>
+<p>I have valued being able to put + and - in PATH!.  I used it for <strong><code>+/-</code></strong> to denote "signed" in ENBIN and DEBIN.</p>
+<ul>
+<li>Some similar situation might apply with <strong><code>=/=</code></strong>
+</li>
+</ul>
+</li>
+<li>
+<p>Anything demoted to symbol status couldn't be used as a refinement either.  So there'd not eb any <strong><code>foo/=</code></strong> refinements</p>
+</li>
+</ul>
+<p>Conservatively I'd imagine we wouldn't be seeing any mixing of <strong>+</strong> or <strong>-</strong> with <strong>:</strong> to make a symbol.  But I might leave <strong><code>:=</code></strong> on the table, partially because I feel = is less of a natural fit for being in words in the first place.</p>
+<p>Then there's more to think about with whether <strong><code>&lt;:&gt;</code></strong> is valuable enough as an operator to outweigh being able to make a TAG! like <strong><code>&lt;:foo&gt;</code></strong> (if those things are truly in contention)</p>
+<h2>But SYMBOL! Functions Can't Have Refinements...</h2>
+<p>Can't be in paths means they can't have things after them to be refinements.</p>
+<p>Oh well.  Tough luck.</p>
+<p>As it happens they kind of couldn't have refinements anyway, because most symbols were winding up as infix functions.</p>
+<h2>No Matter What, There's Only So Many Keys</h2>
+<p>It may sound like a big deal, but there's only so many symbols on the keyboard.  This will bring in a few symbols, but if anyone wants a lot more they'll have to go to unicode.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/a-new-more-limited-word-type-symbol/1709">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/a-new-more-limited-word-type-symbol/1709</link>
+          <pubDate>Fri, 10 Sep 2021 01:56:34 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1709</guid>
+          <source url="https://forum.rebol.info/t/a-new-more-limited-word-type-symbol/1709.rss">A New, More Limited &quot;Word&quot; Type: SYMBOL! ?</source>
+        </item>
+        <item>
+          <title>Generalized Inertness with @</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="6" data-topic="1634">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I'm thinking this idea of <strong>"@[...] represents an already reduced block"</strong> is probably something we put in systemically:</p>
+<pre><code>&gt;&gt; any [1 + 1 = 2]
+== #[true]
+
+&gt;&gt; any @[1 + 1 = 2]
+== 1
+</code></pre>
+</blockquote>
+</aside>
+<p>So this is an important thought, but it runs up against the problem that we don't have a good operator for putting @ on things...whereas with quotes, we have that operator.</p>
+<p>I'm kind of attached to this:</p>
+<pre><code>&gt;&gt; @ block
+== block
+</code></pre>
+<p>As opposed to this:</p>
+<pre><code>&gt;&gt; block: [a b c]
+
+&gt;&gt; @ block
+== @[a b c]
+</code></pre>
+<p>The reason I'm attached to it is because of the API, largely.</p>
+<pre><code>rebValue("append data", rebQ(value));
+// vs...
+rebValue("append data @", value);
+</code></pre>
+<p>So this was an advantage that quoted blocks had...which is that there <em>is</em> an operator for adding quote levels...and a word for it, too.  QUOTE.</p>
+<pre><code>&gt;&gt; block: [1 + 2]
+
+&gt;&gt; any quote block
+== 1
+
+&gt;&gt; any ^block
+== 1
+
+&gt;&gt; any ^ block
+== 1
+</code></pre>
+<p>Several choices there.  But nothing to turn [1 + 2] into @[1 + 2]</p>
+<p>There's the option of @(block)...</p>
+<pre><code>&gt;&gt; block: [1 + 2]
+
+&gt;&gt; @(block)
+== @[1 + 2]
+
+&gt;&gt; word: 'a
+
+&gt;&gt; @(word)
+== @a
+</code></pre>
+<p>This complicates the evaluator a bit, by making one of the @ types non-inert.  But beyond complicating the evaluator, I rather like the idea that @ means "no evaluation" and it applies to the GROUP! form too.</p>
+<p>Maybe the operator could be called INERT?</p>
+<pre><code>&gt;&gt; block: [1 + 2]
+
+&gt;&gt; inert block
+== @[1 + 2]
+
+&gt;&gt; any inert block
+== 1
+</code></pre>
+<p>That actually seems... fairly coherent.  I guess this is a better name for "THEIFY".</p>
+<p>Anyway, the concept would be that it would offer a twist for any function that automatically reduced its argument...like SPACED.</p>
+<pre><code>&gt;&gt; spaced @["hello" 1 + 2]
+== "hello 1 + 2"
+
+&gt;&gt; spaced ["hello" 1 + 2]
+== "hello 3"
+</code></pre>
+<p>And UNPACK would be another instance of this.</p>
+            <p><small>3 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/generalized-inertness-with/1707">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/generalized-inertness-with/1707</link>
+          <pubDate>Wed, 08 Sep 2021 05:43:03 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1707</guid>
+          <source url="https://forum.rebol.info/t/generalized-inertness-with/1707.rss">Generalized Inertness with @</source>
+        </item>
+        <item>
+          <title>Lexical Conflicts Back To Bite Us: Dots In Tags</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>So I've been torn by the question of dots in tags, ever since the loss of <strong><code>&lt;...&gt;</code></strong> to mean variadics.</p>
+<p>But that was how the scanner rules clanked together.  And since <strong>&lt;</strong> is a WORD!, if we assign that to an OBJECT! how do we get fields out of it?</p>
+<pre><code>&gt;&gt; &lt;: make object! [x: 10]
+
+&gt;&gt; &lt;.x
+== 10
+</code></pre>
+<h2>But Something Has To Give</h2>
+<p>I've been convinced.  Dots in tags have to win.</p>
+<p>It's too useful to be able to say <strong><code>&lt;../foo.r&gt;</code></strong> as a file path.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>The state of the system is different now: PATH!s and TUPLE!s are immutable, so they can be checked for disallowed patterns.  We can set a bit on the special-cased words that contain <strong>&lt;</strong> or <strong>&gt;</strong> and then quickly check at path creation time that they contain none of these "arrow words".</p>
+<p>This means any &lt; or &gt; that you see in a path or tuple are guaranteed to be part of a TAG!.</p>
+<p>You can still make some confusing-looking things:</p>
+<pre><code>..&lt;..&gt;..
+</code></pre>
+<p>But with the rule of "no &lt; or &gt; words inside a path or tuple", you can confidently read that as a 5-element TUPLE with a TAG! in the middle of it.</p>
+<pre><code>&gt;&gt; as block! ..&lt;..&gt;..
+[_ _ &lt;..&gt; _ _]
+</code></pre>
+<h2>How Will You Pick Fields Out of Objects In Arrow Words?</h2>
+<p>For purely evaluative purposes, you could just use a GROUP!:</p>
+<pre><code>('&lt;).field
+</code></pre>
+<p>We <em>could</em> try and make some kind of escaping syntax so the literal value could actually be represented in the path.  This would help generic code that took an ANY-WORD! and wanted to make a PATH! out of it:</p>
+<pre><code>#[word! "&lt;"].field
+</code></pre>
+<p>But if we prohibited it, I'm not sure how bad that would be.  It could be a <a href="https://en.wikipedia.org/wiki/You_aren%27t_gonna_need_it">"yagni"</a> situation.  :-/</p>
+<p>For now, I'm just going to hack on the scanner and path mechanics a bit and get us the tags.  This will please those who would like the idea of <strong><code>&lt;/&gt;</code></strong> and <strong><code>&lt;//&gt;</code></strong> and <strong><code>&lt;.&gt;</code></strong> and <strong><code>&lt;..&gt;</code></strong> being a TAG!</p>
+<p>I don't know whether this concession is going to wind up turning into backing off <strong>&lt;:</strong> and <strong>&gt;:</strong> or not.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<pre><code>('&lt;): does [print "Is this good enough, now?"]
+</code></pre>
+<p>It would open up <strong><code>&lt;:&gt;</code></strong> and <strong><code>&lt;::&gt;</code></strong> and <strong><code>&lt;:/some/thing&gt;</code></strong> and a lot more tags of that nature, for what may seem like a pretty negligible loss.</p>
+<h2>Has The History of This Topic Been Churn With No Benefit?</h2>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/no_entry.png?v=9" title=":no_entry:" class="emoji" alt=":no_entry:">  <strong>NO</strong>.</p>
+<p>Because when you look systemically at all the parts, generic TUPLE! and generic PATH! are showing great promise.  I think this world in which things like <strong>/foo</strong> are PATH! and <strong>a.(b).10</strong> is a TUPLE! are really the right way to go.</p>
+<p>For that matter, I don't actually think it's so crazy to put on the lenses where <strong><code>&lt;../foo.r&gt;</code></strong> is a PATH! containing two tuples.</p>
+<p>Consider another very similar looking example of <strong><code>+../foo.r+</code></strong>.  That's:</p>
+<pre><code> as path! reduce [
+     as tuple! [+ _ _]
+     as tuple! [foo r+]
+ ]
+</code></pre>
+<p>I actually think that line of thinking has a lot of interesting dialecting possibilities.  The thing that makes the example with &lt; and &gt; in it trip up is that it treads on the usefulness of tags...and you wind up where <strong>r&gt;</strong> isn't even a valid tuple component.  More is being sacrificed and less is being gained.</p>
+<p>All in all, it's progress.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/lexical-conflicts-back-to-bite-us-dots-in-tags/1702">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/lexical-conflicts-back-to-bite-us-dots-in-tags/1702</link>
+          <pubDate>Fri, 03 Sep 2021 11:45:48 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1702</guid>
+          <source url="https://forum.rebol.info/t/lexical-conflicts-back-to-bite-us-dots-in-tags/1702.rss">Lexical Conflicts Back To Bite Us: Dots In Tags</source>
+        </item>
+        <item>
+          <title>Separate Back-Tick String Type?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>The ability to represent most english and programming-speak in LOAD-able source is cool, and something I've encouraged taking advantage of:</p>
+<pre><code>=== With COMMA! and generic tuple, we can do this.  (Cool, huh?) ===
+</code></pre>
+<p>There's a couple of hiccups.  Like you can't say <strong><code>4chan</code></strong>, but maybe you shouldn't anyway.  By making semicolons flush against things like <strong><code>abc;</code></strong> illegal, we help avoid bad English usages of semicolon... and also avoid the easy confusion that might cause with a SET-WORD! or other colon-ended type.</p>
+<p>One thing I find myself wanting to do that I can't is use backticks to call things out:</p>
+<pre><code>var: 20
+
+=== I sometimes like to say that `var + 1000` would be 1020 ===
+</code></pre>
+<p>That's a standard usage of backticks in markdown.  But shell scripts use them for running commands in mid script and evaluating their results:</p>
+<pre><code>set dircontents=$(ls)  # runs the ls command and gives back result
+
+set dircontents=`ls`  # synonym
+</code></pre>
+<p>I really only use the <strong>$()</strong> form in my scripts, because I like to save the backticks for comments.  But it's a matter of taste, I guess.</p>
+<h2>Notably... JavaScript uses it for String Interpolation</h2>
+<aside class="onebox allowlistedgeneric">
+  <header class="source">
+      <img src="https://developer.mozilla.org/favicon-48x48.97046865.png" class="site-icon" width="16" height="16">
+      <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Template_literals" target="_blank" rel="noopener">developer.mozilla.org</a>
+  </header>
+  <article class="onebox-body">
+    <div class="aspect-image" style="--aspect-ratio:123/69;"><img src="https://developer.mozilla.org/mdn-social-share.0ca9dbda.png" class="thumbnail" width="123" height="69"></div>
+
+<h3><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Template_literals" target="_blank" rel="noopener">Template literals (Template strings) - JavaScript | MDN</a></h3>
+
+<p>Template literals are literals delimited with backticks (`), allowing embedded expressions called substitutions.</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>In the case that there is some harsh cost associated in binding with providing string interpolation, perhaps we could limit the binding penalty to only this string type...leaving the other TEXT! strings and such more efficient?</p>
+<h2>This Seems Worth Considering</h2>
+<p>I just thought of it because I was trying to do a code comment in one of my <code>===</code> headers as I point out above, and felt like I should be able to.</p>
+<p>I might try it as an experiment.  Any name suggestions?</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/separate-back-tick-string-type/1676">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/separate-back-tick-string-type/1676</link>
+          <pubDate>Sat, 21 Aug 2021 21:54:03 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1676</guid>
+          <source url="https://forum.rebol.info/t/separate-back-tick-string-type/1676.rss">Separate Back-Tick String Type?</source>
+        </item>
+        <item>
+          <title>Killing off Floating Point PAIR!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>Rebol2 did not have floating point pairs:</p>
+<pre><code>rebol2&gt;&gt; 10.20x3.04
+** Syntax Error: Invalid tuple -- 10.20x3.04
+</code></pre>
+<p>Red is very focused on graphics and making PAIR! play a central role.  <em>Despite that, it also does not have floating point pairs</em>:</p>
+<pre><code>red&gt;&gt; 10.20x3.04
+*** Syntax Error: (line 1) invalid pair at 10.20x3.04
+</code></pre>
+<p>A particularly irksome aspect of the R3-Alpha implementation of PAIR! was that it used 32-bit floating point numbers in its math, while 64-bit double precision integers were behind DECIMAL!.  This meant you had two different precisions of math being implemented.  And you would lose information picking the decimal numbers out of pairs and putting them back in.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>That was also true of the integer form of PAIR! too.  You couldn't store an arbitrary 64-bit INTEGER! into a PAIR!, because it only had room for 2 32-bit integers in the cell.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>I fixed these issues by making a fully generic optimized mechanic that could store any two cells together.  This wound up being fairly relevant in other ways that have nothing to do with PAIR!.</p>
+<p><strong>In any case, in the ever present drive to simplify anything that is not mission critical, I think decimal point pairs will probably get the axe.</strong>  They raise questions I simply do not feel are worth answering.</p>
+<p><em>If not even Red can bring themselves to care, why on earth should I?</em></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/killing-off-floating-point-pair/1666">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/killing-off-floating-point-pair/1666</link>
+          <pubDate>Mon, 16 Aug 2021 02:19:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1666</guid>
+          <source url="https://forum.rebol.info/t/killing-off-floating-point-pair/1666.rss">Killing off Floating Point PAIR!</source>
+        </item>
+        <item>
+          <title>SET-GROUP! Finds its Groove</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>Having seen the slick multi-return behavior for SET-BLOCK!, I wondered if there was a better purpose for SET-GROUP! than merely a synonym for SET.</p>
+<pre><code>(word): value
+set word value
+</code></pre>
+<p>That felt a bit anticlimactic.  You save one character, but you add three non-alphabetic symbols.</p>
+<p>If these were equivalent, were we really getting the bang for the buck we would want out of a sparkly new datatype?</p>
+<p>So I hesitated to declare that to be the meaning.</p>
+<h2>But I've Found The Reason <em>Why</em> It Needs To Be The Meaning...</h2>
+<p><strong>It fills the role of being a <em>SINGLE</em> value, that can sit in literal slots to represent an assignment.</strong></p>
+<p>That means you can say things like:</p>
+<pre><code>(var): default [10]
+</code></pre>
+<p>It's impossible for this to work with:</p>
+<pre><code>set var default [10]
+</code></pre>
+<p>Because it splits the intent to set the word pointed to by the variable into a function call to SET and a WORD! reference to VAR.  <em>DEFAULT can only quote value left, and it has to pack up all the information it needs to do its job.</em></p>
+<p>So it really is a missing piece.  And really, I think there are a lot of cases where I'm just going to like <strong>(word):</strong> it better than <strong>set word</strong>.  It may be a bit more symbolic, but by not being wordy it could blend in better.</p>
+<pre><code>var1: blah blah blah
+var2: blah blah blah
+(word): blah blah blah  ; doesn't break the rhythm as much as SET WORD
+</code></pre>
+<h2>I'll Start Patching In Behaviors For It... The First Is UPARSE EMIT!</h2>
+<p>Right now, if you know the name you're going to emit for a variable, you can use it literally in GATHER:</p>
+<pre><code>&gt;&gt; uparse [10 20] [gather [emit x: integer!, emit y: integer!]]
+== make object! [
+    x: 10
+    y: 20
+]
+</code></pre>
+<p>But what if the field's name is dynamic (maybe even captured from the parsed material itself?)  Well, SET-GROUP! seems the obvious answer, doesn't it?</p>
+<pre><code>&gt;&gt; word: 'xxx
+
+&gt;&gt; uparse "a" [gather [emit (word): &lt;any&gt;]]
+== make object! [
+    xxx: #a
+]</code></pre>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/set-group-finds-its-groove/1663">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/set-group-finds-its-groove/1663</link>
+          <pubDate>Sun, 15 Aug 2021 01:20:58 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1663</guid>
+          <source url="https://forum.rebol.info/t/set-group-finds-its-groove/1663.rss">SET-GROUP! Finds its Groove</source>
+        </item>
+        <item>
+          <title>Using URL! for an IPv6 Type</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>TUPLE! is now generalized, and can be mixed with paths, which I think is a good direction.  It's also encouraging that it is mostly compatible with the previous kind of tuple.</p>
+<p>However, those who think tuples were primarily for representing IP addresses will note that this doesn't really help you with representing IPv6 addresses.</p>
+<p>I was closing some old rebol-issues and noticed there was a suggestion from earl of tackling this via the URL! type.</p>
+<p>I thought I would link to that discussion and the points it raises:</p>
+<p><a href="https://github.com/metaeducation/rebol-issues/issues/1976" class="inline-onebox">Revisit, refactor or rename tuple! · Issue #1976 · metaeducation/rebol-issues · GitHub</a></p>
+<p>One of the points is that URL!s aren't checked for validity, so it doesn't have the "rigor" that a notational IPV6! datatype might have.  Which may displease some people, as not being much better than a string.</p>
+<p>In any case, I'm closing the original issue itself, as I feel the broad issue of TUPLE!s is solved.  But wanted something to come up here if a search were done on "IPv6".</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/using-url-for-an-ipv6-type/1627">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/using-url-for-an-ipv6-type/1627</link>
+          <pubDate>Thu, 17 Jun 2021 22:33:30 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1627</guid>
+          <source url="https://forum.rebol.info/t/using-url-for-an-ipv6-type/1627.rss">Using URL! for an IPv6 Type</source>
+        </item>
+        <item>
+          <title>Three Single-Character Intents... x:_, x: &#39;, and x: ~</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>So it's nice in a row of initializations to be able to kind of gloss over the "empty bits" and see the data.</p>
+<pre><code>foo: make object! [
+    bar: '
+    baz: '
+    mumble: "a string"
+    frotz: '
+]
+</code></pre>
+<p>Compare that with if you had to say:</p>
+<pre><code>foo: make object! [
+    bar: null
+    baz: null
+    mumble: "a string"
+    frotz: null
+]
+</code></pre>
+<p>If instead of NULL what you wanted to assign was BLANK!, you can do this with a single character also:</p>
+<pre><code>foo: make object! [
+    bar: _
+    baz: _
+    mumble: "a string"
+    frotz: _
+]
+</code></pre>
+<p>I've explained in the <a href="https://forum.rebol.info/t/the-2021-philosophy-of-null-vs-blank-vs-bad-word/1604">modern theory of BLANK! vs. NULL vs. BAD-WORD!</a> why which you would choose makes a difference.   And once again, this would be a bit visibly more shoddy if you had to write it out:</p>
+<pre><code>foo: make object! [
+    bar: blank
+    baz: blank
+    mumble: "a string"
+    frotz: blank
+]
+</code></pre>
+<p>So it's nice that if you have these different intents for how to treat "empty" things, you can pick a clean way to write them that doesn't cloud up the non-empty things surrounding them.</p>
+<p>But with NULL and BLANK! having this coverage, doesn't it seem unfortunate to have to write out the BAD-WORD! intent?</p>
+<pre><code>foo: make object! [
+    bar: ~unset~
+    baz: ~unset~
+    mumble: "a string"
+    frotz: ~unset~
+]
+</code></pre>
+<p>Isn't a shorthand warranted here?</p>
+<pre><code>foo: make object! [
+    bar: ~
+    baz: ~
+    mumble: "a string"
+    frotz: ~
+]
+</code></pre>
+<p>Here's the case where you are saying it's empty and you want accessing the field to cause an error.  On a scale of 1 to 3 of "meanness":</p>
+<ul>
+<li>
+<p>BLANK! is the friendliest <em>(opts out of many operations and makes them return null)</em></p>
+</li>
+<li>
+<p>NULL is a little less friendly <em>(doesn't cause an error on reference/testing but will cause errors on things like APPEND)</em></p>
+</li>
+<li>
+<p>An isotopic BAD-WORD! that has gone through an evaluation step--as above--is the meanest <em>(will error just on referring to the value)</em></p>
+</li>
+</ul>
+<h2>The Landscape Has Changed</h2>
+<p>One reason that I thought it was a bad idea to make <strong>~</strong> a "bad word with NULL spelling" was that it would mess with paths like:</p>
+<pre><code> for-each item first [~/some/dir] [
+     print ["Item is" item]
+ ]
+</code></pre>
+<p>Allowing such mean BAD-WORD!s to be in PATH!s seemed awkward.  You'd be getting errors on something that looked like it should be friendly.</p>
+<p>BUT now that's a <em>non-isotope</em> form of a BAD-WORD!.  You can deal with it like any other value when you come across it literally, it's just not truthy or falsey.</p>
+<p><strong>This seems to shift the balance to saying that having a light way of saying "this field will error if there's a problem has value"</strong></p>
+<p>I don't know that this means it should take the role of ~unset~.  ~unset~ seems more explanatory of the state of unsetness for a variable, and is a bit more visible.</p>
+<p>But once they become isotopes BAD-WORD!s are kind of bending the rules.  While normal BAD-WORD!s are not true or false, the <em>isotope</em> of ~null~ is falsey.  There are various squirrelly behaviors that you get into once you start working with isotopes.</p>
+<p>So...what if:</p>
+<pre><code>&gt;&gt; ~
+== ~unset~   ; isotope
+</code></pre>
+<p>e.g. the <em>normal</em> BAD-WORD! of <strong>~</strong> will turn into the <em>isotope</em> of ~unset~ when you evaluate it?</p>
+<p>Or maybe it's left open.  Maybe ~ remains a plain WORD!, that runs a function, that gives back the unset isotope?  That leaves it more open.</p>
+<p><strong>Regardless of how it happens, I think I like that behavior:</strong></p>
+<pre><code>&gt;&gt; ~
+== ~unset~   ; isotope</code></pre>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/three-single-character-intents-x-x-and-x/1620">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/three-single-character-intents-x-x-and-x/1620</link>
+          <pubDate>Fri, 04 Jun 2021 04:18:02 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1620</guid>
+          <source url="https://forum.rebol.info/t/three-single-character-intents-x-x-and-x/1620.rss">Three Single-Character Intents... x:_, x: &#39;, and x: ~</source>
+        </item>
+        <item>
+          <title>GOB! type</title>
+          <dc:creator><![CDATA[iArnold]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>When creating a GOB! you can specify some values for it, or leave this empty and go for the default values like so:</p>
+<pre><code>&gt;&gt; gb: make gob! []
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+</code></pre>
+<p>And this results in</p>
+<pre><code>&gt;&gt; gb
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+</code></pre>
+<p>Where</p>
+<pre><code>&gt;&gt; gb/offset
+== 100.0x100.0
+
+&gt;&gt; gb/size
+== 0.0x0.0
+
+&gt;&gt; gb/alpha
+== 255
+</code></pre>
+<p>Now when taking a closer look at the GOB! code in <code>t-gob.c</code> you can remark that there should be more to this standard GOB! than meets the eye. There could be a <code>pane</code>, <code>content</code>, <code>data</code> as well as a <code>type</code> and an <code>OLD-OFFSET</code> too.</p>
+<p>Let us test this out:</p>
+<pre><code>&gt;&gt; gb: make gob! [data: [my data here]]
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+</code></pre>
+<p>Now remarkable enough gb on its own looks still the same</p>
+<pre><code>&gt;&gt; gb
+== make custom! [offset: 100.0x100.0 size: 0.0x0.0 alpha: 255]
+</code></pre>
+<p>Yet, now this is the case:</p>
+<pre><code>&gt;&gt; gb/data
+== [my data here]
+</code></pre>
+<p>So what about some of the other attributes?</p>
+<pre><code>&gt;&gt; gb/pane  
+== []
+
+
+&gt;&gt; gb/flags
+== []
+</code></pre>
+<p>But not</p>
+<pre><code>&gt;&gt; gb/content
+** Script Error: cannot pick content in path
+** Where: console
+** Near: [gb/content **]
+** Line: 1
+
+&gt;&gt; gb/parent
+(i) Info: use WHY for error information
+** Script Error: cannot pick parent in path
+** Where: console
+** Near: [gb/parent **]
+** Line: 1
+
+&gt;&gt; gb/type
+** Script Error: cannot pick type in path
+** Where: console
+** Near: [gb/type **]
+** Line: 1
+</code></pre>
+<p>But on line 93 of <code>t-gob.c</code> there is an initialization of TYPE going on:</p>
+<pre><code>GOB_TYPE(a) = GOBT_NONE;
+</code></pre>
+<p>Be it initialized as 0 (enum from <code>reb-gob.h</code> line 125), imo that should mean it could have been picked up.</p>
+<ul>
+<li>
+<p>What is the difference between the init of TYPE here and the other more successful inits?</p>
+</li>
+<li>
+<p>Why is the content of the extra <code>data</code> information not shown when the GOB! gb is queried?</p>
+</li>
+<li>
+<p>It would be very neat to have some kind of dictionary of functions and terminology that in the first place will point to the place where the function is defined. (This for many <code>MACRO</code>'s, the <code>REB***</code> structures, the <code>reb********</code> functions).</p>
+</li>
+</ul>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/gob-type/1617">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/gob-type/1617</link>
+          <pubDate>Mon, 31 May 2021 08:02:36 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1617</guid>
+          <source url="https://forum.rebol.info/t/gob-type/1617.rss">GOB! type</source>
+        </item>
+        <item>
+          <title>What exactly happened to (our) MONEY?</title>
+          <dc:creator><![CDATA[iArnold]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>What has happened to money! datatype?</p>
+<pre><code>&gt;&gt; to money! 12,95
+== $12
+</code></pre>
+<p>It is the same for 12.95 that also loses the 95 cents.</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-exactly-happened-to-our-money/1614">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-exactly-happened-to-our-money/1614</link>
+          <pubDate>Sun, 23 May 2021 09:43:37 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1614</guid>
+          <source url="https://forum.rebol.info/t/what-exactly-happened-to-our-money/1614.rss">What exactly happened to (our) MONEY?</source>
+        </item>
+        <item>
+          <title>Emergent Behavior of @x @x/y @x.y @[...], @(...)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <blockquote>
+<p>UPDATE: The mechanisms that were under the name of @ as discussed in this post are now under the name of ^.  It is kept as is here for historical reference.</p>
+</blockquote>
+<p><strong>A trend has emerged in how I want to use the <code>@</code> variants when it comes to evaluation.</strong></p>
+<p>This trend is that they convey a "bit" on the type somehow, to mean it should be treated literally.  I've been trying to cook up all kinds of indirect ways to getting toward that goal (e.g. "modal parameters").  But the true answer looks like just making the evaluator behavior for these types add a quote level:</p>
+<pre><code>&gt;&gt; x: 1020
+
+&gt;&gt; @x
+== '1020
+
+&gt;&gt; @(10 + 20)
+== '30
+
+&gt;&gt; @[a b c]
+== '[a b c]
+</code></pre>
+<p>And I'm now committed to finding a way that a lone @ would act like the QUOTE operator, so you don't have to use a GROUP! if you are in a situation where you don't need one.</p>
+<pre><code>&gt;&gt; @ 300 + 4
+== '304
+</code></pre>
+<p>So <code>@</code> will be an instance of a unique datatype with behavior coming from the evaluator.  It would make a lousy WORD! as you wouldn't know how to interpret <code>@@/foo</code> <em>(is that the PATH! representation of <code>[@@ foo]</code> or the SYM-PATH! representation of <code>[@ foo]</code> ?)</em>  But you shouldn't be able to override it, anyway.</p>
+<h2>Naming Is Pinned Down: LIT-XXX! Makes Perfect Sense</h2>
+<p>I say that @ is a "literalizing operator" because it gives you the ability to make parameter conventions that distinguish values into two behaviors:</p>
+<ul>
+<li>
+<p>Non-literal behaviors, which cannot truly receive an arbitrary value.  The behavior can be applied to 3, but not '3 or ''3</p>
+</li>
+<li>
+<p>Literal behaviors, which <em>can</em> receive an arbitrary value.  These can apply to 3, '3, and ''3 etc. to any level of quoting.</p>
+</li>
+</ul>
+<p>Imagine a function that is append-like, but where appending a plain integer means to append that many blanks:</p>
+<pre><code>&gt;&gt; my-append [a b c] 3
+== [a b c _ _ _]
+</code></pre>
+<p>Then imagine it regards being quoted as a flag meaning distinct handling should be used, such as handling literally:</p>
+<pre><code>&gt;&gt; my-append [a b c] @ 3
+== [a b c 3]  ; literalism triggered by argument '3
+
+&gt;&gt; my-append [a b c] @ the '3
+== [a b c '3]  ; literalism triggered by argument ''3
+
+&gt;&gt; my-append [a b c] @ the ''3
+== [a b c ''3]  ; literalism triggered by argument '''3
+</code></pre>
+<p>So the idea that quoted things are "literal" has to do with this contrast of being able to represent anything, while the unquoted things can only represent the set of things that are unquoted.</p>
+<p>The trend is that the distinction is used just like this: you get some sort of special behavior out of the plain form, and then the unquoted thing is taken literally.</p>
+<h2>The Final (?) Answer To The APPEND/ONLY Debacle</h2>
+<p>When I've gone down this road before, I've suggested that APPEND to a BLOCK! only accept BLOCK! and QUOTED!.  And when you add the quoted thing, it removes one quote level.</p>
+<p>At source level, <strong>append [a b c] '[d e] =&gt; [a b c [d e]]</strong> won't work because the quote level is boiled off during evaluation.</p>
+<ul>
+<li>Changing that evaluator behavior is not an option...it is the whole point of the feature.</li>
+<li>We could change the parameter convention of APPEND...and I've tried to do that in creative ways ("modal parameters").</li>
+</ul>
+<p>But I think <strong>append [a b c] @[d e]</strong> is a winner.  It strikes me as much more learnable than having to find out what /ONLY is.</p>
+<p>Once you grasp this simple connection between @ and quoting, you open a lot of doors.  I know <a class="mention" href="/u/rgchris">@rgchris</a> might be unhappy that it's a symbol.  But <strong>append/only [a b c] [d e]</strong> has a symbol in it... it's a <code>/</code>.  Then it has a cryptic term after it which has no systemic basis.</p>
+<p><em>(You can always write <strong>append [a b c] quote [d e f]</strong>.  It's one more space character than APPEND/ONLY, but I think it looks nicer.)</em></p>
+<h2>Special Consideration For Invisibility</h2>
+<p>We need a signal in the case of @(...) when the contents of the group evaluate and disappear completely.  Right now I'm choosing <code>~invisible~</code>:</p>
+<pre><code>&gt;&gt; @(comment "special")
+== ~invisible~
+</code></pre>
+<p>Making it a VOID! (are we ready to call that BAD-WORD! yet or not?) helps make it "ornery" in case you're writing code that isn't specially geared up for handling invisibility.</p>
+<p>Having <em>some</em> signal is is an important element of being able to proxy information about invisibility via quoting...so that invisible operations can chain to each other if they want to.</p>
+<p>In addition, there's a bit of a twist with NULL.  By default, it just passes through NULL.</p>
+<pre><code>&gt;&gt; @(null)
+; null
+</code></pre>
+<p>But if it receives what the system thinks of as the "NULL-2" isotope as input, you get something different... a "quoted null":</p>
+<pre><code>&gt;&gt; @(if true [null])
+== '
+</code></pre>
+<p>Then this provides that chaining property:</p>
+<pre><code>&gt;&gt; unquote just '
+; null-2
+
+&gt;&gt; unquote null
+; null
+</code></pre>
+<p>Using true null for the literalized ordinary null has the benefit of being falsey, while every quoted value is truthy.  That's convenient!</p>
+<h2>The Behavior in PARSE is Aligned Nicely</h2>
+<p>Pieces have slotted into place on this, and the behavior is very parallel:</p>
+<pre><code>&gt;&gt; value: [some integer!]
+
+&gt;&gt; parse? [[some integer!] [some integer!]] [some @value]
+== #[true]
+</code></pre>
+<p>It's pleasing how this acts like if you'd written:</p>
+<pre><code>&gt;&gt; parse? [[some integer!] [some integer!]] [some '[some integer!]]
+== #[true]
+</code></pre>
+<p>That's makes parity with the evaluator behavior of @ being a quoting operator.</p>
+<blockquote>
+<p>Note: KEEP presents a bit of an odd edge case, because the @ gets consumed by the rule matching process:</p>
+<pre><code>&gt;&gt; block: [a b]
+
+&gt;&gt; parse [[a b] [a b]] [collect [some keep @block]]
+== [a b a b]
+</code></pre>
+<p>The <code>@block</code> rule just evaluated to [a b].  So the collected thing is not quoted.  How are you supposed to append the block as-is?</p>
+<p>This makes a case for still having /ONLY, which would disable both the block-splicing rule <em>and</em> the quote removal rule.</p>
+</blockquote>
+<h2>Modal Parameters Are Dying... Meet Literal Parameters</h2>
+<p>We owe modal parameters a great debt for leading down the design path to this point.  Let us thank them for their service, and send them on their way.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>Now there's a higher calling for <span class="mention">@arg</span> in your argument lists:</p>
+<pre><code>&gt;&gt; isotope-seer: func [@arg "literal parameter"] [print [mold arg]]
+
+&gt;&gt; isotope-seer 10
+== '10
+
+&gt;&gt; isotope-seer null
+; null
+
+&gt;&gt; isotope-seer (if true [null])
+== '
+</code></pre>
+<p>A-Ha!  The transient isotope status is revealed to us.  This parameter convention would be used by things like ELSE and THEN to give them the insight they need to decide whether to take action or not.</p>
+<p>It was already the case that no block could store an isotope null...because it was a null.  But some variables were still getting isotopes.   <strong>Now that loophole is closed--there are no isotopes outside of the evaluator engine itself.</strong>  Functions like THEN and ELSE can react to them, and you can use other literal-parameter-taking functions to test the status (like the clever THEN? and ELSE? tests).  But null-2 never makes it into variables.</p>
+<p>Brilliant, yes?</p>
+<blockquote>
+<p>I'll point out that the feature of modal parameters <a href="https://forum.rebol.info/t/shim-code-for-modal-arguments/1185">was first prototyped in usermode</a>.  It may be that similar features of triggering an associated refinement based on patterns noticed at the callsite would be interesting for users to implement in some cases.  But it feels very good to make that experimental code for the adventurous...instead of having it implemented in the core, and to have critical features depend on it!</p>
+</blockquote>
+<h2>There Are Still Details To Work Out, But...</h2>
+<p>I'm just going to go ahead and continue my self-congratulatory streak by saying "this is awesome".</p>
+<p>It may look simple at the end when all is said and done.  <em>But simplicity is hard.</em></p>
+<p>Remember folks: Design.  Takes.  Time.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/emergent-behavior-of-x-x-y-x-y/1596">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/emergent-behavior-of-x-x-y-x-y/1596</link>
+          <pubDate>Wed, 05 May 2021 09:42:13 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1596</guid>
+          <source url="https://forum.rebol.info/t/emergent-behavior-of-x-x-y-x-y/1596.rss">Emergent Behavior of @x @x/y @x.y @[...], @(...)</source>
+        </item>
+        <item>
+          <title>Are GET-WORD!s Too Ugly? :FOO vs. $FOO</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>When looking at bash, you can see it doing things that look nice and light:</p>
+<pre><code># bash code
+echo "Installed Version: $ANDROID_NDK_VERSION for the NDK"
+</code></pre>
+<p>Rebol isn't <em>terrible</em>:</p>
+<pre><code>; Rebol version
+print ["Installed Version:" ANDROID_NDK_VERSION "for the NDK"]
+</code></pre>
+<p>But I'm becoming a believer that we should be thinking about offering versions that start by <a href="https://forum.rebol.info/t/dont-fear-the-word/1549">taking the words you write at face value</a>, and marking the substitutions.  That would suggest perhaps offering an echo like:</p>
+<pre><code>; A Rebol Echo with literal tendencies
+echo [Installed Version: (ANDROID_NDK_VERSION) for the NDK]
+</code></pre>
+<p>But I've mentioned that even GROUP!s might want to be literal in such contexts for the default case (I often use parentheses in writing English, as I'm doing here).  So perhaps a GET-WORD! would be more appropriate:</p>
+<pre><code>echo [Installed Version: :ANDROID_NDK_VERSION for the NDK]
+</code></pre>
+<p>That looks a bit unsatisfying.  Beyond looking bad, it doesn't really call your attention to the escaping.<br>
+But it raises to my attention something that's just sort of generally true as a whole... <em>GET-WORD! is unsatisfiying.</em></p>
+<h2>Leading colon, I've never liked you...</h2>
+<p>I've never liked the way <strong>x: :y</strong> looks.  It doesn't have a good vibe...especially when you put a get right after a set like that.</p>
+<p>We don't put colons in front of things in English, like, ever.  While there's some amount of abstract symmetry to <em>"colon in back means set, colon in front means get"</em>, we don't have to be a slave to that.  If pure symbolic reversal were the way to invert meanings we'd use SET to set and TES to get.  :-/</p>
+<p>Is there a truly good reason not to use $FOO, $FOO/BAR, and $(FOO) for the "get" versions of things?  It would still be a GET-WORD!, and could still be called that.</p>
+<pre><code>&gt;&gt; test: does [10]
+
+&gt;&gt; type of first [$test]
+== #[datatype! get-word!]
+
+&gt;&gt; type of test
+== #[datatype! integer!]
+
+&gt;&gt; type of $test
+== #[datatype! action!]
+</code></pre>
+<p>And for compatibility, we could make <strong>:foo</strong> load as <strong>$foo</strong> for the foreseeable future.</p>
+<p>But as a dialecting component, I think it would be something a lot more people would want to use.</p>
+<pre><code>echo [Installed Version: $ANDROID_NDK_VERSION for the NDK]
+</code></pre>
+<p>And I think it actually looks <em>better</em> than the bash, with the brackets instead of quotes:</p>
+<pre><code>echo "Installed Version: $ANDROID_NDK_VERSION for the NDK"
+</code></pre>
+<h2>Breaks One Experiment: The Shell Dialect</h2>
+<p>This would break one idea I had, which was to let a lone $ be a WORD!, so we could use it for shell commands.</p>
+<pre><code>print "Writing normal code here"
+$ ls -alF  ; processes to end of line by default
+print "Done calling out to shell
+</code></pre>
+<p>But $ couldn't be a WORD!, as <strong>$/foo</strong> would be ambiguous.  You can't tell if that's a GET-PATH! of the path <strong>/foo</strong>, or a plain PATH! of the word $ with foo picked out of it.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>I can't think of any particular tricks here.</p>
+<h2>Now That I See It, I Can't Un-See It</h2>
+<p>Leading colon on words is <strong>ugly.</strong></p>
+<p>I've always found myself underwhelmed by the idea of using it in dialects.</p>
+<p>The simple change of using dollar sign for this seems to give a tool for standing up against the likes of bash.  Once we're past a compatibility period, maybe  <code>:foo</code> could be another text type.  Or maybe just a URL! with no scheme?</p>
+<p>Thoughts?</p>
+            <p><small>7 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/are-get-word-s-too-ugly-foo-vs-foo/1550">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/are-get-word-s-too-ugly-foo-vs-foo/1550</link>
+          <pubDate>Wed, 10 Mar 2021 04:58:14 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1550</guid>
+          <source url="https://forum.rebol.info/t/are-get-word-s-too-ugly-foo-vs-foo/1550.rss">Are GET-WORD!s Too Ugly? :FOO vs. $FOO</source>
+        </item>
+        <item>
+          <title>PACK! Sequence Type</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p><a class="mention" href="/u/blackattr">@BlackATTR</a> feels that being able to write code as <strong><code>operation(arg)</code></strong> with no space is critical to the SQL dialect.  While we haven't expressly prohibited that yet, it is lossy:</p>
+<pre><code>&gt;&gt; [operation(arg)]
+== [operation (arg)]
+</code></pre>
+<p>I just noticed another case of tight syntax with a <a href="http://www.rebol.org/view-script.r?script=rebol-dom.r">%rebol-dom.r</a> script where <a class="mention" href="/u/danny">@Danny</a> is trying to write expressions like:</p>
+<pre><code>app[.width] = "curly quew"
+</code></pre>
+<p>Also still legal at the moment, but also still broken apart...and being two separate elements means it couldn't be quoted as a unit on the left (e.g. by an assignment-oriented equal):</p>
+<pre><code>&gt;&gt; app[.width] = "curly quew"
+== [app [.width] = "curly quew"]
+</code></pre>
+<p>One of the reasons we'd discussed making these kinds of constructs illegal would be to free them for new  meanings.  Given that people want more density, might we think of this as a new datatype... like a PATH! or a TUPLE!, that simply has no delimiter?</p>
+<h2>Let's Imagine we call it a PACK!</h2>
+<p><em>(Though it would be nicer if it weren't 4-letters and start with P, as that's very similar to PATH!.  So if anything else comes to mind...think "path", "tuple" and...?)</em></p>
+<pre><code>&gt;&gt; p: 'operation(arg)
+== operation(arg)
+
+&gt;&gt; type of p
+== #[datatype! pack!]  ; or whatever, this syntax has tons of thinking needed
+
+&gt;&gt; first p
+== operation  ; a WORD!
+
+&gt;&gt; second p
+== (arg)  ; a GROUP! with one element
+</code></pre>
+<p>Not every type would be able to participate in a pack.  As with PATH! and TUPLE!, only the pack as a whole could have a decoration (SET-PACK!, GET-PACK!, SYM-PACK!).</p>
+<p>Also, while # is a legal "empty issue", it's also a modifier.  So the #[a] probably shouldn't be a PACK!.  Unless there's some way that would fit into a broader master plan, by virtue of what that pack would mean... e.g. if <strong># = first pack</strong> would mean something was typically a datatype... <img src="https://forum.rebol.info/images/emoji/twitter/thinking.png?v=9" title=":thinking:" class="emoji" alt=":thinking:"></p>
+<p>Let's think about other things first.</p>
+<h2>Plan -4 Issues</h2>
+<p>There's a bit of a problem in that we've been saying you could write (a)(b) and [a][b] and have it mean the same thing as (a) (b) and [a] [b].  I use this frequently, because I do not like the spacing gap you get when braces follow each other.</p>
+<pre><code>f: func [
+    some-arg [integer!]
+] [
+    the gap there bothers me
+]
+
+f: func [
+    some-arg [integer!]
+][
+    without the gap looks better
+]
+</code></pre>
+<p>That would suggest the rules for packing would disallow adjacent GROUP!s and BLOCK!s, which would rule out interesting packs that might represent multidimensional array access:</p>
+<pre><code>&gt;&gt; [foo[x][y]]
+== [foo[x] [y]]  ; would have to be a pack and a block?
+</code></pre>
+<p>Ladislav was always rather adamant that spaces should be everywhere because spaces had signifiance.  So he wasn't in favor of the aesthetic gap-closing.  If PACK! turned out to be truly useful, then it might vindicate his belief.  I dunno.</p>
+<h2>What Would The Evaluator Behavior Be?</h2>
+<p>So this would give a whole range of things that today have no meaning in the evaluator.  If we were to accept choosing out of arrays by index with <strong>array[n]</strong>, how bad would that be...when BLOCK!s have other meanings?  It would still be a BLOCK... just one that happens to be in a PACK!, like <strong>array/[n]</strong> is inside a PATH! or <strong>array.[n]</strong> is inside a TUPLE!.</p>
+<p>Having <strong>foo(bar)</strong> be a function call might appeal to certain users, if that was a stylistic choice they could make.  Maybe it could even use COMMA! to delimit arguments.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<h2>How Would It Reconcile Priority With TUPLE! and PATH!  ?</h2>
+<p>The rule for TUPLE! is that the dots bind more tightly than the slashes.  So <strong>a.b/c.d</strong> is a 2-element PATH! with a 2-element TUPLE!s on the left and right... not a 3-element tuple with a path in the middle.</p>
+<p>What would you get with <strong>a.b/c.d[e f]</strong> ?  How about <strong>a.b[c d]e/f</strong> ?</p>
+<p>My general instinct would be that the PACK! would be the outermost.</p>
+<pre><code>a.b/c.d[e f] =&gt; to pack! [a.b/c.d [e f]]  ; 2-element pack
+a.b[c d]e/f =&gt; to pack! [a.b [c d] e/f]  ; 3-element pack
+</code></pre>
+<p>But that's not based on any particular evidence of utility.  I'm just saying that there has to be a rule...and that's the one that seemed the most natural to me on first glance.</p>
+<h2>There'd Be Some Issues With Numbers</h2>
+<p>If numbers are allowed, you are going to run into trouble with things like how <code>1e...</code> leads into exponential notation, and the fact that you get problematic reversals with <strong>1a</strong> and <strong>a1</strong>.  The first seems like a candidate for being a PACK!, while the second is what we'd see as a normal WORD!</p>
+<h2>BLANK!s terminating Paths or Tuples Would Be Impossible</h2>
+<p>You couldn't merge <strong>a/</strong> and <strong>[b]</strong> to get a PACK!, because <strong>a/[b]</strong> is a PATH!.  This may be a feature and not a flaw...no clue.</p>
+<p>Anyway, a lot to think about.  But if people are dug in and insistent that they have to have these notations, then we should give consideration to the idea.</p>
+            <p><small>20 posts - 7 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/pack-sequence-type/1503">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/pack-sequence-type/1503</link>
+          <pubDate>Wed, 10 Feb 2021 23:33:00 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1503</guid>
+          <source url="https://forum.rebol.info/t/pack-sequence-type/1503.rss">PACK! Sequence Type</source>
+        </item>
+        <item>
+          <title>Dots and Slashes: The Hyphen and Colon Disruption</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>I'd gotten the idea in my head from looking at code that dots were superior to slashes for field selection.</p>
+<p>I do think it looks less noisy in basic cases:</p>
+<pre><code>if system.options.quiet [print "Be quiet!"]
+
+if system/options/quiet [print "Be quiet!"]
+</code></pre>
+<p>But when you combine it with colons, it's a little less obvious:</p>
+<pre><code>system.options.quiet: true
+
+system/options/quiet: true
+</code></pre>
+<p>The dot doesn't contrast as well with the colon as the slash does.  It's a little close to <strong><code>system.options.quiet.</code></strong></p>
+<p>Another issue is how the dot doesn't stand out quite as much from dash as a slash does:</p>
+<pre><code>system.console.print-info "Scans kind of like (system.console.print)-info"
+
+system/console/print-info "More obvious scan as system/console/(print-info) ?"
+</code></pre>
+<p>But it probably as a lot to do with "what you're used to".   We certainly are able to group together hyphenated clauses in filenames all the time, like <strong>some-file.txt</strong> so I am probably just being a bit jarred by seeing a new pattern.  Looking at it side-by-side here, I guess you could probably just as easily see the <code>-info</code> as being broken off from the slashes if you wanted to see it that way...</p>
+<p>Overall, I feel like the benefit of distinguishing function refinements from field selection is high enough to warrant shifting to dots.  But I just was a bit surprised that I didn't instantaneously think it was 100% better-looking.  :-/</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/dots-and-slashes-the-hyphen-and-colon-disruption/1497">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/dots-and-slashes-the-hyphen-and-colon-disruption/1497</link>
+          <pubDate>Wed, 10 Feb 2021 08:30:18 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1497</guid>
+          <source url="https://forum.rebol.info/t/dots-and-slashes-the-hyphen-and-colon-disruption/1497.rss">Dots and Slashes: The Hyphen and Colon Disruption</source>
+        </item>
+        <item>
+          <title>Understanding VARARGS!</title>
+          <dc:creator><![CDATA[rgchris]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>I don't think I fully understand varargs. First up I get an error in ReplPad when I try and specify a basic example:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; ints: func [i [integer! &lt;...&gt;]][collect [while [not tail? i] [keep take i]]]
+** Script Error: Failure on bad value (no additional info): &lt;...&gt;
+</code></pre>
+<p>(I checked <a href="https://github.com/hostilefork/ren-c/blob/master/tests/datatypes/varargs.test.reb#L2">the tests</a> to see if it was still the right syntax)</p>
+<p>Trying on an older version, this works:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; ints: func [i [integer! &lt;...&gt;]][collect [while [not tail? i][keep take i]]]
+== make action! [[i return:] [...]]
+
+&gt;&gt; probe ints 1 2 3 | 4 5
+[1 2 3]
+== 5
+</code></pre>
+<p>But if I switch to hard quoting, it ignores the type:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; ints: func [:i [integer! &lt;...&gt;]][collect [while [not tail? i][keep take i]]]
+== make action! [[:i return:] [...]]
+
+&gt;&gt; probe ints 1 2 3 | 4 5
+ⓘ Note: use WHY for error information
+** Script Error: ints does not allow bar! for its i argument
+</code></pre>
+<p>(I don't see a test for hard quoting in this way)</p>
+<p>Soft quoting gets closer to what I'm looking for—at least using the expression barrier, but bombs on the wrong type:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; ints: func ['i [integer! &lt;...&gt;]][collect [while [not tail? i][keep take i]]]  
+== make action! [['i return:] [...]]
+
+&gt;&gt; ints 1 2 3 | 4.0 5                                                           
+== 5
+
+&gt;&gt; ints 1 2 3 4.0 5   
+** Script Error: ints does not allow decimal! for its i argument
+</code></pre>
+            <p><small>5 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/understanding-varargs/1495">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/understanding-varargs/1495</link>
+          <pubDate>Tue, 09 Feb 2021 15:59:46 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1495</guid>
+          <source url="https://forum.rebol.info/t/understanding-varargs/1495.rss">Understanding VARARGS!</source>
+        </item>
+        <item>
+          <title>TRIM on BINARY!</title>
+          <dc:creator><![CDATA[rgchris]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>What should one expect when trying TRIM on a binary value. I see right off the bat that it doesn't have any effect:</p>
+<pre><code class="lang-nohighlight">test: #{2046206F0A6F200A20}
+equal? test trim copy test
+</code></pre>
+<p>Ah, well—that's too bad. This is at odds with the Rebol 2 function that treats whitespace in binary the same as in text.</p>
+<p>Hold on though—it does work with TRIM/WITH:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; trim/with copy test #{20}  
+== #{46206F0A6F200A}
+
+&gt;&gt; trim/with copy test #{200A} 
+== #{46206F0A6F}
+
+&gt;&gt; trim/with copy test #{0A20} 
+== #{46206F0A6F}
+
+&gt;&gt; trim/all/with copy test #{0A20}
+== #{466F6F}
+
+&gt;&gt; trim/head/tail/with copy test #{0A20}
+== #{46206F0A6F}
+</code></pre>
+<p>This is all as I'd expect it.</p>
+<p>I want to be certain if this is by design—there seems significant deviation on how this works between Rebol 2, Red, Rebol 3 Alpha and Ren-C. To be clear—I like the above behaviour on first glance.</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/trim-on-binary/1490">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/trim-on-binary/1490</link>
+          <pubDate>Fri, 05 Feb 2021 23:48:25 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1490</guid>
+          <source url="https://forum.rebol.info/t/trim-on-binary/1490.rss">TRIM on BINARY!</source>
+        </item>
+        <item>
+          <title>Thoughts On the OBJECT! / MAP! Duality</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Datatypes</category>
+          <description><![CDATA[
+            <p>Rebol's implementation tried to be deliberately "simple".  This simplicity meant not relying on any data structure libraries...certainly not the <a href="https://en.cppreference.com/w/cpp/container">C++ containers</a>, as the dependency of a C++ compiler was avoided.  But also not any C data structure code from an outside source.</p>
+<p>Instead, a hand-coded resizable array type was used for basically everything (the "REBSER").  This array was behind basically every case where a dynamically-sized thing was needed.  Functions were just "BLOCK!s" in disguise that held parameter descriptions.  Objects were just parallel pairs of BLOCK!s... with keys in one array as words...and values in the other array, so the indexes lined up.</p>
+<p>Hence you don't see a lot of malloc() and free() calls; all memory management is delegated to the series machinery.  Anything that would need to malloc() or free() instead put its information in a string or block or some combination of them.</p>
+<p>Beyond this, there were no "sophisticated" data structures.  No priority queues or red-black trees or anything fancy.  Just about everything was one of these resizable arrays (with a linked list here or there).</p>
+<h2>There Was ONE Hash Table: The Binding Table</h2>
+<p>If you have a list of 1,000 unsorted things, and you want to find a thing in it... you will have to look at every item until you find it.  On average, you'd look at 500 things per search.</p>
+<p>It would be very bad if when you tried to run <strong><code>add 1 2</code></strong> and had to go hunting for what ADD looked up to in a linear search every time.  If the lib context contained 1000 definitions, you'd pay quite a lot for this search.</p>
+<p>You might think of changing the LIB context from something array-based to a structure that could do a faster search.  This would mean that it would get a bit bigger--due to the arrangement of the indexing, to help accelerate looking up ADD to see if it had a value or not.</p>
+<p>But instead of doing that for each context, what R3-Alpha (and presumably Rebol2) did was to have a single global table mapping words to array indexes.  This global table would get taken over by the BIND operation <em>temporarily</em>...populated for a single context, to say which index each word could be found at.  Then binding would use the information to glue the index number onto words.  Then the table entries for each entry would be cleared, resetting the bind table to be empty.</p>
+<p><strong>So instead of paying a cost on each context to make it faster at lookups... a context could <em>very temporarily</em> be loaded into a global structure as information to help map keys to the index of that key in the context.</strong></p>
+<h2>Index Stability Is Why Objects Can't Delete Keys</h2>
+<p>Once the system glued the index of where ADD lived in the LIB context, that index is what it used.</p>
+<p>This made things like the user context grow without bound--once a key was added to it, then it could never be removed.</p>
+<p>How uncomfortable you feel about this depends on what you see OBJECT! as being.  Is it more like a C struct or Java class, where it's an immutable description of a memory layout...designed for performance?  Or is it something you use for generic key=&gt;value access?</p>
+<p>Not being able to remove values isn't the only thing that makes OBJECT! bad as a generic key=&gt;value map.  It's not even a generic <em>string</em> to value map...it can only use valid WORD!s as keys.</p>
+<h2>JavaScript's Object Type has "Hidden Classes"</h2>
+<p>JavaScript's basic source-level "object" you create with <code>{}</code> allows you to use any string as the key.  <a href="https://stackoverflow.com/a/8757205">Even empty strings...or happy faces, or whatever.</a></p>
+<p>They have a more sophisticated mechanism I've mentioned before behind these objects called "hidden classes" to accelerate the lookup process.  They're willing to make their objects a bit larger and complex...while finding commonalities between them to save on the size of these structures, so that lookups from key =&gt; value are faster.</p>
+<p>R3-Alpha doesn't have that discovery process.  So if you do:</p>
+<pre><code>repeat n 100 [
+    append objects [make object! [a: n * 10 b: n * 20]]
+]
+</code></pre>
+<p>You'll create an array with two numbers for the values each time, AND you'll create a key array of [a b] each time.  If you want to avoid the repetitive creation of keys you have to make a prototype object and then create instances:</p>
+<pre><code>proto: make object! [a: b: none]
+repeat n 100 [
+    append objects [make proto [a: n * 10 b: n * 20]]
+]
+</code></pre>
+<p>This will get it to reuse the [a b] each time.  But if you ever append to one of the instances, then it will detach and get a new copy of the keylist at that point.</p>
+<h2>JavaScript Has a More Flexible "MAP!" of Its Own</h2>
+<p>Even though JavaScript's plain object type is more flexible, it only allows string keys.  So there is a <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map">Map type</a>.</p>
+<p>There is no literal notation for it--though <a href="https://esdiscuss.org/topic/map-literal">they've discussed it</a>, and it doesn't look like they'd get anything much better than us (e.g. Map#{xxx: yyy} where XXX and YYY could be function calls or ltierals).</p>
+<h2>So...?</h2>
+<p>To people coming from languages like JavaScript, OBJECT! is going to seem like it sucks.  They'd have a similar shock dealing with C or Java, of course...trying to remove fields from classes/structs.</p>
+<p>But this brings back to the point of Redbol's weird "not clearly high level or low level" status.  It <em>looks</em> like a high level language, and people want to use it in a script-y and dynamic way.  And people can well ask what objects are actually for.</p>
+<p>It's kind of disturbing to me that the "user context" and "lib context" are purely additive and grow without bound, with ever-increasing index numbers.  They have no natural ordering, and yet they are binding targets.  This is very "maplike".</p>
+<p><strong>Yet dependence on order is very intrinsic to some applications of contexts.</strong>  For instance, a frame context must put the arguments for functions in a particular order in order for the C code for a native to find them.  The system object order is known to the C code as well, for poking and pulling values out.</p>
+<p>Also, virtual binding has built even further on this notion of "objects can only grow".  Because if objects were allowed to remove or add keys freely, this would mean caches of which things were found or not in a virtual bind would be unreliable.</p>
+<p><strong>So being able to rearrange objects would mean more complex code, less reliable invariants (to build performance and features on), and the resulting OBJECT! still probably wouldn't make people all that happy since it couldn't use arbitrary string keys.</strong>  A more dynamic form of object would still be a bad choice for JSON since only legal words could be keys.</p>
+<p>Making all of this further agonizing is that we can't just throw the usual tools at the problem.  This is C code with an esoteric ruleset layered on top of it.  So building any of these fancier structures (hidden classes/etc.) is much more arduous than it would be for someone who could pull from a box of parts.</p>
+<p>I think the strongest argument for not mucking with the nature of OBJECT! is that no one's going to like it anyway as a generic key-&gt;value tool if its keys are limited to WORD!.  So you'd wreck a bunch of the feature space that actually make the language unique, and add complexity in the process.</p>
+<p><strong>I've already said I think there needs to be pushback to using BLOCK!s, and leveraging the strengths of the language.</strong>  To me, pushing for source-level maps and getting away from relationships you can enumerate in order where you can manipulate and REDUCE and COMPOSE is like if you're making a spreadsheet and you're gradually turning it into a database that's not your core competency...and doing a bad job of it, losing sight of getting people to solve problems in a "spreadsheet way".</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/thoughts-on-the-object-map-duality/1481">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/thoughts-on-the-object-map-duality/1481</link>
+          <pubDate>Sat, 30 Jan 2021 13:01:37 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1481</guid>
+          <source url="https://forum.rebol.info/t/thoughts-on-the-object-map-duality/1481.rss">Thoughts On the OBJECT! / MAP! Duality</source>
+        </item>
+  </channel>
+</rss>

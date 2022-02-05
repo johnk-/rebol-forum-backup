@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Implicit Ports Are Easy, But Are They *TOO* Easy?</title>
+    <link>https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697</link>
+    <description>I&#39;ve proposed changing FILE! and URL! to be more &quot;systemically magical&quot;, that they are not strings but true proxies for the resource they represent.
+
+But if you take something that can either be a FILE! or a TEXT!, and you think you are doing a textual manipulation with an APPEND... you could wind up writing to the file instead of adding to the string.  And this is something that can happen very easily.  :-/
+
+For instance:
+
+    for-each [file description] [
+        %some-file.dat &quot;Random Numbers&quot;
+        %unimportant-file.exe &quot;Red 0.6.4&quot; &quot;oops&quot;
+        %very-important-file.dat &quot;Photographic Proof of Bigfoot&quot;
+    ][
+       append description &quot; (2021)&quot;
+    ]
+
+The stray &quot;oops&quot; caused it to get off by one.  Hence instead of appending the date to the description it&#39;s corrupted your very important file!
+
+Uh oh.
+
+## Are Some Words Not &quot;Alarming&quot; Enough For Implicit I/O?
+
+When something is in a variable and you APPEND to it, it might feel surprising to see that interacting with files and network when no &quot;charged&quot; word like WRITE was being used.
+
+**An annoying conclusion one would reach would be that we have to taxonomize words into those which are involved in I/O, and not have them overlap with words we use more casually for manipulation of local state.**
+
+This would suggest that the introduction of a plain APPEND port action in R3-Alpha was a mistake.  It was from the wrong taxonomy, and needed to at minimum piggy-back on WRITE as WRITE/APPEND so you&#39;d know you weren&#39;t looking at a string operation if you were reading:
+
+    write/append blackbox data
+
+**The less extreme conclusion would be that the limitation only applies to the *implicit* port actions.**
+
+This would draw a distinction between these two functions:
+
+    foo: func [value [port! text!]] [... append value data ...]
+
+    bar: func [value [file! text!]] [... append value data ...]
+
+The argument here would be that in the former case...the only way to get a PORT! is if you&#39;ve already gone through one of the taxonomized &quot;I/O words&quot; such as OPEN.  You&#39;ve thus greenlit the idea that remote impacts will happen to that resource.  You didn&#39;t know when it would happen, but you knew that wherever you passed that port off to had that approval.
+
+But with FILE! as a casual lexical element appearing in lists, you might miss this greenlight step.  So the green light has to be baked into the word itself... a word like WRITE.
+
+## Are There Other Options for &quot;I/O Greenlighting&quot;?
+
+My proposal on taking the OPEN and CLOSE out of the implicit port process suggested that if you make a port out of something then every action you do on the port would be run implicitly, unless you did some kind of operation (like an OPEN or CLOSE) on that port that would batch the operations up.
+
+This means the creation of the PORT! itself would thus serve your greenlighting act.
+
+    var: %foo.txt
+    append (make port! var) &quot;some data&quot;
+
+Some shorthand for that could be made.  We could do like Haskell&#39;s notation for &quot;putting things in the IO monad&quot; and say that the decoration IO will MAKE PORT! on something that isn&#39;t already a port:
+
+    for-each file [%a.txt %b.txt] [
+        append (IO file) &quot;some stuff&quot;
+    ]
+
+    for-each file [%a.txt %b.txt] [
+        append IO file &quot;some stuff&quot;
+    ]
+
+Or you could greenlight through some parameter convention that port actions understand, like giving an @ argument:
+
+    var: %foo.txt
+    append @var &quot;some data&quot;
+
+    vars: [%foo.txt %bar.txt]
+    append @(second vars) &quot;some data&quot;
+
+Though I don&#39;t think I like that much...the IO concept is clearer.
+
+## Regardless, I Still Think FILE! Should Not Be An ANY-STRING!
+
+What we&#39;re encountering here is a safety issue with implicit ports, and I think it would be an overreaction to say &quot;don&#39;t do them at all, and let&#39;s go back to making APPEND on a file treat it like a string&quot;.
+
+Notably the problem only applies when you&#39;re using variables or expressions.  There&#39;s nothing to worry about if the argument is literally a FILE! or a URL!:
+
+    append/line %foo.txt &quot;some data&quot;
+
+That feels expressive, not unsafe.  The evaluator can tell the difference, and we can say that it&#39;s okay when you&#39;ve given a literal path like that to accept that you know it&#39;s going to be I/O.
+
+And I&#39;ve mentioned that there are words that carry the greenlight in them... with examples like WRITE and READ:
+
+    for-each file [%a.txt %b.txt] [
+        write file &quot;some stuff&quot;
+    ]
+
+I feel it would be a step back to require you to decorate that.  Write means write.
+
+So... is it just a flag on a word, to say there are &quot;IO-greenlit words&quot; and &quot;not-necessarily-IO words&quot;?
+
+Food for thought.  What do **you** think of all this?  :-/</description>
+    
+    <lastBuildDate>Fri, 03 Sep 2021 14:54:03 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Implicit Ports Are Easy, But Are They *TOO* Easy?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="4" data-topic="1697">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Taking FILE! and URL! out of ANY-STRING! is still the right answer. We just might throw in a couple of speedbumps on some implicit port instantiations to force you to be (a little) more explicit.</p>
+</blockquote>
+</aside>
+<p>So trying this in practice, it's certainly a very aggressive choice that bumps up against a pre-existing religion in the system.</p>
+<p>With FILE! acting so <em>non-stringy</em>, one of the most convenient things to do if you plan on mucking with paths is to turn it into a string.  Which seems not so bad.</p>
+<p>But...then throughout the system, there's an enforcement that if you have a TEXT! it's not the right type for doing file oriented things with... like making a directory etc.</p>
+<p>Remember the other purpose of FILE! was to gloss over backslash and other inconsistencies in Windows vs. Linux.  So to the extent TEXT! is accepted by any of the file routines, that's interpreted as a local path...it has the slashes adjusted.  So AS TEXT! of a FILE! might give it less of a trigger-finger as far as port actions go, but the backslashes aren't right.</p>
+<h2>Maybe FILE! Should Stay A String?</h2>
+<p>This made me start to wonder if FILE! should really just be a string type, and the "implicit port" mechanic only works on <strong>file://</strong> URL!s.  Then maybe IO could still work on file.</p>
+<p>I don't know...I'm going to do a bit more thinking while other things push ahead.</p>
+          <p><a href="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/6</link>
+        <pubDate>Fri, 03 Sep 2021 14:54:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1697-6</guid>
+        <source url="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697.rss">Implicit Ports Are Easy, But Are They *TOO* Easy?</source>
+      </item>
+      <item>
+        <title>Implicit Ports Are Easy, But Are They *TOO* Easy?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1697">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>We could do like Haskell's notation for "putting things in the IO monad" and say that the decoration IO will MAKE PORT! on something that isn't already a port:</p>
+<pre><code>for-each file [%a.txt %b.txt] [
+    append (IO file) "some stuff"
+]
+
+for-each file [%a.txt %b.txt] [
+    append IO file "some stuff"
+]
+</code></pre>
+</blockquote>
+</aside>
+<p>Another word here that suggests no particular action be taken, -but- that you may be hitting a remote resource, could be LOOKUP.</p>
+<pre><code>for-each file [%a.txt %b.txt] [
+    append (lookup file) "some stuff"
+]
+
+for-each file [%a.txt %b.txt] [
+    append lookup file "some stuff"
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/5</link>
+        <pubDate>Fri, 03 Sep 2021 04:21:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1697-5</guid>
+        <source url="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697.rss">Implicit Ports Are Easy, But Are They *TOO* Easy?</source>
+      </item>
+      <item>
+        <title>Implicit Ports Are Easy, But Are They *TOO* Easy?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I summarized the point of my above writeup to <a class="mention" href="/u/blackattr">@BlackATTR</a> like this:</p>
+<blockquote>
+<p><em>"Implicit ports may look like they could cause scary bugs.  But there are mitigations of that problem.  And we know <strong>append/line %file.txt "hello"</strong> is desirable."</em></p>
+<p><em>"So let's just keep in mind what the desirable thing is and then we'll annotate our way out of the scary."</em></p>
+</blockquote>
+<p>So although my Bigfoot example might look at first glance like deal-breaker, I think the things I describe afterward show it's not.</p>
+<p>Taking FILE! and URL! out of ANY-STRING! is still the right answer.  We just might throw in a couple of speedbumps on some implicit port instantiations to force you to be (a little) more explicit.</p>
+          <p><a href="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/4</link>
+        <pubDate>Wed, 01 Sep 2021 15:49:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1697-4</guid>
+        <source url="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697.rss">Implicit Ports Are Easy, But Are They *TOO* Easy?</source>
+      </item>
+      <item>
+        <title>Implicit Ports Are Easy, But Are They *TOO* Easy?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="giuliolunati" data-post="2" data-topic="1697">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p>Maybe a file should be "immutable"</p>
+</blockquote>
+</aside>
+<p>There are a lot of technical reasons why const and mutable would sort of become bent into knots by this, and they're details beyond the scope of what you probably want to read.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>So instead I'll just point out that you might want to avoid stray reads too.  As it so happens, the network port implemented COPY as a synonym for READ.  Why did it do this?  I don't know, but it did.</p>
+<p>This means that <strong><code>copy var</code></strong> when var is <strong><code>http://example.com/100-gigabyte-file.dat</code></strong> will do a very large read from the network.  A stray I/O operation may have much greater costs than a stray local operation...such as using up your data limits.</p>
+<p>Plus I think my proposal of using the IO decoration seems more like it means what it says than <strong><code>mutable</code></strong>.</p>
+<p>I don't think it seems so bad, as if it's missing it can just say "hey you asked to APPEND to %foo.txt and it was indirect through a variable...if you meant that, say IO".</p>
+<p>It seems worth it to have nice quick scripting ways to say <strong>append/line %foo.txt "hello"</strong> ... and then if you use it in a more abstracted sense you just put the annotation on.</p>
+          <p><a href="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/3</link>
+        <pubDate>Wed, 01 Sep 2021 15:22:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1697-3</guid>
+        <source url="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697.rss">Implicit Ports Are Easy, But Are They *TOO* Easy?</source>
+      </item>
+      <item>
+        <title>Implicit Ports Are Easy, But Are They *TOO* Easy?</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>Maybe a file should be "immutable" (= read-only) until you don't make it mutable...</p>
+          <p><a href="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/2</link>
+        <pubDate>Wed, 01 Sep 2021 15:12:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1697-2</guid>
+        <source url="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697.rss">Implicit Ports Are Easy, But Are They *TOO* Easy?</source>
+      </item>
+      <item>
+        <title>Implicit Ports Are Easy, But Are They *TOO* Easy?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've proposed changing FILE! and URL! to be more "systemically magical", that they are not strings but true proxies for the resource they represent.</p>
+<p>But if you take something that can either be a FILE! or a TEXT!, and you think you are doing a textual manipulation with an APPEND... you could wind up writing to the file instead of adding to the string.  And this is something that can happen very easily.  :-/</p>
+<p>For instance:</p>
+<pre><code>for-each [file description] [
+    %some-file.dat "Random Numbers"
+    %unimportant-file.exe "Red 0.6.4" "oops"
+    %very-important-file.dat "Photographic Proof of Bigfoot"
+][
+   append description " (2021)"
+]
+</code></pre>
+<p>The stray "oops" caused it to get off by one.  Hence instead of appending the date to the description it's corrupted your very important file!</p>
+<p>Uh oh.</p>
+<h2>Are Some Words Not "Alarming" Enough For Implicit I/O?</h2>
+<p>When something is in a variable and you APPEND to it, it might feel surprising to see that interacting with files and network when no "charged" word like WRITE was being used.</p>
+<p><strong>An annoying conclusion one would reach would be that we have to taxonomize words into those which are involved in I/O, and not have them overlap with words we use more casually for manipulation of local state.</strong></p>
+<p>This would suggest that the introduction of a plain APPEND port action in R3-Alpha was a mistake.  It was from the wrong taxonomy, and needed to at minimum piggy-back on WRITE as WRITE/APPEND so you'd know you weren't looking at a string operation if you were reading:</p>
+<pre><code>write/append blackbox data
+</code></pre>
+<p><strong>The less extreme conclusion would be that the limitation only applies to the <em>implicit</em> port actions.</strong></p>
+<p>This would draw a distinction between these two functions:</p>
+<pre><code>foo: func [value [port! text!]] [... append value data ...]
+
+bar: func [value [file! text!]] [... append value data ...]
+</code></pre>
+<p>The argument here would be that in the former case...the only way to get a PORT! is if you've already gone through one of the taxonomized "I/O words" such as OPEN.  You've thus greenlit the idea that remote impacts will happen to that resource.  You didn't know when it would happen, but you knew that wherever you passed that port off to had that approval.</p>
+<p>But with FILE! as a casual lexical element appearing in lists, you might miss this greenlight step.  So the green light has to be baked into the word itself... a word like WRITE.</p>
+<h2>Are There Other Options for "I/O Greenlighting"?</h2>
+<p>My proposal on taking the OPEN and CLOSE out of the implicit port process suggested that if you make a port out of something then every action you do on the port would be run implicitly, unless you did some kind of operation (like an OPEN or CLOSE) on that port that would batch the operations up.</p>
+<p>This means the creation of the PORT! itself would thus serve your greenlighting act.</p>
+<pre><code>var: %foo.txt
+append (make port! var) "some data"
+</code></pre>
+<p>Some shorthand for that could be made.  We could do like Haskell's notation for "putting things in the IO monad" and say that the decoration IO will MAKE PORT! on something that isn't already a port:</p>
+<pre><code>for-each file [%a.txt %b.txt] [
+    append (IO file) "some stuff"
+]
+
+for-each file [%a.txt %b.txt] [
+    append IO file "some stuff"
+]
+</code></pre>
+<p>Or you could greenlight through some parameter convention that port actions understand, like giving an @ argument:</p>
+<pre><code>var: %foo.txt
+append @var "some data"
+
+vars: [%foo.txt %bar.txt]
+append @(second vars) "some data"
+</code></pre>
+<p>Though I don't think I like that much...the IO concept is clearer.</p>
+<h2>Regardless, I Still Think FILE! Should Not Be An ANY-STRING!</h2>
+<p>What we're encountering here is a safety issue with implicit ports, and I think it would be an overreaction to say "don't do them at all, and let's go back to making APPEND on a file treat it like a string".</p>
+<p>Notably the problem only applies when you're using variables or expressions.  There's nothing to worry about if the argument is literally a FILE! or a URL!:</p>
+<pre><code>append/line %foo.txt "some data"
+</code></pre>
+<p>That feels expressive, not unsafe.  The evaluator can tell the difference, and we can say that it's okay when you've given a literal path like that to accept that you know it's going to be I/O.</p>
+<p>And I've mentioned that there are words that carry the greenlight in them... with examples like WRITE and READ:</p>
+<pre><code>for-each file [%a.txt %b.txt] [
+    write file "some stuff"
+]
+</code></pre>
+<p>I feel it would be a step back to require you to decorate that.  Write means write.</p>
+<p>So... is it just a flag on a word, to say there are "IO-greenlit words" and "not-necessarily-IO words"?</p>
+<p>Food for thought.  What do <strong>you</strong> think of all this?  :-/</p>
+          <p><a href="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697/1</link>
+        <pubDate>Wed, 01 Sep 2021 14:59:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1697-1</guid>
+        <source url="https://forum.rebol.info/t/implicit-ports-are-easy-but-are-they-too-easy/1697.rss">Implicit Ports Are Easy, But Are They *TOO* Easy?</source>
+      </item>
+  </channel>
+</rss>

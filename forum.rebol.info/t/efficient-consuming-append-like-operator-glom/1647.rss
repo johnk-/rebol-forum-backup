@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Efficient Consuming Append-Like Operator... GLOM ?</title>
+    <link>https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647</link>
+    <description>So I&#39;m looking at the question of how to take bits of material that may or may not be produced, that become owned by the recipient...and accumulate them.
+
+For efficiency, I&#39;d like an operator that will be BLANK! tolerant.  Like this:
+
+    &gt;&gt; accumulator: _
+
+    &gt;&gt; result: make-some-stuff arg1 arg2 arg3
+    == _  ; let&#39;s say it produced nothing
+
+    &gt;&gt; accumulator: glom accumulator result
+    == _  ; okay, that&#39;s a no-op
+
+    &gt;&gt; result: make-more-stuff arg4 arg5 arg6
+    == [a b c]
+
+    &gt;&gt; accumulator: glom accumulator result
+    == [a b c]  ; since there was nothing, we take it
+
+    &gt;&gt; append accumulator [d]
+    == [a b c d]
+
+    &gt;&gt; result
+    == [a b c d]  ; it&#39;s okay to reuse result, protocol was we &quot;own&quot; it
+
+This kind of operator is handy when synthesizing results up the stack.  Because it has carte-blanche to tear up the series its given, it could notice when the result array was larger than the accumulator and steal its memory to slide results into...rather than do a new allocation. 
+
+So after a GLOM the thing being appended (`result` above) will either be equivalent to the accumulator or it will appear to have been FREE&#39;d.
+
+The specific feature I&#39;m looking to support with this is the &quot;third result&quot; I&#39;ve been talking about for combinators, of their &quot;pending&quot; items...this would include collected things.  I don&#39;t want to have to be making new empty blocks with `copy []` just in case combinators want to add to the collection something...they may just come back with blanks.  So if the accumulator could start off as blank that would avoid these stray series creations most of the time.
+
+I don&#39;t think allowing you to APPEND to a BLANK! and get a new series is a good idea, and it wouldn&#39;t be able to do the other optimizations either (since APPEND does not assume you are giving it ownership of the appended data to destroy as you wish).  So this is a distinct operator, and calling it **GLOM** is probably fine for now.  But thought I&#39;d describe what it did just to put that out there.
+
+Here is a usermode prototype:
+
+    glom: func [
+        return: &quot;New accumulator value (may be blank or reused)&quot;
+            [blank! block!]
+        accumulator [blank! block!]
+        result
+    ][
+        if accumulator [
+            append accumulator result
+            elide if block? result [free result]  ; placeholder for stealing memory
+        ] else [
+            case [
+                blank? result [_]
+                block? result [result]
+                (append copy [] :result)
+            ]
+        ]
+    ]
+
+&gt; Note that I&#39;m using CASE fallout above, where if you don&#39;t pair up the clauses in a case it will just evaluate to the last condition:
+&gt;
+&gt;     &gt;&gt; case [
+&gt;           1 = 2 [print &quot;math is broken&quot;]
+&gt;           10 + 20
+&gt;        ]
+&gt;     == 30
+&gt;
+&gt; Rebol2 and R3-Alpha report #[true] for that, while Red says #[none].  The only answers I&#39;d consider for this would be 30 or raise an error.  I definitely like just being able to write a FAIL in that spot without having to say **`true [fail &quot;...&quot;]`**, and I guess that &quot;laxness&quot; makes me feel it&#39;s a nice place to put a default as well.  This is still an open question.</description>
+    
+    <lastBuildDate>Thu, 05 Aug 2021 22:57:37 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Efficient Consuming Append-Like Operator... GLOM ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It occurs to me that GLOM could be even more efficient if it was willing to let QUOTED! items signify a single item.  :-/</p>
+<pre><code>&gt;&gt; accumulator: _
+
+&gt;&gt; result: ...
+== 'x
+
+&gt;&gt; accumulator: glom accumulator result
+== 'x
+
+&gt;&gt; result: ...
+== 'y
+
+&gt;&gt; accumulator: glom accumulator result
+== [x y]
+</code></pre>
+<p>This starts pointing to a rather strange universe in which something like a FOR-EACH on a QUOTED! would treat it as a container of one item.</p>
+<pre><code>&gt;&gt; result: the 'z
+== 'z
+
+&gt;&gt; for-each item result [print mold item]
+z
+</code></pre>
+<p>We're already treating QUOTED! as a container of one item in things like APPEND.  So it's not necessarily that crazy an idea.</p>
+<p>But it's definitely a sacrifice of clarity for efficiency.  :-/  On the back burner for now, but something to think about to further cut down on series allocations...since quote bits (up to 3 quote levels) are compressed into cells themselves.</p>
+          <p><a href="https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647/2</link>
+        <pubDate>Thu, 05 Aug 2021 22:57:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1647-2</guid>
+        <source url="https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647.rss">Efficient Consuming Append-Like Operator... GLOM ?</source>
+      </item>
+      <item>
+        <title>Efficient Consuming Append-Like Operator... GLOM ?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So I'm looking at the question of how to take bits of material that may or may not be produced, that become owned by the recipient...and accumulate them.</p>
+<p>For efficiency, I'd like an operator that will be BLANK! tolerant.  Like this:</p>
+<pre><code>&gt;&gt; accumulator: _
+
+&gt;&gt; result: make-some-stuff arg1 arg2 arg3
+== _  ; let's say it produced nothing
+
+&gt;&gt; accumulator: glom accumulator result
+== _  ; okay, that's a no-op
+
+&gt;&gt; result: make-more-stuff arg4 arg5 arg6
+== [a b c]
+
+&gt;&gt; accumulator: glom accumulator result
+== [a b c]  ; since there was nothing, we take it
+
+&gt;&gt; append accumulator [d]
+== [a b c d]
+
+&gt;&gt; result
+== [a b c d]  ; it's okay to reuse result, protocol was we "own" it
+</code></pre>
+<p>This kind of operator is handy when synthesizing results up the stack.  Because it has carte-blanche to tear up the series its given, it could notice when the result array was larger than the accumulator and steal its memory to slide results into...rather than do a new allocation.</p>
+<p>So after a GLOM the thing being appended (<code>result</code> above) will either be equivalent to the accumulator or it will appear to have been FREE'd.</p>
+<p>The specific feature I'm looking to support with this is the "third result" I've been talking about for combinators, of their "pending" items...this would include collected things.  I don't want to have to be making new empty blocks with <code>copy []</code> just in case combinators want to add to the collection something...they may just come back with blanks.  So if the accumulator could start off as blank that would avoid these stray series creations most of the time.</p>
+<p>I don't think allowing you to APPEND to a BLANK! and get a new series is a good idea, and it wouldn't be able to do the other optimizations either (since APPEND does not assume you are giving it ownership of the appended data to destroy as you wish).  So this is a distinct operator, and calling it <strong>GLOM</strong> is probably fine for now.  But thought I'd describe what it did just to put that out there.</p>
+<p>Here is a usermode prototype:</p>
+<pre><code>glom: func [
+    return: "New accumulator value (may be blank or reused)"
+        [blank! block!]
+    accumulator [blank! block!]
+    result
+][
+    if accumulator [
+        append accumulator result
+        elide if block? result [free result]  ; placeholder for stealing memory
+    ] else [
+        case [
+            blank? result [_]
+            block? result [result]
+            (append copy [] :result)
+        ]
+    ]
+]
+</code></pre>
+<blockquote>
+<p>Note that I'm using CASE fallout above, where if you don't pair up the clauses in a case it will just evaluate to the last condition:</p>
+<pre><code>&gt;&gt; case [
+      1 = 2 [print "math is broken"]
+      10 + 20
+   ]
+== 30
+</code></pre>
+<p>Rebol2 and R3-Alpha report #[true] for that, while Red says #[none].  The only answers I'd consider for this would be 30 or raise an error.  I definitely like just being able to write a FAIL in that spot without having to say <strong><code>true [fail "..."]</code></strong>, and I guess that "laxness" makes me feel it's a nice place to put a default as well.  This is still an open question.</p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647/1</link>
+        <pubDate>Thu, 05 Aug 2021 09:36:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1647-1</guid>
+        <source url="https://forum.rebol.info/t/efficient-consuming-append-like-operator-glom/1647.rss">Efficient Consuming Append-Like Operator... GLOM ?</source>
+      </item>
+  </channel>
+</rss>

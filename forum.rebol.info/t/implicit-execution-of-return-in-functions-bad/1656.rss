@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Implicit Execution of RETURN in functions = BAD</title>
+    <link>https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656</link>
+    <description>Let&#39;s say you write something like this:
+
+    foo: func [
+        return: [integer!]
+        arg [integer! text! tag!]
+    ][
+        if integer? arg [
+            return arg + 1000
+        ]
+        if text? arg [
+            return reverse arg
+        ]
+        arg
+    ]
+
+I imagine you&#39;d expect behavior along these lines:
+
+    &gt;&gt; foo 20
+    == 1020
+
+    &gt;&gt; foo &quot;whoops&quot;
+    ** Error: FOO doesn&#39;t have RETURN enabled for values of type TEXT!
+
+    &gt;&gt; foo &lt;bomb&gt;
+    ** Error: FOO doesn&#39;t have RETURN enabled for values of type TAG!
+
+Even though the last value just &quot;falls out&quot; of the function, you presumably don&#39;t want that to mean it escapes type checking just because it did.
+
+## Mechanically, this is Non-Obvious...
+
+RETURN is not actually supposed to be a &quot;language feature&quot; per se.  It&#39;s actually a feature of the higher-level generator FUNC...and there are lower-level ways of building functions that lack RETURNs.  *(If there weren&#39;t, how could you write the RETURN function itself?)*
+
+Plus it&#39;s fully overrideable.  You can set RETURN to some random integer if you feel like it...it&#39;s just a variable in the frame.  But more frequently you&#39;d like to specialize or adapt it:
+
+    bar: function [
+        return: [integer!]
+        arg [logic!]
+    ][
+        return: adapt :return [value: value + 300]
+        if arg [
+           return 4
+        ]
+        720
+    ]
+
+    &gt;&gt; bar true
+    == 304
+
+...but here we are at an interesting question.  What do you expect to happen with **bar false**?
+
+    &gt;&gt; bar false
+    == 720  ; (A) values falling out of bottom *do not* run RETURN implicitly
+
+    &gt;&gt; bar false
+    == 1020  ; (B) values falling out of bottom *do* run RETURN implicitly
+
+A usermode implementation of FUNC has a pretty easy trick to implement either behavior.  The question is simply if it takes the body you give it and turns it into a GROUP! and passes it to RETURN or not...
+
+**&quot;real body&quot; option (A) for BAR above**
+
+    [
+        return: (make action! ...)  ; low level make return function
+        (  ; no return here, just `as group! body`
+            return: adapt :return [value: value + 300]
+            if arg [
+                return 4
+            ]
+            720
+        )
+    ]
+
+**&quot;real body&quot; option (B) for BAR above**
+
+    [
+        return: (make action! ...)  ; low level make return function
+        return (  ; automatic return injected
+            return: adapt :return [value: value + 300]
+            if arg [
+                return 4
+            ]
+            720
+        )
+    ]
+
+## Or Just Require RETURN with FUNC that has RETURN: ?
+
+**strict option (C) for BAR above**
+
+    [
+       return: (make action! ...)  ; low level make return function
+       (  ; automatic return injected
+           return: adapt :return [value: value + 300]
+           if arg [
+               return 4
+           ]
+           720
+        )
+        fail &quot;Functions which specify RETURN: must use RETURN&quot;
+    ]
+
+[I&#39;ve brought this up before](https://forum.rebol.info/t/how-attached-are-we-to-functions-return-last-result/1219), and @IngoHohmann and @iArnold seemed to think &quot;dropping out the last value&quot; was somehow fundamental.
+
+But given what I say above about how the semantics get pretty sketchy on type checking and such, what if we say that functions that don&#39;t specify RETURN have no return available, and just drop out their last result?
+
+    bar1: function [
+        arg [logic!]
+    ][
+        if arg [4] else [720]
+    ]
+
+    &gt;&gt; bar true
+    == 4
+
+    &gt;&gt; bar false
+    == 720
+
+You don&#39;t get type checking so you&#39;d have to do it yourself, which will be available:
+
+    bar1-checked: function [
+        arg [logic!]
+    ][
+        let val: if arg [4] else [720]
+        ensure integer! val
+    ]
+
+However: if you specify RETURN: in the spec then you are required to use it.  This gives you type checking and guarantee of running any return hooking on all code paths:
+
+    bar2: function [
+        return: [integer!]
+        arg [logic!]
+    ][
+        return: adapt :return [value: value + 300]
+        if arg [
+           return 4
+        ]
+        return 720
+    ]
+
+    &gt;&gt; bar true
+    == 304
+
+    &gt;&gt; bar false
+    == 1020
+
+## I Think The Case for Requiring RETURN if RETURN: Is Strong
+
+**It seems rather clear when laid out like I have above that it&#39;s the right answer.**  People who hook RETURN are typically doing so because they want it on all return paths.  But I think hiding a RETURN behind the scenes is a cognitive time bomb.  Being explicit sorts that out, and it also provides a rational answer for why you get type checking...*the RETURN does the check*.
+
+*(I can tell you that without that rational answer, the internals have ugliness.  This policy will cleanse the ugliness.)*
+
+Lower-level functions that don&#39;t have RETURN have to have a way to return values.  Dropping them out the bottom seems a good way to start building up the mechanic.  It&#39;s also useful for quick and dirty &quot;macro-like&quot; functions, so I see no problem with that.
+
+## Should `return: &lt;void&gt;` and `return: &lt;none&gt;` be Exceptions?
+
+The point of introducing these cases was to help remove concern over letting unwanted variables &quot;fall out&quot;, and being able to forego concerns about type checking.  **It&#39;s a different case**, because there is no type checking involved of the parameter passed to RETURN as it takes no parameters...and there&#39;s no need to type check what falls out the bottom because it is discarded:
+
+    something: func [
+        return: &lt;none&gt;
+        value [text!]
+    ][
+        if value = &quot;&quot; [return]  ; this RETURN acts as `return ~none~`
+        append data value
+
+        ; expectation has been that this would also yield ~none~
+    ]
+
+The idea was to make it painless to shield callers from seeing the returned result, and have them know there was no result they were supposed to pay attention to.
+
+What gets me concerned here is that question of whether or not a hooked or modified RETURN is implicitly run at the end of such a function.
+
+It seems to suck to have to put the RETURN there.  :-(
+
+    something: func [
+        return: &lt;none&gt;
+        value [text!]
+    ][
+        return: adapt :return [print &quot;I AM RETURNING!&quot;]
+        if value = &quot;&quot; [return]
+        append data value
+        return  ; with this here, it&#39;s clear you will get the PRINT to happen
+    ]
+
+But it does benefit from the explicitness.  There&#39;s no ambiguity.
+
+**Again, you have to use your imagination to think about a longer function in which there are many control paths through the function...and someone decides to hook RETURN.**  If you are working in a large codebase with long functions, wouldn&#39;t you like to know that all control paths will run your hook...and that the language has gotten everyone on the same page that is expected and possible?
+
+**My feeling in the moment is that the only answer I&#39;d consider besides erroring if there&#39;s no RETURN would be to implicitly put a RETURN at the end, so a hooked RETURN would be executed if a value drops out the bottom.**  But I&#39;ve explained that for the other cases I think that&#39;s sneaky.  It feels much more forthright to have the call at source level.
+
+Path of least resistance on this is to add the RETURN implicitly, so I&#39;m going with that.</description>
+    
+    <lastBuildDate>Thu, 12 Aug 2021 21:00:00 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Implicit Execution of RETURN in functions = BAD</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Let's say you write something like this:</p>
+<pre><code>foo: func [
+    return: [integer!]
+    arg [integer! text! tag!]
+][
+    if integer? arg [
+        return arg + 1000
+    ]
+    if text? arg [
+        return reverse arg
+    ]
+    arg
+]
+</code></pre>
+<p>I imagine you'd expect behavior along these lines:</p>
+<pre><code>&gt;&gt; foo 20
+== 1020
+
+&gt;&gt; foo "whoops"
+** Error: FOO doesn't have RETURN enabled for values of type TEXT!
+
+&gt;&gt; foo &lt;bomb&gt;
+** Error: FOO doesn't have RETURN enabled for values of type TAG!
+</code></pre>
+<p>Even though the last value just "falls out" of the function, you presumably don't want that to mean it escapes type checking just because it did.</p>
+<h2>Mechanically, this is Non-Obvious...</h2>
+<p>RETURN is not actually supposed to be a "language feature" per se.  It's actually a feature of the higher-level generator FUNC...and there are lower-level ways of building functions that lack RETURNs.  <em>(If there weren't, how could you write the RETURN function itself?)</em></p>
+<p>Plus it's fully overrideable.  You can set RETURN to some random integer if you feel like it...it's just a variable in the frame.  But more frequently you'd like to specialize or adapt it:</p>
+<pre><code>bar: function [
+    return: [integer!]
+    arg [logic!]
+][
+    return: adapt :return [value: value + 300]
+    if arg [
+       return 4
+    ]
+    720
+]
+
+&gt;&gt; bar true
+== 304
+</code></pre>
+<p>...but here we are at an interesting question.  What do you expect to happen with <strong>bar false</strong>?</p>
+<pre><code>&gt;&gt; bar false
+== 720  ; (A) values falling out of bottom *do not* run RETURN implicitly
+
+&gt;&gt; bar false
+== 1020  ; (B) values falling out of bottom *do* run RETURN implicitly
+</code></pre>
+<p>A usermode implementation of FUNC has a pretty easy trick to implement either behavior.  The question is simply if it takes the body you give it and turns it into a GROUP! and passes it to RETURN or not...</p>
+<p><strong>"real body" option (A) for BAR above</strong></p>
+<pre><code>[
+    return: (make action! ...)  ; low level make return function
+    (  ; no return here, just `as group! body`
+        return: adapt :return [value: value + 300]
+        if arg [
+            return 4
+        ]
+        720
+    )
+]
+</code></pre>
+<p><strong>"real body" option (B) for BAR above</strong></p>
+<pre><code>[
+    return: (make action! ...)  ; low level make return function
+    return (  ; automatic return injected
+        return: adapt :return [value: value + 300]
+        if arg [
+            return 4
+        ]
+        720
+    )
+]
+</code></pre>
+<h2>Or Just Require RETURN with FUNC that has RETURN: ?</h2>
+<p><strong>strict option (C) for BAR above</strong></p>
+<pre><code>[
+   return: (make action! ...)  ; low level make return function
+   (  ; automatic return injected
+       return: adapt :return [value: value + 300]
+       if arg [
+           return 4
+       ]
+       720
+    )
+    fail "Functions which specify RETURN: must use RETURN"
+]
+</code></pre>
+<p><a href="https://forum.rebol.info/t/how-attached-are-we-to-functions-return-last-result/1219">I've brought this up before</a>, and <a class="mention" href="/u/ingohohmann">@IngoHohmann</a> and <a class="mention" href="/u/iarnold">@iArnold</a> seemed to think "dropping out the last value" was somehow fundamental.</p>
+<p>But given what I say above about how the semantics get pretty sketchy on type checking and such, what if we say that functions that don't specify RETURN have no return available, and just drop out their last result?</p>
+<pre><code>bar1: function [
+    arg [logic!]
+][
+    if arg [4] else [720]
+]
+
+&gt;&gt; bar true
+== 4
+
+&gt;&gt; bar false
+== 720
+</code></pre>
+<p>You don't get type checking so you'd have to do it yourself, which will be available:</p>
+<pre><code>bar1-checked: function [
+    arg [logic!]
+][
+    let val: if arg [4] else [720]
+    ensure integer! val
+]
+</code></pre>
+<p>However: if you specify RETURN: in the spec then you are required to use it.  This gives you type checking and guarantee of running any return hooking on all code paths:</p>
+<pre><code>bar2: function [
+    return: [integer!]
+    arg [logic!]
+][
+    return: adapt :return [value: value + 300]
+    if arg [
+       return 4
+    ]
+    return 720
+]
+
+&gt;&gt; bar true
+== 304
+
+&gt;&gt; bar false
+== 1020
+</code></pre>
+<h2>I Think The Case for Requiring RETURN if RETURN: Is Strong</h2>
+<p><strong>It seems rather clear when laid out like I have above that it's the right answer.</strong>  People who hook RETURN are typically doing so because they want it on all return paths.  But I think hiding a RETURN behind the scenes is a cognitive time bomb.  Being explicit sorts that out, and it also provides a rational answer for why you get type checking...<em>the RETURN does the check</em>.</p>
+<p><em>(I can tell you that without that rational answer, the internals have ugliness.  This policy will cleanse the ugliness.)</em></p>
+<p>Lower-level functions that don't have RETURN have to have a way to return values.  Dropping them out the bottom seems a good way to start building up the mechanic.  It's also useful for quick and dirty "macro-like" functions, so I see no problem with that.</p>
+<h2>Should <code>return: &lt;void&gt;</code> and <code>return: &lt;none&gt;</code> be Exceptions?</h2>
+<p>The point of introducing these cases was to help remove concern over letting unwanted variables "fall out", and being able to forego concerns about type checking.  <strong>It's a different case</strong>, because there is no type checking involved of the parameter passed to RETURN as it takes no parameters...and there's no need to type check what falls out the bottom because it is discarded:</p>
+<pre><code>something: func [
+    return: &lt;none&gt;
+    value [text!]
+][
+    if value = "" [return]  ; this RETURN acts as `return ~none~`
+    append data value
+
+    ; expectation has been that this would also yield ~none~
+]
+</code></pre>
+<p>The idea was to make it painless to shield callers from seeing the returned result, and have them know there was no result they were supposed to pay attention to.</p>
+<p>What gets me concerned here is that question of whether or not a hooked or modified RETURN is implicitly run at the end of such a function.</p>
+<p>It seems to suck to have to put the RETURN there.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<pre><code>something: func [
+    return: &lt;none&gt;
+    value [text!]
+][
+    return: adapt :return [print "I AM RETURNING!"]
+    if value = "" [return]
+    append data value
+    return  ; with this here, it's clear you will get the PRINT to happen
+]
+</code></pre>
+<p>But it does benefit from the explicitness.  There's no ambiguity.</p>
+<p><strong>Again, you have to use your imagination to think about a longer function in which there are many control paths through the function...and someone decides to hook RETURN.</strong>  If you are working in a large codebase with long functions, wouldn't you like to know that all control paths will run your hook...and that the language has gotten everyone on the same page that is expected and possible?</p>
+<p><strong>My feeling in the moment is that the only answer I'd consider besides erroring if there's no RETURN would be to implicitly put a RETURN at the end, so a hooked RETURN would be executed if a value drops out the bottom.</strong>  But I've explained that for the other cases I think that's sneaky.  It feels much more forthright to have the call at source level.</p>
+<p>Path of least resistance on this is to add the RETURN implicitly, so I'm going with that.</p>
+          <p><a href="https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656/1</link>
+        <pubDate>Thu, 12 Aug 2021 19:00:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1656-1</guid>
+        <source url="https://forum.rebol.info/t/implicit-execution-of-return-in-functions-bad/1656.rss">Implicit Execution of RETURN in functions = BAD</source>
+      </item>
+  </channel>
+</rss>

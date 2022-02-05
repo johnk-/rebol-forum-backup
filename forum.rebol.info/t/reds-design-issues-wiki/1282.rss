@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Red&#39;s Design Issues Wiki</title>
+    <link>https://forum.rebol.info/t/reds-design-issues-wiki/1282</link>
+    <description>Here&#39;s a page posted on Red&#39;s GitHub:
+
+## [Red Design Questions Wiki](https://github.com/red/red/wiki/%5BLINKS%5D-Design-questions)
+
+I&#39;m bookmarking it here, along with some quick review notes.
+
+#### Vector &amp; matrix DSL design
+
+No real comment, other than it&#39;s interesting that the order of the page ranks things as &quot;most influential&quot;.  While in Ren-C, R3-Alpha&#39;s VECTOR! has been removed from the core (you can build a Ren-C without it).  Hence it isn&#39;t one of the built-in types identified by a byte in the header.  So it&#39;s [a primordial test of a custom type](https://forum.rebol.info/t/user-defined-datatype-discussion/1203), and that is the main lens through which its relevance is considered.
+
+I&#39;m sure if they want plenty of opinions on VECTOR! they can talk to Oldes.
+
+#### Parse DSL: simplify  `fail`  rule to  `[end skip]` ,  `break` / `reject`  to return success/failure  *from the loop (while/any/some)* ,  `break now`  as an emergency exit from the loop, bring  `also`  into parsing
+
+END SKIP as a way to force a fail is an amusing idea.  But much improvedly, Ren-C just gives meaning to LOGIC! true in PARSE as &quot;keep parsing&quot; and LOGIC! false as &quot;fail here&quot;.  (See below for cool ramifications of that.)  So you can fail just by saying FALSE.  It takes away from the ability to match LOGIC! values literally, but you can&#39;t match INTEGER! values or BLOCK! values literally without a &quot;QUOTE&quot;.  And with the [generic quoting Red argues against](https://forum.rebol.info/t/quoted-arrives-formerly-known-as-lit-bit/995/2?u=hostilefork) you&#39;ve got more convenience in that area, e.g. **&#39;#[true]** or **&#39;[a b c]** or **&#39;3**.
+
+It is good for naming reasons, too since FAIL has very specific meaning in Ren-C (way to raise errors, **fail &quot;msg&quot;** is nicer than **do make error! &quot;msg&quot;** and provides a dialecting opportunity).
+
+The rest I&#39;d have to look at in more detail to have an opinion on.
+
+#### Parse DSL: rules with arguments
+
+If I read this right...Ren-C has all this and more with GET-GROUP!.  :boxing_glove:  This evaluates much like a plain GROUP! in a PARSE...but instead of the result vaporizing...it dynamically composes itself into the parse stream.  That makes it a full superset of PARSE&#39;s unusual IF...since in Ren-C LOGIC! true means &quot;keep parsing&quot; and LOGIC! false means &quot;rule fails&quot;.  Thus **:(mode = &#39;foo)** gets you the continue-or-not you want.  But far more open-ended than that, especially since NULL vaporizes and continues the PARSE as #[true] would.  It&#39;s all kinds of keen:
+
+[GET-GROUP!s in PARSE mean execute-and-splice-as-rule](https://forum.rebol.info/t/get-group-s-in-parse-mean-execute-and-splice-as-rule/968)
+
+So if you want a dynamically generated rule as a function, just say **:(my-rule-maker arg1 arg2)** and it will be spliced in.
+
+I consider that bit solved.  But the part that isn&#39;t solved is saving you the trouble of capturing material to pass separately...kind of as if you could extend PARSE with your function acting kind of like a keyword.  Imaginative pseudocode:
+
+     &gt;&gt; print-reverse: parse-func [x] [print reverse x]
+     &gt;&gt; parse &quot;aaabcdef&quot; [3 &quot;a&quot; print-reverse [to end]]
+     fedcb
+
+e.g. the &quot;argument fulfillment&quot; phase is using parse rules--and not the evaluator--to do it.  But where I lean in this direction is asking about whether there is a model by which PARSE can be extensible in the same way DO of a BLOCK! is extensible... some kind of analogue to regular functions that lets you batch together &quot;native&quot; PARSE extensions (like THRU or INTO) along with user-added ones that speak the protocol (as if someone could add COLLECT after-the-fact).
+
+&gt; **UPDATE:** This has been [hit with a bullseye by UPARSE](https://forum.rebol.info/t/introducing-uparse-the-hackable-usermode-parse/1529)...and the problem of calling normal functions while passing them captured parse material is covered by [the ACTION! combinator](https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608)
+&gt;
+&gt;      &gt;&gt; print-reverse: func [x] [print reverse x]
+&gt;      &gt;&gt; uparse &quot;aaabcdef&quot; [3 &quot;a&quot; print-reverse/ [across to &lt;end&gt;]]
+&gt;      fedcb
+&gt;
+&gt; *Yes, that actually works in UPARSE!*
+
+
+#### Core: open problems of the object design
+
+Tip of the iceberg of the problems with the model.  🧊  While Ren-C inherited the same object-model madness, techniques like generic quoting [are making inroads representationally](https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997), and things like [derived binding](https://github.com/metaeducation/ren-c/pull/727) are aiding classic problems:
+
+&gt; *&quot;Derived binding is an interesting design that overcomes a serious weakness of historical Rebol combinatorics (where 1000 instances of an object with 50 member functions each had to make deep copies of the bodies of each function so the words in the bodies would point to the instance, so you&#39;re making 50,000 deep copies just to create those 1000 objects).&quot;*
+
+For a simple example, see [&quot;O-Big&quot;](https://github.com/metaeducation/ren-c/blob/3183acf3ee59e8ebc316ca5afeed09d493de8234/tests/datatypes/object.test.reb#L115)
+
+#### Core: efficient vector arithmetic
+
+Regarding their &quot;[Adding a number to a vector changes the vector itself #2216](https://github.com/red/red/issues/2216)&quot;, I have proposed a concept whereby operations like ADD and MULTIPLY follow Rebol&#39;s &quot;mutate by default&quot; rules, and PLUS (infix alias +) and TIMES (infix alias *) finesse the idea of not mutating.  These ideas originated in design for [efficient BigNum arithmetic](https://forum.rebol.info/t/planning-ahead-for-bignum-arithmetic/623), which shares many of the same issues.
+
+Devil is in the details there, but it proposes building things on a model that is foundationally mutating.
+
+#### VID DSL: automatically bind (literal only?) actor &amp; reaction bodies to the face?
+
+N/A.
+
+#### Core: loop return values
+
+Ren-C has a systemic [loop return result protocol](https://forum.rebol.info/t/the-simple-yet-powerful-magic-of-the-loop-result-protocol/609).  All loops that BREAK return NULL, and there is no BREAK/RETURN.  If you wish to violate the protocol, you do so with THROW to a CATCH.
+
+This is a helpful protocol for building your own loop constructs out of other loops...without having to reach in and figure out how to hook their BREAK.  Being able to tell from the outside if the loop was interrupted far outweighs the idea of BREAK/RETURN, and null isotopes are an idea well worth it to ensure that NULL keeps its unique status for representing break.
+
+#### Core: behavior of series access outside the data boundaries
+
+I talk some about this in [&quot;Where the Series Ends&quot;](https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141) *(for you young folks, that&#39;s a [Shel Silverstein reference](https://en.wikipedia.org/wiki/Where_the_Sidewalk_Ends))*.
+
+#### VID DSL: should it allow to override already defined actors (e.g.  `base on-down [probe 1] [probe 2]` )?
+
+N/A
+
+#### Core: how to solve inelegancies and dangers of  `error? try` ,  `attempt`  and  `catch`  on  *arbitrary*  code?
+
+As usual, it is hiiamboris asking the good questions.  Don&#39;t know the answers, but I&#39;ll offer a thought here... that conventional error-trapping should not conflate things that arise from &quot;typos&quot; with explicitly raised errors:
+
+    red&gt;&gt; attempt [print &quot;blah&quot; do make error &quot;On purpose!&quot;]
+    blah
+    == none
+
+    red&gt;&gt; attempt [prnt &quot;oops&quot; print &quot;But I didn&#39;t mean to raise an error&quot;]
+    == none  
+
+So beyond Boris&#39;s example, it shows that the already sketchy nature of error handling via exceptions is turned into even more of a minefield in Redbol.  Again: I don&#39;t have answers, I just appreciate the questions.
+
+#### Web: how should cached versions of remote files be named (considering user-friendliness, pathname length, sanitization of invalid chars)?
+
+Beyond the scope of current concerns, and likely not all that relevant as the main target is Wasm.
+
+#### Core: should operators use the result from funcs with literal arguments? (if  `f: func [:x][x * 2]` , should  `f 1 + 2`  be equivalent to  `(f 1) + 2` ?)
+
+Yes.  I won&#39;t delve into details on this esoteric (-seeming) point...other than to say that several features I&#39;m very pleased with depend on this behavior.  *(For example: [soft-quoted branching](https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020).)*  I find no compelling points in any counter-argument worth sacrificing the related features.
+
+#### Core: should percent type allow scientific notation, and should it be constrained in range?
+
+Don&#39;t care.
+
+#### VID DSL: should  `panel`  face draw a  `text`  facet on it?
+
+N/A
+
+#### Core: do we want  `/deep`  refinement for  `take` ?
+
+Doesn&#39;t seem like the worst idea.  But I think the better angle is just to make sure that even if TAKE didn&#39;t have it, that someone who wanted it could make it easily.  So [features like AUGMENT](https://forum.rebol.info/t/augment-add-parameters-and-refinements-after-the-fact/1216) are geared in this direction.
+
+# Historical questions &amp; explanations
+
+#### Arguments on why paths evaluate picked items (so-called active accessors)
+
+It&#39;s a reasonable-sounding argument that it is &quot;unlikely&quot; that you want **block/1** to run the first function in a block.  But mechanically it&#39;s the simpler-seeming rule.  I guess it folds into a large part of the sketchiness that is path-processing.  :man_shrugging: 
+
+I will say that Ren-C&#39;s &quot;get-pathing&quot; and PICK-ing, and &quot;set-pathing&quot; and POKE-ing, are unified and run under the same dispatcher.  So **:path/1** and **pick path 1** are the same, and **:path/x** and **pick path &#39;x** are the same, for whatever those things happen to be.  There&#39;s not a separate codebase for getting paths from PICK or setting paths from POKE.  Hence it&#39;s called &quot;path picking&quot; and not &quot;path selection&quot;.
+
+#### Command line argument parsing rules
+
+[This previously crossed my radar.](https://github.com/metaeducation/ren-c/issues/996)  If they do the work of writing test cases, sounds great.  Better them than me.
+
+#### Why word and a single-word path are different (despite the visual similarity)
+
+They shouldn&#39;t be, and single-word PATH!s should be outlawed...as WORD!s with all spaces are.  Ren-C has implemented PATH! immutability (at the &quot;top level&quot;)...which isn&#39;t that unprecedented, as it makes them more parallel to TUPLE!.  By making paths immutable, it&#39;s possible to enforce a set of rules on them at the time of their creation (e.g. no PATH!s in their top level, that aren&#39;t inside GROUP!s, no FILE!s or URL!s, just GROUP!s/BLOCK!s/WORD!s/INTEGER!s etc.).
+
+If this sounds constraining, consider the WORD! analogy again.  Making a PATH! with a PATH! in it like having a WORD! with a slash in it.  When things are immutable you have a moment of creation to enforce your check and then you just don&#39;t worry about it.  It works for WORD!, why not PATH!?
+
+(You can still cheaply alias PATH!s via AS to get a BLOCK!...but the BLOCK! you get is simply read-only.  With &quot;UTF-8 Everywhere&quot; you can also alias WORD! as a string via AS, but once again the resulting value will be read-only.  [You can even alias them all as BINARY!](https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186), as in Rebol2.  :-P)
+
+The idea that PATH!s are some kind of generic &quot;ANY-BLOCK!&quot; is not all that compelling.  DocKimbel himself has complained about people wanting long or multi-line paths.  If you really want to mutate a path freely and promise not to end in a bad state, then COPY AS BLOCK! your path...muck with it, and then AS PATH! it (which will mark the underlying array read only, and do an integrity check that you didn&#39;t reduce it to one word).
+
+*(Overall this ties into great work done in Ren-C on PATH!, which includes generalizing REFINEMENT! so there isn&#39;t just **`/a`** but also **`a/`** and **`a//b`** ... a BLANK! in a PATH! is simply not rendered.  The immutability of paths means that even though **`/a`** is a 2-element path with a blank in the first slot, it can still be represented in one cell and not worry about being unable to handle mutations.  See [Heart :heart: Bytes](https://forum.rebol.info/t/heart-bytes-explained/1008))*
+
+#### Core: :get-word function argument evaluation semantics: R2- or R3-like? (final?)
+
+There absolutely has to be *some* way to literally get a symbol/value in the position, regardless of what it looks up to.  I don&#39;t know if I&#39;m in love with the notation for **:x** for unescapable quoting and **&#39;x** for escapable quoting, but that&#39;s a different question.
+
+#### Core: how to allow maps to have  `none`  values?
+
+Some day Red will realize how much they miss out on by not having NULL.  I guess it&#39;s kind of like societies that never grokked the invention of zero.
+
+[NULL, BLANK!, VOID!: History Under Scrutiny](https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249)
+
+#### Core: how money datatype equality and comparison rules should work?
+
+[It&#39;s like the Joker says...](https://www.youtube.com/watch?v=qMkkfuSizc4)
+
+#### Core: what should empty  `any []`  and  `all []`  return?
+
+Empty ANY returns NULL.  (But if you don&#39;t have that, I guess a NONE! will have to do.)
+
+Empty ALL returns *a ~void~ isotope*.  This means people who care about the actual value will get something that is kind of ornery and indicative that there was nothing there, whereas those who only care about the lack of failure can react with THEN and ELSE.
+
+I think the void isotope helps represent something that doesn&#39;t indicate failure (as NULL would) yet still doesn&#39;t synthesize a value, as coming up with logic #[true] would.  It seems a good case of being in limbo...which is just what isotopes are for...and it communicates the situation honestly.</description>
+    
+    <lastBuildDate>Sat, 06 Jun 2020 14:34:02 +0000</lastBuildDate>
+    <category>Redbol</category>
+    <atom:link href="https://forum.rebol.info/t/reds-design-issues-wiki/1282.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Red&#39;s Design Issues Wiki</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Excellent track record of anticipating and addressing the many historical inconsistencies and tarpits of rebol <a class="mention" href="/u/hostilefork">@hostilefork</a><br>
+</p><div class="lazyYT" data-youtube-id="yo3uxqwTxk0" data-youtube-title="FIX IT" data-width="480" data-height="270" data-parameters="feature=oembed&amp;wmode=opaque"></div>
+          <p><a href="https://forum.rebol.info/t/reds-design-issues-wiki/1282/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/reds-design-issues-wiki/1282/2</link>
+        <pubDate>Sat, 06 Jun 2020 14:25:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1282-2</guid>
+        <source url="https://forum.rebol.info/t/reds-design-issues-wiki/1282.rss">Red&#39;s Design Issues Wiki</source>
+      </item>
+      <item>
+        <title>Red&#39;s Design Issues Wiki</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Here's a page posted on Red's GitHub:</p>
+<h2><a href="https://github.com/red/red/wiki/%5BLINKS%5D-Design-questions">Red Design Questions Wiki</a></h2>
+<p>I'm bookmarking it here, along with some quick review notes.</p>
+<h4>Vector &amp; matrix DSL design</h4>
+<p>No real comment, other than it's interesting that the order of the page ranks things as "most influential".  While in Ren-C, R3-Alpha's VECTOR! has been removed from the core (you can build a Ren-C without it).  Hence it isn't one of the built-in types identified by a byte in the header.  So it's <a href="https://forum.rebol.info/t/user-defined-datatype-discussion/1203">a primordial test of a custom type</a>, and that is the main lens through which its relevance is considered.</p>
+<p>I'm sure if they want plenty of opinions on VECTOR! they can talk to Oldes.</p>
+<h4>Parse DSL: simplify  <code>fail</code>  rule to  <code>[end skip]</code> ,  <code>break</code> / <code>reject</code>  to return success/failure  <em>from the loop (while/any/some)</em> ,  <code>break now</code>  as an emergency exit from the loop, bring  <code>also</code>  into parsing</h4>
+<p>END SKIP as a way to force a fail is an amusing idea.  But much improvedly, Ren-C just gives meaning to LOGIC! true in PARSE as "keep parsing" and LOGIC! false as "fail here".  (See below for cool ramifications of that.)  So you can fail just by saying FALSE.  It takes away from the ability to match LOGIC! values literally, but you can't match INTEGER! values or BLOCK! values literally without a "QUOTE".  And with the <a href="https://forum.rebol.info/t/quoted-arrives-formerly-known-as-lit-bit/995/2">generic quoting Red argues against</a> you've got more convenience in that area, e.g. <strong>'#[true]</strong> or <strong>'[a b c]</strong> or <strong>'3</strong>.</p>
+<p>It is good for naming reasons, too since FAIL has very specific meaning in Ren-C (way to raise errors, <strong>fail "msg"</strong> is nicer than <strong>do make error! "msg"</strong> and provides a dialecting opportunity).</p>
+<p>The rest I'd have to look at in more detail to have an opinion on.</p>
+<h4>Parse DSL: rules with arguments</h4>
+<p>If I read this right...Ren-C has all this and more with GET-GROUP!.  <img src="https://forum.rebol.info/images/emoji/twitter/boxing_glove.png?v=9" title=":boxing_glove:" class="emoji" alt=":boxing_glove:">  This evaluates much like a plain GROUP! in a PARSE...but instead of the result vaporizing...it dynamically composes itself into the parse stream.  That makes it a full superset of PARSE's unusual IF...since in Ren-C LOGIC! true means "keep parsing" and LOGIC! false means "rule fails".  Thus <strong>:(mode = 'foo)</strong> gets you the continue-or-not you want.  But far more open-ended than that, especially since NULL vaporizes and continues the PARSE as #[true] would.  It's all kinds of keen:</p>
+<p><a href="https://forum.rebol.info/t/get-group-s-in-parse-mean-execute-and-splice-as-rule/968">GET-GROUP!s in PARSE mean execute-and-splice-as-rule</a></p>
+<p>So if you want a dynamically generated rule as a function, just say <strong>:(my-rule-maker arg1 arg2)</strong> and it will be spliced in.</p>
+<p>I consider that bit solved.  But the part that isn't solved is saving you the trouble of capturing material to pass separately...kind of as if you could extend PARSE with your function acting kind of like a keyword.  Imaginative pseudocode:</p>
+<pre><code> &gt;&gt; print-reverse: parse-func [x] [print reverse x]
+ &gt;&gt; parse "aaabcdef" [3 "a" print-reverse [to end]]
+ fedcb
+</code></pre>
+<p>e.g. the "argument fulfillment" phase is using parse rules--and not the evaluator--to do it.  But where I lean in this direction is asking about whether there is a model by which PARSE can be extensible in the same way DO of a BLOCK! is extensible... some kind of analogue to regular functions that lets you batch together "native" PARSE extensions (like THRU or INTO) along with user-added ones that speak the protocol (as if someone could add COLLECT after-the-fact).</p>
+<blockquote>
+<p><strong>UPDATE:</strong> This has been <a href="https://forum.rebol.info/t/introducing-uparse-the-hackable-usermode-parse/1529">hit with a bullseye by UPARSE</a>...and the problem of calling normal functions while passing them captured parse material is covered by <a href="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608">the ACTION! combinator</a></p>
+<pre><code> &gt;&gt; print-reverse: func [x] [print reverse x]
+ &gt;&gt; uparse "aaabcdef" [3 "a" print-reverse/ [across to &lt;end&gt;]]
+ fedcb
+</code></pre>
+<p><em>Yes, that actually works in UPARSE!</em></p>
+</blockquote>
+<h4>Core: open problems of the object design</h4>
+<p>Tip of the iceberg of the problems with the model.  <img src="https://forum.rebol.info/images/emoji/twitter/ice_cube.png?v=9" title=":ice_cube:" class="emoji" alt=":ice_cube:">  While Ren-C inherited the same object-model madness, techniques like generic quoting <a href="https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997">are making inroads representationally</a>, and things like <a href="https://github.com/metaeducation/ren-c/pull/727">derived binding</a> are aiding classic problems:</p>
+<blockquote>
+<p><em>"Derived binding is an interesting design that overcomes a serious weakness of historical Rebol combinatorics (where 1000 instances of an object with 50 member functions each had to make deep copies of the bodies of each function so the words in the bodies would point to the instance, so you're making 50,000 deep copies just to create those 1000 objects)."</em></p>
+</blockquote>
+<p>For a simple example, see <a href="https://github.com/metaeducation/ren-c/blob/3183acf3ee59e8ebc316ca5afeed09d493de8234/tests/datatypes/object.test.reb#L115">"O-Big"</a></p>
+<h4>Core: efficient vector arithmetic</h4>
+<p>Regarding their "<a href="https://github.com/red/red/issues/2216">Adding a number to a vector changes the vector itself #2216</a>", I have proposed a concept whereby operations like ADD and MULTIPLY follow Rebol's "mutate by default" rules, and PLUS (infix alias +) and TIMES (infix alias *) finesse the idea of not mutating.  These ideas originated in design for <a href="https://forum.rebol.info/t/planning-ahead-for-bignum-arithmetic/623">efficient BigNum arithmetic</a>, which shares many of the same issues.</p>
+<p>Devil is in the details there, but it proposes building things on a model that is foundationally mutating.</p>
+<h4>VID DSL: automatically bind (literal only?) actor &amp; reaction bodies to the face?</h4>
+<p>N/A.</p>
+<h4>Core: loop return values</h4>
+<p>Ren-C has a systemic <a href="https://forum.rebol.info/t/the-simple-yet-powerful-magic-of-the-loop-result-protocol/609">loop return result protocol</a>.  All loops that BREAK return NULL, and there is no BREAK/RETURN.  If you wish to violate the protocol, you do so with THROW to a CATCH.</p>
+<p>This is a helpful protocol for building your own loop constructs out of other loops...without having to reach in and figure out how to hook their BREAK.  Being able to tell from the outside if the loop was interrupted far outweighs the idea of BREAK/RETURN, and null isotopes are an idea well worth it to ensure that NULL keeps its unique status for representing break.</p>
+<h4>Core: behavior of series access outside the data boundaries</h4>
+<p>I talk some about this in <a href="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141">"Where the Series Ends"</a> <em>(for you young folks, that's a <a href="https://en.wikipedia.org/wiki/Where_the_Sidewalk_Ends">Shel Silverstein reference</a>)</em>.</p>
+<h4>VID DSL: should it allow to override already defined actors (e.g.  <code>base on-down [probe 1] [probe 2]</code> )?</h4>
+<p>N/A</p>
+<h4>Core: how to solve inelegancies and dangers of  <code>error? try</code> ,  <code>attempt</code>  and  <code>catch</code>  on  <em>arbitrary</em>  code?</h4>
+<p>As usual, it is hiiamboris asking the good questions.  Don't know the answers, but I'll offer a thought here... that conventional error-trapping should not conflate things that arise from "typos" with explicitly raised errors:</p>
+<pre><code>red&gt;&gt; attempt [print "blah" do make error "On purpose!"]
+blah
+== none
+
+red&gt;&gt; attempt [prnt "oops" print "But I didn't mean to raise an error"]
+== none  
+</code></pre>
+<p>So beyond Boris's example, it shows that the already sketchy nature of error handling via exceptions is turned into even more of a minefield in Redbol.  Again: I don't have answers, I just appreciate the questions.</p>
+<h4>Web: how should cached versions of remote files be named (considering user-friendliness, pathname length, sanitization of invalid chars)?</h4>
+<p>Beyond the scope of current concerns, and likely not all that relevant as the main target is Wasm.</p>
+<h4>Core: should operators use the result from funcs with literal arguments? (if  <code>f: func [:x][x * 2]</code> , should  <code>f 1 + 2</code>  be equivalent to  <code>(f 1) + 2</code> ?)</h4>
+<p>Yes.  I won't delve into details on this esoteric (-seeming) point...other than to say that several features I'm very pleased with depend on this behavior.  <em>(For example: <a href="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020">soft-quoted branching</a>.)</em>  I find no compelling points in any counter-argument worth sacrificing the related features.</p>
+<h4>Core: should percent type allow scientific notation, and should it be constrained in range?</h4>
+<p>Don't care.</p>
+<h4>VID DSL: should  <code>panel</code>  face draw a  <code>text</code>  facet on it?</h4>
+<p>N/A</p>
+<h4>Core: do we want  <code>/deep</code>  refinement for  <code>take</code> ?</h4>
+<p>Doesn't seem like the worst idea.  But I think the better angle is just to make sure that even if TAKE didn't have it, that someone who wanted it could make it easily.  So <a href="https://forum.rebol.info/t/augment-add-parameters-and-refinements-after-the-fact/1216">features like AUGMENT</a> are geared in this direction.</p>
+<h1>Historical questions &amp; explanations</h1>
+<h4>Arguments on why paths evaluate picked items (so-called active accessors)</h4>
+<p>It's a reasonable-sounding argument that it is "unlikely" that you want <strong>block/1</strong> to run the first function in a block.  But mechanically it's the simpler-seeming rule.  I guess it folds into a large part of the sketchiness that is path-processing.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<p>I will say that Ren-C's "get-pathing" and PICK-ing, and "set-pathing" and POKE-ing, are unified and run under the same dispatcher.  So <strong>:path/1</strong> and <strong>pick path 1</strong> are the same, and <strong>:path/x</strong> and <strong>pick path 'x</strong> are the same, for whatever those things happen to be.  There's not a separate codebase for getting paths from PICK or setting paths from POKE.  Hence it's called "path picking" and not "path selection".</p>
+<h4>Command line argument parsing rules</h4>
+<p><a href="https://github.com/metaeducation/ren-c/issues/996">This previously crossed my radar.</a>  If they do the work of writing test cases, sounds great.  Better them than me.</p>
+<h4>Why word and a single-word path are different (despite the visual similarity)</h4>
+<p>They shouldn't be, and single-word PATH!s should be outlawed...as WORD!s with all spaces are.  Ren-C has implemented PATH! immutability (at the "top level")...which isn't that unprecedented, as it makes them more parallel to TUPLE!.  By making paths immutable, it's possible to enforce a set of rules on them at the time of their creation (e.g. no PATH!s in their top level, that aren't inside GROUP!s, no FILE!s or URL!s, just GROUP!s/BLOCK!s/WORD!s/INTEGER!s etc.).</p>
+<p>If this sounds constraining, consider the WORD! analogy again.  Making a PATH! with a PATH! in it like having a WORD! with a slash in it.  When things are immutable you have a moment of creation to enforce your check and then you just don't worry about it.  It works for WORD!, why not PATH!?</p>
+<p>(You can still cheaply alias PATH!s via AS to get a BLOCK!...but the BLOCK! you get is simply read-only.  With "UTF-8 Everywhere" you can also alias WORD! as a string via AS, but once again the resulting value will be read-only.  <a href="https://forum.rebol.info/t/as-binary-view-of-strings-is-back-with-utf-8-thats-only-part/1186">You can even alias them all as BINARY!</a>, as in Rebol2.  :-P)</p>
+<p>The idea that PATH!s are some kind of generic "ANY-BLOCK!" is not all that compelling.  DocKimbel himself has complained about people wanting long or multi-line paths.  If you really want to mutate a path freely and promise not to end in a bad state, then COPY AS BLOCK! your path...muck with it, and then AS PATH! it (which will mark the underlying array read only, and do an integrity check that you didn't reduce it to one word).</p>
+<p><em>(Overall this ties into great work done in Ren-C on PATH!, which includes generalizing REFINEMENT! so there isn't just <strong><code>/a</code></strong> but also <strong><code>a/</code></strong> and <strong><code>a//b</code></strong> ... a BLANK! in a PATH! is simply not rendered.  The immutability of paths means that even though <strong><code>/a</code></strong> is a 2-element path with a blank in the first slot, it can still be represented in one cell and not worry about being unable to handle mutations.  See <a href="https://forum.rebol.info/t/heart-bytes-explained/1008">Heart <img src="https://forum.rebol.info/images/emoji/twitter/heart.png?v=9" title=":heart:" class="emoji" alt=":heart:"> Bytes</a>)</em></p>
+<h4>Core: :get-word function argument evaluation semantics: R2- or R3-like? (final?)</h4>
+<p>There absolutely has to be <em>some</em> way to literally get a symbol/value in the position, regardless of what it looks up to.  I don't know if I'm in love with the notation for <strong>:x</strong> for unescapable quoting and <strong>'x</strong> for escapable quoting, but that's a different question.</p>
+<h4>Core: how to allow maps to have  <code>none</code>  values?</h4>
+<p>Some day Red will realize how much they miss out on by not having NULL.  I guess it's kind of like societies that never grokked the invention of zero.</p>
+<p><a href="https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249">NULL, BLANK!, VOID!: History Under Scrutiny</a></p>
+<h4>Core: how money datatype equality and comparison rules should work?</h4>
+<p><a href="https://www.youtube.com/watch?v=qMkkfuSizc4">It's like the Joker says...</a></p>
+<h4>Core: what should empty  <code>any []</code>  and  <code>all []</code>  return?</h4>
+<p>Empty ANY returns NULL.  (But if you don't have that, I guess a NONE! will have to do.)</p>
+<p>Empty ALL returns <em>a ~void~ isotope</em>.  This means people who care about the actual value will get something that is kind of ornery and indicative that there was nothing there, whereas those who only care about the lack of failure can react with THEN and ELSE.</p>
+<p>I think the void isotope helps represent something that doesn't indicate failure (as NULL would) yet still doesn't synthesize a value, as coming up with logic #[true] would.  It seems a good case of being in limbo...which is just what isotopes are for...and it communicates the situation honestly.</p>
+          <p><a href="https://forum.rebol.info/t/reds-design-issues-wiki/1282/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/reds-design-issues-wiki/1282/1</link>
+        <pubDate>Sat, 06 Jun 2020 02:03:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1282-1</guid>
+        <source url="https://forum.rebol.info/t/reds-design-issues-wiki/1282.rss">Red&#39;s Design Issues Wiki</source>
+      </item>
+  </channel>
+</rss>

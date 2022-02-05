@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Dissecting R3-Alpha&#39;s EVENT!: What Should We Think?</title>
+    <link>https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724</link>
+    <description>## Quick Retrospective Look At EVENT!
+
+Not everyone had to deal with EVENT!.  But it&#39;s relatively easy to understand as a tiny and very-limited OBJECT!.  Here&#39;s what one being created looked like in R3-Alpha&#39;s %prot-http.r
+
+    make event! [type: &#39;read port: http-port]
+
+It looks a bit like a MAKE OBJECT!, with SET-WORD!s and expressions.  But what actually happened under the hood?
+
+Datatypes in R3-Alpha had &quot;MT&quot; functions (e.g. MAKE TYPE).  So if you [wanted to MT_Event()](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L322) it would take in a BLOCK! and then immediately call a function called [Set_Event_Vars()](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L168).
+
+The code is pretty short:
+
+    REBVAL *var;
+    REBVAL *val;
+
+    while (NOT_END(blk)) {
+        var = blk++;
+        val = blk++;
+        if (IS_END(val))
+            val = NONE_VALUE;
+        else
+            val = Get_Simple_Value(val);
+        if (!Set_Event_Var(evt, var, val))
+            Trap2(RE_BAD_FIELD_SET, var, Of_Type(val));
+    }
+
+It walks through the block, gathering two items at a time.  (If it only sees one item without a second, it uses a global NONE! value as the second.)
+
+**Immediately you notice that this is going to be a much more &quot;scant&quot; form of evaluation than in MAKE OBJECT!**.  If you weren&#39;t tipped off by the calling of a function named &quot;Get_Simple_Value()&quot; then you could notice that if you are only processing two values at a time, that&#39;s going to rule out things like
+
+    make event! [type: second [read write]]
+
+...because it would only see **`type: second`** in the first pair, and then **`[read write] #[none]`** in the second.
+
+It&#39;s worse than it sounds.  Let&#39;s jump directly to [Get_Simple_Value()](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-do.c#L1858) to look at its implementation:
+
+    if (IS_WORD(val) || IS_GET_WORD(val))
+        val = Get_Var(val);
+    else if (IS_PATH(val) || IS_GET_PATH(val)) { //val = Get_Path_Var(val);
+        REBVAL *v = val;
+        DS_PUSH_NONE;
+        Do_Path(&amp;v, 0);
+        val = DS_TOP;
+    }
+    return val;
+
+It basically does a &quot;GET&quot; of a WORD! or PATH!.  But there&#39;s no evaluation.  So if you say:
+
+    get-type-word: does [either reading [&#39;read] [&#39;write]]
+
+    make event! [type: get-type-word port: http-port]
+
+It won&#39;t *call* the GET-TYPE-WORD function.  It will **GET** the GET-TYPE-WORD function, and try to set the TYPE: to that.
+
+Other values act similarly perplexingly...whether it&#39;s a GROUP!, or whether it&#39;s a LIT-WORD! that doesn&#39;t get evaluated.  So the **Set_Event_Var()** function [has to accept LIT-WORD!s as well as WORD!s](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L83), making things just a little bit more confusing.
+
+## Why Is MAKE EVENT! So Much &quot;Lousier&quot; Than MAKE OBJECT! ?
+
+What MAKE OBJECT! does is it gathers all the SET-WORD!s in a block up and creates an object with those keys.  Then it binds the block you gave it to that object, and runs the code.  Since the set-words are all bound to the object, it just naturally works that the evaluation of ordinary expressions will sink the evaluative results into those words.
+
+But the idea behind EVENT! was that it would be a very compressed data structure, so small it fit into one value cell.  This means that when it stores that **TYPE:** it isn&#39;t storing a pointer to an arbitrary word symbol...it&#39;s storing a small number from a finite list.
+
+So TYPE can&#39;t be &quot;bound&quot; in a conventional sense.  There&#39;s no cell in a context to bind the word to.  There&#39;s just a packed bit pattern in an EVENT! structure.
+
+You were able to say things like **(`event/type: &#39;read`)** because the way path dispatch worked, only the first element of the path was &quot;bound&quot;.  It would lookup the event and then send it a message &quot;change the type&quot;...which it would do in its specialized bit packing way.  But you wouldn&#39;t be able to say **do (bind [type: &#39;read] event)** and have that work.
+
+## In My Opinion Get_Simple_Value() Should Not Exist
+
+In truth, R3-Alpha did not have to be so stingy with the evaluator.  It had the ability to DO_NEXT() in a block, and where it used Get_Simple_Value() it could have done an evaluation.  It was there in the pursuit of performance.
+
+But this kind of opens up a bigger field of questioning for the language, just in terms of &quot;What is setting?&quot; and &quot;What is getting?&quot;  You might argue that Get_Simple_Value() was some weird anomaly, but here was the behavior of GET itself in R3-Alpha:
+
+    r3-alpha&gt;&gt; get (1 + 2)
+    == 3
+
+    r3-alpha&gt;&gt; get quote (1 + 2)
+    == (1 + 2)
+
+I tried to phrase some questions like &quot;Are GET and SET supersets of PICK and POKE, or do they provide different functionality&quot; and there really isn&#39;t an articulation of this.
+
+**It&#39;s like Rebol made a relatively concrete definition of what a SET-WORD! and a GET-WORD! are, but any understanding of a connection of these things to some functions named SET and GET are kind of unknown.**
+
+It&#39;s hard whenever looking at the fun parts of playing with Rebol design to come back and face the fact that it&#39;s really kind of sitting on a kind of zero-semantics language model.  I feel like I&#39;m making some progress on it, but drawing clean lines that people can build on reliably often feels out of reach for this particular medium.</description>
+    
+    <lastBuildDate>Wed, 22 Sep 2021 20:40:57 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Dissecting R3-Alpha&#39;s EVENT!: What Should We Think?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Quick Retrospective Look At EVENT!</h2>
+<p>Not everyone had to deal with EVENT!.  But it's relatively easy to understand as a tiny and very-limited OBJECT!.  Here's what one being created looked like in R3-Alpha's %prot-http.r</p>
+<pre><code>make event! [type: 'read port: http-port]
+</code></pre>
+<p>It looks a bit like a MAKE OBJECT!, with SET-WORD!s and expressions.  But what actually happened under the hood?</p>
+<p>Datatypes in R3-Alpha had "MT" functions (e.g. MAKE TYPE).  So if you <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L322">wanted to MT_Event()</a> it would take in a BLOCK! and then immediately call a function called <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L168">Set_Event_Vars()</a>.</p>
+<p>The code is pretty short:</p>
+<pre><code>REBVAL *var;
+REBVAL *val;
+
+while (NOT_END(blk)) {
+    var = blk++;
+    val = blk++;
+    if (IS_END(val))
+        val = NONE_VALUE;
+    else
+        val = Get_Simple_Value(val);
+    if (!Set_Event_Var(evt, var, val))
+        Trap2(RE_BAD_FIELD_SET, var, Of_Type(val));
+}
+</code></pre>
+<p>It walks through the block, gathering two items at a time.  (If it only sees one item without a second, it uses a global NONE! value as the second.)</p>
+<p><strong>Immediately you notice that this is going to be a much more "scant" form of evaluation than in MAKE OBJECT!</strong>.  If you weren't tipped off by the calling of a function named "Get_Simple_Value()" then you could notice that if you are only processing two values at a time, that's going to rule out things like</p>
+<pre><code>make event! [type: second [read write]]
+</code></pre>
+<p>...because it would only see <strong><code>type: second</code></strong> in the first pair, and then <strong><code>[read write] #[none]</code></strong> in the second.</p>
+<p>It's worse than it sounds.  Let's jump directly to <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-do.c#L1858">Get_Simple_Value()</a> to look at its implementation:</p>
+<pre><code>if (IS_WORD(val) || IS_GET_WORD(val))
+    val = Get_Var(val);
+else if (IS_PATH(val) || IS_GET_PATH(val)) { //val = Get_Path_Var(val);
+    REBVAL *v = val;
+    DS_PUSH_NONE;
+    Do_Path(&amp;v, 0);
+    val = DS_TOP;
+}
+return val;
+</code></pre>
+<p>It basically does a "GET" of a WORD! or PATH!.  But there's no evaluation.  So if you say:</p>
+<pre><code>get-type-word: does [either reading ['read] ['write]]
+
+make event! [type: get-type-word port: http-port]
+</code></pre>
+<p>It won't <em>call</em> the GET-TYPE-WORD function.  It will <strong>GET</strong> the GET-TYPE-WORD function, and try to set the TYPE: to that.</p>
+<p>Other values act similarly perplexingly...whether it's a GROUP!, or whether it's a LIT-WORD! that doesn't get evaluated.  So the <strong>Set_Event_Var()</strong> function <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/t-event.c#L83">has to accept LIT-WORD!s as well as WORD!s</a>, making things just a little bit more confusing.</p>
+<h2>Why Is MAKE EVENT! So Much "Lousier" Than MAKE OBJECT! ?</h2>
+<p>What MAKE OBJECT! does is it gathers all the SET-WORD!s in a block up and creates an object with those keys.  Then it binds the block you gave it to that object, and runs the code.  Since the set-words are all bound to the object, it just naturally works that the evaluation of ordinary expressions will sink the evaluative results into those words.</p>
+<p>But the idea behind EVENT! was that it would be a very compressed data structure, so small it fit into one value cell.  This means that when it stores that <strong>TYPE:</strong> it isn't storing a pointer to an arbitrary word symbol...it's storing a small number from a finite list.</p>
+<p>So TYPE can't be "bound" in a conventional sense.  There's no cell in a context to bind the word to.  There's just a packed bit pattern in an EVENT! structure.</p>
+<p>You were able to say things like <strong>(<code>event/type: 'read</code>)</strong> because the way path dispatch worked, only the first element of the path was "bound".  It would lookup the event and then send it a message "change the type"...which it would do in its specialized bit packing way.  But you wouldn't be able to say <strong>do (bind [type: 'read] event)</strong> and have that work.</p>
+<h2>In My Opinion Get_Simple_Value() Should Not Exist</h2>
+<p>In truth, R3-Alpha did not have to be so stingy with the evaluator.  It had the ability to DO_NEXT() in a block, and where it used Get_Simple_Value() it could have done an evaluation.  It was there in the pursuit of performance.</p>
+<p>But this kind of opens up a bigger field of questioning for the language, just in terms of "What is setting?" and "What is getting?"  You might argue that Get_Simple_Value() was some weird anomaly, but here was the behavior of GET itself in R3-Alpha:</p>
+<pre><code>r3-alpha&gt;&gt; get (1 + 2)
+== 3
+
+r3-alpha&gt;&gt; get quote (1 + 2)
+== (1 + 2)
+</code></pre>
+<p>I tried to phrase some questions like "Are GET and SET supersets of PICK and POKE, or do they provide different functionality" and there really isn't an articulation of this.</p>
+<p><strong>It's like Rebol made a relatively concrete definition of what a SET-WORD! and a GET-WORD! are, but any understanding of a connection of these things to some functions named SET and GET are kind of unknown.</strong></p>
+<p>It's hard whenever looking at the fun parts of playing with Rebol design to come back and face the fact that it's really kind of sitting on a kind of zero-semantics language model.  I feel like I'm making some progress on it, but drawing clean lines that people can build on reliably often feels out of reach for this particular medium.</p>
+          <p><a href="https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724/1</link>
+        <pubDate>Wed, 22 Sep 2021 20:40:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1724-1</guid>
+        <source url="https://forum.rebol.info/t/dissecting-r3-alphas-event-what-should-we-think/1724.rss">Dissecting R3-Alpha&#39;s EVENT!: What Should We Think?</source>
+      </item>
+  </channel>
+</rss>

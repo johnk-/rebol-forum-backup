@@ -1,0 +1,323 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Semantics of Predicates</title>
+    <link>https://forum.rebol.info/t/semantics-of-predicates/1404</link>
+    <description>Predicates are IMNSHO an extremely clever notational trick, taking advantage of the inert TUPLE! forms that lead with BLANK!.  It&#39;s already out there for a few functions, but now I&#39;m going to add it to more...like ANY:
+
+    &gt;&gt; any .not.even? [2 4 6 7 10]
+    == 7
+
+This hinges on the idea that ANY can be confident you weren&#39;t trying to pass a value to act as the BLOCK! to be ANY&#39;d, because .NOT.EVEN? is otherwise inert:
+
+    &gt;&gt; .not.even?
+    == .not.even?  ; inert (e.g. evaluated to itself)
+
+    &gt;&gt; to block! .not.even?
+    == [_ not even?]  ; BLANK! is inert, and inert-headed TUPLE! are also inert
+
+    &gt;&gt; 3.also.inert
+    == 3.also.inert  ; Same rule would apply for things like INTEGER!
+
+So a skippable callsite parameter can pick it up, and run it on each value as the test (vs. the default test just for logical trueness).
+
+## But...What Does it Mean?
+
+In my ANY example, the predicate is determining which values &quot;pass&quot; or &quot;fail&quot; consideration.
+
+But notice we return the *input* to that process, not the *result* of the test.  If we&#39;d returned the result, we&#39;d have gotten the result of the NOT EVEN? call, e.g. a LOGIC!
+
+    &gt;&gt; any .not.even? [2 4 6 7 10]
+    == #[true]  ; in this formulation, would be the result of `not even? 7`
+
+That&#39;s not very useful in this case.  Though we *could* have said you&#39;re supposed to pass in some kind of MATCH function, where it was both the test -and- the result.
+
+    &gt;&gt; any .match.tag! [1 &quot;two&quot; &lt;three&gt; #four]
+    == &lt;three&gt;  ; the result of `match tag! &lt;three&gt;`
+
+But given that ANY is returning a single result derived from its contained items, is it *really* necessary to fold a potential transformation in with the act of picking?  Can&#39;t you just apply the transformation *after* you&#39;ve picked?
+
+*It seems that the best role of the predicate with ANY is to focus on picking, and have the understanding that its result will be either one of the items from the container or NULL.*
+
+## But Wait--Generally Speaking, it&#39;s the *REDUCED* Item...
+
+In the simple example I show, all the items in the ANY are inert.  But they don&#39;t have to be.
+
+This raises a question I&#39;ve wondered about for a long time: *What if you want to do an ANY operation on a block of stuff, but you don&#39;t want to reduce it*?
+
+In Ren-C all items have a quoted form, so you could MAP-EACH the block to a quoted version.
+
+    &gt;&gt; block: [1 + 2]
+
+    &gt;&gt; q-block: map-each item block [quote item]
+    == [&#39;1 &#39;+ &#39;2]
+
+    &gt;&gt; any .word? q-block
+    == +
+
+Seems a bit roundabout.  But, at least it&#39;s possible.
+
+But this might suggest an alternate axis for parameterizing ANY.  What if instead of changing the test, you changed the evaluator, or took out the behavior of the evaluator altogether?
+
+    &gt;&gt; any .identity [1 + 2]
+    == +  ; or something like this
+
+## I Just Wanted To Introduce The Questions...
+
+I don&#39;t know if we want to bend ANY all out of shape to get it to work just on inert data just as well as evaluated data.  Maybe that&#39;s a job for another function?
+
+But this is shaping up to be an important design issue, and it&#39;s new...so every operation is going to have to deal with it.
+
+Something odd occurred to me about this idea of &quot;before-or-after&quot; results, realizing that even IF could have a predicate.  That might seem useless, but conditionals pass the condition to the branch...so what if you could split your test out from that branch?
+
+    &gt;&gt; value: 1020
+
+    &gt;&gt; if even? value (x -&gt; [print [&quot;x is&quot; x]])
+    x is #[true]  ; IF received result of (EVEN? VALUE) as single argument
+
+    &gt;&gt; if .even? value (x -&gt; [print [&quot;x is&quot; x]])
+    x is 1020  ; IF got VALUE but ran EVEN? on it, then still had VALUE
+
+Whether you think IF needs such a feature or not, the decision of whether the branch gets the result of the predicate or the value that was tested is something that has to be answered for things like CASE.
+
+    case/all .not.even? [
+        4 [print &quot;This won&#39;t print&quot;]
+        7 [print &quot;This will print&quot;]
+        9 (x -&gt; [print [&quot;x is&quot; x]])
+    ]
+
+This seems pretty clear that you&#39;d rather have the x be 9, and not #[true]
+
+**Anyway, I think this is all very cool...and I&#39;ve managed to fiddle things around so that predicates are much faster.**  They no longer generate functions, they actually just splice the TUPLE! array directly into the evaluator feed.  It&#39;s really neat stuff, so I hope people are looking forward to applying it.</description>
+    
+    <lastBuildDate>Wed, 18 Nov 2020 15:48:26 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/semantics-of-predicates/1404.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Semantics of Predicates</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1404">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>clever notational trick, taking advantage of the inert TUPLE! forms that lead with BLANK!.</p>
+</blockquote>
+</aside>
+<p>While cool...there are a few sticking points to be aware of...that I'm not all quite sure what to do about yet, I'll mention a few.</p>
+<h2>ACTION!s</h2>
+<p>I'd wanted to make it so that you could say things like:</p>
+<pre><code>&gt;&gt; any .(&lt;- match _ 10) [tag! integer! block!]
+== #[datatype! integer!]
+</code></pre>
+<p>This funny-looking concept is letting you do a pointfree specialization that fixes the value at 10, and asks if the ANY finds anything that plugs into the type slot to fit it.  So the datatypes are getting plugged in where the BLANK! is.</p>
+<p>Now that the predicate mechanism is a direct splice, that doesn't execute the function without a reevaluate.  This is kind of like how <strong>(func [x] [print [x]]) 10</strong> won't print anything.  The function definition just gets dropped on the floor, and then the 10 gets dropped on the floor.  You need to say <strong>reeval (func [x] [print [x]]) 10</strong> to get it to work.</p>
+<p>When that's applied to predicates, you get something less satisfying:</p>
+<pre><code>&gt;&gt; any .reeval.(&lt;- match _ 10) [tag! integer! block!]
+== #[datatype! integer!]
+</code></pre>
+<p>So I'm leaning to saying that predicates are smart enough to assume that if the first thing is a GROUP! it should be reevaluated.  There's not a lot of point to running code in a GROUP! that generates a value and tossing it.</p>
+<h2>Predicates and Refinements</h2>
+<p>Because PATH!s can contain TUPLE! and not vice versa, there's an unambiguous meaning that <strong>.foo/bar.baz</strong> is a PATH! with a tuple on the left.</p>
+<p>That would mean if you splice this into the execution stream, you get <strong>[.foo bar.baz]</strong>, and not <strong>[foo/bar baz]</strong></p>
+<p>Predicates won't accept these since they're PATH!s...it would just error and say that's not a TUPLE!.  So I think these cases would mean falling back on passing in a function.</p>
+<p>With the above tweak on actions, you'd still have <strong>.(&lt;- foo/bar baz)</strong> as an option which is not that bad.</p>
+<p>Also, you could use APPLY...which would let you still put it at the front:</p>
+<pre><code>apply :whatever [/predicate (&lt;- foo/bar baz), arg1 arg2 /other-refinement]
+</code></pre>
+<p>Or not.</p>
+<pre><code>apply :whatever [arg1 arg2 /other-refinement
+                 /predicate (&lt;- foo/bar baz)]
+</code></pre>
+<h2>Enfix Functions and Positioning</h2>
+<p>Originally, I'd thought it would be interesting to put predicates between arguments, like:</p>
+<pre><code> switch x .&gt; [
+     10 [print "X is Greater than 10"]
+ ]
+</code></pre>
+<p>But whether that makes sense depends on whether you're using enfix or not:</p>
+<pre><code>switch .greater? x [
+    10 [print "X is Greater than 10"]
+]
+</code></pre>
+<p>The parameter isn't designed to be picked up from more than one spot, and the enfix version looks a bit "weirder", so I'd lean to the prefix position.</p>
+<h2>Multiple Parameter Ordering</h2>
+<p>Predicates that take multiple parameters (as in SWITCH) are a bit hard to keep straight.</p>
+<p>One thing that seems really useful to be able to do in a switch is to MATCH on criteria, but you'd generally put the types in the switch block and switch on the value.  That's not what MATCH's parameter ordering gives you:</p>
+<pre><code> switch .match integer! [
+      10 [print "this is less common to need..."]
+ ]
+</code></pre>
+<p>Contrast that with the parameter ordering for PARSE, which makes more sense.  Though it runs up against SWITCH not wanting to allow BLOCK!s for anything but code, so you currently have to quote the blocks:</p>
+<pre><code> switch .parse data [
+     '[integer! integer!] [print "Your data is two integers"]
+     '[block! path!] [print "Your data is a block and a path"]
+ ]
+</code></pre>
+<p><em>Anyway, my point is just that this is a bigger design space than you can shake a stick at.</em>  It's pretty overwhelming, so it'll probably just kind of phase in one piece at a time.</p>
+          <p><a href="https://forum.rebol.info/t/semantics-of-predicates/1404/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/semantics-of-predicates/1404/4</link>
+        <pubDate>Wed, 18 Nov 2020 15:48:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1404-4</guid>
+        <source url="https://forum.rebol.info/t/semantics-of-predicates/1404.rss">Semantics of Predicates</source>
+      </item>
+      <item>
+        <title>Semantics of Predicates</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Where this is aiming is to pull together a model where you can really combine all the techniques and have it work.</p>
+<p>For instance, with stackless:</p>
+<pre><code> g: generator [
+    yield 1, yield 2, yield 3  ; aren't COMMA!s great?
+ ]
+
+ case/all .equal?.g [
+      1 [print "matched!"]  ; acts as if clause was EQUAL? G 1
+      2 [print "this matched too!"]  ; EQUAL? G 2
+      3 [print "this matched as well!"]  ; EQUAL? G 3
+ ]
+</code></pre>
+<p>You start to raise all kinds of questions, however.  Even the above has an interesting hidden issue... the generator is not finished.  It has yielded three values, but it's sitting at the end of YIELD 3 and is waiting to be called a fourth time so it can give its NULL result.  Until it does, that generator will keep its state hanging around forever.</p>
+<p>The space taken up by the generator isn't much to be concerned about.  More concerning would be if it were in mid-loop over something, and held a lock on that something indefinitely.</p>
+<pre><code> data: [1 2 3]
+
+ g: generator [
+    for-each item data [yield item]
+ ]
+
+ case/all .equal?.g [
+      1 [print "matched!"]  ; acts as if clause was EQUAL? G 1
+      2 [print "this matched too!"]
+      3 [print "this matched as well!"]
+ ]
+
+append data [4 5 6]  ; !!! g has DATA locked by the FOR-EACH
+</code></pre>
+<p>Worrying over this is kind of where I'm at.</p>
+<p>One thing that would make life somewhat easier would be if these locks pointed back to the frame locations that locked them.  Then you could navigate from the error you got on not being able to append to DATA to find the loop in the generator, and at least <em>know</em> where the lock is.</p>
+<p>Still, it feels to me that a language which isn't using scope at all, loses one of the big tools for cleaning things up.</p>
+<p>I wonder what the opportunties for scoping are.  For example:</p>
+<pre><code>foo: func [value] [
+   local o: make object! [x: value]
+   print ["inside function, o/x is" x]
+   return o
+]
+
+&gt;&gt; o-ret: foo 10
+inside function, o/x is 10
+
+&gt;&gt; o-ret/x
+** Error: OBJECT! was freed due to being out of scope (see LOCAL)
+
+bar: func [value] [
+   let o: make object! [x: value]
+   print ["inside function, o/x is" x]
+   return o
+]
+
+&gt;&gt; o-ret: bar 10
+inside function, o/x is 10
+
+&gt;&gt; o-ret/x
+== 10
+</code></pre>
+<p>So maybe it could be a mixture.  I don't know, just thinking out loud here.</p>
+          <p><a href="https://forum.rebol.info/t/semantics-of-predicates/1404/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/semantics-of-predicates/1404/3</link>
+        <pubDate>Wed, 18 Nov 2020 13:38:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1404-3</guid>
+        <source url="https://forum.rebol.info/t/semantics-of-predicates/1404.rss">Semantics of Predicates</source>
+      </item>
+      <item>
+        <title>Semantics of Predicates</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p><img src="https://forum.rebol.info/images/emoji/twitter/clap.png?v=9" title=":clap:" class="emoji" alt=":clap:"> Very impressive. The bag of tricks keeps expanding-- there's a whole 'nother level of Rebol to learn.</p>
+          <p><a href="https://forum.rebol.info/t/semantics-of-predicates/1404/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/semantics-of-predicates/1404/2</link>
+        <pubDate>Wed, 18 Nov 2020 12:42:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1404-2</guid>
+        <source url="https://forum.rebol.info/t/semantics-of-predicates/1404.rss">Semantics of Predicates</source>
+      </item>
+      <item>
+        <title>Semantics of Predicates</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Predicates are IMNSHO an extremely clever notational trick, taking advantage of the inert TUPLE! forms that lead with BLANK!.  It's already out there for a few functions, but now I'm going to add it to more...like ANY:</p>
+<pre><code>&gt;&gt; any .not.even? [2 4 6 7 10]
+== 7
+</code></pre>
+<p>This hinges on the idea that ANY can be confident you weren't trying to pass a value to act as the BLOCK! to be ANY'd, because .NOT.EVEN? is otherwise inert:</p>
+<pre><code>&gt;&gt; .not.even?
+== .not.even?  ; inert (e.g. evaluated to itself)
+
+&gt;&gt; to block! .not.even?
+== [_ not even?]  ; BLANK! is inert, and inert-headed TUPLE! are also inert
+
+&gt;&gt; 3.also.inert
+== 3.also.inert  ; Same rule would apply for things like INTEGER!
+</code></pre>
+<p>So a skippable callsite parameter can pick it up, and run it on each value as the test (vs. the default test just for logical trueness).</p>
+<h2>But...What Does it Mean?</h2>
+<p>In my ANY example, the predicate is determining which values "pass" or "fail" consideration.</p>
+<p>But notice we return the <em>input</em> to that process, not the <em>result</em> of the test.  If we'd returned the result, we'd have gotten the result of the NOT EVEN? call, e.g. a LOGIC!</p>
+<pre><code>&gt;&gt; any .not.even? [2 4 6 7 10]
+== #[true]  ; in this formulation, would be the result of `not even? 7`
+</code></pre>
+<p>That's not very useful in this case.  Though we <em>could</em> have said you're supposed to pass in some kind of MATCH function, where it was both the test -and- the result.</p>
+<pre><code>&gt;&gt; any .match.tag! [1 "two" &lt;three&gt; #four]
+== &lt;three&gt;  ; the result of `match tag! &lt;three&gt;`
+</code></pre>
+<p>But given that ANY is returning a single result derived from its contained items, is it <em>really</em> necessary to fold a potential transformation in with the act of picking?  Can't you just apply the transformation <em>after</em> you've picked?</p>
+<p><em>It seems that the best role of the predicate with ANY is to focus on picking, and have the understanding that its result will be either one of the items from the container or NULL.</em></p>
+<h2>But Wait--Generally Speaking, it's the <em>REDUCED</em> Item...</h2>
+<p>In the simple example I show, all the items in the ANY are inert.  But they don't have to be.</p>
+<p>This raises a question I've wondered about for a long time: <em>What if you want to do an ANY operation on a block of stuff, but you don't want to reduce it</em>?</p>
+<p>In Ren-C all items have a quoted form, so you could MAP-EACH the block to a quoted version.</p>
+<pre><code>&gt;&gt; block: [1 + 2]
+
+&gt;&gt; q-block: map-each item block [quote item]
+== ['1 '+ '2]
+
+&gt;&gt; any .word? q-block
+== +
+</code></pre>
+<p>Seems a bit roundabout.  But, at least it's possible.</p>
+<p>But this might suggest an alternate axis for parameterizing ANY.  What if instead of changing the test, you changed the evaluator, or took out the behavior of the evaluator altogether?</p>
+<pre><code>&gt;&gt; any .identity [1 + 2]
+== +  ; or something like this
+</code></pre>
+<h2>I Just Wanted To Introduce The Questions...</h2>
+<p>I don't know if we want to bend ANY all out of shape to get it to work just on inert data just as well as evaluated data.  Maybe that's a job for another function?</p>
+<p>But this is shaping up to be an important design issue, and it's new...so every operation is going to have to deal with it.</p>
+<p>Something odd occurred to me about this idea of "before-or-after" results, realizing that even IF could have a predicate.  That might seem useless, but conditionals pass the condition to the branch...so what if you could split your test out from that branch?</p>
+<pre><code>&gt;&gt; value: 1020
+
+&gt;&gt; if even? value (x -&gt; [print ["x is" x]])
+x is #[true]  ; IF received result of (EVEN? VALUE) as single argument
+
+&gt;&gt; if .even? value (x -&gt; [print ["x is" x]])
+x is 1020  ; IF got VALUE but ran EVEN? on it, then still had VALUE
+</code></pre>
+<p>Whether you think IF needs such a feature or not, the decision of whether the branch gets the result of the predicate or the value that was tested is something that has to be answered for things like CASE.</p>
+<pre><code>case/all .not.even? [
+    4 [print "This won't print"]
+    7 [print "This will print"]
+    9 (x -&gt; [print ["x is" x]])
+]
+</code></pre>
+<p>This seems pretty clear that you'd rather have the x be 9, and not #[true]</p>
+<p><strong>Anyway, I think this is all very cool...and I've managed to fiddle things around so that predicates are much faster.</strong>  They no longer generate functions, they actually just splice the TUPLE! array directly into the evaluator feed.  It's really neat stuff, so I hope people are looking forward to applying it.</p>
+          <p><a href="https://forum.rebol.info/t/semantics-of-predicates/1404/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/semantics-of-predicates/1404/1</link>
+        <pubDate>Wed, 18 Nov 2020 01:41:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1404-1</guid>
+        <source url="https://forum.rebol.info/t/semantics-of-predicates/1404.rss">Semantics of Predicates</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Thoughts On the OBJECT! / MAP! Duality</title>
+    <link>https://forum.rebol.info/t/thoughts-on-the-object-map-duality/1481</link>
+    <description>Rebol&#39;s implementation tried to be deliberately &quot;simple&quot;.  This simplicity meant not relying on any data structure libraries...certainly not the [C++ containers](https://en.cppreference.com/w/cpp/container), as the dependency of a C++ compiler was avoided.  But also not any C data structure code from an outside source.
+
+Instead, a hand-coded resizable array type was used for basically everything (the &quot;REBSER&quot;).  This array was behind basically every case where a dynamically-sized thing was needed.  Functions were just &quot;BLOCK!s&quot; in disguise that held parameter descriptions.  Objects were just parallel pairs of BLOCK!s... with keys in one array as words...and values in the other array, so the indexes lined up.
+
+Hence you don&#39;t see a lot of malloc() and free() calls; all memory management is delegated to the series machinery.  Anything that would need to malloc() or free() instead put its information in a string or block or some combination of them.
+
+Beyond this, there were no &quot;sophisticated&quot; data structures.  No priority queues or red-black trees or anything fancy.  Just about everything was one of these resizable arrays (with a linked list here or there).
+
+## There Was ONE Hash Table: The Binding Table
+
+If you have a list of 1,000 unsorted things, and you want to find a thing in it... you will have to look at every item until you find it.  On average, you&#39;d look at 500 things per search.
+
+It would be very bad if when you tried to run **`add 1 2`** and had to go hunting for what ADD looked up to in a linear search every time.  If the lib context contained 1000 definitions, you&#39;d pay quite a lot for this search.
+
+You might think of changing the LIB context from something array-based to a structure that could do a faster search.  This would mean that it would get a bit bigger--due to the arrangement of the indexing, to help accelerate looking up ADD to see if it had a value or not.
+
+But instead of doing that for each context, what R3-Alpha (and presumably Rebol2) did was to have a single global table mapping words to array indexes.  This global table would get taken over by the BIND operation *temporarily*...populated for a single context, to say which index each word could be found at.  Then binding would use the information to glue the index number onto words.  Then the table entries for each entry would be cleared, resetting the bind table to be empty.
+
+**So instead of paying a cost on each context to make it faster at lookups... a context could *very temporarily* be loaded into a global structure as information to help map keys to the index of that key in the context.**
+
+## Index Stability Is Why Objects Can&#39;t Delete Keys
+
+Once the system glued the index of where ADD lived in the LIB context, that index is what it used.
+
+This made things like the user context grow without bound--once a key was added to it, then it could never be removed.
+
+How uncomfortable you feel about this depends on what you see OBJECT! as being.  Is it more like a C struct or Java class, where it&#39;s an immutable description of a memory layout...designed for performance?  Or is it something you use for generic key=&gt;value access?
+
+Not being able to remove values isn&#39;t the only thing that makes OBJECT! bad as a generic key=&gt;value map.  It&#39;s not even a generic *string* to value map...it can only use valid WORD!s as keys.
+
+## JavaScript&#39;s Object Type has &quot;Hidden Classes&quot;
+
+JavaScript&#39;s basic source-level &quot;object&quot; you create with `{}` allows you to use any string as the key.  [Even empty strings...or happy faces, or whatever.](https://stackoverflow.com/a/8757205)
+
+They have a more sophisticated mechanism I&#39;ve mentioned before behind these objects called &quot;hidden classes&quot; to accelerate the lookup process.  They&#39;re willing to make their objects a bit larger and complex...while finding commonalities between them to save on the size of these structures, so that lookups from key =&gt; value are faster.
+
+R3-Alpha doesn&#39;t have that discovery process.  So if you do:
+
+    repeat n 100 [
+        append objects [make object! [a: n * 10 b: n * 20]]
+    ]
+
+You&#39;ll create an array with two numbers for the values each time, AND you&#39;ll create a key array of [a b] each time.  If you want to avoid the repetitive creation of keys you have to make a prototype object and then create instances:
+
+    proto: make object! [a: b: none]
+    repeat n 100 [
+        append objects [make proto [a: n * 10 b: n * 20]]
+    ]
+
+This will get it to reuse the [a b] each time.  But if you ever append to one of the instances, then it will detach and get a new copy of the keylist at that point.
+
+## JavaScript Has a More Flexible &quot;MAP!&quot; of Its Own
+
+Even though JavaScript&#39;s plain object type is more flexible, it only allows string keys.  So there is a [Map type](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map).
+
+There is no literal notation for it--though [they&#39;ve discussed it](https://esdiscuss.org/topic/map-literal), and it doesn&#39;t look like they&#39;d get anything much better than us (e.g. Map#{xxx: yyy} where XXX and YYY could be function calls or ltierals).
+
+## So...?
+
+To people coming from languages like JavaScript, OBJECT! is going to seem like it sucks.  They&#39;d have a similar shock dealing with C or Java, of course...trying to remove fields from classes/structs.
+
+But this brings back to the point of Redbol&#39;s weird &quot;not clearly high level or low level&quot; status.  It *looks* like a high level language, and people want to use it in a script-y and dynamic way.  And people can well ask what objects are actually for.
+
+It&#39;s kind of disturbing to me that the &quot;user context&quot; and &quot;lib context&quot; are purely additive and grow without bound, with ever-increasing index numbers.  They have no natural ordering, and yet they are binding targets.  This is very &quot;maplike&quot;.
+
+**Yet dependence on order is very intrinsic to some applications of contexts.**  For instance, a frame context must put the arguments for functions in a particular order in order for the C code for a native to find them.  The system object order is known to the C code as well, for poking and pulling values out.
+
+Also, virtual binding has built even further on this notion of &quot;objects can only grow&quot;.  Because if objects were allowed to remove or add keys freely, this would mean caches of which things were found or not in a virtual bind would be unreliable.
+
+**So being able to rearrange objects would mean more complex code, less reliable invariants (to build performance and features on), and the resulting OBJECT! still probably wouldn&#39;t make people all that happy since it couldn&#39;t use arbitrary string keys.**  A more dynamic form of object would still be a bad choice for JSON since only legal words could be keys.
+
+Making all of this further agonizing is that we can&#39;t just throw the usual tools at the problem.  This is C code with an esoteric ruleset layered on top of it.  So building any of these fancier structures (hidden classes/etc.) is much more arduous than it would be for someone who could pull from a box of parts.
+
+I think the strongest argument for not mucking with the nature of OBJECT! is that no one&#39;s going to like it anyway as a generic key-&gt;value tool if its keys are limited to WORD!.  So you&#39;d wreck a bunch of the feature space that actually make the language unique, and add complexity in the process.
+
+**I&#39;ve already said I think there needs to be pushback to using BLOCK!s, and leveraging the strengths of the language.**  To me, pushing for source-level maps and getting away from relationships you can enumerate in order where you can manipulate and REDUCE and COMPOSE is like if you&#39;re making a spreadsheet and you&#39;re gradually turning it into a database that&#39;s not your core competency...and doing a bad job of it, losing sight of getting people to solve problems in a &quot;spreadsheet way&quot;.</description>
+    
+    <lastBuildDate>Sat, 30 Jan 2021 13:01:38 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/thoughts-on-the-object-map-duality/1481.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Thoughts On the OBJECT! / MAP! Duality</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebol's implementation tried to be deliberately "simple".  This simplicity meant not relying on any data structure libraries...certainly not the <a href="https://en.cppreference.com/w/cpp/container">C++ containers</a>, as the dependency of a C++ compiler was avoided.  But also not any C data structure code from an outside source.</p>
+<p>Instead, a hand-coded resizable array type was used for basically everything (the "REBSER").  This array was behind basically every case where a dynamically-sized thing was needed.  Functions were just "BLOCK!s" in disguise that held parameter descriptions.  Objects were just parallel pairs of BLOCK!s... with keys in one array as words...and values in the other array, so the indexes lined up.</p>
+<p>Hence you don't see a lot of malloc() and free() calls; all memory management is delegated to the series machinery.  Anything that would need to malloc() or free() instead put its information in a string or block or some combination of them.</p>
+<p>Beyond this, there were no "sophisticated" data structures.  No priority queues or red-black trees or anything fancy.  Just about everything was one of these resizable arrays (with a linked list here or there).</p>
+<h2>There Was ONE Hash Table: The Binding Table</h2>
+<p>If you have a list of 1,000 unsorted things, and you want to find a thing in it... you will have to look at every item until you find it.  On average, you'd look at 500 things per search.</p>
+<p>It would be very bad if when you tried to run <strong><code>add 1 2</code></strong> and had to go hunting for what ADD looked up to in a linear search every time.  If the lib context contained 1000 definitions, you'd pay quite a lot for this search.</p>
+<p>You might think of changing the LIB context from something array-based to a structure that could do a faster search.  This would mean that it would get a bit bigger--due to the arrangement of the indexing, to help accelerate looking up ADD to see if it had a value or not.</p>
+<p>But instead of doing that for each context, what R3-Alpha (and presumably Rebol2) did was to have a single global table mapping words to array indexes.  This global table would get taken over by the BIND operation <em>temporarily</em>...populated for a single context, to say which index each word could be found at.  Then binding would use the information to glue the index number onto words.  Then the table entries for each entry would be cleared, resetting the bind table to be empty.</p>
+<p><strong>So instead of paying a cost on each context to make it faster at lookups... a context could <em>very temporarily</em> be loaded into a global structure as information to help map keys to the index of that key in the context.</strong></p>
+<h2>Index Stability Is Why Objects Can't Delete Keys</h2>
+<p>Once the system glued the index of where ADD lived in the LIB context, that index is what it used.</p>
+<p>This made things like the user context grow without bound--once a key was added to it, then it could never be removed.</p>
+<p>How uncomfortable you feel about this depends on what you see OBJECT! as being.  Is it more like a C struct or Java class, where it's an immutable description of a memory layout...designed for performance?  Or is it something you use for generic key=&gt;value access?</p>
+<p>Not being able to remove values isn't the only thing that makes OBJECT! bad as a generic key=&gt;value map.  It's not even a generic <em>string</em> to value map...it can only use valid WORD!s as keys.</p>
+<h2>JavaScript's Object Type has "Hidden Classes"</h2>
+<p>JavaScript's basic source-level "object" you create with <code>{}</code> allows you to use any string as the key.  <a href="https://stackoverflow.com/a/8757205">Even empty strings...or happy faces, or whatever.</a></p>
+<p>They have a more sophisticated mechanism I've mentioned before behind these objects called "hidden classes" to accelerate the lookup process.  They're willing to make their objects a bit larger and complex...while finding commonalities between them to save on the size of these structures, so that lookups from key =&gt; value are faster.</p>
+<p>R3-Alpha doesn't have that discovery process.  So if you do:</p>
+<pre><code>repeat n 100 [
+    append objects [make object! [a: n * 10 b: n * 20]]
+]
+</code></pre>
+<p>You'll create an array with two numbers for the values each time, AND you'll create a key array of [a b] each time.  If you want to avoid the repetitive creation of keys you have to make a prototype object and then create instances:</p>
+<pre><code>proto: make object! [a: b: none]
+repeat n 100 [
+    append objects [make proto [a: n * 10 b: n * 20]]
+]
+</code></pre>
+<p>This will get it to reuse the [a b] each time.  But if you ever append to one of the instances, then it will detach and get a new copy of the keylist at that point.</p>
+<h2>JavaScript Has a More Flexible "MAP!" of Its Own</h2>
+<p>Even though JavaScript's plain object type is more flexible, it only allows string keys.  So there is a <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map">Map type</a>.</p>
+<p>There is no literal notation for it--though <a href="https://esdiscuss.org/topic/map-literal">they've discussed it</a>, and it doesn't look like they'd get anything much better than us (e.g. Map#{xxx: yyy} where XXX and YYY could be function calls or ltierals).</p>
+<h2>So...?</h2>
+<p>To people coming from languages like JavaScript, OBJECT! is going to seem like it sucks.  They'd have a similar shock dealing with C or Java, of course...trying to remove fields from classes/structs.</p>
+<p>But this brings back to the point of Redbol's weird "not clearly high level or low level" status.  It <em>looks</em> like a high level language, and people want to use it in a script-y and dynamic way.  And people can well ask what objects are actually for.</p>
+<p>It's kind of disturbing to me that the "user context" and "lib context" are purely additive and grow without bound, with ever-increasing index numbers.  They have no natural ordering, and yet they are binding targets.  This is very "maplike".</p>
+<p><strong>Yet dependence on order is very intrinsic to some applications of contexts.</strong>  For instance, a frame context must put the arguments for functions in a particular order in order for the C code for a native to find them.  The system object order is known to the C code as well, for poking and pulling values out.</p>
+<p>Also, virtual binding has built even further on this notion of "objects can only grow".  Because if objects were allowed to remove or add keys freely, this would mean caches of which things were found or not in a virtual bind would be unreliable.</p>
+<p><strong>So being able to rearrange objects would mean more complex code, less reliable invariants (to build performance and features on), and the resulting OBJECT! still probably wouldn't make people all that happy since it couldn't use arbitrary string keys.</strong>  A more dynamic form of object would still be a bad choice for JSON since only legal words could be keys.</p>
+<p>Making all of this further agonizing is that we can't just throw the usual tools at the problem.  This is C code with an esoteric ruleset layered on top of it.  So building any of these fancier structures (hidden classes/etc.) is much more arduous than it would be for someone who could pull from a box of parts.</p>
+<p>I think the strongest argument for not mucking with the nature of OBJECT! is that no one's going to like it anyway as a generic key-&gt;value tool if its keys are limited to WORD!.  So you'd wreck a bunch of the feature space that actually make the language unique, and add complexity in the process.</p>
+<p><strong>I've already said I think there needs to be pushback to using BLOCK!s, and leveraging the strengths of the language.</strong>  To me, pushing for source-level maps and getting away from relationships you can enumerate in order where you can manipulate and REDUCE and COMPOSE is like if you're making a spreadsheet and you're gradually turning it into a database that's not your core competency...and doing a bad job of it, losing sight of getting people to solve problems in a "spreadsheet way".</p>
+          <p><a href="https://forum.rebol.info/t/thoughts-on-the-object-map-duality/1481/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/thoughts-on-the-object-map-duality/1481/1</link>
+        <pubDate>Sat, 30 Jan 2021 13:01:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1481-1</guid>
+        <source url="https://forum.rebol.info/t/thoughts-on-the-object-map-duality/1481.rss">Thoughts On the OBJECT! / MAP! Duality</source>
+      </item>
+  </channel>
+</rss>

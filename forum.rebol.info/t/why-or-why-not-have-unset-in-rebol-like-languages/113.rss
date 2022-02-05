@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Why (or why not) have UNSET! in Rebol-like Languages</title>
+    <link>https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113</link>
+    <description>*(**UPDATE**: I&#39;ve edited this post to reflect the terminology change to NULL.  But also, I found a post on Carl&#39;s blog titled [&quot;UNSET! is not first-class&quot;](http://www.rebol.net/r3blogs/0318.html).  It doesn&#39;t particularly add anything new, but shows signs of a desire to differentiate the state...which seems to naturally culminate in Ren-C&#39;s choice to make it impossible to store it in BLOCK!s.)*
+
+Question asked of me was:
+
+&gt; Could you explain in laymen terms why unset! is there in Rebol type languages, and why it&#39;s there?
+To my brain, something like none makes more sense to use for &#39;no thing&#39;. I get that unset removes the reference between word and value(s), but unset pops up for &quot;no return value&quot;, even though it&#39;s a return value, and &#39;none&#39;-ish things.
+
+UNSET!&#39;s existence is ostensibly from wanting to give a distinction between a variable that is not set (should cause an error if accessed) vs. set.  Rebol would be a more unsafe language if such a state were not available.  You&#39;d just go typing `if my-varable = 1 [...]` when you meant to say my-variable and there&#39;d be no indication of a problem.
+
+Note that the reason you don&#39;t get a &quot;no binding&quot; error for a misspelling comes from the somewhat liberal choice to bind words dynamically in the user context just because they appear.  It&#39;s the reason you can write:
+
+    &gt;&gt; print-foo: does [print foo] ;-- gets bound here
+    &gt;&gt; print-foo
+    ** error (it&#39;s in bound state but not set)
+    &gt;&gt; foo: 10
+    &gt;&gt; print-foo
+    10
+
+The `foo` in `print foo` gets a binding to the user context, even though there was no `foo` defined there beforehand.  If that weren&#39;t the case and it expanded on seeing set-words only, there&#39;d be more
+safety against typos...which might make it somewhat less critical to have a &quot;defined-but-not-set&quot; state.
+
+Yet I&#39;d still argue that typos aside, it&#39;s valuable to have knowledge of when you&#39;ve used something before you&#39;ve explicitly assigned it.  So this &quot;bound yet triggers an error in casual usage&quot; state is generally useful.
+
+But I agree with you on the next point... that conveying this state of a variable as a &quot;value&quot; which has a &quot;type&quot;, and can be inserted into a block, is a bad idea.
+
+One could imagine it not being conveyable at all except through an `is-variable-set?` test for those concerned with the status...and other forms of access would be errors.  But one could also designate it a special transitional status that simply can&#39;t be put in blocks.... *which is what Ren-C does.*
+
+So NULL is not a &quot;value&quot;.  It&#39;s in fact, the absence of a value. &quot;set?&quot; or &quot;unset?&quot; are questions asked of *variables*, e.g. `SET? &#39;X` or `UNSET? &#39;X/Y`.  Then `VALUE?` is a question you can ask of an evaluation product, e.g. `VALUE? :NOT-SET-THING` is false.  But the system protects against any instances of a &quot;null cell&quot; making it into the body of a block or other array.  `TYPE OF :NOT-SET-THING` will also come back as a NULL.
+
+Now once you have this non-valued thing, it would be a bit of a shame to waste its unique status.  Ren-C uses it as the outcome of a failed conditional, while forcing all successful conditionals to some value (&quot;voidifying&quot; it if the branch evaluates to NULL).  So...
+
+    &gt;&gt; block: copy [a b c]
+    &gt;&gt; append block if false [&#39;d]
+    == [a b c]
+    &gt;&gt; append block if true [&#39;d]
+    == [a b c d]
+    &gt;&gt; append block if true []
+    == [a b c d #[void]]
+
+Since you never meant to intentionally append a null to a block (as that is impossible) you have this extra dimension of flexibility.
+
+There is also &quot;refinement revocation&quot;, where nulls un-ask for the refinement:
+
+    &gt;&gt; block: copy [a b c]
+    &gt;&gt; append/dup block &#39;foo if false [3]
+    [a b c]
+    &gt;&gt; append/dup block &#39;foo if true [3]
+    [a b c foo foo foo]
+
+The out-of-band nature is taken advantage of in &quot;expert&quot; operators, which differentiate between no value and a legitimate blank value:
+
+    &gt;&gt; block: copy [a _]
+    &gt;&gt; take* block
+    == a
+    &gt;&gt; take* block
+    == _
+    &gt;&gt; take* block
+    // null
+
+A casual `TAKE` operation built on top of `TAKE*` will give you an error if it didn&#39;t actually take anything, as opposed to returning NULL.  Similar solutions help one put blank values in maps, and distinguish that from the absence of a value.
+
+To summarize: the &quot;null&quot; state which is helpful in denoting a transient situation of &quot;complete absence of value&quot; becomes much more useful when you can confidently say it&#39;s *not* a value, and is never stored in blocks or other data structures.  Then it can really indicate some out-of-band quality.  Blanks (&quot;nones&quot;) are too casually used as actual placeholders to serve these purposes.</description>
+    
+    <lastBuildDate>Tue, 22 Jan 2019 23:03:34 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Why (or why not) have UNSET! in Rebol-like Languages</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I don't know what you have to gain by embracing this fallacy.</p>
+<p><em>Variables</em> are "set" or "unset".  Not <strong>values</strong>.  All <em>values</em> should represent a "set" state.</p>
+<pre><code>x: 10
+if set? 'x [print "The variable is set."]
+
+set 'x 20
+if set? 'x [print "Yup, the variable is still set."]
+
+unset 'x
+comment [x: null]  ; alternative unset method
+
+if unset? 'x [print "Now it's unset."]
+if null? :x [print "Here's another way to do it."]
+if not value? :x [print "A way of saying the same thing."]
+</code></pre>
+<p>Generic code has to process blocks of values, and it's just not helping anyone when you can put "unset values" in blocks.  Imagine enumerating this block, each item stored in a variable as you go.  The variable you are using to enumerate the block runs into a problem... it has to hold the current item, yet it also might be unset.  Don't you see why this is not right?</p>
+<p>I'll point out that Ren-C's ANY-VALUE! is not only more clear than ANY-TYPE! (which has a bad property of seeming like ANY-DATATYPE!, e.g. DATATYPE!) but it also does <em>not</em> include NULL.  Optional parameters are "denoted" differently, but ANY-VALUE! means specifically anything that isn't NULL.  Hence ANY-VALUE? and VALUE? are synonyms.</p>
+          <p><a href="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113/4</link>
+        <pubDate>Fri, 02 Jun 2017 08:21:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-113-4</guid>
+        <source url="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113.rss">Why (or why not) have UNSET! in Rebol-like Languages</source>
+      </item>
+      <item>
+        <title>Why (or why not) have UNSET! in Rebol-like Languages</title>
+        <dc:creator><![CDATA[rebolek]]></dc:creator>
+        <description><![CDATA[
+            <p>This is correct explanation and Gödel, Escher and Bach have nothing to do with it, they all died long before Rebol was written by Carl Sassenrath. It is of course strange how uneducated minds work, when they can't get correct explanation when they see one.</p>
+          <p><a href="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113/3</link>
+        <pubDate>Fri, 02 Jun 2017 07:30:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-113-3</guid>
+        <source url="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113.rss">Why (or why not) have UNSET! in Rebol-like Languages</source>
+      </item>
+      <item>
+        <title>Why (or why not) have UNSET! in Rebol-like Languages</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Nenad Rakocevic says:</p>
+<aside class="onebox allowlistedgeneric">
+  <header class="source">
+      <img src="https://cdn03.gitter.im/_s/ae1989d0b/images/favicon-normal.ico" class="site-icon" width="32" height="32">
+      <a href="https://gitter.im/red/red/welcome?at=592f79a33aeff8a61f64b9d7" target="_blank" rel="noopener">gitter.im</a>
+  </header>
+  <article class="onebox-body">
+    <img src="https://avatars-04.gitter.im/group/iv/4/57542d9cc43b8c601977e621" class="thumbnail onebox-avatar" width="128" height="128">
+
+<h3><a href="https://gitter.im/red/red/welcome?at=592f79a33aeff8a61f64b9d7" target="_blank" rel="noopener">red/red/welcome</a></h3>
+
+<p>@dockimbel: @gltewalt Redbol languages are based on denotational semantics, where the meaning of every expression needs to have a representation in the language itself. Every expression needs to return a value. Without `unset!` there would be a hole...</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<blockquote>
+<p>Redbol languages are based on denotational semantics, where the meaning of every expression needs to have a representation in the language itself. Every expression needs to return a value. Without unset! there would be a hole in the language, several fundamental semantic rules would be collapsing, e.g. reduce [1 print ""] =&gt; [1] (reducing 2 expressions would return 1 expression).</p>
+</blockquote>
+<p>I suppose he hasn't read Godel, Escher, Bach.</p>
+<p>The fact of the matter is that there is no such thing as a "complete" system.  All we do is push complexity around in order to shape the territory to become suitable for our purposes.</p>
+<p>Somehow, the idea that <strong>reduce [1 print ""]</strong> could be an <em>error</em> is by its definition <em>worse</em> than having a block that holds a "unset value".</p>
+<p>It's strange how uneducated minds work.</p>
+<blockquote>
+<p><strong>UPDATE:</strong> Ren-C has a #[void] datatype which is used to represent an "ornery" value, and in the evaluator it acts very much like #[unset] did.  And it's actually what PRINT returns, so this REDUCE works (albeit leaving such an ornery value there).  <em>But void very notably has nothing to do with "unsetness"</em> ... <a href="https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947">see explanation</a>.  And many other operations <em>will</em> error, e.g. <strong>reduce [1 find [a b c] 'd]</strong>... you have to write <strong>reduce [1 try find [a b c] 'd]</strong></p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113/2</link>
+        <pubDate>Thu, 01 Jun 2017 21:39:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-113-2</guid>
+        <source url="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113.rss">Why (or why not) have UNSET! in Rebol-like Languages</source>
+      </item>
+      <item>
+        <title>Why (or why not) have UNSET! in Rebol-like Languages</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><em>(<strong>UPDATE</strong>: I've edited this post to reflect the terminology change to NULL.  But also, I found a post on Carl's blog titled <a href="http://www.rebol.net/r3blogs/0318.html" rel="nofollow noopener">"UNSET! is not first-class"</a>.  It doesn't particularly add anything new, but shows signs of a desire to differentiate the state...which seems to naturally culminate in Ren-C's choice to make it impossible to store it in BLOCK!s.)</em></p>
+<p>Question asked of me was:</p>
+<blockquote>
+<p>Could you explain in laymen terms why unset! is there in Rebol type languages, and why it's there?<br>
+To my brain, something like none makes more sense to use for 'no thing'. I get that unset removes the reference between word and value(s), but unset pops up for "no return value", even though it's a return value, and 'none'-ish things.</p>
+</blockquote>
+<p>UNSET!'s existence is ostensibly from wanting to give a distinction between a variable that is not set (should cause an error if accessed) vs. set.  Rebol would be a more unsafe language if such a state were not available.  You'd just go typing <code>if my-varable = 1 [...]</code> when you meant to say my-variable and there'd be no indication of a problem.</p>
+<p>Note that the reason you don't get a "no binding" error for a misspelling comes from the somewhat liberal choice to bind words dynamically in the user context just because they appear.  It's the reason you can write:</p>
+<pre><code>&gt;&gt; print-foo: does [print foo] ;-- gets bound here
+&gt;&gt; print-foo
+** error (it's in bound state but not set)
+&gt;&gt; foo: 10
+&gt;&gt; print-foo
+10
+</code></pre>
+<p>The <code>foo</code> in <code>print foo</code> gets a binding to the user context, even though there was no <code>foo</code> defined there beforehand.  If that weren't the case and it expanded on seeing set-words only, there'd be more<br>
+safety against typos...which might make it somewhat less critical to have a "defined-but-not-set" state.</p>
+<p>Yet I'd still argue that typos aside, it's valuable to have knowledge of when you've used something before you've explicitly assigned it.  So this "bound yet triggers an error in casual usage" state is generally useful.</p>
+<p>But I agree with you on the next point... that conveying this state of a variable as a "value" which has a "type", and can be inserted into a block, is a bad idea.</p>
+<p>One could imagine it not being conveyable at all except through an <code>is-variable-set?</code> test for those concerned with the status...and other forms of access would be errors.  But one could also designate it a special transitional status that simply can't be put in blocks.... <em>which is what Ren-C does.</em></p>
+<p>So NULL is not a "value".  It's in fact, the absence of a value. "set?" or "unset?" are questions asked of <em>variables</em>, e.g. <code>SET? 'X</code> or <code>UNSET? 'X/Y</code>.  Then <code>VALUE?</code> is a question you can ask of an evaluation product, e.g. <code>VALUE? :NOT-SET-THING</code> is false.  But the system protects against any instances of a "null cell" making it into the body of a block or other array.  <code>TYPE OF :NOT-SET-THING</code> will also come back as a NULL.</p>
+<p>Now once you have this non-valued thing, it would be a bit of a shame to waste its unique status.  Ren-C uses it as the outcome of a failed conditional, while forcing all successful conditionals to some value ("voidifying" it if the branch evaluates to NULL).  So...</p>
+<pre><code>&gt;&gt; block: copy [a b c]
+&gt;&gt; append block if false ['d]
+== [a b c]
+&gt;&gt; append block if true ['d]
+== [a b c d]
+&gt;&gt; append block if true []
+== [a b c d #[void]]
+</code></pre>
+<p>Since you never meant to intentionally append a null to a block (as that is impossible) you have this extra dimension of flexibility.</p>
+<p>There is also "refinement revocation", where nulls un-ask for the refinement:</p>
+<pre><code>&gt;&gt; block: copy [a b c]
+&gt;&gt; append/dup block 'foo if false [3]
+[a b c]
+&gt;&gt; append/dup block 'foo if true [3]
+[a b c foo foo foo]
+</code></pre>
+<p>The out-of-band nature is taken advantage of in "expert" operators, which differentiate between no value and a legitimate blank value:</p>
+<pre><code>&gt;&gt; block: copy [a _]
+&gt;&gt; take* block
+== a
+&gt;&gt; take* block
+== _
+&gt;&gt; take* block
+// null
+</code></pre>
+<p>A casual <code>TAKE</code> operation built on top of <code>TAKE*</code> will give you an error if it didn't actually take anything, as opposed to returning NULL.  Similar solutions help one put blank values in maps, and distinguish that from the absence of a value.</p>
+<p>To summarize: the "null" state which is helpful in denoting a transient situation of "complete absence of value" becomes much more useful when you can confidently say it's <em>not</em> a value, and is never stored in blocks or other data structures.  Then it can really indicate some out-of-band quality.  Blanks ("nones") are too casually used as actual placeholders to serve these purposes.</p>
+          <p><a href="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113/1</link>
+        <pubDate>Thu, 01 Jun 2017 00:46:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-113-1</guid>
+        <source url="https://forum.rebol.info/t/why-or-why-not-have-unset-in-rebol-like-languages/113.rss">Why (or why not) have UNSET! in Rebol-like Languages</source>
+      </item>
+  </channel>
+</rss>

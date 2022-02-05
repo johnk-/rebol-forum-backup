@@ -1,0 +1,347 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>COLLECT-LINES: an adaptation story</title>
+    <link>https://forum.rebol.info/t/collect-lines-an-adaptation-story/945</link>
+    <description>Here&#39;s an interesting cookbook recipe.  Frequently, the goal of a COLLECT process is to collect a certain number of strings representing command lines, or something like that.  Each line is represented by a block, but needs to be SPACED.  This can be a bit annoying to have to say every time:
+
+     collect [
+         keep spaced [...]
+         if condition [
+             keep spaced [...]
+         ]
+     ]
+
+What if you wanted to specialize COLLECT as COLLECT-LINES so it would do the SPACED automatically?
+
+     collect-lines: adapt &#39;collect [
+          body: compose [
+               keep: adapt &#39;keep [value: spaced value]
+               (as group! body)
+          ]
+      ]
+
+So you&#39;re augmenting the body with a little bit of prelude code that adapts the keep.  What&#39;s nice is that by using AS you don&#39;t need to deep copy that body, you&#39;re just aliasing it.  This means that when COLLECT goes through and binds the augmented body to keep, the little adapter has the same binding...so it affects that keep.
+
+&gt; There&#39;s a particular finesse in Ren-C because when you put something in a stream of code using AS GROUP!, that won&#39;t synthesize anything.  If your group is empty, it will act like it&#39;s not there.
+&gt;
+&gt;     &gt;&gt; do [1 + 2 ()]
+&gt;     == 3
+&gt;
+&gt; That&#39;s actually pretty important for when you&#39;re doing these kinds of code splicings, you can really &quot;opt out&quot; of sections.
+
+If you&#39;re going to do it this simply, you can eliminate some of the repetition [with MY](https://trello.com/c/8Bmwvwya) (which quotes a set word on the left, and injects the value as the first parameter of what comes next).
+
+     collect-lines: adapt &#39;collect [
+          body: compose [
+               keep: my adapt [value: my spaced]
+               (as group! body)
+          ]
+      ]
+
+That&#39;s quick and dirty enough for casual usage.  But this looks nice enough we might even want it in the box. 
+ So thinking through a few edge cases...
+
+Some of the refinements to KEEP don&#39;t make sense any more, like /ONLY and perhaps /PART (you&#39;d be passing in a block and then specifying a /PART based on the text...probably not what you meant).  You probably want each line to be on its own line when collected in the list, so /LINE should be true.  Other refinements, like /DUP can probably be left as-is.
+
+So let&#39;s get rid of the refinements that don&#39;t make sense and set it up to default to a newline on each string in the collected block.  Also, you need to TRY on the value because it might be null, and then you&#39;d want SPACED to see it as a BLANK! instead of an error, returning a null and thus preserving it:
+
+     collect-lines: adapt &#39;collect [
+          body: compose [
+               keep: adapt specialize &#39;keep [
+                   line: true | only: false | part: _
+               ] [value: spaced try :value]
+               (as group! body)
+          ]
+      ]
+
+Now we have a nice little routine:
+
+     &gt;&gt; collect-lines [
+           keep [&quot;How&quot; &quot;about&quot; &quot;this?&quot;]
+           keep case [
+               1 = 2 [[&quot;Not&quot; &quot;Kept&quot;]]
+               3 = 4 [[&quot;This&quot; &quot;Neither&quot;]]
+           ]
+           keep/dup [&quot;Pretty&quot; &quot;cool&quot; &quot;eh?&quot;] 2
+        ]
+    == [
+        &quot;How about this?&quot;
+        &quot;Pretty cool eh?&quot;
+        &quot;Pretty cool eh?&quot;
+    ]
+
+So... how difficult would that be to do in Rebol2/R3-Alpha/Red?  And how likely are you to get it wrong while trying?
+
+### One issue to think about...
+
+With the recent change to where COLLECT only creates a block if you do a KEEP of some non-null material, there was a workaround to say `keep []` as a no-op at the top of the collect body, to get the block.  That won&#39;t work here, since `keep []` will add an empty string to the collected lines.
+
+Off the top of my head:
+
+* Since COLLECT-LINES is not &quot;full band&quot; any more (it knows you don&#39;t want to collect a BLANK!), it might use BLANK! to be the &quot;no-op, but means you kept something&quot;.  So `keep _` would execute the un-adapted `keep []` internally, yielding the same effect.
+
+* COLLECT-LINES could just sneak in a `keep []` before it does the specialization and always return a block, foregoing COLLECT&#39;s &quot;null if no KEEPs&quot; property.
+
+What&#39;s nice about actually doing these little experiments is you get to think about what pressures it puts on routines like SPACED.  Increasingly I am of the opinion that SPACED of a TEXT! should just return that text--there&#39;s almost no case where enforcing that it&#39;s a BLOCK! has value.</description>
+    
+    <lastBuildDate>Mon, 04 Oct 2021 05:11:45 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>COLLECT-LINES: an adaptation story</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="5" data-topic="945">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But going beyond it, I think even better is POINTFREE. It's more general and keeps the definitions right in front of you.</p>
+</blockquote>
+</aside>
+<p>I was looking at a line of code with COLLECT-TEXT and didn't really remember what it did, so I had to look it up.</p>
+<p>This supports my argument that really, we're better off letting people define these specializations on an as-needed basis.  Also, that lets you give the keep operation the name you want:</p>
+<pre><code>collect [
+    keep: (&lt;- keep/line spaced)  ; if you don't think name reuse is confusing
+    ...
+]
+
+collect [
+    keepline: (&lt;- keep/line spaced)  ; if you only want it a little briefer
+    ...
+]
+
+collect [
+    keepL: (&lt;- keep/line spaced)  ; if you're this kind of person
+    ...
+]
+</code></pre>
+<aside class="quote no-group" data-username="hostilefork" data-post="5" data-topic="945">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Getting the fabric behind COLLECT-LINES working is important, and this has kept pushing on the state of the art.</p>
+</blockquote>
+</aside>
+<p>Having these examples has certainly been good for testing, so I do want to thank these specializations for their service.  <img src="https://forum.rebol.info/images/emoji/twitter/vulcan_salute.png?v=9" title=":vulcan_salute:" class="emoji" alt=":vulcan_salute:"></p>
+<p>But I think it's good enough to just put COLLECT-TEXT and COLLECT-LINES in the test suite.  Having them in the mezzanine is just "that much more stuff" that needs documentation and for people reading the (few) callsites to trip over.  I think the case-by-case specializations are clearer.</p>
+          <p><a href="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/6</link>
+        <pubDate>Sun, 03 Oct 2021 09:07:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-945-6</guid>
+        <source url="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945.rss">COLLECT-LINES: an adaptation story</source>
+      </item>
+      <item>
+        <title>COLLECT-LINES: an adaptation story</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<pre><code>&gt;&gt; collect-lines [
+      keep ["How" "about" "this?"]
+      keep case [
+          1 = 2 [["Not" "Kept"]]
+          3 = 4 [["This" "Neither"]]
+      ]
+      keep/dup ["Pretty" "cool" "eh?"] 2
+   ]
+== [
+    "How about this?"
+    "Pretty cool eh?"
+    "Pretty cool eh?"
+]
+</code></pre>
+</blockquote>
+<p>Getting the fabric behind COLLECT-LINES working is important, and this has kept pushing on the state of the art.</p>
+<p>But going beyond it, I think even better is POINTFREE.  It's more general and keeps the definitions right in front of you.</p>
+<p>POINTFREE can't do partial argument invocations like the following yet, but it should be able to eventually:</p>
+<pre><code>&gt;&gt; collect [
+      keep: (&lt;- keep unspaced)
+
+      keep ["How" "about" "this?"]
+      keep case [
+          1 = 2 [["Not" "Kept"]]
+          3 = 4 [["This" "Neither"]]
+      ]
+      keep/dup ["Pretty" "cool" "eh?"] 2
+   ]
+</code></pre>
+<p>And I think that's probably the right way to go with this.</p>
+<p>With comma as the new experiment for expression barriers, I'm not sure how I feel about:</p>
+<pre><code>      keep: &lt;- keep unspaced,
+</code></pre>
+<p>That comma flies a little under the radar.  Maybe not so bad with a space.</p>
+<pre><code>      keep: &lt;- keep unspaced ,
+</code></pre>
+<p>Anyway that could be an alternate option.</p>
+          <p><a href="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/5</link>
+        <pubDate>Thu, 05 Nov 2020 01:22:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-945-5</guid>
+        <source url="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945.rss">COLLECT-LINES: an adaptation story</source>
+      </item>
+      <item>
+        <title>COLLECT-LINES: an adaptation story</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="945">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>Reading posts like this feels like:</p>
+</blockquote>
+</aside>
+<p>From my end, it usually feels like the holographic instruction manual from Invader Zim <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<div class="lazyYT" data-youtube-id="NB8vk8Zrwak" data-youtube-title="Invader Zim  - Because It's Cool" data-width="480" data-height="270" data-parameters="feature=oembed&amp;wmode=opaque"></div>
+<p>"Why would you do all that?"<br>
+"Because it's Cool."</p>
+          <p><a href="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/4</link>
+        <pubDate>Sun, 09 Dec 2018 17:02:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-945-4</guid>
+        <source url="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945.rss">COLLECT-LINES: an adaptation story</source>
+      </item>
+      <item>
+        <title>COLLECT-LINES: an adaptation story</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>(Applause!) Very cool, and instructive. Anything which makes text munging more powerful and literate is a huge win for me.<br>
+Great stuff, Brian. Reading posts like this feels like:<br>
+<div class="lazyYT" data-youtube-id="xyjn8aybPBs" data-youtube-title="Step Bros night vision goggles" data-width="480" data-height="270" data-parameters="feature=oembed&amp;wmode=opaque"></div></p>
+          <p><a href="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/3</link>
+        <pubDate>Fri, 07 Dec 2018 14:52:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-945-3</guid>
+        <source url="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945.rss">COLLECT-LINES: an adaptation story</source>
+      </item>
+      <item>
+        <title>COLLECT-LINES: an adaptation story</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I said this is a "cookbook" entry more than a feature discover entry (even though I'm thinking COLLECT-LINES needs to be in the box).</p>
+<p>But this actually leads to a rather interesting take on another historical problem: how to collect <em>a single line</em> where some of the components want to be spaced apart, but others want to be tight together.</p>
+<p>Crickets and gentleman(s), I give you... COLLECT-TEXT (because calling it COLLECT-LINE would not be different enough from COLLECT-LINES to spot easily):</p>
+<pre><code>collect-text: chain [
+     adapt 'collect [
+         body: compose/only [
+             keep [] // make sure no null return, an empty block at the least
+             keep: adapt specialize 'keep [
+                 line: false | only: false | part: false
+              ] [value: unspaced try :value]
+             (as group! body)
+         ]
+     ]
+         |
+     :spaced // if an empty block gets here, it becomes a null result
+ ]
+</code></pre>
+<p>The individual bits you KEEP with single blocks will be tight together, with the final result being spaced out:</p>
+<pre><code> &gt;&gt; warnings: ["crazy-spectre-thing" "ms-ships-buggy-headers"]
+
+ &gt;&gt; command: collect-text [
+        keep "$(REBOL)"
+        for-each w warnings [keep ["-Wno-" w]]
+    ]
+
+== "$(REBOL) -Wno-crazy-spectre-thing -Wno-ms-ships-buggy-headers"
+</code></pre>
+<p>This seems another nice tool to go in.  I'll say that as hard as it is having the heavy amount of code in the make system being all Rebol, being able to use the language to attack it with new Ren-C features redeems it (this was why I endorsed it in the first place, even though it was very...big).</p>
+          <p><a href="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/2</link>
+        <pubDate>Fri, 07 Dec 2018 00:01:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-945-2</guid>
+        <source url="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945.rss">COLLECT-LINES: an adaptation story</source>
+      </item>
+      <item>
+        <title>COLLECT-LINES: an adaptation story</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Here's an interesting cookbook recipe.  Frequently, the goal of a COLLECT process is to collect a certain number of strings representing command lines, or something like that.  Each line is represented by a block, but needs to be SPACED.  This can be a bit annoying to have to say every time:</p>
+<pre><code> collect [
+     keep spaced [...]
+     if condition [
+         keep spaced [...]
+     ]
+ ]
+</code></pre>
+<p>What if you wanted to specialize COLLECT as COLLECT-LINES so it would do the SPACED automatically?</p>
+<pre><code> collect-lines: adapt 'collect [
+      body: compose [
+           keep: adapt 'keep [value: spaced value]
+           (as group! body)
+      ]
+  ]
+</code></pre>
+<p>So you're augmenting the body with a little bit of prelude code that adapts the keep.  What's nice is that by using AS you don't need to deep copy that body, you're just aliasing it.  This means that when COLLECT goes through and binds the augmented body to keep, the little adapter has the same binding...so it affects that keep.</p>
+<blockquote>
+<p>There's a particular finesse in Ren-C because when you put something in a stream of code using AS GROUP!, that won't synthesize anything.  If your group is empty, it will act like it's not there.</p>
+<pre><code>&gt;&gt; do [1 + 2 ()]
+== 3
+</code></pre>
+<p>That's actually pretty important for when you're doing these kinds of code splicings, you can really "opt out" of sections.</p>
+</blockquote>
+<p>If you're going to do it this simply, you can eliminate some of the repetition <a href="https://trello.com/c/8Bmwvwya" rel="nofollow noopener">with MY</a> (which quotes a set word on the left, and injects the value as the first parameter of what comes next).</p>
+<pre><code> collect-lines: adapt 'collect [
+      body: compose [
+           keep: my adapt [value: my spaced]
+           (as group! body)
+      ]
+  ]
+</code></pre>
+<p>That's quick and dirty enough for casual usage.  But this looks nice enough we might even want it in the box.<br>
+So thinking through a few edge cases...</p>
+<p>Some of the refinements to KEEP don't make sense any more, like /ONLY and perhaps /PART (you'd be passing in a block and then specifying a /PART based on the text...probably not what you meant).  You probably want each line to be on its own line when collected in the list, so /LINE should be true.  Other refinements, like /DUP can probably be left as-is.</p>
+<p>So let's get rid of the refinements that don't make sense and set it up to default to a newline on each string in the collected block.  Also, you need to TRY on the value because it might be null, and then you'd want SPACED to see it as a BLANK! instead of an error, returning a null and thus preserving it:</p>
+<pre><code> collect-lines: adapt 'collect [
+      body: compose [
+           keep: adapt specialize 'keep [
+               line: true | only: false | part: _
+           ] [value: spaced try :value]
+           (as group! body)
+      ]
+  ]
+</code></pre>
+<p>Now we have a nice little routine:</p>
+<pre><code> &gt;&gt; collect-lines [
+       keep ["How" "about" "this?"]
+       keep case [
+           1 = 2 [["Not" "Kept"]]
+           3 = 4 [["This" "Neither"]]
+       ]
+       keep/dup ["Pretty" "cool" "eh?"] 2
+    ]
+== [
+    "How about this?"
+    "Pretty cool eh?"
+    "Pretty cool eh?"
+]
+</code></pre>
+<p>So... how difficult would that be to do in Rebol2/R3-Alpha/Red?  And how likely are you to get it wrong while trying?</p>
+<h3>One issue to think about...</h3>
+<p>With the recent change to where COLLECT only creates a block if you do a KEEP of some non-null material, there was a workaround to say <code>keep []</code> as a no-op at the top of the collect body, to get the block.  That won't work here, since <code>keep []</code> will add an empty string to the collected lines.</p>
+<p>Off the top of my head:</p>
+<ul>
+<li>
+<p>Since COLLECT-LINES is not "full band" any more (it knows you don't want to collect a BLANK!), it might use BLANK! to be the "no-op, but means you kept something".  So <code>keep _</code> would execute the un-adapted <code>keep []</code> internally, yielding the same effect.</p>
+</li>
+<li>
+<p>COLLECT-LINES could just sneak in a <code>keep []</code> before it does the specialization and always return a block, foregoing COLLECT's "null if no KEEPs" property.</p>
+</li>
+</ul>
+<p>What's nice about actually doing these little experiments is you get to think about what pressures it puts on routines like SPACED.  Increasingly I am of the opinion that SPACED of a TEXT! should just return that text--there's almost no case where enforcing that it's a BLOCK! has value.</p>
+          <p><a href="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/collect-lines-an-adaptation-story/945/1</link>
+        <pubDate>Thu, 06 Dec 2018 21:36:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-945-1</guid>
+        <source url="https://forum.rebol.info/t/collect-lines-an-adaptation-story/945.rss">COLLECT-LINES: an adaptation story</source>
+      </item>
+  </channel>
+</rss>

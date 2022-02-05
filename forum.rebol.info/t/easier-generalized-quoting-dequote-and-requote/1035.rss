@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Easier Generalized Quoting: &lt;dequote&gt; and &lt;requote&gt;</title>
+    <link>https://forum.rebol.info/t/easier-generalized-quoting-dequote-and-requote/1035</link>
+    <description>There are primitives for generalized quoting:
+
+* **quoted?** is the test, which is actually a datatype test (the type is QUOTED!)
+* **quotes of x** counts the number of quote levels
+* **unquote x** removes one quote level, **unquote/depth x count** removes more
+* **quote x** will eventually add quote levels, along with **quote/depth**
+
+*(For today, QUOTE is called UNEVAL.  This makes it easier to find places where you&#39;ve forgotten to switch over to LITERAL or LIT for the old meaning of QUOTE.  The weird name actually is what was around to do something similar before generalized quoting... it made a GROUP! with a quote in it, so each step of eval of that group would just remove one level of evaluation.)*
+
+So you&#39;ve got everything you need to work with them.  But there are some common scenarios of dealing with them that we can help with.
+
+For instance, sometimes you want to basically see past the quoting level of something and operate on its basic type, then return that thing quoted back to the level you had it.  Imagine this:
+
+    increment: function [
+        return: [&lt;opt&gt; integer!]
+        x [quoted! integer!]
+    ][
+        num-quotes: quotes of x
+        x: dequote x
+        if not integer? x [
+            fail &quot;Invalid type&quot;
+        ]
+        if x &gt; 304 [return null]
+        return quote/depth (x + 1) num-quotes
+    ]
+
+So this way you get:
+
+     &gt;&gt; increment lit &#39;&#39;&#39;303
+     &#39;&#39;&#39;304
+
+     &gt;&gt; increment lit &#39;&#39;&#39;1020
+     ; null
+
+It&#39;s cool that you *can* do that, but it&#39;s a bit irritating to write. And it&#39;s a pattern that happens often.
+
+So here&#39;s a tool for helping with that:
+
+    foo: function [
+        return: [&lt;opt&gt; &lt;requote&gt; integer!]
+        x [&lt;dequote&gt; integer!]
+    ][
+        if x &gt; 304 [return null]
+        return x + 1
+    ]
+
+It has the same behavior, but everything is handled for you automatically, including the type checking.  As you can see it doesn&#39;t put quote levels back on a null...it assumes null doesn&#39;t have the requote rule apply.  The exception would be if your input was a quoted null, in which case it would think you meant to support that.
+
+You don&#39;t have to use `&lt;requote&gt;`, you can just dequote a parameter and not add it back in to the result.  If you have `&lt;dequote&gt;` on more than one argument, then the requote will have the sum of the quotes taken off for all arguments.  That&#39;s a weird heuristic that probably won&#39;t come in useful too often, but if it&#39;s not what you want you&#39;ll have to take a QUOTED! and do your own magic.</description>
+    
+    <lastBuildDate>Tue, 03 Nov 2020 16:23:38 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/easier-generalized-quoting-dequote-and-requote/1035.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Easier Generalized Quoting: &lt;dequote&gt; and &lt;requote&gt;</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1035">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>sometimes you want to basically see past the quoting level of something and operate on its basic type, then return that thing quoted back to the level you had it.</p>
+</blockquote>
+</aside>
+<p>The <strong><code>&lt;dequote&gt;</code></strong> and <strong><code>&lt;requote&gt;</code></strong> parameter flags definitely represent a useful intention.</p>
+<p>If the INTEGER! example I give doesn't compel you, let's say you want to SKIP around in a series while it's quoted, and <strong><code>item</code></strong> is <strong>''[a b c]</strong>.</p>
+<p>Would you rather write:</p>
+<pre><code>num-quotes: quotes of item
+item: quote/depth (skip (dequote item) 2) num-quotes)
+</code></pre>
+<p>...or something like:</p>
+<pre><code>item: skip item 2 
+</code></pre>
+<blockquote>
+<p>Note: remember you could also use the MY operator, with <strong>item: my skip 2</strong></p>
+</blockquote>
+<h2>Useful Though It Is, It's Currently Too Built-In</h2>
+<p>There's bits and tweaks in the evaluator for this feature, that probably shouldn't be there.  As a technical matter, <strong><code>&lt;dequote&gt;</code></strong> and <strong><code>&lt;requote&gt;</code></strong> are consuming two typecode slots, and I'd like to have those back to try implementing <a href="https://forum.rebol.info/t/expression-barriers-redux-parse-2020-edition/1376">things like COMMA!</a>.</p>
+<p>I'm thinking that we need a REQUOTE tool that would be able to take care of it.</p>
+<p>So again, if <strong><code>item</code></strong> is <strong>''[a b c]</strong>:</p>
+<pre><code>&gt;&gt; requote skip item 2
+== ''[c]
+</code></pre>
+<p><a href="https://forum.rebol.info/t/seeing-all-action-s-as-variadic-frame-makers/1002/2">I've posted about some of the mechanical implications of REQUOTE being a function that invasively takes over the evaluation process.</a>  And I mention changes that would help us not lose composability, e.g. so you could instead write:</p>
+<pre><code>&gt;&gt; item: my requote skip 2
+== ''[c]
+</code></pre>
+<p>I won't rehash that post here.  But I do have an observation...</p>
+<h2>QUOTE! Can Be Seen As a Monad...Do We Care?</h2>
+<p>When you think about doing an operation on something "inside" a quote "container"...it <a href="https://adit.io/posts/2013-04-17-functors,_applicatives,_and_monads_in_pictures.html"><strong>looks an awful lot like monads...</strong></a></p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://adit.io/imgs/functors/fmap_just.png" title=""><img src="https://adit.io/imgs/functors/fmap_just.png" alt="" width="690" height="195"><div class="meta"><svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename"></span><span class="informations">947×269</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg></div></a></div></p>
+<p>REQUOTE might be better expressed in terms of some general transformation framework for mapping, and that mapping language might be where to look next.</p>
+<p>But for now, killing off <code>&lt;dequote&gt;</code> and <code>&lt;requote&gt;</code> is a step forward.  Not much was using it, and it was contaminating the specification of functions that are more cleanly defined without it.  This lets callers be more purposeful about when they mean quoted things to be OK, and I feel that helps avoid an aspect of randomness and "dirt" of incidental quotes that are permitted to be left on when they shouldn't be.</p>
+          <p><a href="https://forum.rebol.info/t/easier-generalized-quoting-dequote-and-requote/1035/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/easier-generalized-quoting-dequote-and-requote/1035/2</link>
+        <pubDate>Tue, 03 Nov 2020 16:23:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1035-2</guid>
+        <source url="https://forum.rebol.info/t/easier-generalized-quoting-dequote-and-requote/1035.rss">Easier Generalized Quoting: &lt;dequote&gt; and &lt;requote&gt;</source>
+      </item>
+      <item>
+        <title>Easier Generalized Quoting: &lt;dequote&gt; and &lt;requote&gt;</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>There are primitives for generalized quoting:</p>
+<ul>
+<li>
+<strong>quoted?</strong> is the test, which is actually a datatype test (the type is QUOTED!)</li>
+<li>
+<strong>quotes of x</strong> counts the number of quote levels</li>
+<li>
+<strong>unquote x</strong> removes one quote level, <strong>unquote/depth x count</strong> removes more</li>
+<li>
+<strong>quote x</strong> will eventually add quote levels, along with <strong>quote/depth</strong>
+</li>
+</ul>
+<p><em>(For today, QUOTE is called UNEVAL.  This makes it easier to find places where you've forgotten to switch over to LITERAL or LIT for the old meaning of QUOTE.  The weird name actually is what was around to do something similar before generalized quoting... it made a GROUP! with a quote in it, so each step of eval of that group would just remove one level of evaluation.)</em></p>
+<p>So you've got everything you need to work with them.  But there are some common scenarios of dealing with them that we can help with.</p>
+<p>For instance, sometimes you want to basically see past the quoting level of something and operate on its basic type, then return that thing quoted back to the level you had it.  Imagine this:</p>
+<pre><code>increment: function [
+    return: [&lt;opt&gt; integer!]
+    x [quoted! integer!]
+][
+    num-quotes: quotes of x
+    x: dequote x
+    if not integer? x [
+        fail "Invalid type"
+    ]
+    if x &gt; 304 [return null]
+    return quote/depth (x + 1) num-quotes
+]
+</code></pre>
+<p>So this way you get:</p>
+<pre><code> &gt;&gt; increment lit '''303
+ '''304
+
+ &gt;&gt; increment lit '''1020
+ ; null
+</code></pre>
+<p>It's cool that you <em>can</em> do that, but it's a bit irritating to write. And it's a pattern that happens often.</p>
+<p>So here's a tool for helping with that:</p>
+<pre><code>foo: function [
+    return: [&lt;opt&gt; &lt;requote&gt; integer!]
+    x [&lt;dequote&gt; integer!]
+][
+    if x &gt; 304 [return null]
+    return x + 1
+]
+</code></pre>
+<p>It has the same behavior, but everything is handled for you automatically, including the type checking.  As you can see it doesn't put quote levels back on a null...it assumes null doesn't have the requote rule apply.  The exception would be if your input was a quoted null, in which case it would think you meant to support that.</p>
+<p>You don't have to use <code>&lt;requote&gt;</code>, you can just dequote a parameter and not add it back in to the result.  If you have <code>&lt;dequote&gt;</code> on more than one argument, then the requote will have the sum of the quotes taken off for all arguments.  That's a weird heuristic that probably won't come in useful too often, but if it's not what you want you'll have to take a QUOTED! and do your own magic.</p>
+          <p><a href="https://forum.rebol.info/t/easier-generalized-quoting-dequote-and-requote/1035/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/easier-generalized-quoting-dequote-and-requote/1035/1</link>
+        <pubDate>Sat, 26 Jan 2019 00:25:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1035-1</guid>
+        <source url="https://forum.rebol.info/t/easier-generalized-quoting-dequote-and-requote/1035.rss">Easier Generalized Quoting: &lt;dequote&gt; and &lt;requote&gt;</source>
+      </item>
+  </channel>
+</rss>

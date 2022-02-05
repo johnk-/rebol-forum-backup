@@ -1,0 +1,312 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>From Liability to Asset: WORD! and PATH! always running code</title>
+    <link>https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354</link>
+    <description>Since there are no parentheses in function application, Rebol winds up with the somewhat sketchy aspect that you can&#39;t tell when looking at a WORD! or PATH! if it&#39;s going to give you a value or run arbitrary code.
+
+Tonight I&#39;ve reached a point in the generic tuple + path change such that **/foo**, **.foo**, **foo.**, and **foo/** are all forms of PATH! and TUPLE! that fit efficiently into a single cell.  But once things like **`foo.`** existed I had to make them do something... so I went ahead with trying my suggestion:
+
+    &gt;&gt; foo: 10
+    == 10
+
+    &gt;&gt; foo.
+    == 10
+
+    &gt;&gt; foo/
+    ** Error: Terminal slash in PATH! did not follow ACTION!
+
+    &gt;&gt; append/ [1 2 3] 4
+    == [1 2 3 4]
+
+    &gt;&gt; append.
+    ** Error: Picking from action on left of dot in TUPLE!
+
+*That&#39;s pretty great*.  (Error messages need some thought).  And I noticed something else neat about terminal slash...which is that it makes a good shortcut for REEVAL to get a function value then force its execution:
+
+    &gt;&gt; (specialize &#39;add [value2: 10]) 20
+    == 20  ; GROUP! evaluated to an ACTION! and was discarded
+
+    &gt;&gt; reeval (specialize &#39;add [value2: 10]) 20
+    == 30  ; this is how you previously did it without a new variable for the action
+
+    &gt;&gt; (specialize &#39;add [value2: 10])/ 20
+    == 30  ; shorthand!
+
+## But Is There More Untapped Power Lurking Here?
+
+My first thought went to protecting from Rebol&#39;s dangerous &quot;always execute IF a function&quot; semantics.
+
+But being able to make member access look the same when calling a function or not is a sought-after ability in other languages.  Most discussions of the feature involve *&quot;Property Getters and Setters&quot;*...where you can override non-parentheses access and assignment for a field.  [For instance, in C#:](https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/using-properties)
+
+&gt; &quot;Properties combine aspects of both fields and methods. **To the user of an object, a property appears to be a field, accessing the property requires the same syntax. To the implementer of a class, a property is one or two code blocks, representing a [get](https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/get) accessor and/or a [set](https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/set) accessor&quot;**
+
+By its nature, Rebol has &quot;getters&quot; because you don&#39;t need parentheses to get an object member.  Just make a function with no arguments:
+
+    &gt;&gt; my-object: make object! [
+           x-private: 10
+           x: func [] [
+                print &quot;Getting X!&quot;
+                return x-private + 20
+           ]
+     ]
+                
+    &gt;&gt; my-object/x
+    Getting X!
+    == 30
+
+But it doesn&#39;t have overrideable behavior for SET-PATH! or SET-WORD!, so you can&#39;t make something like `my-object/x: 10` call code.  The X function just gets overridden.
+
+The little inkling of a thought I had was that we might be able to use the PATH!/TUPLE! distinction somehow to tell the difference between *calling the setter/getter function* and *dealing with the function itself*.
+
+     &gt;&gt; foo/x: 1000 
+     Calling the Setter Function!
+     == 1000  ; imagine setter stores value - 20
+
+     &gt;&gt; foo/x-private
+     == 980  ; ...so it updated the private value
+
+     &gt;&gt; foo/x
+     Getting X
+     == 1000 
+
+     &gt;&gt; foo/x.: &lt;dead&gt;  ; notice the `.`
+     == &lt;dead&gt;
+
+     &gt;&gt; foo/x
+     == &lt;dead&gt;   ; no setter or getter anymore
+
+Where my train of thought was going with this is that all the historical uses of `/` would be willing to call getters and setters (if they existed).
+
+It&#39;s just an inkling at this point of something that might be interesting.  I was kind of lamenting how many `/` there are in the codebase, when it seemed to me I&#39;d be wanting to use `.` almost always.  But that got me to wondering about the kinds of motivations that people would have for using one form vs. the other.  Maybe this plays into it.
+
+All that aside... really just kind of announcing that generic tuple and path unification with compression to single cells is coming up shortly.  There are a few &quot;big&quot; issues to think about, but the mechanics are working...for the most part.</description>
+    
+    <lastBuildDate>Sun, 04 Oct 2020 15:45:36 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>From Liability to Asset: WORD! and PATH! always running code</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="5" data-topic="1354">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/mark-hi/40/212_2.png" class="avatar"> Mark-hi:</div>
+<blockquote>
+<p>Have you changed Ren-C since you wrote this?</p>
+</blockquote>
+</aside>
+<p>The problem I mention was fixed and the powers of NON expanded by just <a href="https://github.com/metaeducation/ren-c/commit/37cd566d3ab4729faae710e82741c0183a97e269#diff-8bac0ea10dbe05abe0e684632d1cecf0R575" rel="nofollow noopener">building NON on EITHER-MATCH</a> which is used to implement MATCH and ENSURE.  I just pushed that fix.</p>
+<p>The tiny stub NON function was about 10 lines long and has had over time about 5 stupid bugs, which speaks to the importance of not writing short fill-in functions and then not testing them.</p>
+          <p><a href="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/6</link>
+        <pubDate>Sun, 04 Oct 2020 15:45:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1354-6</guid>
+        <source url="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354.rss">From Liability to Asset: WORD! and PATH! always running code</source>
+      </item>
+      <item>
+        <title>From Liability to Asset: WORD! and PATH! always running code</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p>Have you changed Ren-C since you wrote this? With build: 3-Oct-2020/19:10:45+0:00 I get:</p>
+<pre><code class="lang-auto">‌&gt;&gt; non void! void
+** Error: NON expected value to not be VOID!, but it was
+
+‌</code></pre>
+          <p><a href="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/5</link>
+        <pubDate>Sun, 04 Oct 2020 15:33:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1354-5</guid>
+        <source url="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354.rss">From Liability to Asset: WORD! and PATH! always running code</source>
+      </item>
+      <item>
+        <title>From Liability to Asset: WORD! and PATH! always running code</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1354">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>The little inkling of a thought I had was that we might be able to use the PATH!/TUPLE! distinction somehow to tell the difference between <em>calling the setter/getter function</em> and <em>dealing with the function itself</em> .</p>
+</blockquote>
+</aside>
+<p>I just hit a situation where I was fixing some problems with NON (inspired by mentioning it), and I was testing it with VOID.</p>
+<p>Here's a validation that's supposed to fail (I'm asking for a non-void, but passing a void)</p>
+<pre><code>&gt;&gt; non void! void
+** Script Error: :arg is VOID! (Note: use GET/ANY to GET voids)
+</code></pre>
+<p>Oops, NON hasn't been updated for the GET/ANY rule in its implementation <em>(we decided GET-WORD! was only supposed to have one reason: <a href="https://forum.rebol.info/t/should-get-word-of-a-void-raise-an-error/1301">get functions instead of running them</a>)</em></p>
+<p>But then... what if I had written:</p>
+<pre><code>&gt;&gt; non void! get/any 'void
+== make action! [[] [...]]
+</code></pre>
+<p>VOID-the-WORD! can't evaluate to void, so VOID is a function that returns a value.  <em>It's a lot like a property access, just not done through a path.</em>  It's worth pointing out that anytime you bind in an object, you wouldn't be using a path either.</p>
+<p>It's shaped like a case where VOID would be marked as a function that would give you <strong>:void</strong> as VOID!, but you'd need <strong>:void/</strong> to read out the actual function?  But since it's VOID itself, the :void isn't supposed to work... e.g. the only reason you were allowed to get the void is because it was running a function.  But <strong>get/any 'void</strong> would give you a VOID!, while <strong>get/any/fundamental 'void</strong> would dig down to the function.</p>
+<p>Always something to think about, here.  :-/</p>
+          <p><a href="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/4</link>
+        <pubDate>Sat, 03 Oct 2020 19:44:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1354-4</guid>
+        <source url="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354.rss">From Liability to Asset: WORD! and PATH! always running code</source>
+      </item>
+      <item>
+        <title>From Liability to Asset: WORD! and PATH! always running code</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1354">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>This will likely be viewed by some as adding noise/punctuation to the otherwise clean language, but I like it.</p>
+</blockquote>
+</aside>
+<p>Even if you take advantage of cool new brevity-enhancing things <a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/2">like NON</a>, you still need a GET-WORD! to avoid ACTION! invocation:</p>
+<pre><code>append x non action! :a
+</code></pre>
+<p>Unless you go for an apostrophe, I guess, but then you need a GET:</p>
+<pre><code>append x non action! get 'a
+</code></pre>
+<p>By comparison, taking advantage of terminal dots is cleaner and I think quite learnable:</p>
+<pre><code>append x a.
+</code></pre>
+<p>Of course <code>append x a</code> is "cleaner".  And people don't have to use protective techniques in their scripts if they "just know" things aren't actions.  But the problem with writing mezzanines or libraries is you have less control over what you're passed.  You can type check a function's arguments, but once you pick values out of objects/etc. all bets are off unless you have some validation.</p>
+<p>As for overriding the SET with lower-level vs. higher level, that could be a refinement:</p>
+<pre><code>obj/x.: &lt;dead&gt;
+
+set/fundamental 'obj/x &lt;dead&gt;
+</code></pre>
+<p>In all these cases, people can decide what they prefer.  The bias on this is to historical "it does whatever" which is compatible, and also good for code golf.  But now getting some validation is cheap and visually fine enough that I don't mind doing it so much when I need it.</p>
+<p>In other observations: there doesn't need to be separate setter and getter functions, as they can use the <code>&lt;end&gt;</code> status:</p>
+<pre><code> foo: make object! [
+     x-private: 10
+
+     x: func [arg [&lt;end&gt; integer!]] [
+         if arg [
+             print "Setting!"
+             x-private: arg - 20
+             return arg  ; !!! do all setters enforce returning the value?
+         ] else [
+             print "Getting!"
+             x-private + 20
+         ]
+     ]
+
+     mark-property 'x  ; lame interface, but this has to be known somehow
+ ]
+</code></pre>
+<p>The question comes down to how to mark these functions as "setters", or "properties", or whatever.</p>
+<p>Path access is due for a reckoning, so having the TUPLE!/PATH! distinction to mess with is a good motivator.</p>
+          <p><a href="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/3</link>
+        <pubDate>Sat, 03 Oct 2020 13:48:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1354-3</guid>
+        <source url="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354.rss">From Liability to Asset: WORD! and PATH! always running code</source>
+      </item>
+      <item>
+        <title>From Liability to Asset: WORD! and PATH! always running code</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1354">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>we might be able to use the PATH!/TUPLE! distinction somehow to tell the difference between <em>calling the setter/getter function</em> and <em>dealing with the function itself</em> .</p>
+</blockquote>
+</aside>
+<p>Wicked! This will likely be viewed by some as adding noise/punctuation to the otherwise clean language, but I like it.</p>
+          <p><a href="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/2</link>
+        <pubDate>Sat, 03 Oct 2020 13:21:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1354-2</guid>
+        <source url="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354.rss">From Liability to Asset: WORD! and PATH! always running code</source>
+      </item>
+      <item>
+        <title>From Liability to Asset: WORD! and PATH! always running code</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Since there are no parentheses in function application, Rebol winds up with the somewhat sketchy aspect that you can't tell when looking at a WORD! or PATH! if it's going to give you a value or run arbitrary code.</p>
+<p>Tonight I've reached a point in the generic tuple + path change such that <strong>/foo</strong>, <strong>.foo</strong>, <strong>foo.</strong>, and <strong>foo/</strong> are all forms of PATH! and TUPLE! that fit efficiently into a single cell.  But once things like <strong><code>foo.</code></strong> existed I had to make them do something... so I went ahead with trying my suggestion:</p>
+<pre><code>&gt;&gt; foo: 10
+== 10
+
+&gt;&gt; foo.
+== 10
+
+&gt;&gt; foo/
+** Error: Terminal slash in PATH! did not follow ACTION!
+
+&gt;&gt; append/ [1 2 3] 4
+== [1 2 3 4]
+
+&gt;&gt; append.
+** Error: Picking from action on left of dot in TUPLE!
+</code></pre>
+<p><em>That's pretty great</em>.  (Error messages need some thought).  And I noticed something else neat about terminal slash...which is that it makes a good shortcut for REEVAL to get a function value then force its execution:</p>
+<pre><code>&gt;&gt; (specialize 'add [value2: 10]) 20
+== 20  ; GROUP! evaluated to an ACTION! and was discarded
+
+&gt;&gt; reeval (specialize 'add [value2: 10]) 20
+== 30  ; this is how you previously did it without a new variable for the action
+
+&gt;&gt; (specialize 'add [value2: 10])/ 20
+== 30  ; shorthand!
+</code></pre>
+<h2>But Is There More Untapped Power Lurking Here?</h2>
+<p>My first thought went to protecting from Rebol's dangerous "always execute IF a function" semantics.</p>
+<p>But being able to make member access look the same when calling a function or not is a sought-after ability in other languages.  Most discussions of the feature involve <em>"Property Getters and Setters"</em>...where you can override non-parentheses access and assignment for a field.  <a href="https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/using-properties" rel="nofollow noopener">For instance, in C#:</a></p>
+<blockquote>
+<p>"Properties combine aspects of both fields and methods. <strong>To the user of an object, a property appears to be a field, accessing the property requires the same syntax. To the implementer of a class, a property is one or two code blocks, representing a <a href="https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/get" rel="nofollow noopener">get</a> accessor and/or a <a href="https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/set" rel="nofollow noopener">set</a> accessor"</strong></p>
+</blockquote>
+<p>By its nature, Rebol has "getters" because you don't need parentheses to get an object member.  Just make a function with no arguments:</p>
+<pre><code>&gt;&gt; my-object: make object! [
+       x-private: 10
+       x: func [] [
+            print "Getting X!"
+            return x-private + 20
+       ]
+ ]
+            
+&gt;&gt; my-object/x
+Getting X!
+== 30
+</code></pre>
+<p>But it doesn't have overrideable behavior for SET-PATH! or SET-WORD!, so you can't make something like <code>my-object/x: 10</code> call code.  The X function just gets overridden.</p>
+<p>The little inkling of a thought I had was that we might be able to use the PATH!/TUPLE! distinction somehow to tell the difference between <em>calling the setter/getter function</em> and <em>dealing with the function itself</em>.</p>
+<pre><code> &gt;&gt; foo/x: 1000 
+ Calling the Setter Function!
+ == 1000  ; imagine setter stores value - 20
+
+ &gt;&gt; foo/x-private
+ == 980  ; ...so it updated the private value
+
+ &gt;&gt; foo/x
+ Getting X
+ == 1000 
+
+ &gt;&gt; foo/x.: &lt;dead&gt;  ; notice the `.`
+ == &lt;dead&gt;
+
+ &gt;&gt; foo/x
+ == &lt;dead&gt;   ; no setter or getter anymore
+</code></pre>
+<p>Where my train of thought was going with this is that all the historical uses of <code>/</code> would be willing to call getters and setters (if they existed).</p>
+<p>It's just an inkling at this point of something that might be interesting.  I was kind of lamenting how many <code>/</code> there are in the codebase, when it seemed to me I'd be wanting to use <code>.</code> almost always.  But that got me to wondering about the kinds of motivations that people would have for using one form vs. the other.  Maybe this plays into it.</p>
+<p>All that aside... really just kind of announcing that generic tuple and path unification with compression to single cells is coming up shortly.  There are a few "big" issues to think about, but the mechanics are working...for the most part.</p>
+          <p><a href="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354/1</link>
+        <pubDate>Sat, 03 Oct 2020 05:23:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1354-1</guid>
+        <source url="https://forum.rebol.info/t/from-liability-to-asset-word-and-path-always-running-code/1354.rss">From Liability to Asset: WORD! and PATH! always running code</source>
+      </item>
+  </channel>
+</rss>

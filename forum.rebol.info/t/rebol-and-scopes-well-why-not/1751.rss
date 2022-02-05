@@ -1,0 +1,342 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Rebol And Scopes: Well, Why Not?</title>
+    <link>https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751</link>
+    <description>It&#39;s frequently said that Rebol &quot;doesn&#39;t have scope&quot;.  Early examples of that premise might point to something like a block of:
+
+    [x x x y y y]
+
+Then people might say that the Xs and Ys can all resolve to something different.
+
+    &gt;&gt; print [x x x y y y]
+    10 20 &quot;foo&quot; 30 40 &quot;bar&quot;
+
+I find it personally frustrating when this is pronounced with glee (as per Red Gitter *&quot;there is no spoon!&quot;*)...vs. acknowledging that this should seem very alarming.  When you do something weird the burden of proof is on you to prove its benefit.
+
+## Were Scopes Rejected Because They&#39;re Somehow Bad?
+
+No.
+
+*It&#39;s because Rebol&#39;s dynamic nature means there isn&#39;t a clear moment in time where code can be holistically analyzed to determine scopes*.  Code structures are always getting cobbled together from pieces...from disparate locations in the codebase, or sometimes fabricated from thin air with *no* context.
+
+So it hasn&#39;t had scopes because it hasn&#39;t been able to.
+
+BUT with the prototypes I&#39;ve done with string interning, it integrates something like &quot;scopes&quot;.
+
+    &gt;&gt; print reword {Scopes? $x $x $x $y $y $y}
+    Scopes? 10 10 10 foo foo foo
+
+When a string carries along a &quot;binding&quot;, it only carries one.  And that effectively captures some map from words to values.  So the answer to &quot;what is X&quot; and &quot;what is Y&quot; will be the same each time you ask that mapping referenced by that string.
+
+If that&#39;s not a &quot;scope&quot;, what is it?  And is there a reason the system as a whole should not use them?
+
+## Historical Rebol Used Mutable Binding
+
+Historical Rebol&#39;s idea of binding is that ANY-WORD!s get bits in the cell representing an object they are looked up in.  This process of gluing on bindings was done &quot;every now and again&quot; by code that walks around--usually deeply--and mutably changes data it is given.
+
+**On the plus side: programmability.**  If you received a BLOCK! and wanted to go through and say that every SET-WORD! that starts with a vowel is going to be bound to some new object, but others will be left as-is, you can do that.  You can examine not only the properties of the structure, but also make decisions on what the previous binding was...selecting to override some references of the same named variable while leaving others alone.
+
+(Note: Some binding queries didn&#39;t give useful information.  If you asked for the binding of a word linked to a function argument or local, it would just say &quot;true&quot;.)
+
+**On the plus side: performance.**  If you&#39;re dealing with a concept of binding that wants to freeze in time at the moment you run a bind pass, you can cache the notion of which object and which index in that object a word will be found at.  Although...
+
+...**On the minus side: requires lots of copies (adversely affects performance, and it&#39;s not clear when to make them).** If you assume every value has a binding it can mutably disrupt, this complicates situations where a piece of code needs to be viewed in more than one way.  Just one example is the idea that every method in an object would need to be copied deeply so that its code could be rebound to that object&#39;s instance variables.
+
+**Also on the minus side: no reaction to changes.**  For instance, you might bind some code into a place like the LIB context...but later add a new declaration to LIB.  The addition will not be seen.
+
+
+## Ren-C Began To &quot;Virtualize&quot; Binding
+
+A big focus in Ren-C has been experimenting with binding forms that don&#39;t a-priori walk deeply at the outset, but that trickle down and spread as you descend into array structures...each step propagating something called a &quot;specifier&quot;.
+
+One of the first instances was when you run a function body, a specifier would be added that would be the FRAME! of that function&#39;s variables.  It starts propagating by slipping a pointer into an extracted block cell for the body when it gets a DO at the top level.  That pointer travels along through nested blocks, so those become aware of the function instance it relates to...one extraction at a time.  Similar techniques allow object instance methods to be differentiated while running the same code used in other objects...the function bodies are the same arrays, but the specifier facilitates finding the object instance.
+
+There are various incarnations of this technique of having binding be a &quot;view&quot; on an array of values, without having to actually touch the bits in arrays.  But the general name for these techniques I&#39;ve adopted is **virtual binding**.
+
+## String Interpolation Tries *Fully Virtualized Binding*
+
+At first specifiers were just for functions and methods.  But the concept of making specifiers accrue a more complete map of a persistent binding environment is very tempting, allowing things like [binding lookup in strings](https://forum.rebol.info/t/could-strings-have-context/587/10?u=hostilefork).
+
+The idea behind the prototype that lets you look up a map from WORD! =&gt; value on strings is that specifiers compound together in chains.  A new link is added each time something new to consider is added.
+
+So let&#39;s look at that model of operation for something like:
+
+     global: 10
+     x: &lt;not an integer&gt;
+
+     foo: func [x] [
+         let local: 20
+         return reword {The sum is $(x + local)}
+     ]
+
+     foo 30
+
+The virtual bind chain starts out with a module context that has `global`, `x`, and `foo` in it.  This is all there is to stick on the BLOCK!s that gets passed to FUNC.  So the spec and body are blocks with a module as the specifier.
+
+FUNC stows the body block away in an ACTION! that it generates.  Later when it gets invoked, it creates a FRAME! with `return` and `x` in it...and puts that in a chain *with* the module context.  So upon entry to the function body, that body is being executed with a specifier that looks in the frame first (would find that x) and then in the module second (would find `global` and `foo`).  This compound specifier is what the evaluator state initially has for that body block.
+
+The module inherits from the LIB context, so things like LET and REWORD will be found by means of that inheritance.  So then LET runs...using a special ability to add another link in the chain to the specifier that the evaluator is using, for the word `local`.
+
+Finally we get to the RETURN (it&#39;s in the frame) and REWORD (falling through to the module) and the whole specifier chain is stuck onto the string.  Because the specifier has snowballed all the information *the string could look up anything* (except the X in the module that&#39;s hidden).
+
+**In simple cases like this, it&#39;s essentially just like scope.**   There are no situations that introduce contention.  The flow of context is from the top to the bottom, and there&#39;s no parts being unplugged from one place and into another.
+
+## But What If You Did Unplug and Replug Things?
+
+Let&#39;s just look at a *super simple* example of throwing a COMPOSE into the mix.  So instead of calling REWORD directly, you made a call to another function, WRAPPER:
+
+     global: 10
+     x: &lt;not an integer&gt;
+
+     wrapper: func [string] [
+         return do compose [reword (string)]
+     ]
+
+     foo: func [x] [
+         let local: 20
+         return wrapper {The sum is $(x + local)}
+     ]
+
+     foo 30
+
+When wrapper runs, the same basic logic applies to how &quot;scopes&quot; are gathered...and applied to the body of the function when it executes.  But that COMPOSE is splicing in a string that already has a binding on it.  How does the specifier flowing downward (which has the module&#39;s X) interact with the specifier already on that string (which has FOO&#39;s X overriding the module&#39;s X)?
+
+**A simple thought is a default of leaving bindings alone if they already have one.** This seems obviously better than blindly overwriting, because it gives you a simple choice if you want overwriting to happen... you could just unbind the string:
+
+     wrapper: func [string] [
+         return do compose [reword (unbind string)]
+     ]
+
+But all-or-nothing doesn&#39;t cover a lot of scenarios.  If you&#39;re dynamically creating a function with some block material you got &quot;from somewhere else&quot;, that material may have been written with the express knowledge that certain words were supposed to be overridden by the place it&#39;s being substituted, with others left alone.
+
+Also, what if you had a rule like *&quot;I want all the GROUP!s in this code to be bound to FOO but only inside the GROUP!s&quot;*?
+
+## Could Binding Be Functional?
+
+If you want a programmable sense of binding that doesn&#39;t resort to deep walking the structure and mutating it directly... you could allow the binding &quot;specifier&quot; to be (at least conceptually) a function.  That function could be passed the existing binding as an argument, and make a decision based on that of how to resolve it.
+
+This would result in a kind of &quot;programmable specifier&quot;, that only injects its influence *if and when* a descent into a block with the desire to execute it occurs.
+
+Whether you could *actually* provide a function, or just speak in a &quot;mini dialect&quot; of merge and override instructions that behaved as a function, I don&#39;t know.  A real usermode function doing the bind merge logic sounds expensive (but would it be worse than deep walking and selectively binding a tree of code?  Who knows.)
+
+## Pure Virtual Binding Has No Obvious Way To Cache
+
+One advantage to storing the &quot;scope chain&quot; is that if contexts in that chain have things added or removed, the evaluation can pick up the change...
+
+...but a *disadvantage* is that it&#39;s hard to see any way to efficiently remember where to look up bindings.  Where you found a word on the last lookup might not be the same place that you would on the next lookup, if any objects/modules in the chain have changed.  Thinking of binding as some sort of black box function makes this even more intractable than it already is.
+
+**But I really feel the deep walking with putting bindings on things is a dead end.**  That just makes it feel like the focus needs to be on figuring out this means of dialecting the resolution of scopes at the merge points.  There needs to be a richer language than just &quot;unbind&quot; and &quot;no-op&quot; for what you do at these points...but I don&#39;t think walking the blocks and pasting bindings on particular items is viable.
+
+## I Think &quot;Scopes&quot; Have To Come Into Play
+
+Rebol&#39;s word soup for binding has always been [DWIM technology](https://en.wikipedia.org/wiki/DWIM).  (&quot;do what I mean&quot;)  So there&#39;s no schematic for how to do this.  It&#39;s fundamentally based on wishful thinking.
+
+The concept of having a fully granular ability to go down to the WORD!-level in a structure of code and declare what *that one word* points to may seem like it puts all the power in your hands.  But that power has proven difficult or impossible to wield in non-trivial situations... runs afoul of blocks that are imaged multiple places in the source... and winds up leaving code stale and oblivious to when new declarations arise at moments they don&#39;t expect.
+
+**What puts me over the top in thinking we need &quot;scopes&quot; is bindings in strings.**  Features based on string interpolation are so undeniably useful that once the possibilities are seen, they can&#39;t be unseen.
+
+But also, what about debuggers that might want to show you lists of what variables are &quot;in scope&quot; at a certain point of execution?  There are a lot of reasons to have a running tally of which contexts and declarations are visible.
+
+**Yet it&#39;s important to realize this is kind of just kicking the can down the road a bit: There&#39;s no rigorous way to give meaning to word soup being arranged haphazardly.**  What has been able to succeed in Rebol so far (to the extent you can call existing binding &quot;success&quot;) is really just the by-product of fairly unambitious code.  &quot;It looks like it works because nothing difficult is being tried.&quot;
+
+Eliminating mutable binding and asking lookup to be accomplished by some nebulous &quot;scope merging&quot; language doesn&#39;t have an obvious magic to it.  Beyond that, I don&#39;t know how to cache it.  **So this is a radical idea that may just lead to frustration and the slow death of the project.**  :skull_and_crossbones: 
+
+But I have said that before about other things that worked out okay.  :man_shrugging: 
+
+We&#39;ll see.</description>
+    
+    <lastBuildDate>Fri, 05 Nov 2021 23:11:43 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Rebol And Scopes: Well, Why Not?</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="4" data-topic="1751">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>features in the spirit of string interpolation</p>
+</blockquote>
+</aside>
+<p>Reminds me of <a href="https://www.stringtemplate.org/">StringTemplate</a> - which I have never used, but thought was interesting.</p>
+          <p><a href="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/5</link>
+        <pubDate>Fri, 05 Nov 2021 23:11:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1751-5</guid>
+        <source url="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751.rss">Rebol And Scopes: Well, Why Not?</source>
+      </item>
+      <item>
+        <title>Rebol And Scopes: Well, Why Not?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="Brett" data-post="3" data-topic="1751">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/brett/40/177_2.png" class="avatar"> Brett:</div>
+<blockquote>
+<p>I have useful evaluation techniques that have relied on that ability to rebinding the words of a series into different contexts as desired (nothing earth shattering, just useful).</p>
+</blockquote>
+</aside>
+<p>With what I'm thinking of, going down to the word level and binding individual words (or strings) should still be possible in a pinch...even in a model that is based fully on compounding scopes.</p>
+<p>But rather than BIND itself doing some kind of deep walk, you'd have to do something like:</p>
+<pre><code>obj: make object! [b: 10]
+block: [a [b] c]
+change (second block) bind (pick block 1) obj
+</code></pre>
+<p>And if you didn't have mutable access to the block, you'd have to copy it..deeply in this case.</p>
+<aside class="quote no-group" data-username="Brett" data-post="3" data-topic="1751">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/brett/40/177_2.png" class="avatar"> Brett:</div>
+<blockquote>
+<p>The obvious open and wishful thinking question is "Can we choose a binding policy when we want to?", like for dialects or foreign syntaxes, where we know we're dealing with a less-than-general language situation.</p>
+</blockquote>
+</aside>
+<p>The best we can hope for is a "you get what you pay for" attitude.  The more obscure your situation, the more likely it is you'll have to go to the level of copying everything and binding manually...and the less likely it will compose in any meaningful way with previously unknown dialects or functions or combinators.</p>
+<p>Kind of reminds me of the saying "every model is broken, but some are useful".</p>
+<p>But demanding binding on strings really is a tough new constraint in the game.  It pushing a little away from "glue bindings on destructively and bear the consequences of ordering problems" and a little more "be like synthesized/inherited attribute grammar rules".  I just feel like having looked at how good other languages are at expressing things that a text-based language without features in the spirit of string interpolation will be non-competitive.</p>
+<p>Tough, tough!  But bring forward your binding examples to have in the set of "things we aim to support" and will see what can be done.</p>
+          <p><a href="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/4</link>
+        <pubDate>Fri, 05 Nov 2021 19:50:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1751-4</guid>
+        <source url="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751.rss">Rebol And Scopes: Well, Why Not?</source>
+      </item>
+      <item>
+        <title>Rebol And Scopes: Well, Why Not?</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <p>Kudos for such an effective and thought provoking piece on binding.</p>
+<p>It's an interesting journey - the how, the when and the why of binding behaviour, leading to the question of whether this can be implemented like a programmable function, of "scopes" and the representation of what is, or what happened.</p>
+<p>Going down to the word level in a structure and pasting binding on things has allowed us to do some interesting things with binding in user code, without access to the evaluator. Still chasing the "relative expression" idea - I have useful evaluation techniques that have relied on that ability to rebinding the words of a series into different contexts as desired (nothing earth shattering, just useful). It has been frustrating too, for all the problems you have pointed out. It has limits in flexibility, sometimes I've just wanted to idly experiment ideas like having a word bound to two contexts at once (part of multiple active sets, not hierarchical) with some policy to decide the lookup between them depending on situation or what they sit next to - just to see where it leads. Realisation hits that it's hard and there's still all the existing binding problems, so it doesn't get tried. I'd wondered if one day, that lookup process could be user code accessible.</p>
+<p>The paste binding on code idea, despite it's problems, has always been for me something special about Rebol. It has been nice to drag in structured data, rewrite it into expressions, maybe paint on some bindings, be able to evaluate it and spit out some commands into another system or whatever - solve an ad-hoc problem without having to conform to the rigors of some general language or limited shell. Admittedly though ad-hoc is never really ad-hoc, one usually wants to be able to reuse code/expressions sometime later, but only do the minimum required now.</p>
+<p>You point out that each binding behaviour, i'll call it a policy here, has it's pro and cons.  The obvious open and wishful thinking question is "Can we choose a binding policy when we want to?", like for dialects or foreign syntaxes, where we know we're dealing with a less-than-general language situation.</p>
+<p><a href="https://en.wikipedia.org/wiki/Po_(lateral_thinking)">Po:</a> Could dialects be a bit more first class by specifying an evaluator and/or binding policy (are those even separable?) by series?</p>
+<p>I don't expect answers to these questions. I can see it's hard enough to pin down the questions you're already wrestling with for the main language. I was inspired to comment on your piece as perhaps any of us that have attempted to write a non-trivial user code dialect would.</p>
+          <p><a href="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/3</link>
+        <pubDate>Thu, 28 Oct 2021 01:50:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1751-3</guid>
+        <source url="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751.rss">Rebol And Scopes: Well, Why Not?</source>
+      </item>
+      <item>
+        <title>Rebol And Scopes: Well, Why Not?</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I'll count on your ability to find something better, if you run into a dead-end.</p>
+          <p><a href="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/2</link>
+        <pubDate>Wed, 27 Oct 2021 12:38:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1751-2</guid>
+        <source url="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751.rss">Rebol And Scopes: Well, Why Not?</source>
+      </item>
+      <item>
+        <title>Rebol And Scopes: Well, Why Not?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It's frequently said that Rebol "doesn't have scope".  Early examples of that premise might point to something like a block of:</p>
+<pre><code>[x x x y y y]
+</code></pre>
+<p>Then people might say that the Xs and Ys can all resolve to something different.</p>
+<pre><code>&gt;&gt; print [x x x y y y]
+10 20 "foo" 30 40 "bar"
+</code></pre>
+<p>I find it personally frustrating when this is pronounced with glee (as per Red Gitter <em>"there is no spoon!"</em>)...vs. acknowledging that this should seem very alarming.  When you do something weird the burden of proof is on you to prove its benefit.</p>
+<h2>Were Scopes Rejected Because They're Somehow Bad?</h2>
+<p>No.</p>
+<p><em>It's because Rebol's dynamic nature means there isn't a clear moment in time where code can be holistically analyzed to determine scopes</em>.  Code structures are always getting cobbled together from pieces...from disparate locations in the codebase, or sometimes fabricated from thin air with <em>no</em> context.</p>
+<p>So it hasn't had scopes because it hasn't been able to.</p>
+<p>BUT with the prototypes I've done with string interning, it integrates something like "scopes".</p>
+<pre><code>&gt;&gt; print reword {Scopes? $x $x $x $y $y $y}
+Scopes? 10 10 10 foo foo foo
+</code></pre>
+<p>When a string carries along a "binding", it only carries one.  And that effectively captures some map from words to values.  So the answer to "what is X" and "what is Y" will be the same each time you ask that mapping referenced by that string.</p>
+<p>If that's not a "scope", what is it?  And is there a reason the system as a whole should not use them?</p>
+<h2>Historical Rebol Used Mutable Binding</h2>
+<p>Historical Rebol's idea of binding is that ANY-WORD!s get bits in the cell representing an object they are looked up in.  This process of gluing on bindings was done "every now and again" by code that walks around--usually deeply--and mutably changes data it is given.</p>
+<p><strong>On the plus side: programmability.</strong>  If you received a BLOCK! and wanted to go through and say that every SET-WORD! that starts with a vowel is going to be bound to some new object, but others will be left as-is, you can do that.  You can examine not only the properties of the structure, but also make decisions on what the previous binding was...selecting to override some references of the same named variable while leaving others alone.</p>
+<p>(Note: Some binding queries didn't give useful information.  If you asked for the binding of a word linked to a function argument or local, it would just say "true".)</p>
+<p><strong>On the plus side: performance.</strong>  If you're dealing with a concept of binding that wants to freeze in time at the moment you run a bind pass, you can cache the notion of which object and which index in that object a word will be found at.  Although...</p>
+<p>...<strong>On the minus side: requires lots of copies (adversely affects performance, and it's not clear when to make them).</strong> If you assume every value has a binding it can mutably disrupt, this complicates situations where a piece of code needs to be viewed in more than one way.  Just one example is the idea that every method in an object would need to be copied deeply so that its code could be rebound to that object's instance variables.</p>
+<p><strong>Also on the minus side: no reaction to changes.</strong>  For instance, you might bind some code into a place like the LIB context...but later add a new declaration to LIB.  The addition will not be seen.</p>
+<h2>Ren-C Began To "Virtualize" Binding</h2>
+<p>A big focus in Ren-C has been experimenting with binding forms that don't a-priori walk deeply at the outset, but that trickle down and spread as you descend into array structures...each step propagating something called a "specifier".</p>
+<p>One of the first instances was when you run a function body, a specifier would be added that would be the FRAME! of that function's variables.  It starts propagating by slipping a pointer into an extracted block cell for the body when it gets a DO at the top level.  That pointer travels along through nested blocks, so those become aware of the function instance it relates to...one extraction at a time.  Similar techniques allow object instance methods to be differentiated while running the same code used in other objects...the function bodies are the same arrays, but the specifier facilitates finding the object instance.</p>
+<p>There are various incarnations of this technique of having binding be a "view" on an array of values, without having to actually touch the bits in arrays.  But the general name for these techniques I've adopted is <strong>virtual binding</strong>.</p>
+<h2>String Interpolation Tries <em>Fully Virtualized Binding</em>
+</h2>
+<p>At first specifiers were just for functions and methods.  But the concept of making specifiers accrue a more complete map of a persistent binding environment is very tempting, allowing things like <a href="https://forum.rebol.info/t/could-strings-have-context/587/10">binding lookup in strings</a>.</p>
+<p>The idea behind the prototype that lets you look up a map from WORD! =&gt; value on strings is that specifiers compound together in chains.  A new link is added each time something new to consider is added.</p>
+<p>So let's look at that model of operation for something like:</p>
+<pre><code> global: 10
+ x: &lt;not an integer&gt;
+
+ foo: func [x] [
+     let local: 20
+     return reword {The sum is $(x + local)}
+ ]
+
+ foo 30
+</code></pre>
+<p>The virtual bind chain starts out with a module context that has <code>global</code>, <code>x</code>, and <code>foo</code> in it.  This is all there is to stick on the BLOCK!s that gets passed to FUNC.  So the spec and body are blocks with a module as the specifier.</p>
+<p>FUNC stows the body block away in an ACTION! that it generates.  Later when it gets invoked, it creates a FRAME! with <code>return</code> and <code>x</code> in it...and puts that in a chain <em>with</em> the module context.  So upon entry to the function body, that body is being executed with a specifier that looks in the frame first (would find that x) and then in the module second (would find <code>global</code> and <code>foo</code>).  This compound specifier is what the evaluator state initially has for that body block.</p>
+<p>The module inherits from the LIB context, so things like LET and REWORD will be found by means of that inheritance.  So then LET runs...using a special ability to add another link in the chain to the specifier that the evaluator is using, for the word <code>local</code>.</p>
+<p>Finally we get to the RETURN (it's in the frame) and REWORD (falling through to the module) and the whole specifier chain is stuck onto the string.  Because the specifier has snowballed all the information <em>the string could look up anything</em> (except the X in the module that's hidden).</p>
+<p><strong>In simple cases like this, it's essentially just like scope.</strong>   There are no situations that introduce contention.  The flow of context is from the top to the bottom, and there's no parts being unplugged from one place and into another.</p>
+<h2>But What If You Did Unplug and Replug Things?</h2>
+<p>Let's just look at a <em>super simple</em> example of throwing a COMPOSE into the mix.  So instead of calling REWORD directly, you made a call to another function, WRAPPER:</p>
+<pre><code> global: 10
+ x: &lt;not an integer&gt;
+
+ wrapper: func [string] [
+     return do compose [reword (string)]
+ ]
+
+ foo: func [x] [
+     let local: 20
+     return wrapper {The sum is $(x + local)}
+ ]
+
+ foo 30
+</code></pre>
+<p>When wrapper runs, the same basic logic applies to how "scopes" are gathered...and applied to the body of the function when it executes.  But that COMPOSE is splicing in a string that already has a binding on it.  How does the specifier flowing downward (which has the module's X) interact with the specifier already on that string (which has FOO's X overriding the module's X)?</p>
+<p><strong>A simple thought is a default of leaving bindings alone if they already have one.</strong> This seems obviously better than blindly overwriting, because it gives you a simple choice if you want overwriting to happen... you could just unbind the string:</p>
+<pre><code> wrapper: func [string] [
+     return do compose [reword (unbind string)]
+ ]
+</code></pre>
+<p>But all-or-nothing doesn't cover a lot of scenarios.  If you're dynamically creating a function with some block material you got "from somewhere else", that material may have been written with the express knowledge that certain words were supposed to be overridden by the place it's being substituted, with others left alone.</p>
+<p>Also, what if you had a rule like <em>"I want all the GROUP!s in this code to be bound to FOO but only inside the GROUP!s"</em>?</p>
+<h2>Could Binding Be Functional?</h2>
+<p>If you want a programmable sense of binding that doesn't resort to deep walking the structure and mutating it directly... you could allow the binding "specifier" to be (at least conceptually) a function.  That function could be passed the existing binding as an argument, and make a decision based on that of how to resolve it.</p>
+<p>This would result in a kind of "programmable specifier", that only injects its influence <em>if and when</em> a descent into a block with the desire to execute it occurs.</p>
+<p>Whether you could <em>actually</em> provide a function, or just speak in a "mini dialect" of merge and override instructions that behaved as a function, I don't know.  A real usermode function doing the bind merge logic sounds expensive (but would it be worse than deep walking and selectively binding a tree of code?  Who knows.)</p>
+<h2>Pure Virtual Binding Has No Obvious Way To Cache</h2>
+<p>One advantage to storing the "scope chain" is that if contexts in that chain have things added or removed, the evaluation can pick up the change...</p>
+<p>...but a <em>disadvantage</em> is that it's hard to see any way to efficiently remember where to look up bindings.  Where you found a word on the last lookup might not be the same place that you would on the next lookup, if any objects/modules in the chain have changed.  Thinking of binding as some sort of black box function makes this even more intractable than it already is.</p>
+<p><strong>But I really feel the deep walking with putting bindings on things is a dead end.</strong>  That just makes it feel like the focus needs to be on figuring out this means of dialecting the resolution of scopes at the merge points.  There needs to be a richer language than just "unbind" and "no-op" for what you do at these points...but I don't think walking the blocks and pasting bindings on particular items is viable.</p>
+<h2>I Think "Scopes" Have To Come Into Play</h2>
+<p>Rebol's word soup for binding has always been <a href="https://en.wikipedia.org/wiki/DWIM">DWIM technology</a>.  ("do what I mean")  So there's no schematic for how to do this.  It's fundamentally based on wishful thinking.</p>
+<p>The concept of having a fully granular ability to go down to the WORD!-level in a structure of code and declare what <em>that one word</em> points to may seem like it puts all the power in your hands.  But that power has proven difficult or impossible to wield in non-trivial situations... runs afoul of blocks that are imaged multiple places in the source... and winds up leaving code stale and oblivious to when new declarations arise at moments they don't expect.</p>
+<p><strong>What puts me over the top in thinking we need "scopes" is bindings in strings.</strong>  Features based on string interpolation are so undeniably useful that once the possibilities are seen, they can't be unseen.</p>
+<p>But also, what about debuggers that might want to show you lists of what variables are "in scope" at a certain point of execution?  There are a lot of reasons to have a running tally of which contexts and declarations are visible.</p>
+<p><strong>Yet it's important to realize this is kind of just kicking the can down the road a bit: There's no rigorous way to give meaning to word soup being arranged haphazardly.</strong>  What has been able to succeed in Rebol so far (to the extent you can call existing binding "success") is really just the by-product of fairly unambitious code.  "It looks like it works because nothing difficult is being tried."</p>
+<p>Eliminating mutable binding and asking lookup to be accomplished by some nebulous "scope merging" language doesn't have an obvious magic to it.  Beyond that, I don't know how to cache it.  <strong>So this is a radical idea that may just lead to frustration and the slow death of the project.</strong>  <img src="https://forum.rebol.info/images/emoji/twitter/skull_and_crossbones.png?v=9" title=":skull_and_crossbones:" class="emoji" alt=":skull_and_crossbones:"></p>
+<p>But I have said that before about other things that worked out okay.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<p>We'll see.</p>
+          <p><a href="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751/1</link>
+        <pubDate>Wed, 27 Oct 2021 03:57:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1751-1</guid>
+        <source url="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751.rss">Rebol And Scopes: Well, Why Not?</source>
+      </item>
+  </channel>
+</rss>

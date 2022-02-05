@@ -1,0 +1,1926 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Binding - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/binding/49</link>
+    <description>Topics in the &#39;Binding&#39; category &quot;Binding&quot; refers to the concept of an invisible pointer that is annotated onto ANY-WORD! types, which connects them to an object where that word is defined (or more specifically, an ANY-CONTEXT!)</description>
+    
+      <lastBuildDate>Wed, 27 Oct 2021 09:11:12 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/binding/49.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>Weird Dynamic Binding Idea: Climbing The Chain?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>I've lamented the performance impacts of having to search "specifier" binding chains to look things up, and how it's nice that it finds newly emerging elements (like declarations that get added to modules) but how uncacheable it is...</p>
+<p>But there's an odd thing about a chain of lookup that keeps compounding, in that you could ask not to take the <em>first</em> match, but to involve a count of how many times you've found it.</p>
+<p><em>There are already some ideas for what leading tuple might mean, <strong>but</strong></em>... let's imagine it being used for this purpose.  It could be something else:</p>
+<pre><code>x: 10
+
+foo: func [x] [
+    let x: 30
+    print [x .x ..x]   ; What if this printed `30 20 10` ??
+]
+
+foo 20
+</code></pre>
+<p>Just a thought.  Things are pretty chaotic in binding, and having code demonstrate such a "meta-awareness" of what's going on in the binding above seems like it could be moreso.  But it's crossed my mind a couple times so I thought I'd mention it.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/weird-dynamic-binding-idea-climbing-the-chain/1752">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/weird-dynamic-binding-idea-climbing-the-chain/1752</link>
+          <pubDate>Wed, 27 Oct 2021 09:11:12 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1752</guid>
+          <source url="https://forum.rebol.info/t/weird-dynamic-binding-idea-climbing-the-chain/1752.rss">Weird Dynamic Binding Idea: Climbing The Chain?</source>
+        </item>
+        <item>
+          <title>Rebol And Scopes: Well, Why Not?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>It's frequently said that Rebol "doesn't have scope".  Early examples of that premise might point to something like a block of:</p>
+<pre><code>[x x x y y y]
+</code></pre>
+<p>Then people might say that the Xs and Ys can all resolve to something different.</p>
+<pre><code>&gt;&gt; print [x x x y y y]
+10 20 "foo" 30 40 "bar"
+</code></pre>
+<p>I find it personally frustrating when this is pronounced with glee (as per Red Gitter <em>"there is no spoon!"</em>)...vs. acknowledging that this should seem very alarming.  When you do something weird the burden of proof is on you to prove its benefit.</p>
+<h2>Were Scopes Rejected Because They're Somehow Bad?</h2>
+<p>No.</p>
+<p><em>It's because Rebol's dynamic nature means there isn't a clear moment in time where code can be holistically analyzed to determine scopes</em>.  Code structures are always getting cobbled together from pieces...from disparate locations in the codebase, or sometimes fabricated from thin air with <em>no</em> context.</p>
+<p>So it hasn't had scopes because it hasn't been able to.</p>
+<p>BUT with the prototypes I've done with string interning, it integrates something like "scopes".</p>
+<pre><code>&gt;&gt; print reword {Scopes? $x $x $x $y $y $y}
+Scopes? 10 10 10 foo foo foo
+</code></pre>
+<p>When a string carries along a "binding", it only carries one.  And that effectively captures some map from words to values.  So the answer to "what is X" and "what is Y" will be the same each time you ask that mapping referenced by that string.</p>
+<p>If that's not a "scope", what is it?  And is there a reason the system as a whole should not use them?</p>
+<h2>Historical Rebol Used Mutable Binding</h2>
+<p>Historical Rebol's idea of binding is that ANY-WORD!s get bits in the cell representing an object they are looked up in.  This process of gluing on bindings was done "every now and again" by code that walks around--usually deeply--and mutably changes data it is given.</p>
+<p><strong>On the plus side: programmability.</strong>  If you received a BLOCK! and wanted to go through and say that every SET-WORD! that starts with a vowel is going to be bound to some new object, but others will be left as-is, you can do that.  You can examine not only the properties of the structure, but also make decisions on what the previous binding was...selecting to override some references of the same named variable while leaving others alone.</p>
+<p>(Note: Some binding queries didn't give useful information.  If you asked for the binding of a word linked to a function argument or local, it would just say "true".)</p>
+<p><strong>On the plus side: performance.</strong>  If you're dealing with a concept of binding that wants to freeze in time at the moment you run a bind pass, you can cache the notion of which object and which index in that object a word will be found at.  Although...</p>
+<p>...<strong>On the minus side: requires lots of copies (adversely affects performance, and it's not clear when to make them).</strong> If you assume every value has a binding it can mutably disrupt, this complicates situations where a piece of code needs to be viewed in more than one way.  Just one example is the idea that every method in an object would need to be copied deeply so that its code could be rebound to that object's instance variables.</p>
+<p><strong>Also on the minus side: no reaction to changes.</strong>  For instance, you might bind some code into a place like the LIB context...but later add a new declaration to LIB.  The addition will not be seen.</p>
+<h2>Ren-C Began To "Virtualize" Binding</h2>
+<p>A big focus in Ren-C has been experimenting with binding forms that don't a-priori walk deeply at the outset, but that trickle down and spread as you descend into array structures...each step propagating something called a "specifier".</p>
+<p>One of the first instances was when you run a function body, a specifier would be added that would be the FRAME! of that function's variables.  It starts propagating by slipping a pointer into an extracted block cell for the body when it gets a DO at the top level.  That pointer travels along through nested blocks, so those become aware of the function instance it relates to...one extraction at a time.  Similar techniques allow object instance methods to be differentiated while running the same code used in other objects...the function bodies are the same arrays, but the specifier facilitates finding the object instance.</p>
+<p>There are various incarnations of this technique of having binding be a "view" on an array of values, without having to actually touch the bits in arrays.  But the general name for these techniques I've adopted is <strong>virtual binding</strong>.</p>
+<h2>String Interpolation Tries <em>Fully Virtualized Binding</em>
+</h2>
+<p>At first specifiers were just for functions and methods.  But the concept of making specifiers accrue a more complete map of a persistent binding environment is very tempting, allowing things like <a href="https://forum.rebol.info/t/could-strings-have-context/587/10">binding lookup in strings</a>.</p>
+<p>The idea behind the prototype that lets you look up a map from WORD! =&gt; value on strings is that specifiers compound together in chains.  A new link is added each time something new to consider is added.</p>
+<p>So let's look at that model of operation for something like:</p>
+<pre><code> global: 10
+ x: &lt;not an integer&gt;
+
+ foo: func [x] [
+     let local: 20
+     return reword {The sum is $(x + local)}
+ ]
+
+ foo 30
+</code></pre>
+<p>The virtual bind chain starts out with a module context that has <code>global</code>, <code>x</code>, and <code>foo</code> in it.  This is all there is to stick on the BLOCK!s that gets passed to FUNC.  So the spec and body are blocks with a module as the specifier.</p>
+<p>FUNC stows the body block away in an ACTION! that it generates.  Later when it gets invoked, it creates a FRAME! with <code>return</code> and <code>x</code> in it...and puts that in a chain <em>with</em> the module context.  So upon entry to the function body, that body is being executed with a specifier that looks in the frame first (would find that x) and then in the module second (would find <code>global</code> and <code>foo</code>).  This compound specifier is what the evaluator state initially has for that body block.</p>
+<p>The module inherits from the LIB context, so things like LET and REWORD will be found by means of that inheritance.  So then LET runs...using a special ability to add another link in the chain to the specifier that the evaluator is using, for the word <code>local</code>.</p>
+<p>Finally we get to the RETURN (it's in the frame) and REWORD (falling through to the module) and the whole specifier chain is stuck onto the string.  Because the specifier has snowballed all the information <em>the string could look up anything</em> (except the X in the module that's hidden).</p>
+<p><strong>In simple cases like this, it's essentially just like scope.</strong>   There are no situations that introduce contention.  The flow of context is from the top to the bottom, and there's no parts being unplugged from one place and into another.</p>
+<h2>But What If You Did Unplug and Replug Things?</h2>
+<p>Let's just look at a <em>super simple</em> example of throwing a COMPOSE into the mix.  So instead of calling REWORD directly, you made a call to another function, WRAPPER:</p>
+<pre><code> global: 10
+ x: &lt;not an integer&gt;
+
+ wrapper: func [string] [
+     return do compose [reword (string)]
+ ]
+
+ foo: func [x] [
+     let local: 20
+     return wrapper {The sum is $(x + local)}
+ ]
+
+ foo 30
+</code></pre>
+<p>When wrapper runs, the same basic logic applies to how "scopes" are gathered...and applied to the body of the function when it executes.  But that COMPOSE is splicing in a string that already has a binding on it.  How does the specifier flowing downward (which has the module's X) interact with the specifier already on that string (which has FOO's X overriding the module's X)?</p>
+<p><strong>A simple thought is a default of leaving bindings alone if they already have one.</strong> This seems obviously better than blindly overwriting, because it gives you a simple choice if you want overwriting to happen... you could just unbind the string:</p>
+<pre><code> wrapper: func [string] [
+     return do compose [reword (unbind string)]
+ ]
+</code></pre>
+<p>But all-or-nothing doesn't cover a lot of scenarios.  If you're dynamically creating a function with some block material you got "from somewhere else", that material may have been written with the express knowledge that certain words were supposed to be overridden by the place it's being substituted, with others left alone.</p>
+<p>Also, what if you had a rule like <em>"I want all the GROUP!s in this code to be bound to FOO but only inside the GROUP!s"</em>?</p>
+<h2>Could Binding Be Functional?</h2>
+<p>If you want a programmable sense of binding that doesn't resort to deep walking the structure and mutating it directly... you could allow the binding "specifier" to be (at least conceptually) a function.  That function could be passed the existing binding as an argument, and make a decision based on that of how to resolve it.</p>
+<p>This would result in a kind of "programmable specifier", that only injects its influence <em>if and when</em> a descent into a block with the desire to execute it occurs.</p>
+<p>Whether you could <em>actually</em> provide a function, or just speak in a "mini dialect" of merge and override instructions that behaved as a function, I don't know.  A real usermode function doing the bind merge logic sounds expensive (but would it be worse than deep walking and selectively binding a tree of code?  Who knows.)</p>
+<h2>Pure Virtual Binding Has No Obvious Way To Cache</h2>
+<p>One advantage to storing the "scope chain" is that if contexts in that chain have things added or removed, the evaluation can pick up the change...</p>
+<p>...but a <em>disadvantage</em> is that it's hard to see any way to efficiently remember where to look up bindings.  Where you found a word on the last lookup might not be the same place that you would on the next lookup, if any objects/modules in the chain have changed.  Thinking of binding as some sort of black box function makes this even more intractable than it already is.</p>
+<p><strong>But I really feel the deep walking with putting bindings on things is a dead end.</strong>  That just makes it feel like the focus needs to be on figuring out this means of dialecting the resolution of scopes at the merge points.  There needs to be a richer language than just "unbind" and "no-op" for what you do at these points...but I don't think walking the blocks and pasting bindings on particular items is viable.</p>
+<h2>I Think "Scopes" Have To Come Into Play</h2>
+<p>Rebol's word soup for binding has always been <a href="https://en.wikipedia.org/wiki/DWIM">DWIM technology</a>.  ("do what I mean")  So there's no schematic for how to do this.  It's fundamentally based on wishful thinking.</p>
+<p>The concept of having a fully granular ability to go down to the WORD!-level in a structure of code and declare what <em>that one word</em> points to may seem like it puts all the power in your hands.  But that power has proven difficult or impossible to wield in non-trivial situations... runs afoul of blocks that are imaged multiple places in the source... and winds up leaving code stale and oblivious to when new declarations arise at moments they don't expect.</p>
+<p><strong>What puts me over the top in thinking we need "scopes" is bindings in strings.</strong>  Features based on string interpolation are so undeniably useful that once the possibilities are seen, they can't be unseen.</p>
+<p>But also, what about debuggers that might want to show you lists of what variables are "in scope" at a certain point of execution?  There are a lot of reasons to have a running tally of which contexts and declarations are visible.</p>
+<p><strong>Yet it's important to realize this is kind of just kicking the can down the road a bit: There's no rigorous way to give meaning to word soup being arranged haphazardly.</strong>  What has been able to succeed in Rebol so far (to the extent you can call existing binding "success") is really just the by-product of fairly unambitious code.  "It looks like it works because nothing difficult is being tried."</p>
+<p>Eliminating mutable binding and asking lookup to be accomplished by some nebulous "scope merging" language doesn't have an obvious magic to it.  Beyond that, I don't know how to cache it.  <strong>So this is a radical idea that may just lead to frustration and the slow death of the project.</strong>  <img src="https://forum.rebol.info/images/emoji/twitter/skull_and_crossbones.png?v=9" title=":skull_and_crossbones:" class="emoji" alt=":skull_and_crossbones:"></p>
+<p>But I have said that before about other things that worked out okay.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+<p>We'll see.</p>
+            <p><small>5 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751</link>
+          <pubDate>Wed, 27 Oct 2021 03:57:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1751</guid>
+          <source url="https://forum.rebol.info/t/rebol-and-scopes-well-why-not/1751.rss">Rebol And Scopes: Well, Why Not?</source>
+        </item>
+        <item>
+          <title>The Binding Composition Paradox</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>Sometimes, Redbol has made it seem like the bindings on things are "sticky"...once you bind a word, it stays bound there, even when mixed in with the same word that is bound elsewhere.</p>
+<p><strong>Here is a familiar example in Rebol2, for how to make a BLOCK! that has two meanings for a WORD! <code>X</code> at the same time:</strong></p>
+<pre><code>rebol2&gt; x: 10  ; sets user context X to 10
+
+rebol2&gt; block: [x +]  ; this block refers to the user context X
+
+rebol2&gt; obj: make object! [x: 20]
+
+rebol2&gt; append block bind 'x obj
+== [x + x]  ; first X is bound to user context, second to obj
+
+rebol2&gt; do block
+== 30  ; e.g. 10 + 20
+</code></pre>
+<p>But <em>some</em> constructs overrule this.  That same block--if used in the body of a function--would have the function argument out-prioritize the existing binding.</p>
+<p><strong>Here is that same block being used as the body of a function, where both meanings of X are overridden...both now refer to the argument X:</strong></p>
+<pre><code>rebol2&gt; add-x-to-x: func [x] block  ; passing in the [x + x] from before
+
+rebol2&gt; add-x-to-x 100
+== 200  ; e.g. 100 + 100
+</code></pre>
+<p><em>There is historically no choice in this matter.</em>  If a word is reachable through a deep walk of the body block...and it is named in the arguments/locals, then it will be overridden.</p>
+<p>But notably: bindings to words that are not function parameters are not disturbed:</p>
+<pre><code>rebol2&gt; x: 100  ; this X is in the user context
+
+rebol2&gt; obj: make object! [y: 20]
+
+rebol2&gt; block: [x +]
+
+rebol2&gt; append block bind 'y obj
+== [x + y]  ; the Y is inside OBJ
+
+rebol2&gt; y: 2000  ; this Y is in the user context
+
+rebol2&gt; add-x-to-y: func [x] block
+
+rebol2&gt; add-x-to-y 10
+== 30  ; preserved binding of Y: 20, though X was overridden to argument of 10
+</code></pre>
+<p>It may seem there's no other choice for what could have happened here...</p>
+<p>...but with other designs, we could have other choices.  There could have been a decision by FUNC to make an observation about the visibility of what it could see at the site of its invocation...e.g. where <strong>func [x] block</strong> was called.  It could have said that the block inherits the visibility of Y in the user context...since that's what <strong>func [x] [x + y]</strong> would have seen.</p>
+<h2>A New Potential Ability To Exploit</h2>
+<p>Historically, FUNC could not know any difference between being called by <strong>func [x] block</strong> vs. <strong>do compose/only [func [x] (block)]</strong>.  It would get the same block data.</p>
+<p>A new nuance exists now, where fetching through a variable could shield the referenced thing from a wave of binding.  The COMPOSE case would not have that shield.  For example:</p>
+<pre><code>&gt;&gt; add-x-to-y: func [x] block
+
+&gt;&gt; add-x-to-y 10
+== 120  ; argument X ignored completely, block binding used as is
+
+&gt;&gt; add-x-to-y: do compose/only [func [x] (block)]
+
+&gt;&gt; add-x-to-y 10
+== 2010  ; uses arg X and user context Y
+</code></pre>
+<p>I've also been wondering if <strong><code>:(...)</code></strong> should be a way of saying "pretend this were written here" (as it is in UPARSE and Ren-C PARSE), which would be cleaner than the COMPOSE</p>
+<pre><code>&gt;&gt; add-x-to-y: func [x] :(block)
+
+&gt;&gt; add-x-to-y 10
+== 2010
+</code></pre>
+<p>So notice gives you the same outcome as if you'd just written [x + y] to start with:</p>
+<pre><code>rebol2&gt; y: 2000
+
+rebol2&gt; add-x-to-y: func [x] [x + y]
+
+rebol2&gt; add-x-to-y 10
+== 2010
+</code></pre>
+<p>And also the "leave it completely alone" version acts like you had made the function body DO through the variable instead of using it directly:</p>
+<pre><code>rebol2&gt; x: 100  ; this X is in the user context
+
+rebol2&gt; obj: make object! [y: 20]
+
+rebol2&gt; block: [x +]
+
+rebol2&gt; append block bind 'y obj
+== [x + y]  ; the Y is inside OBJ
+
+rebol2&gt; add-x-to-y: func [x] [do block]  ; not using block as body directly
+
+rebol2&gt; add-x-to-y 10
+== 120
+</code></pre>
+<p><strong>It's interesting to point out these options are disjoint.</strong>  You don't get the historical behavior out of either "extreme".  But neither of the "extremes" are available in the historical model.</p>
+<p>Desirable or not, the extremes are at least easy to articulate:</p>
+<ul>
+<li><em>"pretend I'd written it here to start with"</em></li>
+<li><em>"leave the binding completely alone"</em></li>
+</ul>
+<p>It's "Pretend I'd Written It Here" that's a new possibility.  Due to some mechanical changes, we can make composed source act like you'd written it in the place it's being composed.</p>
+<p>This couldn't be done before, because binding didn't act as a "wave" which propagated through evaluation.  It was something that happened at a moment in time--e.g. when you'd LOAD something there'd be a deep walk of it gluing bindings onto things, and anything that missed that moment would have missed the boat.</p>
+<h2>When To Override, And When To Leave Alone?</h2>
+<p>"Pretend Like I Wrote It Here" is much like what people would think that "macros" do in traditional languages.  It's like your COMPOSE was run by a preprocessor, and then the source acts just like it had been written there all along.</p>
+<p>But this doesn't <em>seem</em> to mesh well with the "value proposition" of binding that is pitched in the language.</p>
+<p>If you are using COMPOSE to put together a PARSE rule or a FUNC which consists of some material that was passed in from a dialect, it's rare that the local variables involved in your code doing the composing should be picked up by the code being composed.  But if the dialect fragment at the callsite referred to variables visible at the callsite, those were likely the intended variables.</p>
+<p><strong>Important to remember is that there's no magic answer to arbitrary semantic composability.</strong>  If you aren't pleased by DO BLOCK where the block is basically being run as a function with no arguments, and you aren't pleased by a form of "do as if I wrote it here", then everything else is a sort of strange middle shade of gray, where some things will be overridden and others won't.</p>
+<p>I've been sort of staring at the canvas of what's possible on this, and technically things are in the best position they have been to try new things.  Sea of Words is a big step forward, but I'm having trouble pushing it much further.</p>
+<p><strong>It would help to have some more ambitious demos.  I'd like to look at cases where a dialect implementation lives in one file...and the dialect usage lives in another file...with the expectation that the dialect implementation be able to compose and remix the data passed in from the usage site as running code which preserved relationships established in the usage file.</strong></p>
+<p>UPARSE isn't the most challenging example of such a remix.  The GROUP!s in a parse block are basically left completely alone; they're never composed with anything else.  The challenging feature is if there are going to be LET statements in UPARSE and how they would work, to cross that boundary of being visible during the rule part as well as in the GROUP! part.  (Also, do they stop at <strong><code>|</code></strong> boundaries?  If so, how would they do that?)</p>
+<p>Anyway, it's slow going to think about this.  But it is <em>the</em> central point IMO, so it's worth the time.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/the-binding-composition-paradox/1574">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-binding-composition-paradox/1574</link>
+          <pubDate>Sat, 27 Mar 2021 22:11:15 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1574</guid>
+          <source url="https://forum.rebol.info/t/the-binding-composition-paradox/1574.rss">The Binding Composition Paradox</source>
+        </item>
+        <item>
+          <title>Slipping Bindings Into a MODULE</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>When you give a block as the body to the MODULE function in R3-Alpha, you lose essentially any bindings you had in it:</p>
+<pre><code>r3-alpha&gt;&gt; obj: make object! [print: func [x] [lib/print "unused override"]]
+
+r3-alpha&gt;&gt; m: module [] compose/deep [test: does [(bind 'print obj) "Hello"]]
+
+r3-alpha&gt;&gt; m/test
+Hello
+</code></pre>
+<p>So we put a PRINT word bound into OBJ inside that module material, but it got wiped out and used the plain old LIB/PRINT instead.</p>
+<p><a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/base-funcs.r#L87">There's an UNBIND/DEEP call</a> right in the implementation of the R3-Alpha MODULE function, so that's at least <em>one</em> reason why.  But there are more reasons...it kind of just...<em>doesn't work</em> to leave the bindings on.  There's too much potential for stray bindings you never intended to have meaning being treated as legitimate.</p>
+<p>The very confusingly-named /MIXIN refinement is actually a very blunt tool for passing an object to bind to <em>before</em> the body runs:</p>
+<pre><code>r3-alpha&gt;&gt; obj: make object! [print: func [x] [lib/print "mixed in!"]]
+
+r3-alpha&gt;&gt; m: module/mixin [] [test: does [print "Hello"]] obj
+
+r3-alpha&gt;&gt; m/test
+mixed in!
+</code></pre>
+<p>So now you know why that exists.  Since it's going to throw away all your bindings, it gives you at least one chance to inject some overrides.</p>
+<h2>Module Inheritance May Give New Possibilites</h2>
+<p>One of the key things I want to see is the ability to say that a module uses a baseline other than the default LIB.</p>
+<p>For example: If you want to run a module of Rebol2 or Red code, then you would want to use Redbol as the "lib" (and then perhaps expose Ren-C's functions via a "newlib" variable)...</p>
+<p>Anyway, the point is that I think you basically have to accept that whatever you toss at the module in terms of a body will have its bindings completely lost.  You have to use a facility like /MIXIN or module inheritance.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/slipping-bindings-into-a-module/1565">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/slipping-bindings-into-a-module/1565</link>
+          <pubDate>Fri, 19 Mar 2021 11:28:32 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1565</guid>
+          <source url="https://forum.rebol.info/t/slipping-bindings-into-a-module/1565.rss">Slipping Bindings Into a MODULE</source>
+        </item>
+        <item>
+          <title>The Sea Of Words</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <pre><code> === I HAVE SORT OF A PLAN-OF-ATTACK ===
+
+ echo [For how to deal with the explosion of WORD!s
+     that would result if you start sanctioning people
+     doing things like this...]
+</code></pre>
+<p><strong>TO RECAP:</strong> the user context proactively creates <strong>variables</strong> <em>for every word that you even so much as mention</em>.  The idea is that it doesn't know if that word will come into existence later, and it wants to be able to facilitate things like:</p>
+<pre><code>foo: func [] [bar]  ; doesn't leave unbound, in case definition comes later
+bar: func [] [print "Hello"]  ; hooks up to previously existing bar variable
+foo  ; prints hello
+</code></pre>
+<p>We've seen that there are several downsides to this strategy:</p>
+<ul>
+<li>
+<p>Even without pathological cases like sentences-of-word-using <strong>===</strong> and <strong>echo</strong>, the user context swells to a very large size.  You get definitions for function arguments that were never intended to have a global variable for them, every LET variable gets a user context binding it doesn't use, etc.</p>
+</li>
+<li>
+<p>You have no way of knowing when a variable <em>isn't</em> valid or intended.  Any stray assignment or misspelling writes into the global space:</p>
+<pre><code> foo: func [argument] [
+     argment: default [10]
+     print ["You just defaulted the wrong" argument]
+ ]
+</code></pre>
+</li>
+<li>
+<p>The aggressive creation of variables that are local copies of <em>everything</em> from the lib context means that you won't see changes if the lib definition changes.</p>
+<pre><code> &gt;&gt; foo: func [] [newfangled "Hello"]
+ &gt;&gt; append lib compose [newfangled (:print)]
+ &gt;&gt; foo
+ ** Script Error: newfangled is ~unset~
+</code></pre>
+</li>
+</ul>
+<h2>Proposal: "Attachment" =&gt; Binding <em>Without Creating a Variable</em>
+</h2>
+<p>What if there were a way to say that WORD!s could be attached to a context, <em>but not actually have memory for a variable behind that reference?</em></p>
+<p>If a new variable came into existence, those references would see it.  But those references themselves would not create the variables...at least not without some extra effort.</p>
+<pre><code>&gt;&gt; foo: func [] [y: 10]
+
+&gt;&gt; foo
+** Error: y is attached to a context, but no definition exists for it
+</code></pre>
+<p>Going with the current way for making variables appear in contexts:</p>
+<pre><code>&gt;&gt; foo: func [] [y: 10]
+
+&gt;&gt; append system/contexts/user [y: _]
+
+&gt;&gt; foo
+== 10
+
+&gt;&gt; y
+== 10
+</code></pre>
+<p>But we could imagine there being some new LET-like construct which would enforce the existence of the variable.  It would peek ahead at the word, and then force a variable if there wasn't one already, then vanish.  Let's call it EMERGE for now.</p>
+<p>This addresses the issue of references that exist "back in time":</p>
+<pre><code>&gt;&gt; bar: func [] [y: 20]  ; Y scanned and bound before the emerge
+; (so calling bar right now would error)
+
+&gt;&gt; foo: func [] [emerge y: 10]
+
+&gt;&gt; foo
+== 10
+
+&gt;&gt; y
+== 10
+
+&gt;&gt; bar  ; was allowed to assign and overwrite
+== 20
+</code></pre>
+<p><strong>I've started a small hacked-together proof-of-concept</strong>.  It seems to have potential, but there are a lot of questions...</p>
+<h2>When Are SET-WORD!s Implicitly Gathered?</h2>
+<p>Right now, modules use the tactic of only considering top-level SET-WORD!s to be gathered.</p>
+<p>But what if something isn't a module?  What if it's a string of code, like:</p>
+<pre><code>&gt;&gt; do "x: 10, print [x]"
+</code></pre>
+<p>Had you written that as a BLOCK!, it wouldn't work...</p>
+<pre><code>&gt;&gt; do [x: 10, print [x]]
+</code></pre>
+<p>...because in that case, the actual loading process the console ran was for the string "do [x: 10, print [x]]", and that doesn't have a top-level SET-WORD!.</p>
+<p><strong>My feeling is that top-level SET-WORD!s being "emerge'd" implicitly is that should be a choice for a module, but not a basic behavior of DO or TRANSCODE</strong>.</p>
+<h2>How Do Top-Level SET-WORD!s mix With SET-BLOCK!, anyway?</h2>
+<p>Not all contents of SET-BLOCK!s are words being assigned, e.g.</p>
+<pre><code>[x (first word-list)]: some-func ...
+</code></pre>
+<p>So we don't want declarations for FIRST and WORD-LIST, since they're only finding the name of the word to be evaluated...and if they were  bound as new variables by a "scan for SET-XXX" process they would not work for their intended purpose, since they'd lose their binding to the FIRST function and the WORD-LIST variable in the process.</p>
+<p>Additionally, not all SET-BLOCK!s at the top level necessarily mean assignment.  They can be used for dialected purposes.  That's true of SET-WORD!s too...even at the top level.</p>
+<h2>How Do You Mix EMERGE with LET?</h2>
+<p>There was a problem with LET wanting to do multi-returns, e.g. where one variable needs a new definition but another one already exists.  That is being resolved with quoting, you add a tick to say you want to pass-thru the definition of a variable:</p>
+<pre><code>let [new-variable 'reused-variable]: some-func ..
+</code></pre>
+<p>(This same concept of quote use is being applied to say not to create a new loop variable for things like FOR-EACH, e.g. <code>for-each 'reuse [1 2 3] [...]</code>)</p>
+<p>But now we have the same problem with EMERGE.  I guess you could put it in a GROUP! and then say to reuse the emerged product, like:</p>
+<pre><code>let [new-variable '(emerge global-variable)]: ...
+</code></pre>
+<h2>What Does BIND Mean When You Bind to Everything?</h2>
+<p>It's generally the case that BIND BLOCK LIB or BIND BLOCK USER is something only done at the beginning of constructing code from raw material.  Most people expect LOAD to do this for them.</p>
+<p>If these kinds of contexts consider themselves candidates for all words, they'd never not-bind.</p>
+<p>It may be that this category of context (synonymous with MODULE! ?) is something you have to subset into a collection of words before using in binding operations...and if you bind without that subsetting then you just reset everything in the material you're working with.</p>
+<h2>Despite The Questions, This Is Probably What's Needed</h2>
+<p>The small demo I have working makes me reasonably optimistic that this is the right direction.  I'll keep looking at it.</p>
+            <p><small>5 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/the-sea-of-words/1564">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-sea-of-words/1564</link>
+          <pubDate>Thu, 18 Mar 2021 17:19:16 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1564</guid>
+          <source url="https://forum.rebol.info/t/the-sea-of-words/1564.rss">The Sea Of Words</source>
+        </item>
+        <item>
+          <title>Indexes And Binding Positions</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>The fact that blocks have a "somewhat hidden" index in them creates no shortage of problems system-wide.  The semantics of this index are quite nebulous.  COPY doesn't see backwards, for instance:</p>
+<pre><code>r3-alpha&gt;&gt; data: [a b c]
+
+r3-alpha&gt;&gt; pos: next data
+== [b c]
+
+r3-alpha&gt;&gt; copied-pos: copy pos
+== [b c]
+
+r3-alpha&gt;&gt; back pos
+== [a b c]
+
+r3-alpha&gt;&gt; back copied-pos
+== [b c]
+</code></pre>
+<p>Your new <code>copied-pos</code> only has parity with the original <code>pos</code> so long as no one ever uses BACK on it.  This semantic question is inherent to all kinds of functions that accept blocks that aren't at their head.  How about the low-level MAKE FUNCTION! ?</p>
+<pre><code>r3-alpha&gt;&gt; spec: []
+r3-alpha&gt;&gt; body: [print "one" print "two"]
+
+r3-alpha&gt;&gt; test: make function! compose/only [(spec) (next next body)]
+
+r3-alpha&gt;&gt; test
+one  ; hey, we skipped past `print "one"` (?!)
+two
+</code></pre>
+<p>You'll find quirks related to this everywhere.  Ren-C has some implementation changes that make it less likely to just forget that a block encodes a position, but the questions still remain.</p>
+<h2>How does BIND interact with Indexing?</h2>
+<p>In R3-Alpha and Rebol2, the index is ignored.  Regardless of the input position, the whole block gets the new binding:</p>
+<pre><code>rebol2&gt;&gt; x: 304
+rebol2&gt;&gt; block: [x x]
+rebol2&gt;&gt; reduce block
+== [304 304]
+
+rebol2&gt;&gt; obj: make object! [x: 1020]
+rebol2&gt;&gt; bind next block obj
+rebol2&gt;&gt; reduce block
+== [1020 1020]
+</code></pre>
+<p>Red and Ren-C currently give back [304 1020] for the BIND case, so only the positions after are bound.</p>
+<p>That's fine and good for BIND. But Ren-C's virtual binding gives you a new view on a block.  What happens if you step backwards in that view?</p>
+<pre><code>&gt;&gt; x: 304
+&gt;&gt; block: [x x]
+&gt;&gt; obj: make object! [x: 1020]
+&gt;&gt; virtualized: in obj next block
+&gt;&gt; reduce head virtualized
+== [1020 1020]
+</code></pre>
+<p>There's nothing in the virtual binding information that says it only applies after a certain index in the block.  So if you take that step backward, you get the bindings.</p>
+<p>It's <em>technically possible</em> to put an index position into a virtual binding...but you'd also have to change the binding to remove the index after stepping down into a nested block, because the index as limit only applies at the top level.  So if instead of <strong>[x x]</strong> the above block had been <strong>[[x x] [x x]]</strong>, the you'd want it to act as <strong>[[304 304] [1020 1020]]</strong> with the splitting at the top level, not keep splitting all the way down as <strong>[[304 304] [304 1020]]</strong>, thinking the "start at the second item" applied to the nesting too.</p>
+<p>But even if we did that, there'd be a problem with mutations.  Although virtually bound views of blocks are CONST, that's only a suggestion...you're supposed to be able to switch it to MUTABLE if you're sure you know what you're doing.  And the original block being input isn't even made CONST.</p>
+<h2>Does LET Make This Worse, or Just The Same?</h2>
+<p>At first I thought LET was worse, because it's an active instruction in a block to change the binding.  Meaning if you reposition in it and run it again, you get the binding twice.</p>
+<p>But I think the main issue with that is kind of tangential.  You probably shouldn't be capturing a BLOCK! with accrued LET state in the first place; I talk about that in <a href="https://forum.rebol.info/t/pivotal-design-question-is-evaluator-state-just-a-block/1496">Should the Evaluator Have State Besides A Block?</a>.  It seems that's a job for FRAME!.  So really, the places that capture virtual binding state are whole blocks, where it's their stored index position that creates the problem just like any other IN OBJ at a non-head position would.</p>
+<h2>Best Solution...Shallow COPY If You Care?</h2>
+<p>As semantically crappy as the index positioning in Rebol is...historical usage points out that quite a lot of code doesn't really wind up caring about this problem.  Most block operations are on heads of arrays...and most evaluative and binding operations never step backwards.</p>
+<p>Offhand I feel like it would be a losing battle to try to encode a position into virtual binding.  It's probably more efficient to just have those places that have a reason for fine-grained control to make a shallow copy to prevent stepping backwards altogether.</p>
+<p>There really are just going to be limits in a system that embraces mutability as much as Rebol historically has...the ergonomics and semantics are going to be perpetually at odds.  :-/</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/indexes-and-binding-positions/1519">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/indexes-and-binding-positions/1519</link>
+          <pubDate>Tue, 23 Feb 2021 15:36:13 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1519</guid>
+          <source url="https://forum.rebol.info/t/indexes-and-binding-positions/1519.rss">Indexes And Binding Positions</source>
+        </item>
+        <item>
+          <title>Binding Re-Examined from First Principles</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>Probably the best way to understand Rebol's "weird proposition" is by looking closely at the very basic implementation of the IF construct.</p>
+<p>I'll go back to R3-Alpha just to have the simplest form possible.  I've omitted the /ELSE and /ONLY refinements, which were ultimately dropped.  (<code>//</code> comments mine):</p>
+<pre><code>// D_ARG(1) is argument 1 (the condition)
+// D_ARG(2) is argument 2 (the branch)
+//
+REBNATIVE(if)  // macro for declaring a C function that permits D_ARG(n) access
+{
+    if (IS_TRUE(D_ARG(1)))  // test argument 1 cell for "truthiness"
+        DO_BLK(D_ARG(2));  // push result of running block in argument 2 slot
+        return R_TOS1;  // signal to look for return cell at top of stack
+    }
+    return R_NONE;  // signal to fabricate a NONE! cell as the result
+}
+</code></pre>
+<ul>
+<li>
+<p><code>D_ARG(1)</code> is the condition, which has undergone an evaluation prior to when this C code for the native gets dispatched.  (So <strong><code>if 1 &gt; 2 [...]</code></strong> has already run the <code>1 &gt; 2</code> and turned that into a LOGIC! argument cell by the point this dispatcher runs.)</p>
+</li>
+<li>
+<p><code>D_ARG(2)</code> is presumed to be a BLOCK! in this iteration of the IF implementation.</p>
+</li>
+<li>
+<p>If the condition is "truthy" (neither a LOGIC! false cell nor a NONE! cell), then the block is run with the DO mechanics.  Evaluation leaves a result on the stack (TOS =&gt; "Top Of Stack"), which is then returned.</p>
+</li>
+<li>
+<p>If the condition is false, then a NONE! is returned.</p>
+</li>
+</ul>
+<h1>!!! The Most Important Observation To Make is...</h1>
+<p><strong>...that the only parameter to DO_BLK() is a pointer to the cell containing the block to execute.</strong>  The BLOCK! value alone somehow encapsulates enough information to run it...just as if it were a function with no parameters.  How??  The block is symbolic data, and yet there are no "lookup contexts" or attribute-grammar-y stuff being passed as additional parameters to the evaluation.</p>
+<p>Let's say the BLOCK! you pass holds <strong>[print [x + 20]]</strong>.  That's all it has in its hand when running.  <em>So where is the contextual information coming from--e.g. how does it know the value of X?</em></p>
+<p>You might guess the evaluator itself holds some state like a "dictionary of variables in effect at this moment".  Perhaps a table of what is in the current "scope".</p>
+<p>If that were the case, then how could this work?</p>
+<pre><code>x: 10  ; "outer x", something that looks like a "global"
+y: 20
+code: [print [x + y]]
+
+foo: func [x block] [  ; "inner x", a function argument
+    if x &gt; 10 block
+]
+
+r3-alpha&gt;&gt; foo 1000 code
+== 30  ; not 1020
+</code></pre>
+<p>When the IF native gets called, it's being called during an invocation of the FOO function.  That function has an argument of its own called X...whose passed in value is 1000.</p>
+<p>But when the DO_BLK() in the C code for REBNATIVE(if) gets called with <code>[print [x + 20]]</code> as the D_ARG(2), it apparently finds 10 as the value for X... not 1000.  And it finds Y as 20.</p>
+<p>So X was NOT "the most recent X encountered on the stack".  And Y was not "undefined because the function has no Y".  The block retained information, coming from persistent connections in the BLOCK! as it's passed around.</p>
+<h2>How Would The Example Above Look In JavaScript?</h2>
+<p>Pretty much every other system uses the currency of functions to handle passing code around.</p>
+<p>In JavaScript:</p>
+<pre><code>let x = 10
+let code = function() {
+    console.log(x + 20)  // "captures" the X visible to its scope here
+}
+
+let foo = function(x, runnable) {
+    if (x &gt; 10) { runnable() } 
+}
+
+&gt; foo(1000, code)
+30
+</code></pre>
+<p><strong>A function is hardened into a blob, where its meanings have been finalized, and where you call it <em>from</em> doesn't affect the meaning when it runs</strong>.  While BLOCK!s are still in limbo regarding their full meaning.</p>
+<h2>BLOCK!s Are Malleable In Their Interpretation</h2>
+<p>When a BLOCK! is used as a branch in an IF as an arity-0 function, their meaning seemed "hardened", like a function.  But it didn't have to be.</p>
+<p>We know that if we had literally written <code>if x &gt; 10 [print [x + y]]</code> in the body of the function, then the printed X would have been the same X in the comparison and in the block.  You'd get 1020 output.</p>
+<p>If what you want is the "same result as if you'd written it there", you'd need to use COMPOSE on the body <em>before</em> FUNC runs.</p>
+<pre><code>x: 10  ; "outer x"
+y: 20
+code: [print [x + y]]
+
+foo: func [x] compose/only [
+    if x &gt; 10 (code)
+]
+
+r3-alpha&gt;&gt; foo 1000
+== 1020  ; not 30
+</code></pre>
+<p>We might argue that if FUNC was <em>not</em> allowed to overrule the binding of X in an embedded block, then the currency of a block wouldn't be useful.  It would be acting like a black-box...much as an arity-0 function would.</p>
+<p><em>Yet it's important to note that composing a block does not necessarily get you the same thing as if you wrote the block right there.</em>  Only some overrides apply.  Consider:</p>
+<pre><code>x: 10
+y: 20
+
+bar: func [] [
+     make object! [
+         y: 200
+         return [print [x + y]]
+      ]
+]
+code: bar
+
+foo: func [x] compose/only [
+    if x &gt; 10 (code)
+]
+
+r3-alpha&gt;&gt; foo 1000
+== 1200  ; not 1020
+</code></pre>
+<p>There's an important point to be made here: <strong>COMPOSE does not act "as if" you had written the code at the site it is composed into</strong>.  It's acts with the bindings it had where it was originally written, and <em>only bindings that are actively overridden are changed</em>.</p>
+<p>In this case, FUNC is the entity which overrides the binding for X.  So only that is overridden before execution.</p>
+<h2>What Is The Value Proposition Of Working in This Way?</h2>
+<p>The basic value proposal is that computational intent can be framed as mixtures of code and data in a freeform way.</p>
+<p>If someone is going to create a "dialect" in JavaScript, they could approximate it with arrays.  Let's imagine trying to express the following PARSE rule:</p>
+<pre><code>num-a: 0
+rule: [some "a" (print "Found an A", num-a: me + 1)]
+</code></pre>
+<p>In JavaScript you'd need to make some identities for the new keywords, so let's say there's an object named <strong>p</strong> which contains some fields like <strong>some</strong> which resolve to objects with unique identities.</p>
+<pre><code>let num_a = 0
+let rule = [p.some, "a", function () { console.log("Found an A"); ++num_a }]
+</code></pre>
+<p>Just speaking to the code portion: Rebol has the advantage of a way to denote code without repeating the boilerplate for constructing functions (e.g. <strong><code>function () { ... }</code></strong> or lambda's <strong><code>() =&gt; { ... }</code></strong>) every time code is to be captured.</p>
+<p>But this idea of seeing blocks as containing the material for <em>"functions to be"</em> helps us understand the bias for preserving their bindings.  If it did not do so, then the invocation would be responsible for providing <em>all</em> of the binding information.</p>
+<p><strong>The bias for preserving bindings is thus driven by the idea that dialects want to be able to capture mixtures of executable code and data without giving advance notice specifically on which portions that represent code.</strong></p>
+<h2>What Can You Do To Code Blocks Without Breaking Them?</h2>
+<p>I've pointed out the basic rule that DO of a BLOCK! acts like an arity-0 function.  But once you start changing a block, what can you do to it?</p>
+<p>In the <em>fully-general</em> case, there is basically <em>nothing</em> you can do to a BLOCK! of arbitrary code the user writes without introducing the potential for breaking it.</p>
+<p>This is especially true about Rebol code, because the meaning is so fluid.  You can't know that any words mean anything in particular.</p>
+<p><strong>So the crux of the value proposition of Rebol's medium of BLOCK!s-as-currency is to keep the focus on <em>constructing new blocks from doing surgery on other blocks whose format you "understand by contract"</em>.</strong></p>
+<p>(I'll stop here because I think I've kind of drawn up the contrast between blocks and bindings vs. traditional functions.  I'll add on if I think of more that fits in this train of thought)</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515</link>
+          <pubDate>Sat, 20 Feb 2021 21:36:36 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1515</guid>
+          <source url="https://forum.rebol.info/t/binding-re-examined-from-first-principles/1515.rss">Binding Re-Examined from First Principles</source>
+        </item>
+        <item>
+          <title>Giving Functions the Power To Create Local Variables</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>I've added an experimental routine which is sort of a Pandora's box, but... I kind of feel it's where things need to go.</p>
+<p>This lets you add arbitrary new variables into the stream of evaluation programmatically.  Demo:</p>
+<pre><code>make-two-variables: func [name [text!]] [
+    let frame: binding of 'return  ; frame of the call to MAKE-TWO-VARIABLES
+
+    ; make variables for the incoming string with 1 and 2 as a suffix
+    ; resulting words will have their binding adjusted to the new variables
+    ;
+    let word1: add-let-binding frame (to word! unspaced [name 1])
+    let word2: add-let-binding frame (to word! unspaced [name 2])
+
+    ; set variables to values as a demonstration
+    set word1 &lt;one&gt;
+    set word2 &lt;two&gt;
+]
+
+do [
+    make-two-variables "demo"
+    assert [demo1 = &lt;one&gt;]
+    assert [demo2 = &lt;two&gt;]
+]
+</code></pre>
+<p>So this means you can write your own LET-like thing, to declare any number of variables and inject them into the stream of evaluation.</p>
+<p>I've <a href="https://github.com/metaeducation/ren-c/commit/babd70e45e1d8f7b92b15cc94ffc99d74ee23328#">gone ahead and done this with the TLS EMIT dialect</a>.  So the act of doing an EMIT will effectively do LETs for its labels, that can be observed by ensuing operations.  I've also removed all uses of the SET-WORD! gathering FUNCTION.  This means TLS is now operating entirely with FUNC.</p>
+<p>(As I've mentioned, the plan is that FUNCTION implying gathering will be phased out...ultimately making FUNC and FUNCTION synonyms).</p>
+<p>The mechanism behind this is far from perfect.  But what it's replacing was--I believe--a definitive dead-end.  The big question here to answer is <em>"does this accrual of state represent something the evaluator shouldn't do, even if it can, because it infringes on the concept of a BLOCK! position alone capturing evaluator state"</em>.  I think we need to review what "dialects using stepwise services" need...and under that review, I believe we will find that prohibiting the class of features that involve accrued state is too limiting to justify the simplicity.</p>
+<p>And while the performance tax of these ideas is going to be something to pay, We're <em>not</em> aiming for device driver code... at least not running under the interpreter!  Maybe you write tools that help you generate device drivers, but not running them.  I'll once again cite the Minecraft cities...:</p>
+<div class="onebox lazyYT lazyYT-container" data-youtube-id="QovfIQV_7GU" data-youtube-title="Greenfield - The Largest City in Minecraft - v0.5.3" data-parameters="feature=oembed&amp;wmode=opaque">
+  <a href="https://www.youtube.com/watch?v=QovfIQV_7GU" target="_blank" rel="noopener">
+    <img class="ytp-thumbnail-image" src="https://i.ytimg.com/vi/QovfIQV_7GU/maxresdefault.jpg" title="Greenfield - The Largest City in Minecraft - v0.5.3" width="690" height="388">
+  </a>
+</div>
+
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/giving-functions-the-power-to-create-local-variables/1499">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/giving-functions-the-power-to-create-local-variables/1499</link>
+          <pubDate>Wed, 10 Feb 2021 17:35:05 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1499</guid>
+          <source url="https://forum.rebol.info/t/giving-functions-the-power-to-create-local-variables/1499.rss">Giving Functions the Power To Create Local Variables</source>
+        </item>
+        <item>
+          <title>Unbinding SET-WORD!s in FUNC: Pros and Cons</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>The ability to read from arbitrary words without saying you are going to do so is fundamental in Rebol:</p>
+<pre><code>foo: func [x &lt;with&gt; print] [
+    print ["Having to say &lt;with&gt; print would be too annoying" x]
+]
+</code></pre>
+<p>So you don't have to use <code>&lt;with&gt;</code> to import a lot of words.  Yet I've long felt that being able to <em>write</em> arbitrary words is even more haphazard and problematic...</p>
+<pre><code>foo: func [x] [
+    y: 10
+    print ["Bad if you left off a LET or &lt;local&gt; on" y]
+]
+</code></pre>
+<p><strong>There's a certain amount of asymmetry, because a bad read is more likely to be noticed than a bad write.</strong></p>
+<p>Not only will reading a variable that doesn't exist cause errors, a variable that does exist will have weird content that you will notice going bad.  But writing doesn't have that character...you can write into a "global" unintentionally and not notice for quite a long time.  There are many bad consequences, e.g. two functions that seemed to work independently can suddenly trip over each other if called at the same time...if they both write globals they thought were local.</p>
+<p><strong>I've often thought it would be a good idea to unbind SET-WORD! in function bodies when that wasn't an explicit local or argument, or if it didn't have an explicit <code>&lt;with&gt;</code> or other importing construct like <code>&lt;in&gt;</code>.</strong></p>
+<p>Now that LET exists and offers a syntactically convenient way to make a new variable, this would call your attention to when you needed to add one.</p>
+<pre><code>y: 20
+foo: func [x] [
+    y: 10  ; this line would error in the proposal
+    print ["Y is" y]
+]
+</code></pre>
+<p>The idea would be that the error would guide you to either add <strong><code>&lt;with&gt; y</code></strong> to the function spec if you meant the existing global.  Or to make Y a local with <strong><code>let y: 10</code></strong> or adding <strong><code>&lt;local&gt; y</code></strong> to the spec.</p>
+<h2>The Downside: COMPOSE-ing Code With Bindings In It</h2>
+<p>Imagine if instead I had written:</p>
+<pre><code> y: 20
+ code: [y: y + x]
+ foo: func [x] compose [
+     ((code))
+     print ["Y is" y]
+ ]
+</code></pre>
+<p>It's important to point out: <em>the idea that your bindings are going to be messed with is fundamental to using blocks of code as the medium in the first place</em>.  If you wanted hygienic behavior you would use functions...it's specifically the mingling of code that leads you to use COMPOSE in a situation like this.</p>
+<p>But losing that binding on the SET-WORD! of Y is unfortunate for the code-builder.  They presumably anticipated the impact on X in this case, but if the Y becomes unbound then they're going to have to somehow put a <code>&lt;with&gt; y</code> in the function spec as well.  Should they have to?</p>
+<p><strong>The compromise might be that there's a wildcard form of WITH, a sort of "WITH-ALL".</strong></p>
+<p>Unfortunately WORD!s like <strong><code>*</code></strong> can be things you're actually doing <code>&lt;with&gt;</code>.  So you can't mean this by <strong><code>&lt;with&gt; *</code></strong>.   Also unfortunate is that since the spec uses tags, you can't say <strong><code>&lt;with&gt; &lt;*&gt;</code></strong>...which might be factored into arguments for why it should be a token instead so you could say  <strong><code>#with &lt;*&gt;</code></strong>.  Or it could be <strong><code>&lt;with&gt; #all</code></strong></p>
+<p>In any case...it's less burdensome to tell the person making the function to make it the kind of function that just allows all the bindings, rather than having to figure out how to transmit the name of each individual variable into it.</p>
+<p>Implementing this is not as easy as it sounds (if it sounds easy).  There are various layers going together that would have to analyze which bindings to rule in or out.  But I just see way too many instances of bugs from writing to globals that meant to be local.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/unbinding-set-word-s-in-func-pros-and-cons/1494">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/unbinding-set-word-s-in-func-pros-and-cons/1494</link>
+          <pubDate>Mon, 08 Feb 2021 21:47:17 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1494</guid>
+          <source url="https://forum.rebol.info/t/unbinding-set-word-s-in-func-pros-and-cons/1494.rss">Unbinding SET-WORD!s in FUNC: Pros and Cons</source>
+        </item>
+        <item>
+          <title>How Important is Knowing the BINDING OF ?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>With work on LET advancing, it raises the question of "what is the answer to BINDING OF on a LET"?</p>
+<pre><code>x: &lt;in-user-context&gt;
+print ["This is a giant object (the user context):" mold binding of 'x]
+do [
+    let x: 10
+    print ["But what is this?" mold binding of 'x]
+]
+</code></pre>
+<p>Efficiency tricks for making LET work pares the entity that represents the variable down to just 8 platform pointers.  That's 4 pointers for the value cell itself (the INTEGER! 10, in this case).  And then a header, the symbol (for X), and the two remaining pointers are used for bookkeeping.</p>
+<p>So there's no unifying "object" that ties LETs together.  One good aspect of this is that it gives you a finer grain of garbage collecting... if you define 10 LETs in a function and return a WORD! bound to just 1 of them, the other 9 can be GC'd.</p>
+<p><em>(The bad aspect is that the GC has to mark and sweep 10 individual things...which increases the load.  But I've settled on the idea that your scenario can guide you as to if you think this is a problem or not...and bundle things as <code>&lt;local&gt;</code> if you feel it is problematic.)</em></p>
+<p>So this makes us wonder if there is a rule that if BOUND? WORD is true, then:</p>
+<pre><code>(binding of word)/word = get word
+</code></pre>
+<p>If that rule has to be true, we'd need some new ANY-CONTEXT! along the lines of LET! for capturing individual variables...such that picking from that LET with its symbol would return the item.</p>
+<p>If the rule <em>doesn't</em> need to be true, then BINDING OF WORD could just return the word itself with the binding.  This is enough information that if the word were X, then  BIND 'X BINDING OF WORD could work.</p>
+<h2>How About FOR-EACH and USE?</h2>
+<p>When you say <strong>for-each x [1 2 3 4] [...]</strong> it would be nice if it took advantage of the efficiency of the 8-pointer form of object to declare X.  It's also a likely savings if <strong>for-each [x y] [1 2 3 4] [...]</strong> used two instances of that form linked together instead of trying to make a full-blown OBJECT! for the two fields.</p>
+<p>However, using LET-style binding would mean that you wouldn't be able to navigate from BINDING OF 'X to get a context you could look up Y in.  Programmatically you couldn't link the X and the Y together as being from the same FOR-EACH.</p>
+<p>Is that important?  It might be.</p>
+<p><strong>But I think the main problem is that what people actually want out of binding aggregation is to be able to say "bind this generated code as if it had been written here as source", and that is something Rebol wasn't designed to do.</strong>  Too much of the binding process involves phases...and if you do something at a later phase, you've missed the moment where the pointers were glued on and giving meaning.</p>
+<p>If we interpret <strong>for-each [x y] [1 2 3 4] [...]</strong> as equivalent to:</p>
+<pre><code>do [
+    let x 
+    let y
+    for-each ['x 'y] 1 2 3 4 [...]
+]
+</code></pre>
+<p>(Assuming quoted words reuse bindings instead of adding new ones.)</p>
+<p>... I think there are benefits, and these benefits likely outweigh the ability to navigate to a shared object.  If you're in one of the odd cases that you care, you could physically make the grouped object:</p>
+<pre><code>obj: make object! [x: y: _]
+for-each in obj ['x 'y] [1 2 3 4] [...]
+</code></pre>
+<p>But making decisions about all of this should be scenario-driven.</p>
+<h2>So...should User and Lib Contexts Be Made Out Of "LET!"s?</h2>
+<p>I've mentioned the somewhat unpleasant property that the user and lib contexts have that they grow without bound, are indexed by integer, and never GC keys.</p>
+<p>This means adding to the context can be costly (if you need to reallocate).  And it imposes a sense of ordering that doesn't really have any meaning... at least not the way things like the fields in a FRAME! have meaning (for the order of arguments gathered at a callsite...as well as internal indexing referred to by the native code for a function).</p>
+<p>Binding directly to point at individual variables in the case of the LIB and USER context means an index isn't needed, as lookups have an invariant thing to point at.</p>
+<p>But knowing that something is "in LIB" is a meaningful status.  When you override the binding of something you reach to LIB to ask for getting back the original version.</p>
+<p>Is the USER context a different story?</p>
+<p>As usual with binding this is more questions than answers.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/how-important-is-knowing-the-binding-of/1493">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/how-important-is-knowing-the-binding-of/1493</link>
+          <pubDate>Mon, 08 Feb 2021 19:45:30 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1493</guid>
+          <source url="https://forum.rebol.info/t/how-important-is-knowing-the-binding-of/1493.rss">How Important is Knowing the BINDING OF ?</source>
+        </item>
+        <item>
+          <title>Persistent Binding?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>I've been mulling how to make things like LET that are able to create new bindings outside of the USE-style nesting of blocks.</p>
+<p>So instead of writing:</p>
+<pre><code>use [x] [
+    x: 10
+    ...
+    use [y] [
+        y: 20
+    ]
+    ...
+]    
+</code></pre>
+<p>You could write:</p>
+<pre><code>let x: 10
+...
+let y: 20
+...
+</code></pre>
+<p>The hope is that developments in virtual binding could make this feasible enough to become a replacement for "locals gathering" from doing a deep walk on function creation.</p>
+<h2>But the LETs Would Cease  Visibility At The End Of The Block...</h2>
+<p>...that means it's kind of lame when you want to write:</p>
+<pre><code>while [let value: take block] [
+    print ["Took:" value]
+]
+</code></pre>
+<p>If VALUE is only visible for the condition block, you can't use it in the body.  So you have to write:</p>
+<pre><code>let value
+while [value: take block] [
+    print ["Took:" value]
+]
+</code></pre>
+<p>So here we have a situation where a block has built up bindings, and you want to know those bindings so you can use them in another block.</p>
+<p>This would suggest that DO would have an option to give you another result besides just the value...the context that was built up while the evaluation was taking place.</p>
+<h2>Also: BLOCK! From EVALUATE (DO/NEXT) Changes Binding</h2>
+<p>In a world with a LET that builds up state as it runs, there's a complicating effect in if you do single evaluation steps across blocks.</p>
+<pre><code>&gt;&gt; pos: evaluate [let x: 1, let y: 2, print [x + y]]
+== [, let y: 2, print [x + y]]
+</code></pre>
+<p>The block you get back there has to be somehow remembering its binding of x: 1 if it's not going to throw that information out.  This means the block is now virtually bound into a frame that was built for the execution and then torn down.  That throws a bit of a wrench into my suggestion that it could avoid creating new virtual bindings on each LET...because it's no longer going to be clear that it's the same frame.  Nothing is stopping you from this:</p>
+<pre><code>pos2: copy pos
+do pos
+do pos2
+</code></pre>
+<p>It can't glue y into the same context for where x lived on both, or it would get two y's.</p>
+<p>Another hiccup in this whole concept is that if you virtually bind things, they currently become CONST.  If every EVALUATE virtually bound to the frame of the block you were running, that would rule out casual modification of partially evaluated blocks.</p>
+<p>Wily stuff.  It's hard to imagine ways of making this work <em>at all</em>, much less performantly, but more abilities are around now for experimenting with it.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/persistent-binding/1488">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/persistent-binding/1488</link>
+          <pubDate>Tue, 02 Feb 2021 20:25:09 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1488</guid>
+          <source url="https://forum.rebol.info/t/persistent-binding/1488.rss">Persistent Binding?</source>
+        </item>
+        <item>
+          <title>Effect of Abstracting Functions on Naming/Binding</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>Among the many good fundamental questions tackled in the Whitespace interpreter example is "how do you make your own generator that makes <em>a function, and some other stuff</em>".</p>
+<p>So examine <a href="https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L191">the case of OPERATION</a>:</p>
+<pre><code>push: operation [
+    {Push the number onto the stack}
+    space [value: Number]
+][
+    insert stack value
+]
+</code></pre>
+<p>It looks a bit like FUNC... the description is in a string at the start of the spec block, and the body is the second block.  But while VALUE is a parameter definition, SPACE is just a description of the sequence of characters that are recognized as the pattern for requesting a PUSH instruction.  <em>(The full "opcode" is actually <strong>space space</strong>, because everything in the Stack-Manipulation category starts with the <a href="https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L184">"IMP" of space</a>)</em></p>
+<p>Something has to process this operation definition.  It could be an OPERATION function...or something that's actively looking for the word OPERATION and processing it...e.g. CATEGORY.  I chose to make OPERATION a function that acts as something of a "smart macro", teasing this out into component parts.</p>
+<p>One of those components is a parse rule, <code>[space space Number]</code>.  Another is just a function:</p>
+<pre><code>func [value [integer!]] [
+    insert stack value
+]
+</code></pre>
+<p>We could put the description into the FUNC, but that's broken out into its own variable too.  Imagine that OPERATION returns this bundle as an object:</p>
+<pre><code>push: make object! [
+    description: {Push the number onto the stack}
+    opcode: [space space Number]
+    action: func [value [integer!]] [
+        insert stack value
+    ]
+]
+</code></pre>
+<p><em>(Important Note: If we were forced to write the source like this expansion, it starts looking kind of like a run-of-the-mill JavaScript definition...minus the commas.  A JS specification would also have a harder time using undecorated "words" as [space space Number]... because there's a requirement of words looking up to variables in a scope.  Even if you get scope sorted out you'll only get what the words look up to.  So they'd be more likely to say ["space", "space", "Number"] in a data-oriented situation.)</em></p>
+<p>But there's a weakness to this approach.  If PUSH holds an object, then the way you call it would be PUSH/ACTION.  If you looked on the stack, then the way Rebol would reflect the name of that stack level would be simply as "ACTION".  That's not much better than no name at all.</p>
+<p>But also, what's getting built by the interpretation process is an instruction, e.g. <strong>[push 1]</strong>.  Then the instruction is processed with ordinary DO.  That means PUSH has to be a function, but there's no way to bind PUSH to PUSH/ACTION.  A binding for a word has to go through a word with the same name.</p>
+<p>You don't want the instruction representation to turn into <strong>[push/action 1]</strong>.  You also don't want to do <strong>compose [(:push/action) 1]</strong> and have the unfriendly literal action in the block...you lose all the niceness.  :-/</p>
+<p>So this puts you in the situation of either scrapping the concept that you use DO on the instruction BLOCK! to run the action... or you come up with some word named "push" that you can bind to.</p>
+<p>This means the object that gets returned winds up being like:</p>
+<pre><code>push: make object! [
+    description: {Push the number onto the stack}
+    opcode: [space space Number]
+    push: func [value [integer!]] [  ; renamed from ACTION to match PUSH
+        insert stack value
+    ]
+]
+</code></pre>
+<p>So now you have two PUSH words to bind to...either the outer or the inner.  But the inner function is now living in an object you wouldn't want to use as a bind target for anything generic (you don't want your instruction to see OPCODE, or DESCRIPTION)...so you have to bind <em>just</em> the word PUSH inside of PUSH.  This feels rather hackish and unpleasant.</p>
+<p>One feature JavaScript has that would be helpful here would be if functions could act as objects.  In JavaScript:</p>
+<pre><code>  &gt; foo = function (x) { return x + this.y }
+  &gt; foo.y = 20
+  &gt; foo = foo.bind(foo)  // so it has access to its own fields
+  &gt; foo(10)
+  &lt;- 30
+</code></pre>
+<p>If we could say that things like description and opcode were properties of the function, that could make it so OPERATION actually returned an ACTION!.  It could be bound to its name, yet have these additional fields available.</p>
+<p>Since we have the <strong>foo.bar</strong> format as well as <strong>foo/bar</strong>, we could treat the former case as accessing fields out of FOO while the latter case would invoke it with a refinement.</p>
+<p>This could fold in with the notion that <strong>foo.</strong> would give you foo inertly.  In fact, <strong>foo.</strong> may be a more aesthetic way of handling GET-WORD! behavior, possibly freeing up GET-WORD! for the more general "give it to me even if it's unset" idea. (?)  Just a thought.</p>
+<p><em>(Note: Looking at some Red code today, it really does seem like an uphill battle to convince people that <strong>(obj1/coordinate/x / obj2/coordinate/x)</strong> is somehow an improvement on every other language that uses dots for field selection.)</em></p>
+<p>I think the idea of being able to treat a function as an object is a good one.  JavaScript certainly gets mileage out of it.</p>
+<p>The foundations are already laid with the META information.  So we could say these fields live in the same place the HELP information does.  That makes it potentially crowded, so maybe HELP should put its information under a HELP sub-object... instead of taking top-level words like DESCRIPTION.</p>
+<h2>Still...Just a Band-Aid On The Core Problem</h2>
+<p>We have to ask: <strong>What happens when your abstraction makes TWO functions.</strong>  Now you're back to the same question about how to bind to these functions through words.</p>
+<p>One answer is that you just don't reuse the evaluator to run the instructions.  Instead you have your own evaluator hooked in that gets in PUSH and goes doing its own lookup...maybe even having a way of running an action under a custom label.</p>
+<pre><code>&gt;&gt; apply/label :obj/action [...] "name-shown-in-debug-trace"
+</code></pre>
+<p>It's worth remembering that the evaluator can't be all things to all people.  So trying to give life to all your data structures through it ultimately will fall down.  But this usage in Whitespace is not contrived...it's trying to get that supposed leverage from having homoiconicity and access to binding and the evaluator.  So we should be clear on what's unreasonable about its usage if it's going to be branded as unreasonable...</p>
+<h2>Further... Maybe BLOCK! Isn't The Right Abstraction...</h2>
+<p>This doesn't make the naming issue any better... but...since the instructions are built to be run, maybe they should be FRAME!s from the start, instead of BLOCK!s?</p>
+<p>Frames render in a less friendly and less loggable way than blocks today.  So it's a harder problem to think about how to make that work.  But it is a thinking point as to what the right tool to use is.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/effect-of-abstracting-functions-on-naming-binding/1487">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/effect-of-abstracting-functions-on-naming-binding/1487</link>
+          <pubDate>Tue, 02 Feb 2021 10:11:45 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1487</guid>
+          <source url="https://forum.rebol.info/t/effect-of-abstracting-functions-on-naming-binding/1487.rss">Effect of Abstracting Functions on Naming/Binding</source>
+        </item>
+        <item>
+          <title>Consequences of if the TO Operator Can&#39;t See Binding</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>R3-Alpha (and Red) see value cells as a single data type.  It doesn't matter what kind of code you have inside the interpreter, it always has the same level of privilege.</p>
+<p>That's mostly true of the C build of Ren-C, too...with the exception of the C <code>const</code> attribute.  It compiles everything down to just one type, the REBVAL.</p>
+<p>But the C++ build offers more granular views:</p>
+<ul>
+<li>
+<p>A RELVAL is a cell which cannot have its binding looked up unless you have a "specifier" to couple it with.</p>
+</li>
+<li>
+<p>A REBCEL is a view of a value without its quoting level -or- its binding.</p>
+</li>
+</ul>
+<p><em>(Note: I'm likely going to replace these with the branding-agnostic names <strong><code>VALUE</code></strong>, <strong><code>CELL</code></strong>, and <strong><code>CELL0</code></strong>...)</em></p>
+<p>What's neat is that since these are really just views of the same memory, all the C++ checks are doing is stopping you from calling methods you shouldn't on each type.  This doesn't cost anything extra at runtime (in the release build).</p>
+<h2>Methods Can Receive Different Views</h2>
+<p>As an example, the MOLD mechanics for each type only receive a REBCEL.  The higher-level of Mold_Value() takes care of outputting the right number of tick marks, and then the value is supposed to output based just on the cell contents.</p>
+<p>Besides not being able to react to the quoting, it means a MOLD can't look up a WORD! it is being asked to mold, and decide how to render it based on what it looks up to.  Is that a good rule?  I'm pretty sure that it is.  While someone might want a way of generating string output from source that does take bindings into account, that would likely <em>use</em> MOLD in its implementation.  But I believe it's safer (and faster) to say that MOLD is constrained in its definition to operate just on the cell structure without being able to look up bindings...or render something differently based on how many quote marks it has in front of it.</p>
+<h2>Could the View Given to TO Help Define It?</h2>
+<p>When examining qualitative differences between MAKE and TO (and AS and CAST and ALIAS and anything else)...it seemed to me that it was best if TO remained very "surface-level".</p>
+<p>We could phrase this in terms of general rules like "a TO can't THROW".  So with that, we might say that it seems sensible that a TO doesn't REDUCE its input.  Further stepping in the definitional sphere, we could say that TO can't dereference or GET a WORD! in its input at all.</p>
+<p><em>(Note: This isn't to be confused with saying that a usermode methodization of TO couldn't REDUCE code or use GET in its implementation.  It just couldn't react to anything about the binding of the <em>input</em> that it was receiving.)</em></p>
+<h2>Not Reducing During a TO Seems Uncontroversial</h2>
+<p>Rebol2 wouldn't let you do TO an OBJECT!:</p>
+<pre><code>&gt;&gt; to object! [a: 1 + 2 b: 3 + 4]
+*** Script Error: to does not allow object for its type argument
+</code></pre>
+<p><em>(NOTE: Not that I think it's necessarily a great idea to make TO do this...but I will point out that CONSTRUCT was an idea of being able to make objects without evaluation...so you might imagine TO of a BLOCK! doing that behavior under this model.)</em></p>
+<p>R3-Alpha and Red's "TO MAP! didn't reduce the contents:</p>
+<pre><code>r3-alpha/red&gt;&gt; to map! [a: 1 + 2 b: 3 + 4]
+== #(
+    a: 1
+    +: 4
+    b: 3
+)
+</code></pre>
+<p>So saying that TO shouldn't have access to the bindings of variables seems like a solid rule.</p>
+<h2>The TO BLOCK! and TO GROUP! Idiom Would Need To Change</h2>
+<p>While the TO itself may not use bindings, conversions between arrays have historically preserved them.</p>
+<p>So... what if TO stripped off bindings?  Would that be bad?</p>
+<p>It doesn't seem too inconsistent to say that the results of a TO are not bound.  For instance, look at the historical behavior of TO BLOCK! of a string:</p>
+<pre><code>rebol2&gt;&gt; x: 10
+
+rebol2&gt;&gt; b: to block! "x + 20"
+== [x + 20]
+
+&gt;&gt; do b
+** Script Error: x word has no context
+</code></pre>
+<p>We can also notice that an aliasing operator (like let's say <strong>AS</strong>) has the benefit of not making a copy if you don't want it.  So not only can you keep the bindings by saying <strong>copy as group! block</strong>, but your awareness is drawn to <strong>as group! block</strong> to be used if you didn't need that copy.</p>
+<h2>Mechanical Problem: TO is not DEEP</h2>
+<p>Historically you do not get a deep copy from TO.</p>
+<pre><code>rebol2&gt;&gt; block: [a [b c]]
+
+rebol2&gt;&gt; group: to paren! block  ; ugh, remember PAREN!?  ugly name!
+== (a [b c])
+
+rebol2&gt;&gt; append second block 'd
+rebol2&gt;&gt; block
+== [a [b c d]]
+
+rebol2&gt;&gt; group
+== (a [b c d])  ; copy was shallow, change to original block reflected
+</code></pre>
+<p>But if you're shallow copying the contents, that means you're reusing arrays from the original.  How do you reuse their memory without also reusing their binding?</p>
+<p>Well... we have one possible tool, with <strong>virtual unbinding</strong>.  We throw in a virtual binding patch that says "stop all binding here" and the only bindings that apply are those that are layered on top of the unbinding patch.  What this would mean is that even though the TO methods only have <code>RELVAL*</code>, we'd offer a combinator for getting a <code>REBVAL*</code> back even though you don't have a specifier...it would be by letting you manufacture a virtual binding specifier that worked to resolve any RELVAL as unbound.  All nice and tidy, and solved precisely with the type system.  Neat, eh?</p>
+<p>But right now, virtual binds are const.  This would mean that if you used TO BLOCK! to get a block and inherited its nested arrays, trying to run a mutable BIND/DEEP would fail on those nested arrays...because it would want to protect you from mutating the embedded blocks with aliased binding.  You wouldn't necessarily get the effects you wanted (you'd be changing the view as seen by the original block...the virtual one would stay unbound).</p>
+<p>This would mean you could only use a shallow mutable BIND on the result of such a TO, or more virtual binding.</p>
+<h2>Would Anyone Use This TO of BLOCK! or GROUP! ?</h2>
+<p>A lot of places that have been using TO really wanted to use AS (or whatever the aliasing operator would be that says "use the same array memory, just view it as a different type).</p>
+<p>How often do you want a copy that also happens to be shallow?  On those few occasions that you do, isn't <strong>copy as group! ...</strong> more explicit, along with being easily changed to <strong>copy/deep as group! ...</strong>, which you can't do with TO?</p>
+<p>The real value here is just driving a stake in the ground of what a TO operator <em>is</em>...which has been a very slippery question.  If we can agree that whatever it is that it can't see or act on the bindings of what you give it--and enforce that through compiler checks and rules--then we've gotten a little tiny step forward in being able to say what is and what is not...</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/consequences-of-if-the-to-operator-cant-see-binding/1455">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/consequences-of-if-the-to-operator-cant-see-binding/1455</link>
+          <pubDate>Mon, 04 Jan 2021 14:44:49 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1455</guid>
+          <source url="https://forum.rebol.info/t/consequences-of-if-the-to-operator-cant-see-binding/1455.rss">Consequences of if the TO Operator Can&#39;t See Binding</source>
+        </item>
+        <item>
+          <title>Syntax for Subverting Virtual Binding</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>In the closing weeks of 2020, I've been committing myself to <em>"Virtual Binding's Last Stand"</em>.  The results are encouraging.  While it's a bit premature to declare that "it works!"...it can bootstrap itself and run the tests without crashing.  (This is with applying virtual binding to all XXX-EACH, USE, and MAKE OBJECT! cases.)</p>
+<p>Despite the fact that what I have now is kind of the most clunky form of itself, it hasn't degraded performance noticeably.    Unfortunately, the main reason it looks so acceptable <strong>is because the method it was using from R3-Alpha there before really, really sucked.</strong></p>
+<p>Anyway...no matter how good virtual binding gets, it will always have more cost than referring to a fixed variable.  So if you have a variable you want to reuse, we need a way to say that.</p>
+<h2>Red's "Idea": Reusing Variables is the Default (and only) option</h2>
+<p>Here's how Red rolls:</p>
+<pre><code> red&gt;&gt; print-nums: func [] [foreach x [1 2 3] [print ["Value is" x]]]
+
+ red&gt;&gt; x: 10
+
+ red&gt;&gt; print-nums
+
+ red&gt;&gt; x
+ == 3
+</code></pre>
+<p>So DocKimbel's answer to the performance and semantic inconvenience of copying-and-rebinding the loop body is "ignore it".  You have to define the variable.</p>
+<pre><code> red&gt;&gt; print-nums: func [/local x] [foreach x [1 2 3] [print ["Value is" x]]]
+
+ red&gt;&gt; x: 10
+
+ red&gt;&gt; print-nums
+
+ red&gt;&gt; x
+ == 10
+</code></pre>
+<p>This is different from Rebol2 and R3-Alpha, which bear the cost of allocating a new variable, and then copying and rebinding the body to it:</p>
+<pre><code>rebol2&gt;&gt; body: [append [] &lt;test&gt;]
+rebol2&gt;&gt; foreach x [1 2] body
+rebol2&gt;&gt; body
+== [append [] &lt;test&gt;]
+
+red&gt;&gt; body: [append [] &lt;test&gt;]
+red&gt;&gt; foreach x [1 2] body
+red&gt;&gt; body
+== [append [&lt;test&gt; &lt;test&gt;] &lt;test&gt;]
+</code></pre>
+<p><em>(As a point on why this is semantically slippery, notice I didn't say <strong><code>body: [insert body &lt;test&gt;]</code></strong> in the Rebol2 case.  The reason is that since the body is copied, you don't have a name for the loop's copy of the body to see the effects on it... so that would change the original body.  You have to modify an array stored inside the body to see what's going on.  Just another point of complexity in making copies behind-the-scenes...)</em></p>
+<h2>Red's Choice is a Bad Default (right?)... but it should be an Option</h2>
+<p>Even though virtual binding does not copy the body, it won't be without cost.  (Its existence isn't really about performance primarily anyway...it's about semantics, and not corrupting block bindings on a whim.)</p>
+<p>So you should have a way of asking to just use an existing variable if you need to.</p>
+<p>Early on I used quoted words as a way of telling the FOR-EACH to reuse a variable:</p>
+<pre><code> print-nums: func [&lt;local&gt; x] [
+     for-each 'x [1 2 3] [print ["Value is" x]]]
+ ]
+</code></pre>
+<p>When using a BLOCK! spec, you could mix and match...so some fields were reused and others were part of a generated object:</p>
+<pre><code> print-nums: func [&lt;local&gt; x] [
+     for-each ['x y] [1 2 3 4] [print [x y]]]
+ ]
+</code></pre>
+<p>But I've mentioned that for reasons of one's "formal" senses (or necessary suppressing the behavior of a left-quoting WORD!) that you might want to use quoted words as the argument to FOR-EACH anyway.  On top of that, I don't know that we've come to a full consensus that it shouldn't be required...though I'm leaning heavily to saying it shouldn't be.</p>
+<p>So what other choices are there?  GET-WORD! is already taken to mean <em>"subvert quoting, this word holds the name of the variable(s) to use"</em>... so <strong>for-each :x</strong> is a shorthand for as a shorthand for <strong>for-each :(x)</strong></p>
+<pre><code>for-each /x [...] [...]
+for-each .x [...] [...]
+for-each @x [...] [...]
+</code></pre>
+<p>None of these really scream "use an existing variable" to me.  And <strong>for-each/reuse</strong> wouldn't let you mix and match.</p>
+<p>The spec dialect itself could be fancier...maybe importing things <code>#with</code>, and you could use commas to break it up:</p>
+<pre><code>for-each [#with x] [...] [...]  ; reuse X
+for-each [#with x, y] [...] [...]  ; reuse X, virtual bind Y
+for-each [#with x y] [...] [...]  ; both X and Y are reused
+</code></pre>
+<h2>Any Other Ideas?  Comments?</h2>
+<p>I'm going to assume everyone agrees that virtual binding should be the default, giving a Rebol2/R3-Alpha-like experience.  If you didn't agree with that, and wanted Red's behavior as default, you might suggest things like <strong>for-each x: [...]</strong> to request a new variable.  But that's flat-out confusing, and <strong>for-each 'x: [...]</strong> isn't much of an improvement.</p>
+<p>I'm kind of bummed the distinction of <strong>for-each x</strong> vs. <strong>for-each 'x</strong> isn't an option.  Something about that seemed nice and clean.</p>
+<p>We're still shaping up exactly what the @-family does...in particular if it's going to mean anything w.r.t. datatypes.  Maybe that's not its destiny.  So best option is probably going to be <strong>for-each <span class="mention">@x</span></strong>.  It leans somewhat on the "as-is" meaning (use the variable as-is).</p>
+<p>You won't expect to see this all that often, unless someone is trying to optimize something for performance.</p>
+            <p><small>8 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/syntax-for-subverting-virtual-binding/1444">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/syntax-for-subverting-virtual-binding/1444</link>
+          <pubDate>Tue, 29 Dec 2020 14:45:24 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1444</guid>
+          <source url="https://forum.rebol.info/t/syntax-for-subverting-virtual-binding/1444.rss">Syntax for Subverting Virtual Binding</source>
+        </item>
+        <item>
+          <title>Breaking MAKE OBJECT! Into Component Operations</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>The behavior of the following in historical Rebol/Red strikes me as <em>extremely buggy</em>:</p>
+<pre><code>rule-ctx: [num: 1020]
+rule: [num 'foo]
+bind rule rule-ctx
+
+parse-obj: make object! compose [
+     rule: (rule)  ; assume this is the non-splicing semantic
+     run: method [data] [
+          parse data rule
+     ]
+     ...
+     num: 304  ; imagine this is just an incidental field name
+]
+</code></pre>
+<ol>
+<li>
+<p><strong>The COMPOSE'd rule will be bound to PARSE-OBJ's <code>num</code> instead of RULE-CTX's <code>num</code>.</strong>  The more generic the word, the more likely this is going to happen on accident.  You get different behavior than if you'd named the rule something else, and not used COMPOSE... as with <strong>make object! [rule: a-rule, ...]</strong>, because then the block wouldn't be fetched via word when the body runs.  It would be the word <code>a-rule</code> that was hit with the binding wave, not what it looked up to.</p>
+</li>
+<li>
+<p><strong>Not only was the COMPOSE'd rule changed, but the <em>original</em> rule is changed!</strong>  This is because there's nowhere to store unique binding information for the rule as seen through the lens of the object vs. not.  It is mutably bound, and the only way to avoid this is to make a copy.</p>
+</li>
+</ol>
+<p><em>As it happens, I actually have some progress to report on <span class="hashtag">#2</span> with virtual binding.</em>  I'm making it possible for multiple "views" of the same block to see it bound different ways (a technique which started with having multiple views of a function's body viewed via different frame instances, that is extended to stacking on views through arbitrary objects).</p>
+<p>But that doesn't do anything to help <span class="hashtag">#1</span>.</p>
+<h2>MAKE OBJECT! Is Actually Three Operations</h2>
+<p>There are three distinct steps performed historically by MAKE OBJECT!.</p>
+<ul>
+<li>
+<p>COLLECT all the top-level SET-WORD!s in the BLOCK! to make an empty OBJECT!, with all those words unset.</p>
+</li>
+<li>
+<p>BIND the block's ANY-WORD! elements to the newly created object.</p>
+</li>
+<li>
+<p>DO the bound block.</p>
+</li>
+</ul>
+<p>Virtual binding means the second step can be very fast.  The block is just annotated to say "you are a view as seen by this object".  (It's possible to deep-walk the block and do some a-priori caching to make the execution the first time faster, but that's not necessary.)</p>
+<p>Without virtual binding, the second step requires a deep walk... <em>and destructively binds the block so any other references to the block are now contaminated</em>.  This is usually not what you'd want, but sometimes (as when modules are being loaded) it's intended.</p>
+<h2>What If MAKE OBJECT! Was Just The COLLECT Step?</h2>
+<p>If we let you make an object from a block without actually binding or running it, you could tailor the steps as appropriate for your operation.</p>
+<p>For instance: Modules don't want virtual binding...they fabricated a new block themselves from the input UTF-8.  They want to destructively bind their single copy to lib and the module:</p>
+<pre><code> block: transcode read module-filename  ; oversimplified...
+ mod: make module! block  ; imagine this does *not* run the block
+ bind block lib
+ bind block mod
+ do block
+</code></pre>
+<p>You get another advantage: <em>you have access to both the result of the DO and the result of the MAKE</em>.  These could be provided as separate outputs from something like IMPORT.</p>
+<p>If you wanted something that was a cleaned-up version of today's MAKE OBJECT! that used virtual binding to avoid contaminating the input block (e.g. because it was read-only material in a function body, or passed as a const parameter), you could say:</p>
+<pre><code> obj: make object! block
+ do in obj block  ; I've repurposed IN to be the virtual binding operator
+ obj   ; the object as the result
+</code></pre>
+<p>This still has the possibly unintended effects of <span class="hashtag">#1</span> above, where all COMPOSE'd components inherit the binding.  But you could use a more conservative virtual bind that only applied to the top level set-words.  I have that implemented, it would just need to be exposed somehow:</p>
+<pre><code> obj: make object! block
+ do in/shallow/set obj block
+ obj
+</code></pre>
+<p>This would make binding into the object optional.  If MY were like METHOD and took the binding on the left and propagated it to the right, you could say either:</p>
+<pre><code> make-obj-toplevel compose [rule: (rule), ...]  ; no binding effect
+ make-obj-toplevel compose [rule: my (rule), ...]  ; block bound into object
+</code></pre>
+<p>And if MY were powered by virtual binding, that wouldn't have to touch the original rule.</p>
+<p>For that matter, with only top-level words assigned, you'd get the advantage of not even needing a COMPOSE.  Any normal words would be left as they were:</p>
+<pre><code> make-obj-toplevel compose [rule: rule, ...]  ; different `rule`s
+</code></pre>
+<h2>This Seems A Promising Direction</h2>
+<p>It needs to be hammered out in terms of the details, and names.  We have names like CONSTRUCT and CLASS that we are looking at.  I don't particularly like CONTEXT or OBJECT as verbs since they are type names.</p>
+<p>There's an uneasy question about whether MAKE should be a high-level operation (due to its short name, wanting the high-level operations to be in reach).  However, while its name is short, it has to be combined with a type which makes it not all that short compared to e.g. CONSTRUCT.</p>
+<p>I experimented for a time with HAS as seeming analogue to DOES.  It didn't catch on at the time, I suspected because it sounds more like a question than a statement.  But it is does have brevity on its side:</p>
+<pre><code>obj: has [
+    x: 10
+    y: 20
+]
+</code></pre>
+<p>I'll throw it back out there.  Anyway, my natural leaning would be to say that MAKE becomes the low level operation that doesn't actually run the block you give it, then these other higher-level variations get names.</p>
+<p>This would also seem consistent with MAKE FRAME!, which gives you an empty (seeming) context.  But we could also distinguish <strong><code>make*</code></strong> from MAKE, or variations of that.</p>
+<hr>
+<p><em>Afterthought:</em> I'll also remind people about WRAP, which was an operator I proposed long ago that was like MAKE OBJECT! but returned the result of the evaluation...which could be more convenient now:</p>
+<pre><code>&gt;&gt; wrap [x: 1000, y: 20, x + y]
+== 1020
+</code></pre>
+<p>This gives you the same result as <strong><code>use [x y] [x: 1000, y: 20, x + y]</code></strong> by automatically collecting top-level SET-WORD!s.  This could make a comeback...more efficiently expressed with virtual binding.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442</link>
+          <pubDate>Mon, 28 Dec 2020 08:53:07 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1442</guid>
+          <source url="https://forum.rebol.info/t/breaking-make-object-into-component-operations/1442.rss">Breaking MAKE OBJECT! Into Component Operations</source>
+        </item>
+        <item>
+          <title>Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>Being case-insensitive for binding and equality comparisons makes Rebol/Red pretty unusual.  It is certainly more costly in the implementation and harder to write.  And it opens a huge can of worms to try and define what case insensitivity means at a system level...especially with UTF-8.</p>
+<p>When I think about it, <em>I've almost never used it (on purpose), and all it does is get in the way</em>.  (Admittedly I did for a time try typing <strong><code>FAIL [...]</code></strong> in all caps to draw attention to it even though it was defined as <strong><code>fail</code></strong>...however I found this ugly, and stopped doing it.)</p>
+<p>Pretty much all of the reasons I cite in <a href="http://blog.hostilefork.com/making-the-case-for-caselessness/">"Making the Case for Caselessness"</a> could be covered just by a best practices document saying "don't use mixed-case names in your code, even though that seems to open up more unique space for identifiers".  And you're done.</p>
+<h2>A Current Example of Caselessness "Getting In the Way"</h2>
+<p>I was trying to do some cleverness based on the idea of not redundantly storing the string in bound WORD!s...but just letting the name come out of the object it was bound to.  This could reclaim one pointer per cell in bound words and would be <em>extremely useful</em> for something I am doing.  (It's actually more than useful, it's probably critical to get that slot.)</p>
+<p>But it had this Bad Effect (tm):</p>
+<pre><code> &gt;&gt; obj: make object! [Some-Name: 10]
+
+ &gt;&gt; block: [some-name, some-other-name]
+
+ &gt;&gt; bind block obj
+ &gt;&gt; block
+ == [Some-Name, some-other-name]  ; ack, where'd my case go?!
+</code></pre>
+<p>That's obviously an unacceptable consequence.  But when you think about it, you're not really far from having a similar "lossiness" just about anywhere in the system.  It's super easy to look things up in tables and go "oh, it's there" and then fetch it back with it actually being different than what you put in.</p>
+<h2>A Losing Battle?</h2>
+<p>It's tempting to just punt on the whole thing and change the rules of the system to strip out <em>all</em> of the case-insensitivity.  <em>(I recall on a wiki about map case sensitivity, DocKimbel had said that if it weren't for historical compatibility with Rebol2 practices, he'd have probably wanted to make Red case-sensitive.)</em></p>
+<p>So I wonder:</p>
+<ol>
+<li>
+<p>Is the case-insensitivity battle the right battle to be choosing, when it's different from basically all other current languages?</p>
+</li>
+<li>
+<p>Is it even a winnable battle, if chosen?</p>
+</li>
+</ol>
+<h2>It Doesn't Technically Have To Be All-Or-Nothing</h2>
+<p>The system today follows a fair number of hybridized rules.  We could just bend it a bit and say that the BIND operations are based on <code>==</code> (<code>is</code>) equality, and that <code>=</code> still is case-insensitive.</p>
+<p>However: this would lead to a world where <strong><code>o: make object! [A: 10, a: 20]</code></strong> is an object with two distinct fields.  So you'd presumably want <strong><code>o/A</code></strong> and <strong><code>o/a</code></strong> to get those different fields.  Hence some of these decisions seem tied together.  Although we could say that <strong><code>/</code></strong> is case-insensitive for historical Rebol compatibility, while the <code>.</code> operator is case-sensitive, which might be a nice compromise...?</p>
+<p><em>(It's worth noting that JavaScript+JSON are case-sensitive to both field names and data, so being able to have unique cased fields is a compatibility aspect with JavaScript objects.  Though they can have spaces in key names too, so there's multiple issues to fret over.)</em></p>
+<p>That doesn't change the fact that in such a world--as always--you want a case sensitive and case-insensitive comparison.  It's just a question of <strong>('A is 'a)</strong> vs. <strong>('A = 'a)</strong>.  And you're saying that pathing and binding lookup uses whichever version of that is case-sensitive.</p>
+<h2>Does Anyone Object to Case-Sensitive for Just Binding?</h2>
+<p>It's independent of what <strong>=</strong> thinks about case, that can be decided separately.</p>
+<p>Best-practices could still recommend avoiding the use of mixed case or all-caps in object keys...saving it only for situations where one is trying to achieve compatibility with some external demand.  So most people wouldn't notice a difference.</p>
+<p>We <em>might</em> try making <strong>.</strong> accesses case sensitive and leaving <strong>/</strong> access case-insensitive (if that's seen as necessary?  Is it?  No reason to do it if no one actually thinks this is important...and they can focus on more interesting distinctions.)</p>
+            <p><small>20 posts - 7 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439</link>
+          <pubDate>Wed, 23 Dec 2020 09:25:20 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1439</guid>
+          <source url="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439.rss">Case Insensitivity vs. Case-Preservation (can&#39;t have both?)</source>
+        </item>
+        <item>
+          <title>LET Binding? (A Limited Form of Virtual Binding?)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>I've previously lumped LET in with the question of how we might avoid copying loop bodies every time the loop runs.</p>
+<p>They seem like similar problems.  You have a named variable (or variables) that you want to allocate space for, and then bind to code that hadn't previously been aligned with an interest in those variables.</p>
+<p>But maybe there's value to thinking about LET as a separate problem.</p>
+<h2>Today's "Fake" LET</h2>
+<p>Consider the following situation:</p>
+<pre><code>foo: func [code] [
+    let a: 1
+    do compose [a + ((code))]
+]
+
+&gt;&gt; a: 1000
+&gt;&gt; foo [a + 20]
+== 1021
+</code></pre>
+<p>In today's world, LET is a no-op.  All it does is signal FUNC...while it's making a "relativized" copy of the body...to collect <code>a</code> in that list.  That's exactly how old FUNCTION once looked for SET-WORD!s), meaning the above is to if you had said <strong><code>foo: func [code &lt;local&gt; a]</code></strong>.  It's considered less harmful since we use LET more narrowly than we use SET-WORD!</p>
+<p>Though a new copy of the function body is created, it's a copy that is re-used every time the function runs.  That allows frames be resolved against the blocks in a cascading fashion as they are delved into.</p>
+<p>So the reason you see 1021 and not 1002 is because the walk of FOO's body doing the local binding for <code>a</code> never saw <code>[a + 20]</code>, it just saw <code>code</code>.  Manual binding with the <code>a</code> after composition would mean both notions of <code>a</code> would be forced to match:</p>
+<pre><code>foo: func [code] [
+    let a: 1
+    do bind (compose [a + ((code))]) 'a
+]
+
+&gt;&gt; a: 1000
+&gt;&gt; foo [a + 20]
+== 1002
+</code></pre>
+<p>That's lossy..and the reason you don't see many people messing with BIND, and just leaving the bindings as-is.  Incidental name sharing can create havoc outside of carefully controlled circumstances.  You're better off saying DO CODE instead of composing material live into places where the bindings can get mucked with.</p>
+<h2>One Small New Idea For a Virtual LET</h2>
+<p>The "real" LET idea considered that LET isn't a no-op, but that it somehow augments the context as it runs...making the variable it adds visible in the flow after it:</p>
+<pre><code>foo: func [code] [
+    ; at this point, there is no `a` defined
+    let a: 1
+    ; going into the DO statement, there's an ambient new `a` that
+    ; is in effect now
+    do compose [a + ((code))]
+]
+</code></pre>
+<p>One issue with virtual binding is the cost of consulting a side-table for what might be <em>every word lookup</em>...to know if it has been overridden or not.</p>
+<p>But another issue is semantic.  How would it know which <code>a</code> to override, and which to leave alone?  If it overrides all the As, then it's like we've got that lossy BIND operation running on everything.</p>
+<p><strong>However...what if we don't think of LET as being fully general?</strong>  For starters, let's imagine a LET that only can be used if it occurred inside of a relativized function body (as this one does).  It could then say that its override only applies to other A that also originated out of the original function body.</p>
+<p>It's a mechanic that would work on a somewhat limited basis.  New LETs that you conjure out of thin air won't work.  <em>But then again, "pre-scanning for SET-WORD!s" didn't let you just suddenly fabricate new code once the function was running and gather set-words as local.</em>  At least here you could get an error... "your LET is too late, not relativized in a function body."</p>
+<p>So in the above you could say <strong>do compose [let a: 10, a + ((code))]</strong> but you couldn't put a LET in the code, compose it in at runtime, and have it work.  At least it wouldn't work the same way.  But I think perhaps the best idea is to have it not work at all.</p>
+<h2>Performance And Semantic Implications</h2>
+<p>At first glance this looks a lot like what would happen if you gather things locally to the frame.  Though one difference is that the runtime nature of LET would scope its influence to blocks:</p>
+<pre><code>a: "global"
+
+foo: func [] [
+    block: [print a]
+    do block  ; prints "global"
+    loop 2 [
+        let a: "local"
+        do block  ; prints "local"
+    ]
+    comment [do block]  ; prints "global"
+]
+</code></pre>
+<p>That also points out a cost factor: with that LET happening each time through the loop, you are generating a new unique identity.</p>
+<pre><code>two-as: func [] [
+    result: collect [
+        repeat n 2 [
+            let a: n
+            keep 'a
+        ]
+     ]
+]
+
+&gt;&gt; data: two-as
+== [a a]
+
+&gt;&gt; reduce data
+== [1 2]
+</code></pre>
+<p>Even keeping an open mind, that's pretty brutal to think about.  Also these lets would be strangely promiscuous, willing to bind against any relativized material from the function body despite having such an identity.</p>
+<p>A tidier notion might be to say that the dynamic frame would only create one instance of these LETs.  It would still have the "global" and "local" distinguishing behavior.</p>
+<p><em>Anyway, just a little more thinking about the possibilities.</em>  There might be something here to thinking that LET runtime augments frames in a scoped way, but if the LET creates new variable identities on every loop iteration it seems to cause more problems than it would solve.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/let-binding-a-limited-form-of-virtual-binding/1435">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/let-binding-a-limited-form-of-virtual-binding/1435</link>
+          <pubDate>Tue, 15 Dec 2020 07:55:32 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1435</guid>
+          <source url="https://forum.rebol.info/t/let-binding-a-limited-form-of-virtual-binding/1435.rss">LET Binding? (A Limited Form of Virtual Binding?)</source>
+        </item>
+        <item>
+          <title>Ideas from the Lab: ⚗️ Unbound SET-BLOCK! object keys?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>The new-age TUPLE! and PATH! won't let you include types that would cause ambiguity.  For instance:</p>
+<pre><code>&gt;&gt; to path! [foo example.com]
+== foo/example.com
+
+&gt;&gt; to path! [foo _ example.com]
+== foo//example.com
+
+&gt;&gt; to path! [foo: _ example.com]
+** Error: can't put a SET-WORD! inside of a PATH!
+</code></pre>
+<p>I'm not sure exactly how many types to allow or disallow.  But suffice to say not everything will be supported.</p>
+<p>But among important things that will be supported are plain GROUP! and plain BLOCK!, at any position, including the head <em>(...which R3-Alpha and Red don't support in scanning or the evaluator, though you can build any path you like with any values...despite the enormous downsides).</em></p>
+<p>We know pretty well what a GROUP! in a PATH! does.  But what should a BLOCK! in a path do?</p>
+<p>Today it acts the same as if it had been in a group:</p>
+<pre><code>m: make map! [[a b c] (1 2 3)]
+
+&gt;&gt; key: [a b c]
+== [a b c]
+
+&gt;&gt; m/(key)
+== (1 2 3)
+
+&gt;&gt; m/[a b c]
+== (1 2 3)
+
+&gt;&gt; m/([a b c])
+== (1 2 3)
+</code></pre>
+<p>That looks reasonable, although it seems not to buy all that much on the surface.</p>
+<p>But looking closer at it, I noticed this makes maps a very tempting way to get names of things with spaces in them:</p>
+<pre><code>&gt;&gt; m: make map! compose [
+    [a cool name] "some value"
+    [&lt;crazy&gt; #name] (func [x] [print [x + 1]])
+]
+
+&gt;&gt; m/[a cool name]
+== "some value"
+
+&gt;&gt; m/[&lt;crazy&gt; #name] 10
+11
+</code></pre>
+<p>And we're now talking about a smoother syntax with the tuples:</p>
+<pre><code>&gt;&gt; m.[a cool name]
+== "some value"
+</code></pre>
+<p>That's just kind of <em>nice</em>.  So you start to wonder...with the dawn of SET-BLOCK!, outside of efficiency, is there any real technical reason why objects couldn't allow BLOCK!s as keys...and be more competitive with JavaScript and the like?</p>
+<h2>The technical issues</h2>
+<p>So one reason for saying that this should only be done with BLOCK! (as opposed to TAG! keys and such) is that BLOCK! has a SET-BLOCK! form.  This means an object might say:</p>
+<pre><code>obj: make object! [
+    [a cool name]: "some value"
+]
+</code></pre>
+<p>Right now SET-BLOCK! is being used for multiple return values, but it could be done with SET-GROUP!...which actually might make more sense in light of recent semantic thinking about groups...</p>
+<pre><code>(x y): some-multireturn-func a b c
+</code></pre>
+<p>Obviously you don't want a block on its own to invoke a function or evaluate to something else.  And there would be big performance and logistics problems if these tried to participate in the binding process.</p>
+<p>But what if they didn't participate in the binding process, and they were just names?  Putting things in a block could be a way of declaring data members that deliberately skip out on binding.</p>
+<p>The exception would be that when MAKE OBJECT! walked over the body and saw the SET-BLOCK!, it would have to inject a binding onto it...destroying any other binding bits it had.  So you'd be talking about <code>a</code>, <code>cool</code>, and <code>name</code> all being unbound in that set block...in order to make room for the binding of the block to the object, making the set-block work.  I suppose GET-BLOCK! could work in a similar way when used in such a context, but you'd not be able to dispatch functions from it.</p>
+<h2>This Once Again Calls into Question MAP! vs OBJECT!</h2>
+<p>People have always been somewhat skeptical of why maps and objects are different, and what exactly the hard system requirements are that mandate OBJECT!s strictness.  I know how things work today but I think it's worth having a go-over to see if there might be a better angle.</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333</link>
+          <pubDate>Mon, 21 Sep 2020 05:07:55 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1333</guid>
+          <source url="https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333.rss">Ideas from the Lab: ⚗️ Unbound SET-BLOCK! object keys?</source>
+        </item>
+        <item>
+          <title>About the Binding category</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>"Binding" refers to the concept of an invisible pointer that is annotated onto ANY-WORD! types, which connects them to an object where that word is defined (or more specifically, an ANY-CONTEXT!)</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/about-the-binding-category/1326">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/about-the-binding-category/1326</link>
+          <pubDate>Mon, 14 Sep 2020 13:00:16 +0000</pubDate>
+          <discourse:topicPinned>Yes</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1326</guid>
+          <source url="https://forum.rebol.info/t/about-the-binding-category/1326.rss">About the Binding category</source>
+        </item>
+        <item>
+          <title>Case Study: LET vs. auto-gathered SET-WORD!</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>We now have a <a href="https://github.com/metaeducation/ren-c/pull/1014" rel="nofollow noopener">clunky implementation of LET</a> <em>(when I say clunky, I mean it's basically like how SET-WORD!s were gathered before...so no clever virtual binding just yet)</em>.  I explain in that pull request what the difference virtual binding would make would be; you would have to be -running- a <strong>let</strong> in order to see its impacts.  Simple inert references in blocks would not be enough to cause memory to be allocated for a variable.  It would have to be run, at which point there would be an allocation and then a "wave" of binding traveling along with the evaluation stream.</p>
+<p>But the clunky method used for the moment is at least good enough to get us started moving away from SET-WORD! gathering, and assess the approach.  What I want us to do is to slowly start turning FUNCTIONs into FUNC, and see what problems we find (other than the known issue with PARSE rules like <strong>copy x: to end</strong> not having a place to put a LET).  Then someday we deprecate FUNCTION.  And then someday after that, they <a href="https://forum.rebol.info/t/abbreviations-as-synonyms/1211">become synonyms</a>.</p>
+<p>Here is a sample function, just to look at the BEFORE and AFTER (of a kind of klutzy piece of code used by the help system on derived functions, which is not particularly great to uphold as great code but it's a real thing to look at):</p>
+<h2>Before</h2>
+<pre><code>dig-action-meta-fields: function [value [action!]] [
+    meta: meta-of :value else [
+        return make system/standard/action-meta [
+            description: _
+            return-type: _
+            return-note: _
+            parameter-types: make frame! :value
+            parameter-notes: make frame! :value
+        ]
+    ]
+
+    underlying: try ensure [&lt;opt&gt; action!] any [
+        select meta 'specializee
+        select meta 'adaptee
+        first try match block! select meta 'chainees
+    ]
+
+    fields: try all [:underlying | dig-action-meta-fields :underlying]
+
+    inherit-frame: function [parent [&lt;blank&gt; frame!]] [
+        let child: make frame! :value
+        for-each param words of child [  ; `for-each param child` locks child
+            child/(param): maybe select parent param
+        ]
+        return child
+    ]
+
+    return make system/standard/action-meta [
+        description: try ensure [&lt;opt&gt; text!] any [
+            select meta 'description
+            copy try select fields 'description
+        ]
+        return-type: try ensure [&lt;opt&gt; block!] any [
+            select meta 'return-type
+            copy try select fields 'return-type
+        ]
+        return-note: try ensure [&lt;opt&gt; text!] any [
+            select meta 'return-note
+            copy try select fields 'return-note
+        ]
+        parameter-types: try ensure [&lt;opt&gt; frame!] any [
+            select meta 'parameter-types
+            inherit-frame try select fields 'parameter-types
+        ]
+        parameter-notes: try ensure [&lt;opt&gt; frame!] any [
+            select meta 'parameter-notes
+            inherit-frame try select fields 'parameter-notes
+        ]
+    ]
+]
+</code></pre>
+<h2>After</h2>
+<p><em>(Note: While the name is FUNC for the moment--to indicate suppression of auto-gathering--long term it could be FUNCTION as a synonym, under the current plan.)</em></p>
+<pre><code>dig-action-meta-fields: func [value [action!]] [
+    let meta: meta-of :value else [
+        return make system/standard/action-meta [
+            description: _
+            return-type: _
+            return-note: _
+            parameter-types: make frame! :value
+            parameter-notes: make frame! :value
+        ]
+    ]
+
+    let underlying: try ensure [&lt;opt&gt; action!] any [
+        select meta 'specializee
+        select meta 'adaptee
+        first try match block! select meta 'chainees
+    ]
+
+    let fields: try all [:underlying | dig-action-meta-fields :underlying]
+
+    let inherit-frame: func [parent [&lt;blank&gt; frame!]] [
+        let child: make frame! :value
+        for-each param words of child [  ; `for-each param child` locks child
+            child/(param): maybe select parent param
+        ]
+        return child
+    ]
+
+    return make system/standard/action-meta [
+        description: try ensure [&lt;opt&gt; text!] any [
+            select meta 'description
+            copy try select fields 'description
+        ]
+        return-type: try ensure [&lt;opt&gt; block!] any [
+            select meta 'return-type
+            copy try select fields 'return-type
+        ]
+        return-note: try ensure [&lt;opt&gt; text!] any [
+            select meta 'return-note
+            copy try select fields 'return-note
+        ]
+        parameter-types: try ensure [&lt;opt&gt; frame!] any [
+            select meta 'parameter-types
+            inherit-frame try select fields 'parameter-types
+        ]
+        parameter-notes: try ensure [&lt;opt&gt; frame!] any [
+            select meta 'parameter-notes
+            inherit-frame try select fields 'parameter-notes
+        ]
+    ]
+]
+</code></pre>
+<h2>Observations</h2>
+<p>The auto-gathered version may seem cleaner to you, because you're not needing to mark the locals explicitly, but that comes at a cost.</p>
+<p>What cost?  Well, how big is the frame for the first case...?</p>
+<pre><code>&gt;&gt; words of make frame! :dig-action-meta-fields  ; BEFORE
+== [return value meta description return-type return-note parameter-types
+    parameter-notes underlying fields inherit-frame child]
+</code></pre>
+<p>...and the second case?</p>
+<pre><code>&gt;&gt; words of make frame! :dig-action-meta-fields  ; AFTER
+== [return value meta underlying fields inherit-frame child]
+</code></pre>
+<p>Here we have 4 unnecessary variables, and it's <a href="https://forum.rebol.info/t/rethinking-auto-gathered-set-word-locals/1150">not just about wasted memory and processing cycles</a>.  This is why people who were skeptical of FUNCTION preferred FUNC and explicit locals.  But it seems to me that LET offers the best of both worlds.</p>
+<p><strong>Like I say, this is not to say that an auto-gathering mechanism for SET-WORD! shouldn't exist.</strong>  It's the kind of thing someone should be able to dream up here in the Minecraft-Of-Programming.  But it's not what we want in the mezzanine and core implementation code.  So we should let those who want it get it out of some third-party module or extension of some kind.</p>
+<h2>Thoughts on Unbinding</h2>
+<p>For reasons of safety, I'm wondering if any SET-WORD! in the body of the function be unbound if it isn't an argument, in the "wave" of a LET, or explicitly <code>&lt;with&gt;</code>'d in the spec.</p>
+<pre><code>y: &lt;global&gt;
+foo: func [x] [
+    y: x + 1
+]
+foo 10  ; error
+
+bar: func [x &lt;with&gt; y] [
+    y: x + 1
+]
+bar 10  ; sets y to 11
+</code></pre>
+<p>In the design I'm thinking of, it would only unbind the SET-WORD!s.  e.g.</p>
+<pre><code>y: &lt;global&gt;
+baz: func [condition] [
+    print mold y
+    code: [y: 11]
+    if condition [do code]
+]
+baz false  ; would print &lt;global&gt;
+baz true  ; would print &lt;global&gt; then error, y is unbound
+</code></pre>
+<p>Do people have any gut feelings on this?  I feel like it would help catch bugs.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215</link>
+          <pubDate>Thu, 26 Sep 2019 11:26:30 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1215</guid>
+          <source url="https://forum.rebol.info/t/case-study-let-vs-auto-gathered-set-word/1215.rss">Case Study: LET vs. auto-gathered SET-WORD!</source>
+        </item>
+        <item>
+          <title>Key Question on Virtual Binding and Mutability</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>Consider this code:</p>
+<pre><code>obj: make object! [
+    x: &lt;foo&gt;
+    code: copy/deep [
+        append last code [print x]
+        ()
+    ]
+]
+
+foreach x [1 2 3] obj/code ;-- FOR-EACH in Ren-C
+</code></pre>
+<p>Off the top of your head, what do you think that should output?  Perhaps <code>1 2 2 3 3 3</code>?</p>
+<p><em>In Rebol2 and R3-Alpha, it outputs nothing.</em>  This might surprise you if you look at <code>obj/code</code> after running the loop:</p>
+<pre><code>&gt;&gt; obj/code
+== [
+    append last code [print x]
+    (print x print x print x)
+]
+</code></pre>
+<p>So the prints were added.   But the reason is that FOR-EACH doesn't use the block you gave it directly...it makes a rebound copy of it that points any x in the body to that iterating <strong>x</strong>, and runs <em>that copy</em>.  So your modifications will affect <code>code</code>, but not the deep copy of it FOR-EACH is running.</p>
+<p><em>Red prints foo 6 times.</em></p>
+<pre><code>&lt;foo&gt;
+&lt;foo&gt;
+&lt;foo&gt;
+&lt;foo&gt;
+&lt;foo&gt;
+&lt;foo&gt;
+</code></pre>
+<p>That's because it doesn't create a new binding for x...it will overwrite whatever x was before the loop, and when it's over the x you had before will have been overwritten with whatever the state was in the last loop iteration.</p>
+<p>I made this case a bit tricky by putting the code in a place where the x in the body would have a different binding than the x in the loop variable.  That was just to make the point of what's going on.  Red's argument is that it is too inefficient to pay for the copy and rebind of the body in the general case.</p>
+<p>Making a new binding might not be the most important feature in the world.  Not rebinding may be useful--in fact I added the behavior of not creating a new binding by using a LIT-WORD!, so <code>for-each 'x [1 2 3] [...]</code> will act like Red does, just setting that x and leaving bindings alone.</p>
+<blockquote>
+<p><strong>UPDATE</strong>: This particular notation to achieve that feature was removed some time ago.  The current concept is actually to always use the LIT-WORD! notation if not using a function as the body, see <a href="https://forum.rebol.info/t/avoiding-having-to-name-higher-order-function-variants/1217">"Avoiding Having To Name Higher Order Function Variants"</a>.  It still might be an interesting feature to use another notation for.</p>
+</blockquote>
+<p>But what I don't like is the notion that <em>if a new binding is what you wanted, that it would be too inefficient to accomplish</em>.  So if my object example seems contrived, what about this example, which has some parallels:</p>
+<pre><code>&gt;&gt; rule: ["a" (keep &lt;found&gt;)]
+== ["a" (keep &lt;found&gt;)]
+
+&gt;&gt; collect [parse "aaa" [some rule]]
+*** Script Error: keep has no value
+</code></pre>
+<p>I've been lumping various proposed solutions to this category problem under the label of "virtual binding".  But the FOR-EACH case involves modification, which always throws a wrench into situations where you're trying to share data and avoid making copies.</p>
+<h3>How is mutability handled in other bindings?</h3>
+<p><strong>specific binding</strong> was an early accomplishment of Ren-C.  This allowed each invocation of a function to have words in its body point to a unique data value for <em>that invocation of that function</em>--but without needing to make a deep and rebound copy on each call (which had the only way to do it in R3-Alpha, e.g. CLOSURE).  Instead it created a single copy of the body which had references to function arguments "relativized" by pointing to the archetypal function definition.  Then each call would pair together a function instance frame with the relativized value--requiring the frame to be threaded through the stack to form fully resolved values.</p>
+<p>Building upon that extremely major design change was <strong>derived binding</strong>, which similarly avoided making unnecessary copies.  This time not deeply copying member functions of a base object when a derived instance was created.  It's a bit more nuanced, but has been deployed and is working, which should impress people--if they were paying more attention.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>Both of these methodologies have the advantage that ACTION! bodies in Ren-C are locked from modification.  If they weren't, it wouldn't necessarily be clear what modifying them would mean.  If you have a <code>func [x]</code> and then one call inserts a reference to <code>x</code> into the body...should other iterations of the function that fetch that word see their own x instance...or the specific x instance that was inserted?  Or should the moment of insertion cause the system to bite the bullet and make a unique copy for that function instance--as the illusion of getting unique body copies for each instantiation had been shattered?</p>
+<p>So far it's been easy enough to say you shouldn't change action bodies--and if you want to then you're on the hook for making that copy on each call yourself.  People rarely need to do this, and it's better to make the more common case the one that performs better.</p>
+<h3>Next Step: Virtual Binding?</h3>
+<p>Virtual binding is yet another case of not wanting to copy and rebind code...but this one doesn't have the advantage of a "relativization pass" to prepare a code block in a way that makes it ready to reuse many times.  It's trying to avoid making any copies at all, so looking at a simpler FOR-EACH:</p>
+<pre><code>for-each x [1 2 3] [
+    if x &gt;= 2 [print x]
+]
+</code></pre>
+<p>FOR-EACH creates a context containing just x.  And its goal is to run the body--that it has "never seen before"--having the x references look up to its x (instead of whatever binding they have at the outset, if any).</p>
+<p>Specific and derived binding hinge on a mechanism of augmenting a block at runtime with additional binding information.  So that already exists to build on.  But here we have an issue where there's no relationship set up between the x in the loop and the x in the body--other than having a common spelling.  That relationship must be discovered (and possibly iteratively re-discovered) as we go.</p>
+<p>The scenario we'd like to avoid is paying repeatedly for having <code>x</code> looked up in some mapping structure as well as <code>if</code> and <code>&gt;=</code> and <code>print</code> getting searched...on every iteration through the loop, on every word.  We also want to try and keep these mapping structures--whatever they are--from accruing in the garbage collector.  Because if virtual binding isn't lightweight, then you might as well make a copy <em>(copies are expensive in nested loops, but it doesn't help to replace that with something that costs as much or more per nesting level)</em>.</p>
+<p>There are options on the table.  Maybe a block that gets virtually bound does make a relativized copy of a block, but caches it in case a matching relativization is used on it later.  (This would be kind of like having the system automatically factor the code into a function for reuse--which would be the manual form of optimization people would use).  Who knows.</p>
+<p>But I guess one question to answer is if the FOR-EACH example that has a body that modifies itself is interesting or not.  How would be people feel if it was read-only once it was virtually bound?  If it's not read-only, what should happen with:</p>
+<pre><code>obj: make object! [
+    x: &lt;foo&gt;
+    xx: 'x
+]
+code: copy/deep [
+    append last code compose [print (obj/xx)]
+    ()
+]
+for-each x [1 2 3] code
+</code></pre>
+<p>So there you have the case of after-the-fact <code>x</code>'s being slipped into the body which are bound into <code>obj</code>.  Should virtual binding pick it up, the way it would a before-the-fact <code>x</code> bound into <code>obj</code>?</p>
+<p>In any case, some things to think about.  I brought up the COLLECT/KEEP example and mention how ultimately, I think this all may point to a kind of "missing link" in Rebol, for threading contextual information through the call stack.  (<a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313">See also this post.</a>)</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765</link>
+          <pubDate>Mon, 30 Jul 2018 19:23:49 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-765</guid>
+          <source url="https://forum.rebol.info/t/key-question-on-virtual-binding-and-mutability/765.rss">Key Question on Virtual Binding and Mutability</source>
+        </item>
+        <item>
+          <title>The Real Story about User and Lib Contexts</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>People know about binding in the sense of making an object--which has certain named keys--and then binding an ANY-WORD! which has the same spelling (case-insensitive) as those keys into that object.  Once bound, the words look up into that object.</p>
+<p>Yet the mysterious <strong>user context</strong> influences a lot of how people experience the system.  How does it operate?</p>
+<hr>
+<p>For the moment, let's oversimplify matters a bit and imagine that the user context starts out empty.  Then say you type into the console something like:</p>
+<pre><code>&gt;&gt; foo: func [arg] [print ["arg is" arg]]
+</code></pre>
+<p>This idealized user context would now contain keys for <strong>foo</strong>, <strong>func</strong>, <strong>print</strong>, and <strong>arg</strong>.  FOO would be set to this new action we've just defined.  FUNC and PRINT would be values of their respective actions from lib.  And ARG would be an unset variable--present in the user context, but with no value assigned to it.</p>
+<p>Ok...it seems fairly obvious that the user context would contain a FOO.  You just defined it, and there's nowhere else for it to live.  But why did it create entries for <strong>func</strong> and <strong>print</strong>?  Aren't they in the <strong>lib</strong> context?  Couldn't it have just bound the words into the lib context directly?</p>
+<p>Binding words into lib implies you probably also bind SET-WORD!s (and even if you didn't, you could use SET to set through a WORD!).  When you have a direct reference to something like <strong>print</strong> or <strong>append</strong> in lib--and casually overwrite what it points to--you would wreak havoc on the implementations of mezzanine routines that live in lib that use those definitions.  e.g. if you say <strong>print: :fail</strong>--then try to run HELP--then all the printing in HELP would break.</p>
+<p>So what happens instead is that when a word isn't found in the user context already, the LOAD process checks <code>lib</code> to see if it exists there.  When it creates the binding in user, it captures the value of what lib holds for that word at that moment.  The two words then go their own way--any changes to lib's definition after that point won't update the user context's version.</p>
+<p>Next we might ask why <strong>arg</strong> got a binding.  It's a function argument, why should it have a definition in the user context?  That variable is just going to be unset...because the function is going to use a binding for the arg based on the invocation, not use any "global" arg.</p>
+<p>The thing is that LOAD didn't know what you were going to do with the code you loaded.  And when it made a WORD!, it has a moment in time to either make the choice to bind it or not.  If it left it unbound because it couldn't find anything to point it to, you might be disappointed by how that behaved.</p>
+<p>Let's try out a console in an alternate world where you'd have to have a SET-WORD! before getting a binding:</p>
+<pre><code>&gt;&gt; d1: does [print foo]
+
+&gt;&gt; foo: 1020
+
+&gt;&gt; d2: does [print foo]
+
+&gt;&gt; d2
+1020
+
+&gt;&gt; d1
+** Error: foo is not bound to a context
+</code></pre>
+<p>So here you see the problem of not pre-emptively adding a context key for every word you see.  If you didn't, you'd have to do some kind of "forward declaration".</p>
+<h3>Every ANY-WORD! gets a binding in user?  That's a lot of words!</h3>
+<p>Yep.  And the context only grows--it never shrinks.</p>
+<p>This was worse when ISSUE! was an ANY-WORD! (a decision that has been reversed in Ren-C, it is now <a href="https://forum.rebol.info/t/removing-issue-from-the-any-word-category/1106/3">an immutable string form, unified with characters</a>).  Not only would you get a word for every data-bearing issue, you'd get invalid words:</p>
+<pre><code>&gt;&gt; foo: func [] [print [#1020-0304]]   
+
+&gt;&gt; find words of binding of 'foo '1020-0304
+== [1020-0304 words]
+</code></pre>
+<p>Your context has FIND, WORDS, OF, BINDING, FOO, 1020-0304, and WORDS... (1020-0304 was just close to the tail).  So as crazy as everything else is, it's good to have issues out of this picture.</p>
+<h3>How much space are we talking about?</h3>
+<p>Each entry in a context is a key and a value.  The key is 4 platform pointers, the value is 4 platform pointers.  On a 64-bit system that's (4 + 4) * 8 =&gt; 64 bytes.</p>
+<p>Every unique word, issue, or otherwise that gets its own binding adds that cost, whether the declaration comes from lib or not.  And if modules are isolated into their own user-type contexts, then they start bloating up too...with their own copies of lib declarations, and their own declarations for any word they use.</p>
+<p>So if you use 800 unique words in a module, that module has about 50k of overhead just for that list on a 64-bit system.</p>
+<h3>Could lib be read-only, so direct bindings could be used?</h3>
+<p>The main problem with making the variables in lib read-only is what would happen if you decide you want to redefine something.  You'd have to do that redefinition up-front.  Because at present, there's no way to go back and update bindings that were made historically...you don't know where the blocks of code containing the old binding got handed to.</p>
+<p>When you think about the impact to the usage model, it is significant.  Again, think about how much in the console it's taken for granted that <strong>d1: does [print foo]</strong> can have foo defined <em>after</em> that and still be found by that foo.  If direct bindings were used until overridden, you would face a different use problem in that you'd redefine PRINT but only bindings that were made after that point would see it.</p>
+<h3>How do modules treat this?</h3>
+<p>I mention that this same concept extends to module isolation.  The state of modules in R3-Alpha was that they were bound directly into lib unless you said <code>Options: [Isolate]</code>.  Look how quickly that goes south:</p>
+<pre><code>&gt;&gt; m: module [] [test: does [print: does [do make error! "surprise!"]]]
+&gt;&gt; m/test
+&gt;&gt; help append
+USAGE:
+    ** User error: "surprise!"
+</code></pre>
+<p><em>(Note: USAGE is output with <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/mezz-help.r#L262">PRIN and not PRINT</a>, so that's why you see it.  Good argument for a common hookpoint like WRITE-STDOUT, isn't it?)</em></p>
+<p>Once you throw on that <code>Options: [Isolate]</code> you don't wreak that havoc.  But you'll start noticing your module went from having a handful of declarations in it for your exports, to having a definition for every single ANY-WORD! it so much as <em>mentions</em>.</p>
+<p>I've just added some interesting code which lets the libRebol API detect at runtime what native they're running in, and use that as a guide to what context to do bindings into.  So a native registered as part of an extension module would be able to bind into that module's context...thus not being disrupted when other modules (or the user context) changes the definition of something basic like <code>rebRun("append"...)</code> or <code>rebRun("print"...)</code>...also using the specific overridden versions of words that particular module defined.  But for this to work, they must be using <code>Isolate</code>, which means they'll be getting those tens of kilobytes of overhead by having their own copies of every WORD!, SET-WORD!, ISSUE!, etc. they reference.</p>
+<h3>...?</h3>
+<p>It's unfortunate that people let things get this far down the road in Rebol lore without a body of clear-headed thinking about this.  I take every chance I get to complain about it not having been a priority.  :-/</p>
+<p>What I've brought in is a lot of mechanical tools for solving binding problems--we already have specific binding and derived binding which are solutions to <em>fundamental</em> design holes.  The same level of control that permitted the implementation of those features can be brought in to help here.  So it's not a matter of execution--it's a matter of figuring out what the plan is.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764</link>
+          <pubDate>Mon, 30 Jul 2018 15:59:08 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-764</guid>
+          <source url="https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764.rss">The Real Story about User and Lib Contexts</source>
+        </item>
+        <item>
+          <title>Could strings have context?</title>
+          <dc:creator><![CDATA[rgchris]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>A common problem faced within Rebol is passing string-based templates to functions without any context attached to them. What would it take/cost to add context to string values? An example:</p>
+<pre><code class="lang-auto">my-context: make object! [
+    x: 10
+    template: "x"
+]
+
+reduce load my-context/template
+</code></pre>
+<p>The thought would be a string in source would adopt its parent context, otherwise would be unbound.</p>
+            <p><small>11 posts - 5 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/could-strings-have-context/587">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/could-strings-have-context/587</link>
+          <pubDate>Sat, 31 Mar 2018 13:40:01 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-587</guid>
+          <source url="https://forum.rebol.info/t/could-strings-have-context/587.rss">Could strings have context?</source>
+        </item>
+        <item>
+          <title>How R3-Alpha Console Binding Worked</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>Load up an R3-Alpha session and try this:</p>
+<pre><code>&gt;&gt; print mold words-of bind? 'foobar
+[system print mold words-of bind? foobar]
+</code></pre>
+<p>We've called out a "non-built-in" LIT-WORD! (<code>'foobar</code>), and are asking it to show us the keys of the object to which it is bound.  It gives us back the so-called "user context".</p>
+<p>It's a small-looking context (for now), which has the word <code>system</code> along with "magically" all of the words we just typed in.  This may seem strange, because foobar aside...aren't print/mold/bind?/words-of known to live in the  <code>lib</code> context?  Shouldn't those words be bound into lib?</p>
+<p>But consider this: if PRINT living in the lib context would make WORD! bindings go directly there, what should SET-WORD!s do?  For instance, <strong>print: func [x] [write-stdout reverse copy x]</strong>.  If that overwrote the FUNCTION! value of PRINT in lib, it would be gone...and a lot of lower-level and mezzanine functions would be broken because of this whimsical reassignment.</p>
+<p>So it would seem the rules are:</p>
+<ul>
+<li>If the input uses an ANY-WORD! that's in the user context already, bind it there and continue</li>
+<li>If not already in the user context, but found in the lib context, create a new key/value in the user context which copies the existing value from lib, and bind the word to that new variable</li>
+<li>If the above two fail, bind to a new unset value in the user context</li>
+</ul>
+<p>Let's look for something like that.</p>
+<h2>The Code</h2>
+<p>The R3-Alpha console code loop just took that string you typed in and <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/os/host-main.c#L184" rel="nofollow noopener">passed it to RL_Do_String()</a>:</p>
+<pre><code>while (TRUE) {
+     Put_Str(PROMPT_STR);
+     if ((line = Get_Str())) {
+         RL_Do_String(line, 0, 0);
+         RL_Print_TOS(0, RESULT_STR);
+         OS_Free(line);
+    }
+    else break; // EOS
+}
+</code></pre>
+<p><code>RL_Do_String</code> merely calls over to <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-do.c#L1655" rel="nofollow noopener">Do_String()</a>.  This code would set up a kind of "exception handler" to trap errors.  Then it would turn the textual source into structural code (via <code>Scan_Source()</code>), bind it, and execute it.</p>
+<p>The code that handled the console's binding looked like this:</p>
+<pre><code>rc = VAL_OBJ_FRAME(Get_System(SYS_CONTEXTS, CTX_USER));
+len = rc-&gt;tail;
+Bind_Block(rc, BLK_HEAD(code), BIND_ALL | BIND_DEEP);
+SET_INTEGER(&amp;vali, len);
+Resolve_Context(rc, Lib_Context, &amp;vali, FALSE, 0);
+</code></pre>
+<p>So the "context to be resolved" (rc) is the user context.  Considering <em>only the user context</em>, <code>Bind_Block</code> walks the passed in code from the console deeply (<code>BIND_DEEP</code>), looking for ANY-WORD! (<code>BIND_ALL</code>).  It creates new bindings for anything not found already.</p>
+<p>However--before any of that binding happened--it took a note of how many variables were already in the context.  This way it can tell the difference between those that already had an entry in the user context but were unset, vs. those that weren't in the user context at all before this binding.</p>
+<p>That information is taken advantage of by the <code>Resolve_Context</code> operation, which is passed the Lib_Context to use to fill any of the <em>new</em> unset things that happen to have entries in the Lib_Context.  The code for resolving <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-frame.c#L679" rel="nofollow noopener">looks a bit complicated</a>.  But really it's just trying to efficiently deal with the indexes of words in the lib context:</p>
+<pre><code>&gt;&gt; index? find (words-of lib) 'print
+== 262
+</code></pre>
+<p>Code being loaded will make mention of a lot of declarations from lib.  Yet the list of new words is being tacked onto the end of the user context in no particular order...all of which want to be searched <em>by word</em> in the lib context.  So all of lib is walked to put into a hash table mapping words to indices in lib, and then the new declarations are walked and checked against that table.  If there's a significant number of words, then this is faster than linear searching to find each word.</p>
+<p>So the actual mechanism is:</p>
+<ul>
+<li>Remember what words are already in the user context...even the unset ones</li>
+<li>If the input uses an ANY-WORD! that's in the user context already, bind it there and continue, else add a new unset value</li>
+<li>For the lib context, build a table mapping word names to their variable index in lib</li>
+<li>For all <em>new</em> unset values, see if they're in the mapping table, and if so bind them to lib at that index</li>
+<li>Any of the new unset values that don't look up in lib are left unset</li>
+<li>Uninitialize the mapping table</li>
+</ul>
+<h2>Clutter?</h2>
+<p>This might strike one as being a lot of clutter.  You're ending up with every ANY-WORD!--that is seen in scanned source--getting a binding in the user context.  This happens even if that binding will remain unset indefinitely, because its intent was always to be bound again in an object or function.</p>
+<p>But you don't see that clutter in the lib context.  Let's just randomly pick a local from R3-Alpha's <code>minimum-of</code> mezzanine... the <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/mezz-math.r#L67" rel="nofollow noopener">/local spot</a>:</p>
+<pre><code>&gt;&gt; find lib 'minimum-of
+== true
+
+&gt;&gt; find lib 'spot
+== none
+</code></pre>
+<p>But try the following in a fresh R3-Alpha session, and you'll see <code>local</code> and <code>spot</code>:</p>
+<pre><code>&gt;&gt; my-function: func [/local spot] []
+
+&gt;&gt; words-of bind? 'my-function
+== [system my-function func local spot words-of bind?]
+</code></pre>
+<p>The code that produces <code>lib</code> doesn't get this extra junk, because %base-xxx.r, %sys-xxx.r, and %mezz-xxx.r files are processed using a method that's a bit more like how objects are defined.  They are scanned for <em>top-level</em> SET-WORD!s first.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/how-r3-alpha-console-binding-worked/534">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/how-r3-alpha-console-binding-worked/534</link>
+          <pubDate>Sun, 18 Feb 2018 21:31:21 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-534</guid>
+          <source url="https://forum.rebol.info/t/how-r3-alpha-console-binding-worked/534.rss">How R3-Alpha Console Binding Worked</source>
+        </item>
+        <item>
+          <title>What happens to FUNCTION! arguments and locals when the call ends?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Binding</category>
+          <description><![CDATA[
+            <p>R3-Alpha's CLOSURE provided two things.  One was a unique identity for the words of a function's arguments and locals for each recursion.  This is what I've called <a href="https://github.com/metaeducation/ren-c/wiki/Relative-Binding-and-FRAME!-Internals" rel="nofollow noopener">"specific binding"</a> and now comes "for free" in <em>all</em> functions...so you don't even have to think about it.  (It's not exactly free, but we can hope it will converge to "very low cost".)</p>
+<p>So in Ren-C:</p>
+<pre><code>&gt;&gt; foo: function [x code] [
+    append code [print x]
+    if x &gt; 0 [
+        probe code
+        do code
+        foo (x - 1) code
+    ]
+]
+
+&gt;&gt; foo 2 []
+[print x]
+2
+[print x print x]
+2 ;-- R3-Alpha FUNCTION! got 1, only CLOSURE! got 2
+1
+</code></pre>
+<p>Users can now take that for granted.  <img src="https://forum.rebol.info/images/emoji/twitter/thumbsup.png?v=9" title=":thumbsup:" class="emoji" alt=":thumbsup:"></p>
+<p>But what I want to talk about is the <strong>other</strong> emergent feature of R3-Alpha CLOSURE!.  This was that if an ANY-WORD! that was bound to the arguments or locals "escaped" the lifetime of the call, that word would continue to have its value after the function ended...for as long as references to it existed.</p>
+<pre><code>&gt;&gt; f: closure [x] [return [x]]
+
+&gt;&gt; b: f 10
+== [x]
+
+&gt;&gt; reduce b
+[10]
+</code></pre>
+<p>Functions did not do this:</p>
+<pre><code>&gt;&gt; f: function [x] [return [x]]
+
+&gt;&gt; b: f 10
+== [x]
+
+&gt;&gt; reduce b
+** Script error: x word is not bound to a context
+</code></pre>
+<p>It goes without saying that the closure mechanic is going to cost more, just by the very fact that they need to hold onto the memory for what the word looks up to.  But the way things work today, it doesn't just need to hold onto that cell of data...it holds onto all the args and locals of the function.  (R3-Alpha was more inefficient still...it not only kept the whole frame of values alive, it made a deep copy of the function body <em>on every invocation of that function</em>...so that the body could be updated to refer to that "frame".  Specific binding lets Ren-C dodge that bullet.)</p>
+<p>Now and again, the "keep-things-simple" voice says that the system would be simpler and faster if all executing frames (and their frame variables) died after a function ended.  If you wanted to snapshot the state of a FRAME! for debugging purposes--to look at after the function ends--you could COPY it into a heap-based object, and return that.  If you really were in one of the circumstances where you wanted an arg or local's word to survive, you could manually make an object to hold just those words, and bind to that.</p>
+<p>But <span class="mention">@Ladislav</span> had a compelling case:</p>
+<pre><code>foo: function [x] [
+    y: 10
+    return function [z] [x + y + z]
+]
+</code></pre>
+<p>If <code>x</code> and <code>y</code> were to go bad after foo exited, the returned function would be useless.</p>
+<p>Some new mechanics related to Move_Value() are creating possibilities for "automatic closure-i-fication", where stack cells are converted into a heap object at the moment it's noticed that a bound word is "escaping".  If none escape, then everything stays on the stack.</p>
+<p>But though you might think these kinds of escapes are rare, remember some bindings aren't even intentional.  When you return a block out of a function it might just have stray bindings on words that <em>happen</em> to overlap with something in the binding visibility.  (Which makes one wonder, when returning a BLOCK! as data, should you always UNBIND/DEEP it before returning...to scrub off any inadvertent pointers into your local state it carries?  Should there be a RETURN/BOUND to avoid the scrub?)  These invisible bindings would trigger the auto-closurification, on what might seem like random cases to the user.</p>
+<p>And remember--each time a word bound to a frame escapes--we're still talking about copying <em>all</em> the values in the frame.  (It might be possible to break this down to a smaller granularity, e.g. a PAIR!-wise binding, where what closure-i-fication does is pack each key/value into a REBSER node.)</p>
+<p>Were the user to get involved, and specify the cases, I might suggest something a bit like this (if <code>&lt;HAS&gt;</code> were taken to mean "a kind of per-instance static", while <code>&lt;STATIC&gt;</code> were used for all instances):</p>
+<pre><code>foo: function [x &lt;has&gt; x2 y] [
+    x2: x
+    y: 10
+    return function [z] [x2 + y + z]
+] 
+</code></pre>
+<p>The advantages to this are that it would mean that any words that "escape" would be explicitly handled by the user, reducing the burden on the system.  The entire frame would not need to be preserved, only the part of the frame which had these persistent values.  The disadvantage is that it's not automatic, and other languages--even JavaScript--do it automatically.</p>
+<p>So how do people feel on this matter?  What's acceptable or unacceptable?  <span class="mention">@MarkI</span> said at one point that he was opposed to locals and args outliving the function call because it created "garbage".  Is it wise to hide the consequences from the user, and burden the system with the logic of making it automatic?</p>
+            <p><small>15 posts - 4 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/what-happens-to-function-arguments-and-locals-when-the-call-ends/234">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/what-happens-to-function-arguments-and-locals-when-the-call-ends/234</link>
+          <pubDate>Mon, 31 Jul 2017 21:38:40 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-234</guid>
+          <source url="https://forum.rebol.info/t/what-happens-to-function-arguments-and-locals-when-the-call-ends/234.rss">What happens to FUNCTION! arguments and locals when the call ends?</source>
+        </item>
+  </channel>
+</rss>

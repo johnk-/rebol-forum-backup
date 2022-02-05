@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Thinking We Might Should Nix PROTECT/HIDE For Now</title>
+    <link>https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644</link>
+    <description>R3-Alpha had an interesting feature, [which let you &quot;hide&quot; fields in contexts](http://www.rebol.net/r3blogs/0189.html).
+
+It was actually something that drew me in to the language in the beginning as &quot;oh, that&#39;s cool&quot;.
+
+So it has stuck around in some form, and simple examples do still seem to work:
+
+    &gt;&gt; obj: make object! [x: 10 y: 20]
+    == make object! [
+        x: 10
+        y: 20
+    ]
+
+    &gt;&gt; protect/hide &#39;obj/y
+    == obj/y
+
+    &gt;&gt; obj
+    == make object! [
+        x: 10
+    ]
+
+**But this is a very complex feature to honor systemically.**  Doing it poorly is easy.  Doing it pervasively and correctly is rather difficult.
+
+In particular, what bothers me about this &quot;user controlled hidden bit&quot; is that I&#39;m trying to get some system-level hidden mechanics working correctly.  And the interaction between things the system needs to hide and this &quot;user can hide anything they want&quot; is somewhat maddening, especially because I know how hard it is to do such a thing *right*.
+
+It&#39;s an intriguing feature that seems to have been a bit of an off-the-cuff experiment.  I don&#39;t see it as mission-critical...and all it does is interfere with the hardening needed to solve the mission-critical problems related to contexts.
+
+Not going to delete it immediately, but it&#39;s certainly in the crosshairs if it causes any more trouble with something I&#39;m trying to fix.</description>
+    
+    <lastBuildDate>Thu, 23 Sep 2021 05:12:16 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Thinking We Might Should Nix PROTECT/HIDE For Now</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>PROTECT is back in the hot seat again...</h2>
+<p>...but for a different reason.</p>
+<p>There's an aspect to PROTECT in which you have historically been able to give it a PATH!, and you can protect that path'd variable:</p>
+<pre><code>r3-alpha&gt;&gt; obj: make object! [x: 10]
+
+r3-alpha&gt;&gt; protect 'obj/x
+== obj/x
+
+r3-alpha&gt;&gt; obj/x: 20
+** Script error: protected variable - cannot modify: x
+</code></pre>
+<p>Useful.  But...what if you said instead:</p>
+<pre><code>r3-alpha&gt;&gt; gob: make gob! [size: 10x10]
+== make gob! [offset: 0x0 size: 10x10 alpha: 0]
+
+r3-alpha&gt;&gt; protect 'gob/size
+== gob/size  ; it didn't complain...
+
+r3-alpha&gt;&gt; gob/size: 20x20
+== 20x20  ; but it still lets you set it :-(
+</code></pre>
+<p>That didn't work...and it didn't say anything about not working.</p>
+<p>If you dig into R3-Alpha code, PROTECT <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/n-control.c#L173">relies on something called Resolve_Path()</a>:</p>
+<pre><code>if (ANY_PATH(word)) {
+    REBCNT index;
+    REBSER *obj;
+    if (NZ(obj = Resolve_Path(word, &amp;index))) {
+        wrd = FRM_WORD(obj, index);
+        Protect_Word(wrd, flags);
+        if (GET_FLAG(flags, PROT_DEEP)) {
+            Protect_Value(val = FRM_VALUE(obj, index), flags);
+            Unmark(val);
+        }
+    }
+}
+</code></pre>
+<p>That NZ() stands for "NonZero", and is a test saying <em>"If the Resolve_Path() doesn't come up empty handed with 0"</em> (e.g. C's NULL) <em>"then do the protection on the location to which it resolved"</em>.</p>
+<h2>Another Shard of The Fragmented GET/SET Picture</h2>
+<p>Resolve_Path() couldn't have returned a reference to the GOB!'s size if it wanted to, because the size is compacted bits.  There's no cell or object involved.</p>
+<p><em>That doesn't mean GOB! couldn't theoretically offer protection as one of the features in its compressed representation.</em>  It could--if it wanted to--have set aside a bit somewhere to let you protect sizes, or even more granularly to X and Y coordinates.</p>
+<h2>Can You Just Say It Doesn't Matter?</h2>
+<p>Clearly some people can.</p>
+<p>In terms of preserving the feature overall: I actually like this non-HIDE form of PROTECT, and use it frequently as a kind of breakpoint.  If I can't figure out what's changing a value, I protect it and see where it gets an error.  So I'm not eager to lose the feature, or the category of functionality it represents...I actually do want to see it migrate into being a kind of data breakpoint feature of a debugger.</p>
+<p>But the real issue here is I can't see any sensible answer to what would be ruled out and what would be ruled in.  That's the thing that's so amorphous about these functions...things work, and if they don't work they don't have an explanation of what rule they're breaking to not work.</p>
+<p>I'm not sure what's so fundamentally different about PROTECT-ing something from GET-ing or SET-ing it, or how you can promise you wouldn't want some other operation that can be directed at a "subcell" tuple/path sequence.</p>
+<h2>Is Resolve_Path() Desirable?</h2>
+<p>Resolve_Path() asks something kind of weird...which is kind of like:</p>
+<p><em>"I have this URL.  Can you give me back something that lets me muck with the internals of your webserver without your knowledge to have the effect I want?"</em></p>
+<p>That's different from how path dispatch worked in general.  It was more like sending a message, and each point in the chain was ceding control down the chain to whatever the receiving entity was--be that a MAP! or a BLOCK! or an OBJECT! or a GOB!... to handle it.</p>
+<p>Dropping the PROTECT on the floor is exactly the kind of thing you expect when you don't know the internals of the things being dealt with, and try to reach over the line.</p>
+<p>So besides PICK and POKE, do we need more "messages"?  Is PROTECT another one, and should this go through a generic DISPATCH of some kind?</p>
+<pre><code> DISPATCH @[obj x] 'PICK                ; PICK method, no argument needed
+ DISPATCH @[obj x] 'POKE 20             ; POKE method, send a new value
+ DISPATCH @[obj x] 'PROTECT #[true]     ; maybe PROTECT takes a flag?
+
+ DISPATCH @[gob size] 'PROTECT #[true]  ; may implement it, or reject it
+</code></pre>
+<p>That's a bit maddening-sounding...because this "Dispatch" starts to run a completely parallel keyed number of methods to the already existing generics.</p>
+<p>Consider that right now when you write <strong>append object.block [a b c]</strong>, the tuple is resolved into a BLOCK! as a separate evaluator step.  So the object never finds out about the APPEND...it goes directly to the block.  There's no chance for object to intervene and say that it actually stores the block in compressed form, etc.</p>
+<p>But here we're looking at some parallel set of functions that don't trust path dispatch to produce the right thing for them to talk to...so they're <em>not</em> generics but rather take the PATH! (TUPLE!) literally, and have to run some other process.</p>
+<h2>Can Anything Simplify This Mire?</h2>
+<p>It feels strange to use a language where you can write:</p>
+<pre><code>gob.size.x: 10
+</code></pre>
+<p>And yet, the "language itself doesn't really know where X is".  It feels like with x being assignable, there should be some kind of knowledge of what <a href="https://en.cppreference.com/w/cpp/language/value_category">value category</a> it is.</p>
+<p>Intellectually it's like wanting to say that Rebol "must know where the address of that variable is, because it can write to it".  And if it knows it's address it should know other things about it...like if it supports being PROTECT'ed.</p>
+<p>But GOB! is an alien entity that just agreed to do something weird...taking [size.x, 10] and consuming it.  The appearance to look "native" to the language is deceiving, and it's certainly a tangle to explain how this notational hack fits into any larger general system.</p>
+<p>When you have such a notational hack, you end up asking if that means the entirety of the mechanism has to be at the lowest-common-denominator of the hack...or if there's some way of identifying the moment of crossover.  Does every tuple resolution go to the point of Resolve_Context() which is one mechanism, and then flip over into some kind of POKE mechanic with fundamentally different properties?</p>
+<p>I don't know...but...I'm still hammering at it pretty hard.  This PROTECT issue is the last mechanical thing keeping me from deleting the old path dispatch code...and while the new code may wind up having its share of problems, at least I understand all of it and why it's there.</p>
+          <p><a href="https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644/2</link>
+        <pubDate>Thu, 23 Sep 2021 04:47:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1644-2</guid>
+        <source url="https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644.rss">Thinking We Might Should Nix PROTECT/HIDE For Now</source>
+      </item>
+      <item>
+        <title>Thinking We Might Should Nix PROTECT/HIDE For Now</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>R3-Alpha had an interesting feature, <a href="http://www.rebol.net/r3blogs/0189.html">which let you "hide" fields in contexts</a>.</p>
+<p>It was actually something that drew me in to the language in the beginning as "oh, that's cool".</p>
+<p>So it has stuck around in some form, and simple examples do still seem to work:</p>
+<pre><code>&gt;&gt; obj: make object! [x: 10 y: 20]
+== make object! [
+    x: 10
+    y: 20
+]
+
+&gt;&gt; protect/hide 'obj/y
+== obj/y
+
+&gt;&gt; obj
+== make object! [
+    x: 10
+]
+</code></pre>
+<p><strong>But this is a very complex feature to honor systemically.</strong>  Doing it poorly is easy.  Doing it pervasively and correctly is rather difficult.</p>
+<p>In particular, what bothers me about this "user controlled hidden bit" is that I'm trying to get some system-level hidden mechanics working correctly.  And the interaction between things the system needs to hide and this "user can hide anything they want" is somewhat maddening, especially because I know how hard it is to do such a thing <em>right</em>.</p>
+<p>It's an intriguing feature that seems to have been a bit of an off-the-cuff experiment.  I don't see it as mission-critical...and all it does is interfere with the hardening needed to solve the mission-critical problems related to contexts.</p>
+<p>Not going to delete it immediately, but it's certainly in the crosshairs if it causes any more trouble with something I'm trying to fix.</p>
+          <p><a href="https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644/1</link>
+        <pubDate>Tue, 03 Aug 2021 09:05:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1644-1</guid>
+        <source url="https://forum.rebol.info/t/thinking-we-might-should-nix-protect-hide-for-now/1644.rss">Thinking We Might Should Nix PROTECT/HIDE For Now</source>
+      </item>
+  </channel>
+</rss>

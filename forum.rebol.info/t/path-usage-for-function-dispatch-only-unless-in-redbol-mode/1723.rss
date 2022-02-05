@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>PATH! usage for Function Dispatch Only Unless in Redbol Mode</title>
+    <link>https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723</link>
+    <description>For a while now I&#39;ve been a pretty big convert on the look of dots for member selection.  It&#39;s not just that it&#39;s more standard--I think it&#39;s visually better.  It also lets you be reassured that when you see a slash in a path, that the thing to the left of that slash was a function:
+
+    foo.bar.baz
+       ;
+       ; ^-- I may not know what foo.bar.baz is, but at least I know that
+       ; foo and foo.bar are *not* functions
+
+    foo.bar.baz/mumble
+       ;
+       ; ^-- Under the convention that slashes are for refinements only, I
+       ; can tell the author intends that (foo.bar.baz) must be a function
+
+    foo.baz.bar/
+       ;
+       ; ^-- With Ren-C&#39;s path generality, you can even decorate a case
+       ; without refinements to show it&#39;s a function.
+
+## It Hasn&#39;t Been A *Rule*, but...
+
+So far Ren-C has been allowing you to use slashes wherever you historically could.  So the new rules were only applying to dots--restricting them on not being usable on functions.
+
+    append.dup [a b c] [d] 2  ; this would cause an error, for instance
+
+However, you could still pick members out of objects with slashes:
+
+    &gt;&gt; obj: make object! [field: 10]
+
+    &gt;&gt; obj/field   ; not obj.field
+    == 10
+
+I had a feeling this might be prohibited eventually...though it would need to be possible to make Redbol emulation work.  So there&#39;d have to be some kind of flag for allowing it.
+
+## ...But Now, I Might Have A Good Reason To Enforce It
+
+The reason is that in trying to do a good job of building an extensibility mechanism for member selection, it is difficult to make that mechanism able to communicate information about specialized functions in a &quot;light&quot; way.
+
+When pathing is done hardcoded in the evaluator, it can do little sneaky tricks to push the words of refinements onto a stack.  It doesn&#39;t have to create an entirely new specialized function.
+
+But once you&#39;re using a generic interface to usermode functions which can extend **`PICK*`** and **`POKE*`**, that interface has to speak in &quot;reified&quot; forms.  We have partial specialization so these refied forms exist... I just feel like what&#39;s happening in that case isn&#39;t &quot;picking&quot; or &quot;poking&quot;.  And it&#39;s tying my hands to make anything efficient if we say that path dispatch runs through code which might be usermode.
+
+## The Flag Will Be Introduced Gradually
+
+I&#39;ve been experimenting with the flag turning itself on automatically, and giving you a warning.  So you only hear about it the first time.
+
+    &gt;&gt; obj: make object! [x: 10]
+
+    &gt;&gt; obj/x
+    The PATH! obj/x doesn&#39;t evaluate to an ACTION! in the first slot.
+    SYSTEM.OPTIONS.REDBOL-PATHS is FALSE so this is not allowed by default.
+    For now, we&#39;ll enable it automatically...but it will slow down the system!
+    Please use TUPLE! instead, like obj.x
+    == 10
+
+    &gt;&gt; obj/x
+    == 10
+
+What happens when you enable the flag is that it actually turns any PATH! with no ACTION! in the first slot into a TUPLE!, and then permits you to use refinements in TUPLE!s like `append.dup`.  This is because I&#39;m avoiding creating a separate extensibility mechanism for paths...it just does the not-easy-to-optimize extensibility.
+
+I haven&#39;t committed this, and I&#39;d be phasing it in slowly.  But as it&#39;s phased in, the performance of paths for member selections vs. tuples will degrade.  So it&#39;s worth knowing about.</description>
+    
+    <lastBuildDate>Sat, 25 Sep 2021 09:30:46 +0000</lastBuildDate>
+    <category>Redbol</category>
+    <atom:link href="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>PATH! usage for Function Dispatch Only Unless in Redbol Mode</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1723">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>For a while now I've been a pretty big convert on the look of dots for member selection. It's not just that it's more standard--I think it's visually better. It also lets you be reassured that when you see a slash in a path, that the thing to the left of that slash was a function</p>
+</blockquote>
+</aside>
+<p><em>Let me paint the statement of what PATH!s are "for" in a broader way...</em></p>
+<h2>PATH!s are not for lookup, but are for "OPTIONS"</h2>
+<p>There is a feature of FAIL which is that you can pass it a location to "blame".  It's a skippable argument, which you currently pass as an @-word:</p>
+<pre><code>greet-negative-number: func [message [text!] n [integer!]] [
+    if n &gt;= 0 [
+        fail @n "It's called GREET-NEGATIVE-NUMBER, bozo!"
+    ]
+    print ["Hello" n ":" message]
+]
+</code></pre>
+<p>It's nice because instead of seeing the error location as being reported from inside of GREET-NEGATIVE-NUMBER, it points at the callsite... and tell you the name of the offending argument... and its offending value.</p>
+<p>Plus, both the error "reason" and the thing to "blame" are optional.  This means if you're lazy you can just blame the parameter without a message:</p>
+<pre><code>if n &gt;= 0 [fail @n]
+</code></pre>
+<p>You still have the name of the variable, its value, and the better implication of the source of the error at the callsite.  Though if you want to just be lazy you can just leave it all off and have a generic failure... which is especially nice in things like SWITCH:</p>
+<pre><code>switch x [
+    1 [print "one"]
+    2 [print "two"]
+    fail
+]
+</code></pre>
+<h2>Back To The Point: About PATH!s vs. TUPLE!s</h2>
+<p>So certainly if you're going to blame a variable, it should be possible to blame not just WORD!s but things that are looked up in objects.</p>
+<pre><code>obj: make object! [n: 1020]
+if obj.n &gt;= 0 [
+    fail @obj.n "Let's say I want this to be negative, too"
+]
+
+** Error: Let's say I want this to be negative, too
+** Blame: obj.n is 1020
+</code></pre>
+<p>But then I started thinking about the idea that you might have something else to say.  Like whether to show the name of the variable in the error.</p>
+<pre><code>fail @obj.n/anonymous "Let's say I want this to be negative, too"
+
+** Error: Let's say I want this to be negative, too
+** Blame: 1020
+</code></pre>
+<h2>If "PATH!s Are For Options", could values have them?</h2>
+<p>Fancifully:</p>
+<pre><code>&gt;&gt; n: 304
+
+&gt;&gt; n/lastdigit
+== 4
+</code></pre>
+<p>This blurs the line between "member access" and "option".  Perhaps if you can only <em>read</em> a property but not write it, then it's more like calling a function and getting a result?</p>
+<p>I'm not exactly sure where this line of argumentation goes.  I just thought the application of pathing to add options to the blame argument of FAIL was interesting enough to write up and add to this thread.</p>
+          <p><a href="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723/2</link>
+        <pubDate>Sat, 25 Sep 2021 09:30:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1723-2</guid>
+        <source url="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723.rss">PATH! usage for Function Dispatch Only Unless in Redbol Mode</source>
+      </item>
+      <item>
+        <title>PATH! usage for Function Dispatch Only Unless in Redbol Mode</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>For a while now I've been a pretty big convert on the look of dots for member selection.  It's not just that it's more standard--I think it's visually better.  It also lets you be reassured that when you see a slash in a path, that the thing to the left of that slash was a function:</p>
+<pre><code>foo.bar.baz
+   ;
+   ; ^-- I may not know what foo.bar.baz is, but at least I know that
+   ; foo and foo.bar are *not* functions
+
+foo.bar.baz/mumble
+   ;
+   ; ^-- Under the convention that slashes are for refinements only, I
+   ; can tell the author intends that (foo.bar.baz) must be a function
+
+foo.baz.bar/
+   ;
+   ; ^-- With Ren-C's path generality, you can even decorate a case
+   ; without refinements to show it's a function.
+</code></pre>
+<h2>It Hasn't Been A <em>Rule</em>, but...</h2>
+<p>So far Ren-C has been allowing you to use slashes wherever you historically could.  So the new rules were only applying to dots--restricting them on not being usable on functions.</p>
+<pre><code>append.dup [a b c] [d] 2  ; this would cause an error, for instance
+</code></pre>
+<p>However, you could still pick members out of objects with slashes:</p>
+<pre><code>&gt;&gt; obj: make object! [field: 10]
+
+&gt;&gt; obj/field   ; not obj.field
+== 10
+</code></pre>
+<p>I had a feeling this might be prohibited eventually...though it would need to be possible to make Redbol emulation work.  So there'd have to be some kind of flag for allowing it.</p>
+<h2>...But Now, I Might Have A Good Reason To Enforce It</h2>
+<p>The reason is that in trying to do a good job of building an extensibility mechanism for member selection, it is difficult to make that mechanism able to communicate information about specialized functions in a "light" way.</p>
+<p>When pathing is done hardcoded in the evaluator, it can do little sneaky tricks to push the words of refinements onto a stack.  It doesn't have to create an entirely new specialized function.</p>
+<p>But once you're using a generic interface to usermode functions which can extend <strong><code>PICK*</code></strong> and <strong><code>POKE*</code></strong>, that interface has to speak in "reified" forms.  We have partial specialization so these refied forms exist... I just feel like what's happening in that case isn't "picking" or "poking".  And it's tying my hands to make anything efficient if we say that path dispatch runs through code which might be usermode.</p>
+<h2>The Flag Will Be Introduced Gradually</h2>
+<p>I've been experimenting with the flag turning itself on automatically, and giving you a warning.  So you only hear about it the first time.</p>
+<pre><code>&gt;&gt; obj: make object! [x: 10]
+
+&gt;&gt; obj/x
+The PATH! obj/x doesn't evaluate to an ACTION! in the first slot.
+SYSTEM.OPTIONS.REDBOL-PATHS is FALSE so this is not allowed by default.
+For now, we'll enable it automatically...but it will slow down the system!
+Please use TUPLE! instead, like obj.x
+== 10
+
+&gt;&gt; obj/x
+== 10
+</code></pre>
+<p>What happens when you enable the flag is that it actually turns any PATH! with no ACTION! in the first slot into a TUPLE!, and then permits you to use refinements in TUPLE!s like <code>append.dup</code>.  This is because I'm avoiding creating a separate extensibility mechanism for paths...it just does the not-easy-to-optimize extensibility.</p>
+<p>I haven't committed this, and I'd be phasing it in slowly.  But as it's phased in, the performance of paths for member selections vs. tuples will degrade.  So it's worth knowing about.</p>
+          <p><a href="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723/1</link>
+        <pubDate>Wed, 22 Sep 2021 18:11:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1723-1</guid>
+        <source url="https://forum.rebol.info/t/path-usage-for-function-dispatch-only-unless-in-redbol-mode/1723.rss">PATH! usage for Function Dispatch Only Unless in Redbol Mode</source>
+      </item>
+  </channel>
+</rss>

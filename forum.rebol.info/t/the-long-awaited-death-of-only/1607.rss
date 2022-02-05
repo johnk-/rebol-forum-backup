@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Long-Awaited Death of /ONLY</title>
+    <link>https://forum.rebol.info/t/the-long-awaited-death-of-only/1607</link>
+    <description>**It is looking 99% certain that I will be killing off /ONLY, and that the only things you can append to BLOCK! (and GROUP!, etc.) will be ANY-ARRAY!, QUOTED!, and BLANK! (no op).**
+
+So let&#39;s talk about that...
+
+## Key Point Up Front: You Can Have /ONLY If You Want It
+
+*Ren-C&#39;s flexibility means you can get /ONLY back if you want it, and not break a sweat doing so*.   You just become responsible for figuring out what its universal meaning is.  (#goodluckwiththat)
+
+Remember that AUGMENT lets you add parameters to functions.
+
+    &gt;&gt; foo: func [x] [print [&quot;x is&quot; mold x]]
+    &gt;&gt; parameters of :foo
+    == [x]
+
+    &gt;&gt; foo+: augment :foo [/only &quot;An ONLY parameter&quot;]
+    &gt;&gt; parameters of :foo+
+    == [x /only]
+
+    &gt;&gt; foo+ 10
+    x is 10
+
+    &gt;&gt; foo+/only 10
+    x is 10
+
+But adding parameters doesn&#39;t actually do anything but expand the specification.  You have to use another tool like ADAPT or ENCLOSE to make use of the new parameters that FOO never knew about.
+
+    &gt;&gt; foo++: adapt :foo+ [print either only [&quot;/ONLY!&quot;] [&quot;no /ONLY&quot;]]
+
+    &gt;&gt; foo++ 10
+    no /ONLY
+    x is 10
+
+    &gt;&gt; foo++/only 10
+    /ONLY!
+    x is 10
+
+So here&#39;s an ONLIFY transformer that adds a refinement to a function, and then injects a little code to pre-process the parameter to quote it:
+
+    onlify: func [
+        {Add /ONLY behavior to APPEND, INSERT, CHANGE}
+        action [action!]
+    ][
+        adapt (augment :action [/only &quot;Use quoted semantics for value&quot;]) [
+            all [only, any-array? series] then [
+                value: quote :value
+            ]
+            ; ...fall through to normal handling
+        ]
+    ]
+
+Then you can apply it to the functions:
+
+    append: my onlify  ; e.g. `append: onlify :append` 
+    insert: my onlify
+    change: my onlify
+
+**This is the punchline.**  Ren-C&#39;s arsenal of abilities lets language twist and morph in your hands.
+
+## One Fewer Semantic To Worry About
+
+/ONLY was well defined for block-to-block appends.  But other places had no idea.
+
+What did APPEND/ONLY a BLOCK! to a string vs. regular APPEND to a string mean?  How about a PORT!?
+
+You could just ignore it, and a lot of places did that.  Yet this is uncomfortable.  It makes it feel like every implementer of an APPEND has to think about what &quot;only-ness&quot; means in that context or they are somehow missing out.
+
+*But ONLY-ness has no meaning.*  It&#39;s always been a Rebol-specific &quot;quirk&quot; that I (especially) hated.  While the non-native-English speakers might have been more willing to accept that &quot;it is whatever it does&quot;, it interfered with the desire to make Rebol approximate fluent English as much as possible.
+
+Certainly seeing it spread to something every datatype might have to react to or define was bad mojo.  The wrappers above show the ball being lobbed into the user&#39;s court to decide if they want to give it meaning, instead of having this burden borne by every PORT! or OBJECT! that might want to implement &quot;the APPEND generic action&quot;.
+
+They&#39;ll have to figure out what they want to do with QUOTED! items, of course.  But that was going to be a problem anyway.  And it was a problem even when there were just **&#39;word** and **&#39;pa/th** in existence...arguably a harder and weirder problem due to the inability to do something generalized.
+
+Long story short: Good riddance to having every APPEND/CHANGE/INSERT/FIND/SELECT implementer make up What /ONLY Means for Every parameter combination.
+
+## There Will Be A Lot Of (Generalized) Tools To Help
+
+I&#39;ve hesitated on going &quot;hard-line&quot; on this, to say that you can&#39;t do things like:
+
+    &gt;&gt; find [a b &quot;cde&quot; [f g] h] &quot;cde&quot;
+    ** Error: FIND on ANY-ARRAY! requires ANY-ARRAY! or QUOTED!
+
+You can grumble a bit and say:
+
+    &gt;&gt; find [a b &quot;cde&quot; [f g] h] [&quot;cde&quot;]
+    == [&quot;cde&quot; [f g] h]
+
+But that&#39;s now more &quot;blocky&quot; than someone might like.  Moreover, what if it&#39;s in a variable?
+
+Well, the variable case is the one we were actually worrying about.  It&#39;s to stop problems with:
+
+    &gt;&gt; find data item
+    ** Error: FIND on ANY-ARRAY! requires pattern to be ANY-ARRAY! or QUOTED!
+
+You can easily lose your bearings if you are trying to write generic code...to the point that generic code was nigh-impossible to write.
+
+But with the right tools, I think this becomes so regularized that it feels natural to comply.  You can choose more wordy or more blocky or more symbol-y, it&#39;s all up to your style.
+
+So imagine:
+
+    &gt;&gt; data: [a b &quot;cde&quot; [f g] h]
+    &gt;&gt; item: &quot;cde&quot;
+
+There are now an arsenal of tools for manipulating the quoting status:
+
+    &gt;&gt; find data quote item
+    == [&quot;cde&quot; [f g] h]
+
+    &gt;&gt; find data ^item
+    == [&quot;cde&quot; [f g] h]
+
+    &gt;&gt; find data just b
+    == [b &quot;cde&quot; [f g] h]
+
+    &gt;&gt; find data [b]
+    == [b &quot;cde&quot; [f g] h]
+
+    &gt;&gt; find data ^(first [h i])
+    == [h]
+
+And it means that you just think of anytime that you&#39;re writing patterns to look for in blocks, you can default to making them be blocks or quoted blocks.
+
+    &gt;&gt; pattern-one: [b &quot;cde&quot;]
+    &gt;&gt; pattern-two: quote [f g]  ; or ^[f g], or [[f g]]
+
+    &gt;&gt; find data pattern-one
+    == [b &quot;cde&quot; [f g] h]
+
+    &gt;&gt; find data pattern-two
+    == [[f g] h]
+
+**Key is to stop losing sleep over these low-level routines being a little more &quot;inconvenient&quot;, and instead have faith that making them well-defined will let you build the specializations or adaptations you need.**
+
+## Good Riddance /ONLY
+
+The elimination of /ONLY from the semantic model, and to have it not contaminate the user&#39;s heads, means that people can learn more generic tools that work in more contexts.
+
+Its appearance in Ren-C will be limited to the Redbol compatibility module.</description>
+    
+    <lastBuildDate>Sat, 15 May 2021 11:18:07 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/the-long-awaited-death-of-only/1607.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Long-Awaited Death of /ONLY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>It is looking 99% certain that I will be killing off /ONLY, and that the only things you can append to BLOCK! (and GROUP!, etc.) will be ANY-ARRAY!, QUOTED!, and BLANK! (no op).</strong></p>
+<p>So let's talk about that...</p>
+<h2>Key Point Up Front: You Can Have /ONLY If You Want It</h2>
+<p><em>Ren-C's flexibility means you can get /ONLY back if you want it, and not break a sweat doing so</em>.   You just become responsible for figuring out what its universal meaning is.  (<span class="hashtag">#goodluckwiththat</span>)</p>
+<p>Remember that AUGMENT lets you add parameters to functions.</p>
+<pre><code>&gt;&gt; foo: func [x] [print ["x is" mold x]]
+&gt;&gt; parameters of :foo
+== [x]
+
+&gt;&gt; foo+: augment :foo [/only "An ONLY parameter"]
+&gt;&gt; parameters of :foo+
+== [x /only]
+
+&gt;&gt; foo+ 10
+x is 10
+
+&gt;&gt; foo+/only 10
+x is 10
+</code></pre>
+<p>But adding parameters doesn't actually do anything but expand the specification.  You have to use another tool like ADAPT or ENCLOSE to make use of the new parameters that FOO never knew about.</p>
+<pre><code>&gt;&gt; foo++: adapt :foo+ [print either only ["/ONLY!"] ["no /ONLY"]]
+
+&gt;&gt; foo++ 10
+no /ONLY
+x is 10
+
+&gt;&gt; foo++/only 10
+/ONLY!
+x is 10
+</code></pre>
+<p>So here's an ONLIFY transformer that adds a refinement to a function, and then injects a little code to pre-process the parameter to quote it:</p>
+<pre><code>onlify: func [
+    {Add /ONLY behavior to APPEND, INSERT, CHANGE}
+    action [action!]
+][
+    adapt (augment :action [/only "Use quoted semantics for value"]) [
+        all [only, any-array? series] then [
+            value: quote :value
+        ]
+        ; ...fall through to normal handling
+    ]
+]
+</code></pre>
+<p>Then you can apply it to the functions:</p>
+<pre><code>append: my onlify  ; e.g. `append: onlify :append` 
+insert: my onlify
+change: my onlify
+</code></pre>
+<p><strong>This is the punchline.</strong>  Ren-C's arsenal of abilities lets language twist and morph in your hands.</p>
+<h2>One Fewer Semantic To Worry About</h2>
+<p>/ONLY was well defined for block-to-block appends.  But other places had no idea.</p>
+<p>What did APPEND/ONLY a BLOCK! to a string vs. regular APPEND to a string mean?  How about a PORT!?</p>
+<p>You could just ignore it, and a lot of places did that.  Yet this is uncomfortable.  It makes it feel like every implementer of an APPEND has to think about what "only-ness" means in that context or they are somehow missing out.</p>
+<p><em>But ONLY-ness has no meaning.</em>  It's always been a Rebol-specific "quirk" that I (especially) hated.  While the non-native-English speakers might have been more willing to accept that "it is whatever it does", it interfered with the desire to make Rebol approximate fluent English as much as possible.</p>
+<p>Certainly seeing it spread to something every datatype might have to react to or define was bad mojo.  The wrappers above show the ball being lobbed into the user's court to decide if they want to give it meaning, instead of having this burden borne by every PORT! or OBJECT! that might want to implement "the APPEND generic action".</p>
+<p>They'll have to figure out what they want to do with QUOTED! items, of course.  But that was going to be a problem anyway.  And it was a problem even when there were just <strong>'word</strong> and <strong>'pa/th</strong> in existence...arguably a harder and weirder problem due to the inability to do something generalized.</p>
+<p>Long story short: Good riddance to having every APPEND/CHANGE/INSERT/FIND/SELECT implementer make up What /ONLY Means for Every parameter combination.</p>
+<h2>There Will Be A Lot Of (Generalized) Tools To Help</h2>
+<p>I've hesitated on going "hard-line" on this, to say that you can't do things like:</p>
+<pre><code>&gt;&gt; find [a b "cde" [f g] h] "cde"
+** Error: FIND on ANY-ARRAY! requires ANY-ARRAY! or QUOTED!
+</code></pre>
+<p>You can grumble a bit and say:</p>
+<pre><code>&gt;&gt; find [a b "cde" [f g] h] ["cde"]
+== ["cde" [f g] h]
+</code></pre>
+<p>But that's now more "blocky" than someone might like.  Moreover, what if it's in a variable?</p>
+<p>Well, the variable case is the one we were actually worrying about.  It's to stop problems with:</p>
+<pre><code>&gt;&gt; find data item
+** Error: FIND on ANY-ARRAY! requires pattern to be ANY-ARRAY! or QUOTED!
+</code></pre>
+<p>You can easily lose your bearings if you are trying to write generic code...to the point that generic code was nigh-impossible to write.</p>
+<p>But with the right tools, I think this becomes so regularized that it feels natural to comply.  You can choose more wordy or more blocky or more symbol-y, it's all up to your style.</p>
+<p>So imagine:</p>
+<pre><code>&gt;&gt; data: [a b "cde" [f g] h]
+&gt;&gt; item: "cde"
+</code></pre>
+<p>There are now an arsenal of tools for manipulating the quoting status:</p>
+<pre><code>&gt;&gt; find data quote item
+== ["cde" [f g] h]
+
+&gt;&gt; find data ^item
+== ["cde" [f g] h]
+
+&gt;&gt; find data just b
+== [b "cde" [f g] h]
+
+&gt;&gt; find data [b]
+== [b "cde" [f g] h]
+
+&gt;&gt; find data ^(first [h i])
+== [h]
+</code></pre>
+<p>And it means that you just think of anytime that you're writing patterns to look for in blocks, you can default to making them be blocks or quoted blocks.</p>
+<pre><code>&gt;&gt; pattern-one: [b "cde"]
+&gt;&gt; pattern-two: quote [f g]  ; or ^[f g], or [[f g]]
+
+&gt;&gt; find data pattern-one
+== [b "cde" [f g] h]
+
+&gt;&gt; find data pattern-two
+== [[f g] h]
+</code></pre>
+<p><strong>Key is to stop losing sleep over these low-level routines being a little more "inconvenient", and instead have faith that making them well-defined will let you build the specializations or adaptations you need.</strong></p>
+<h2>Good Riddance /ONLY</h2>
+<p>The elimination of /ONLY from the semantic model, and to have it not contaminate the user's heads, means that people can learn more generic tools that work in more contexts.</p>
+<p>Its appearance in Ren-C will be limited to the Redbol compatibility module.</p>
+          <p><a href="https://forum.rebol.info/t/the-long-awaited-death-of-only/1607/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-long-awaited-death-of-only/1607/1</link>
+        <pubDate>Sat, 15 May 2021 09:48:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1607-1</guid>
+        <source url="https://forum.rebol.info/t/the-long-awaited-death-of-only/1607.rss">The Long-Awaited Death of /ONLY</source>
+      </item>
+  </channel>
+</rss>

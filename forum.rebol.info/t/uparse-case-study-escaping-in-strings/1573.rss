@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>UPARSE Case Study: Escaping In Strings</title>
+    <link>https://forum.rebol.info/t/uparse-case-study-escaping-in-strings/1573</link>
+    <description>I wanted to make a REWORD variation that would look for escaped parts of strings and extract them as words.  So:
+
+    Input: &quot;abc$(def)ghi&quot;
+    Output: [&quot;abc&quot; def &quot;ghi&quot;]
+
+It&#39;s a common-seeming and not entirely trivial task.  The first thing I came up with is a bit convoluted...perhaps because I tried to not repeat the &quot;$(&quot; and &quot;)&quot; strings in the rule:
+
+    uparse text [
+        return collect [
+            any [
+                not end
+                (capturing: false)
+                keep opt between here [&quot;$(&quot; (capturing: true) | end]
+                :(if capturing &#39;[
+                    inner: between here &quot;)&quot;
+                    keep @(as word! inner)
+                ])
+            ]
+        ]
+    ]
+
+It basically alternates between a capturing mode and a non-capturing mode.  It decides if it needs to run a capture mode with a variable.
+
+It has to throw in a [NOT END for reasons I explain in another post](https://forum.rebol.info/t/any-vs-while-and-not-end/1572).  Because it&#39;s running alternating rules that may both opt out.
+
+I use a GET-GROUP! spliced conditional rule, as UPARSE doesn&#39;t have any loop-interrupting constructs yet.  So you can&#39;t say &quot;Stop running this rule, but consider it to have matched.&quot;  There&#39;s only LOGIC! of #[false] which means what FAIL used to mean...e.g. the overall rule did not match (so any collected material would be forgotten).
+
+Since it can&#39;t break out of the rule and report success, it has to have a way to skip over a rule.  So the rule for capturing inside the parentheses conditions itself out with an IF statement and a generated rule.  I could have instead written that as an alternate rule, where if `not capturing` was true it would bypass normal code:
+
+    uparse text [
+        return collect [
+            any [
+                not end
+                (capturing: false)
+                keep opt between here [&quot;$(&quot; (capturing: true) | end]
+                [:(not capturing) |
+                    inner: between here &quot;)&quot;
+                    keep @(as word! inner)
+                ]
+            ]
+        ]
+    ]
+
+That feels more convoluted to me because of the inverse logic of the NOT, though.
+
+It produces more empty strings than I would like:
+
+    Input: &quot;$(abc)$(def)$(ghi)&quot;
+    Output: [&quot;&quot; abc &quot;&quot; def &quot;&quot; ghi]
+
+It would technically be possible for a rule like BETWEEN to succeed and give a NULL result if there were no content, instead of an empty string:
+
+    &gt;&gt; did parse &quot;()&quot; [x: between &quot;(&quot; &quot;)&quot;]
+    == #[true]
+
+    &gt;&gt; x
+    ; null
+
+But this then means you can&#39;t get a good distinction of what happened in the case of an optional rule.
+
+    &gt;&gt; did parse &quot;&quot; [x: opt between &quot;(&quot; &quot;)&quot;]
+    == #[true]
+
+    &gt;&gt; x
+    ; null...so were there parentheses or not?
+
+So I guess it&#39;s another situation where if you want to filter out the empty strings, you have to capture into a variable and filter it.
+
+**I think UPARSE helps out here...but it&#39;s not quite the slam dunk I&#39;d hope for.**
+
+Because it has two rules that may both opt themselves out, it&#39;s a thought piece for asking if the NOT END makes sense with ANY.  Or is it better off baking that into the ANY rule and having another construct?  Intuitively I feel like the tax of having two slightly different versions and explaining the use of one vs. the other is worse than just having the more general construct.
+
+If there were a loop-ending construct that indicated the overall rule was a success (e.g. didn&#39;t discard the KEEPs), then we might avoid the capturing flag:
+
+    uparse text [
+        return collect [
+            any [
+                keep opt between here [&quot;$(&quot; | end]
+                [end break |
+                    inner: between here &quot;)&quot;
+                    keep @(as word! inner)
+                ]
+            ]
+        ]
+    ]
+
+But I don&#39;t know if BREAK is the right name for a loop-accepting operation (as in DO&#39;s while this typically causes most loop operations to return NULL).  So I&#39;d think it would perhaps discard anything kept.  Perhaps STOP would be more consistent, and it could be value-bearing as well (**stop @(...)**)
+
+Loop breaking operations would be another potential argument for [renaming ANY to WHILE](https://forum.rebol.info/t/any-vs-while-and-not-end/1572), as it would hint more clearly at the existence of a BREAK.  Though WHILE has no STOP in plain DO currently (only CYCLE does) due to the desire to make loops easier to abstract.</description>
+    
+    <lastBuildDate>Sat, 27 Mar 2021 13:44:38 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/uparse-case-study-escaping-in-strings/1573.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>UPARSE Case Study: Escaping In Strings</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I wanted to make a REWORD variation that would look for escaped parts of strings and extract them as words.  So:</p>
+<pre><code>Input: "abc$(def)ghi"
+Output: ["abc" def "ghi"]
+</code></pre>
+<p>It's a common-seeming and not entirely trivial task.  The first thing I came up with is a bit convoluted...perhaps because I tried to not repeat the "$(" and ")" strings in the rule:</p>
+<pre><code>uparse text [
+    return collect [
+        any [
+            not end
+            (capturing: false)
+            keep opt between here ["$(" (capturing: true) | end]
+            :(if capturing '[
+                inner: between here ")"
+                keep @(as word! inner)
+            ])
+        ]
+    ]
+]
+</code></pre>
+<p>It basically alternates between a capturing mode and a non-capturing mode.  It decides if it needs to run a capture mode with a variable.</p>
+<p>It has to throw in a <a href="https://forum.rebol.info/t/any-vs-while-and-not-end/1572">NOT END for reasons I explain in another post</a>.  Because it's running alternating rules that may both opt out.</p>
+<p>I use a GET-GROUP! spliced conditional rule, as UPARSE doesn't have any loop-interrupting constructs yet.  So you can't say "Stop running this rule, but consider it to have matched."  There's only LOGIC! of #[false] which means what FAIL used to mean...e.g. the overall rule did not match (so any collected material would be forgotten).</p>
+<p>Since it can't break out of the rule and report success, it has to have a way to skip over a rule.  So the rule for capturing inside the parentheses conditions itself out with an IF statement and a generated rule.  I could have instead written that as an alternate rule, where if <code>not capturing</code> was true it would bypass normal code:</p>
+<pre><code>uparse text [
+    return collect [
+        any [
+            not end
+            (capturing: false)
+            keep opt between here ["$(" (capturing: true) | end]
+            [:(not capturing) |
+                inner: between here ")"
+                keep @(as word! inner)
+            ]
+        ]
+    ]
+]
+</code></pre>
+<p>That feels more convoluted to me because of the inverse logic of the NOT, though.</p>
+<p>It produces more empty strings than I would like:</p>
+<pre><code>Input: "$(abc)$(def)$(ghi)"
+Output: ["" abc "" def "" ghi]
+</code></pre>
+<p>It would technically be possible for a rule like BETWEEN to succeed and give a NULL result if there were no content, instead of an empty string:</p>
+<pre><code>&gt;&gt; did parse "()" [x: between "(" ")"]
+== #[true]
+
+&gt;&gt; x
+; null
+</code></pre>
+<p>But this then means you can't get a good distinction of what happened in the case of an optional rule.</p>
+<pre><code>&gt;&gt; did parse "" [x: opt between "(" ")"]
+== #[true]
+
+&gt;&gt; x
+; null...so were there parentheses or not?
+</code></pre>
+<p>So I guess it's another situation where if you want to filter out the empty strings, you have to capture into a variable and filter it.</p>
+<p><strong>I think UPARSE helps out here...but it's not quite the slam dunk I'd hope for.</strong></p>
+<p>Because it has two rules that may both opt themselves out, it's a thought piece for asking if the NOT END makes sense with ANY.  Or is it better off baking that into the ANY rule and having another construct?  Intuitively I feel like the tax of having two slightly different versions and explaining the use of one vs. the other is worse than just having the more general construct.</p>
+<p>If there were a loop-ending construct that indicated the overall rule was a success (e.g. didn't discard the KEEPs), then we might avoid the capturing flag:</p>
+<pre><code>uparse text [
+    return collect [
+        any [
+            keep opt between here ["$(" | end]
+            [end break |
+                inner: between here ")"
+                keep @(as word! inner)
+            ]
+        ]
+    ]
+]
+</code></pre>
+<p>But I don't know if BREAK is the right name for a loop-accepting operation (as in DO's while this typically causes most loop operations to return NULL).  So I'd think it would perhaps discard anything kept.  Perhaps STOP would be more consistent, and it could be value-bearing as well (<strong>stop @(...)</strong>)</p>
+<p>Loop breaking operations would be another potential argument for <a href="https://forum.rebol.info/t/any-vs-while-and-not-end/1572">renaming ANY to WHILE</a>, as it would hint more clearly at the existence of a BREAK.  Though WHILE has no STOP in plain DO currently (only CYCLE does) due to the desire to make loops easier to abstract.</p>
+          <p><a href="https://forum.rebol.info/t/uparse-case-study-escaping-in-strings/1573/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/uparse-case-study-escaping-in-strings/1573/1</link>
+        <pubDate>Sat, 27 Mar 2021 13:44:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1573-1</guid>
+        <source url="https://forum.rebol.info/t/uparse-case-study-escaping-in-strings/1573.rss">UPARSE Case Study: Escaping In Strings</source>
+      </item>
+  </channel>
+</rss>

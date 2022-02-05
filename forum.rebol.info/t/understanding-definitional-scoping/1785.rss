@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Understanding Definitional Scoping</title>
+    <link>https://forum.rebol.info/t/understanding-definitional-scoping/1785</link>
+    <description>I just started learning Red/Rebol, and I was having trouble understanding the scoping rules. I did read the [Stack Overflow](https://stackoverflow.com/a/21964858) and [Bindology](https://en.wikibooks.org/wiki/Rebol_Programming/Advanced/Bindology), and I think I somewhat understand, but I&#39;m not sure! I&#39;d be grateful if someone can confirm the my deductions about the following code from the SE post:
+
+```
+rebol []
+
+a: 1
+
+func-1: func [] [a]
+
+inner: context [
+    a: 2
+    func-2: func [] [a]
+    func-3: func [/local a] [a: 3 func-1]
+]
+
+reduce [func-1 inner/func-2 inner/func-3]
+```
+
+1. **Compile-time:** First, when the code is compiled, a list of top-level names is created. _(`a`, `func-1`, `inner`)_
+2. **Load-time:** When the code is loaded, context **A** is created with those symbols as members. Also, the entire code is walked through, and every occurrence of those symbols is bound to these entries. _(e.g., `a` inside `func-2` would be bound to the top-level `a`)_
+3. **Run-time:** When `a: 1` is executed, the value `1` is stored in the `a`&#39;s slot in the context.
+4. The `func` keyword after `func-1:` creates a new function, and assigns it to `func-1`. However, it leaves the binding of `a` intact.
+5. The `context` keyword after `inner:` creates a new context **B**, walks over all the block, collecting all new symbols, and inserts those in the new object.
+6. `a: 2` assigns value `2` in `a`&#39;s slot in the new context.
+7. `func` after `func-2:` creates a function while keeping `a`&#39;s new binding intact, and assigns it to `func-2`&#39;s slot.
+8. `func` after `func-3:` creates a function and creates a new context **C** in which `a` is inserted and bound.
+9. Upon execution of `reduce`, `func-1` returns `1` from context **A**, `func-2` return `2` from context **B**, and `func-3` executes `func-1` which returns `1` from context **A** again.
+
+So, now,  a few questions:
+
++ Is the above correct? If it is,
++ How does the `context` keyword determine which set-words it should create a slot for? i.e., 
+    - if `a: 2` didn&#39;t exist, will it still create the slot for `a` due to `a: 3` deep inside?
+    - What about if `a:3` didn&#39;t exist either? Will the new context contain a slot for `a` just due to `a` inside `func-2`&#39;s body?
++ Did `context` bind `a` in `[/local a]` too, before `func` was executed?
++ When a new context is created, does it copy existing symbols or bindings from the older context? If not,
++ Is there a parent-child relationship between contexts, or are they free-standing? Given a context, can I chase some pointer to its parent or child?
+
+Sorry for so many questions, I think I am getting extra confused since I already have programming experience and need to unlearn some stuff before being able to grok Rebol.
+
+Thank you.</description>
+    
+    <lastBuildDate>Mon, 24 Jan 2022 12:11:02 +0000</lastBuildDate>
+    <category>First Steps</category>
+    <atom:link href="https://forum.rebol.info/t/understanding-definitional-scoping/1785.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Understanding Definitional Scoping</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Hello there... thanks for your question, and no need to be sorry.  Questions are well warranted.</p>
+<p>(Note that I take no responsibility for the madness that is Rebol--I just happen to hack on a derivative of the open source codebase because I have found various interesting aspects about it.  :-P)</p>
+<aside class="quote no-group" data-username="DefinitionalUsername" data-post="1" data-topic="1785">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/letter_avatar_proxy/v4/letter/d/aeb1de/40.png" class="avatar"> DefinitionalUsername:</div>
+<blockquote>
+<p>First, when the code is compiled</p>
+</blockquote>
+</aside>
+<p>Rebol is interpreted--not compiled.  (Red attempts to do some compilation, and I'm unclear on how that works...you will have to ask them.)</p>
+<aside class="quote no-group" data-username="DefinitionalUsername" data-post="1" data-topic="1785">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/letter_avatar_proxy/v4/letter/d/aeb1de/40.png" class="avatar"> DefinitionalUsername:</div>
+<blockquote>
+<p><strong>Load-time:</strong> When the code is loaded, context <strong>A</strong> is created with those symbols as members.</p>
+</blockquote>
+</aside>
+<p>It's probably dumber than you think.  Not only is there no "compile-time", "load-time" isn't where the binding happens.  It all happens at run time.</p>
+<aside class="quote no-group" data-username="DefinitionalUsername" data-post="1" data-topic="1785">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/letter_avatar_proxy/v4/letter/d/aeb1de/40.png" class="avatar"> DefinitionalUsername:</div>
+<blockquote>
+<p>if <code>a: 2</code> didn't exist, will it still create the slot for <code>a</code> due to <code>a: 3</code> deep inside?</p>
+</blockquote>
+</aside>
+<p>CONTEXT is an alias in historical Rebol for MAKE OBJECT! and the behavior of that is that it only searches one level of depth symbolically for SET-WORD!s to gather.</p>
+<p>Deeper walks are possible.  The concept behind R3-Alpha and Red's FUNCTION is that it searches deeply the body for any SET-WORD!s and assumes they should be local variables.  This creates the problems you would expect: a nested function's locals will be picked up as locals in the outer function, and SET-WORD!s used in the body incidentally as object members or for dialect purposes will also be picked up.  This is why Ren-C has LET and does runtime variable instantiation which runs in a wave (virtual binding), you can't sensibly calculate a static concept of what symbols are variables or not.</p>
+<p>Ren-C is quite different from Rebol, and so answers will vary significantly, if you find that you care about the difference.</p>
+<aside class="quote no-group" data-username="DefinitionalUsername" data-post="1" data-topic="1785">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/letter_avatar_proxy/v4/letter/d/aeb1de/40.png" class="avatar"> DefinitionalUsername:</div>
+<blockquote>
+<p>Did <code>context</code> bind <code>a</code> in <code>[/local a]</code> too, before <code>func</code> was executed?</p>
+</blockquote>
+</aside>
+<p>No, CONTEXT was merely looking for symbolic SET-WORD! tokens at one level of depth underneath it.  <strong><code>a</code></strong> is a plain WORD!, and it's in a block one level deep, so that's two strikes.</p>
+<aside class="quote no-group" data-username="DefinitionalUsername" data-post="1" data-topic="1785">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/letter_avatar_proxy/v4/letter/d/aeb1de/40.png" class="avatar"> DefinitionalUsername:</div>
+<blockquote>
+<p>Is there a parent-child relationship between contexts, or are they free-standing? Given a context, can I chase some pointer to its parent or child?</p>
+</blockquote>
+</aside>
+<p>Contexts inherit keylists as an implementation detail for efficiency, and it's weaker than v8 hidden classes.</p>
+<p><a href="https://richardartoul.github.io/jekyll/update/2015/04/26/hidden-classes.html" class="inline-onebox">Javascript Hidden Classes and Inline Caching in V8</a></p>
+<p>I have thought hidden classes might be better, at times, but then again that would complicate the code.  And part of the point is to let everyone understand the stack.  It's a thought experiment.</p>
+<p>Rebol was written to be a brutishly simple C '89 codebase and a lot of the "interesting" aspects were higher-order studies on top of an interpreter that worked better than you would think for how dumb it was.</p>
+<p>My take is to call it "Amish Programming", you may find my talk at the 2019 conference useful if you're getting your bearings.</p>
+<p><a href="http://2019.reb4.me/talks" class="inline-onebox">Talks | Rebol [2019]</a></p>
+          <p><a href="https://forum.rebol.info/t/understanding-definitional-scoping/1785/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/understanding-definitional-scoping/1785/2</link>
+        <pubDate>Mon, 24 Jan 2022 12:11:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1785-2</guid>
+        <source url="https://forum.rebol.info/t/understanding-definitional-scoping/1785.rss">Understanding Definitional Scoping</source>
+      </item>
+      <item>
+        <title>Understanding Definitional Scoping</title>
+        <dc:creator><![CDATA[DefinitionalUsername]]></dc:creator>
+        <description><![CDATA[
+            <p>I just started learning Red/Rebol, and I was having trouble understanding the scoping rules. I did read the <a href="https://stackoverflow.com/a/21964858" rel="noopener nofollow ugc">Stack Overflow</a> and <a href="https://en.wikibooks.org/wiki/Rebol_Programming/Advanced/Bindology" rel="noopener nofollow ugc">Bindology</a>, and I think I somewhat understand, but I'm not sure! I'd be grateful if someone can confirm the my deductions about the following code from the SE post:</p>
+<pre><code class="lang-auto">rebol []
+
+a: 1
+
+func-1: func [] [a]
+
+inner: context [
+    a: 2
+    func-2: func [] [a]
+    func-3: func [/local a] [a: 3 func-1]
+]
+
+reduce [func-1 inner/func-2 inner/func-3]
+</code></pre>
+<ol>
+<li>
+<strong>Compile-time:</strong> First, when the code is compiled, a list of top-level names is created. <em>(<code>a</code>, <code>func-1</code>, <code>inner</code>)</em>
+</li>
+<li>
+<strong>Load-time:</strong> When the code is loaded, context <strong>A</strong> is created with those symbols as members. Also, the entire code is walked through, and every occurrence of those symbols is bound to these entries. <em>(e.g., <code>a</code> inside <code>func-2</code> would be bound to the top-level <code>a</code>)</em>
+</li>
+<li>
+<strong>Run-time:</strong> When <code>a: 1</code> is executed, the value <code>1</code> is stored in the <code>a</code>'s slot in the context.</li>
+<li>The <code>func</code> keyword after <code>func-1:</code> creates a new function, and assigns it to <code>func-1</code>. However, it leaves the binding of <code>a</code> intact.</li>
+<li>The <code>context</code> keyword after <code>inner:</code> creates a new context <strong>B</strong>, walks over all the block, collecting all new symbols, and inserts those in the new object.</li>
+<li>
+<code>a: 2</code> assigns value <code>2</code> in <code>a</code>'s slot in the new context.</li>
+<li>
+<code>func</code> after <code>func-2:</code> creates a function while keeping <code>a</code>'s new binding intact, and assigns it to <code>func-2</code>'s slot.</li>
+<li>
+<code>func</code> after <code>func-3:</code> creates a function and creates a new context <strong>C</strong> in which <code>a</code> is inserted and bound.</li>
+<li>Upon execution of <code>reduce</code>, <code>func-1</code> returns <code>1</code> from context <strong>A</strong>, <code>func-2</code> return <code>2</code> from context <strong>B</strong>, and <code>func-3</code> executes <code>func-1</code> which returns <code>1</code> from context <strong>A</strong> again.</li>
+</ol>
+<p>So, now,  a few questions:</p>
+<ul>
+<li>Is the above correct? If it is,</li>
+<li>How does the <code>context</code> keyword determine which set-words it should create a slot for? i.e.,
+<ul>
+<li>if <code>a: 2</code> didn't exist, will it still create the slot for <code>a</code> due to <code>a: 3</code> deep inside?</li>
+<li>What about if <code>a:3</code> didn't exist either? Will the new context contain a slot for <code>a</code> just due to <code>a</code> inside <code>func-2</code>'s body?</li>
+</ul>
+</li>
+<li>Did <code>context</code> bind <code>a</code> in <code>[/local a]</code> too, before <code>func</code> was executed?</li>
+<li>When a new context is created, does it copy existing symbols or bindings from the older context? If not,</li>
+<li>Is there a parent-child relationship between contexts, or are they free-standing? Given a context, can I chase some pointer to its parent or child?</li>
+</ul>
+<p>Sorry for so many questions, I think I am getting extra confused since I already have programming experience and need to unlearn some stuff before being able to grok Rebol.</p>
+<p>Thank you.</p>
+          <p><a href="https://forum.rebol.info/t/understanding-definitional-scoping/1785/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/understanding-definitional-scoping/1785/1</link>
+        <pubDate>Sat, 22 Jan 2022 08:13:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1785-1</guid>
+        <source url="https://forum.rebol.info/t/understanding-definitional-scoping/1785.rss">Understanding Definitional Scoping</source>
+      </item>
+  </channel>
+</rss>

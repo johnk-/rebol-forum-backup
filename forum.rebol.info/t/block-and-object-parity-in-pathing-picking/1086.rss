@@ -1,0 +1,467 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+    <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086</link>
+    <description>Rebol didn&#39;t have any great answer for &quot;object literals&quot; and &quot;map literals&quot;.  Yet literal objects (&quot;dictionaries&quot;) are critical to JSON.  So it has seemed that Rebol needs an answer here.
+
+Notationally we&#39;re at a bit of a loss of how to represent them.  But something I began to wonder is if Rebol has been losing some of its advantage of having a SET-WORD! type.  If you look at:
+
+    array: [foo &lt;baz&gt; #bar]
+    dictionary: [field1: ... field2: ...]
+
+Couldn&#39;t it just be that the presence of SET-WORD!s in the dictionary-like thing is what gives you the tip-off?  Why exchange files with literal objects, instead of doing it with blocks?  The kinds of data exchanges we see using such forms are not rigorously glued to a schema--by design--the concept is that the sender and recipient are on the same page about things.
+
+There may be little benefit to having another container type saying &quot;this is an object&quot;, *if objects and blocks act more or less interchangeably when used with keyed access*.  The user of the data would have the option to make a block into an object if they needed to, or not if they didnt?
+
+I&#39;ve suggested before that I feel there&#39;s something wrong with &quot;pickquality&quot;, where it&#39;s the idea that picking and pathing consider WORD!, SET-WORD!, ISSUE!, etc. to be equal.  I felt that if BLOCK!s are used for keyed access in this way, they should use SET-WORD!s...and then the seeking process in the block can look specifically for them.  If we use &quot;scant evaluation&quot;, then this could even allow for SET-WORD! values.
+
+## Demonstration
+
+    block: [
+        &lt;meta-tag 1&gt; &lt;meta-tag-2&gt; #meta-issue
+        string: &quot;hello&quot;
+        x: y: 100
+        code: &#39;(1 + 2)
+        setword: &#39;something:
+    ]
+
+    &gt;&gt; block/string
+    == &quot;hello&quot;  ; skips info before set-word!
+
+    &gt;&gt; block/x
+    == 100  ; advances to first non-set-word value
+
+    &gt;&gt; block/code
+    == (1 + 2)  ; &quot;scant&quot; evaluation, removes quote
+
+     &gt;&gt; block/setword
+     == something:  ; also &quot;scant&quot; evaluation
+
+Imagine being able to manipulate the block in a way that has parity with how it would act if it were an object.  So getting the quoting if necessary:
+
+    &gt;&gt; block: [thing: 10]
+
+    &gt;&gt; block/thing: first [a b c]
+
+    &gt;&gt; block
+    == [thing: &#39;a]
+
+You don&#39;t want path access to trigger an actual evaluation of something that isn&#39;t inert or quoted, so that should give an error:
+
+     &gt;&gt; block: [thing: (1 + 2)]
+     &gt;&gt; block/thing
+     ** Error: keyed access of block only works on inert and quoted types
+
+To me, this really feels like a coherent direction, with something that has been very lacking in coherence historically.
+
+## [Cowpaths](https://forum.rebol.info/t/strict-equality-lax-equality-equivalence-sameness-is-and/349/5?u=hostilefork)
+
+@rgchris very much likes the freedom in blocks to say **[a 1 b 2]** and not **[a: 1 b: 2]**.  So his direction of cleanup of the historical behavior would be to treat blocks as collections of 2-element records, which would prevent confusion if you wrote **[a b b 2]**.
+
+I appreciate wanting to have this choice.  But for pathing, I like this parity with objects idea.  I do not feel like enforcing the SET-WORD!s at odd numbered positions feels like the right choice there...I&#39;d like to be able to be more free-form, as I would be able to do with MAKE OBJECT!.  It addresses several dark corners, and I think that it will make blocks stronger for data exchange.
+
+Pathing and selection are already not the same (as block/2 gives you the second item of the block, not an item immediately following an INTEGER! 2 inside the block).  **If we changed SELECT to a /SKIP default of 2, and went with the SET-WORD!-based behavior for pathing (hence also PICK+POKE), would that make everyone happy?**
+
+    &gt;&gt; select [a b b 2] &#39;a
+    == b
+
+    &gt;&gt; select [a b b 2] &#39;b
+    == 2
+
+And I&#39;d suggest that SELECT would have you use the data type you were selecting on.  So it would not consider SET-WORD! and WORD! the same (nor ISSUE! and WORD!, etc.)  With [skippable functions to do the equality](https://forum.rebol.info/t/brave-switch-new-world-skippable-predicates/1045), you could ask for varying behaviors:
+
+    &gt;&gt; select [a 1 10 20] .matches integer!
+    == 20  ; e.g. a wasn&#39;t an INTEGER!, but 10 was (1 skipped going in steps of 2)
+
+And one of those behaviors could ask for a more lax style of comparison which considered SET-WORD! and WORD! to be equal.  `.synonymizes`, perhaps.  or `.wordequals`
+
+    &gt;&gt; select [a 1 b: 20] .wordequals first [a:]
+    == 1
+
+    &gt;&gt; select [a 1 b: 20] .synonymizes &#39;b
+    == 20
+
+In any case, the idea is that the SELECT command is about treating a block as records of fixed size.  I don&#39;t know if that means that it should not be used with objects (preferring PICK).  It might be clarifying.  PICK is a shorter word.
+
+*(I also don&#39;t know what the applications are to having SELECT default to 2 characters at a time when selecting from strings.  But then again, I&#39;m not really sure what sort of scenarios would get people to select out of a string in the first place, if all you get back is a single character.  Should it be limited to just ANY-ARRAY!?)*</description>
+    
+    <lastBuildDate>Tue, 21 Jul 2020 15:11:35 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="10" data-topic="1086">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>This makes me wonder if there should be a native for iterating.</p>
+</blockquote>
+</aside>
+<p>I like this idea.</p>
+<p>Similar thought: Is there a prescribed way of declaring a block! (or similar structure) to be non-expanding, allowing it to contain only the # of elements of its defined size? If you insert into the block, the last value is automatically purged. (Maybe if you append to the block, the first element gets taken.) Optionally could declare the block with default values. Background: Sometimes I want to keep a "cartridge" of values meeting the spec of a certain length, and it may be as simple as a LIFO/FIFO list where I want to hold onto "the most recent" X things, and then just be able to immediately FORM/MOLD etc. into an output.</p>
+<p>This is easy to achieve with a normal block, but it grows and grows and then you have to truncate it each time (not a big deal) and process it for your intended output.</p>
+<p>Just a code-golf thought. Maybe there's a structure that already handles this though... I haven't dug into this.</p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/12</link>
+        <pubDate>Tue, 21 Jul 2020 15:11:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-12</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>My thought is an optimized 5-way (parent, first[child], last, back, next) NODE! type. I've been using blocks for this and has several disadvantages, including being difficult to PROBE and inefficient to traverse or convert to BLOCK!. Maintaining relationships would still be on the user, thus could be used for a simple linked list, double linked list or full-blown tree structure.</p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/11</link>
+        <pubDate>Tue, 21 Jul 2020 01:58:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-11</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="9" data-topic="1086">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>Obfuscating in this way is the Rebol way.</p>
+</blockquote>
+</aside>
+<p>This makes me wonder if there should be a native for iterating.</p>
+<pre><code> &gt;&gt; suit-order: head [♣ ♦ ♥ ♠]
+
+ &gt;&gt; suit: iterates suit-order
+
+ &gt;&gt; suit
+ == ♣
+
+ &gt;&gt; suit
+ == ♣
+
+ &gt;&gt; suit/next
+ == ♦
+
+ &gt;&gt; suit
+ == ♦
+</code></pre>
+<p>Etc.  In stackless this can be written in usermode as a YIELDER, with something approximating:</p>
+<pre><code> iterates: func [data /cycle] [
+      return yielder [/next /back] [
+          forever [  ; e.g. lib/cycle, FOREVER for clarity w/cycle refinement
+               if next [
+                   if tail? data: my lib/next [
+                       if cycle [data: head data]
+                   ]
+               ]
+               if back [
+                   if head? data: my lib/back [
+                       if cycle [data: back tail data]
+                   ]
+               ]
+               yield data/1
+          ]
+      ]
+ ]
+</code></pre>
+<p>It could be made as a relatively efficient native.  It might even use binding tricks to bind a single prototype action it to the data it iterates, so an ACTION! need not be created on each call.</p>
+<p>You'd be in a situation where <strong>:SUIT</strong> was an ACTION! not a WORD!, which might seem uncomfortable.  Though this doesn't seem that much different than iterators in any other language--they're always another type from the data they wrap.</p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/10</link>
+        <pubDate>Tue, 21 Jul 2020 00:50:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-10</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="7" data-topic="1086">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>This idea felt obfuscating; hiding the current suit in a series position just seemed wrong.</p>
+</blockquote>
+</aside>
+<p>Obfuscating in this way is the Rebol way. If you're willing to pay a little for something a little less opaque, you could just say: <strong>append suite-order suit: take suite-order</strong></p>
+<p>Also, I've been using linked lists a fair bit of late (I have thoughts on potentially optimizing the linked list concept for tree building, but I digress):</p>
+<pre><code class="lang-auto">♣: [next ♦ back ♠]
+♦: [next ♥ back ♣]
+♥: [next ♠ back ♦]
+♠: [next ♣ back ♥]
+
+suit: ♣
+suit: (suit)/next
+; had problems with this on subsequent calls, needed (get suit)/next
+</code></pre>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/9</link>
+        <pubDate>Sun, 19 Jul 2020 16:38:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-9</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Common issue. I'm sure we've all cycled through each of those different options trying to figure out the best fit.</p>
+<p>It's nice to be able to do this:</p>
+<blockquote>
+<p>direction: (select direction-order direction) else [first direction-order]</p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/8</link>
+        <pubDate>Sun, 19 Jul 2020 13:35:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-8</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="1086">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>my main objection to the Rebol 2 behaviour was the unexpectedness in the <strong>[a b b c]</strong> example.</p>
+</blockquote>
+</aside>
+<p>I used SELECT here in the <a href="https://forum.rebol.info/t/portable-bridge-notation-pbn-parser/1306">Portable Bridge Notation</a> code, to step through items in order:</p>
+<pre><code>let suit-order: [♣ ♦ ♥ ♠]
+; ...
+suit: select suit-order suit
+</code></pre>
+<p>This advanced through the suits until the end was reached.</p>
+<p>I also used it for dealing cards in directions.  This case could start at any direction, and needed to cycle:</p>
+<pre><code>let direction-order: [N E S W]
+;
+direction: (select direction-order direction) else [first direction-order]
+</code></pre>
+<p>I was a bit torn on how to do this.  I could have gone more like:</p>
+<pre><code>suit-state: head [♣ ♦ ♥ ♠]
+suit: does [suit-state/1]
+;
+suit-state: next suit-state
+</code></pre>
+<p>This idea felt obfuscating; hiding the current suit in a series position just seemed wrong.</p>
+<p>I even toyed with the idea of doing it as state transitions, if we are to think in terms of SELECT/SKIP 2 or SELECT seeking out SET-WORD! :</p>
+<pre><code>next-suit: [
+     ♣: ♦
+     ♦: ♥
+     ♥: ♠
+     ♠: _
+]
+; ...
+suit: select next-suit suit
+</code></pre>
+<p>But that's just not what I was looking for.  I felt in the end the suit order had to be just what it was, as <strong><code>suit-order: [♣ ♦ ♥ ♠]</code></strong></p>
+<p><strong>...I don't know what it gets at, other than that what I was ultimately looking for here didn't fit either of our ideas.</strong>  I really wanted to advance through things in a series in a context where FOR-EACH wasn't what I was using at that moment (because I was inside a PARSE rule that I didn't want to exit).</p>
+<p>Food for thought.</p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/7</link>
+        <pubDate>Sun, 19 Jul 2020 04:29:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-7</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>As another point on BLOCK! and OBJECT! parity, people seemed to think you could SET an OBJECT! to a block.</p>
+<pre><code>rebol2&gt;&gt; o: make object! [x: 10 y: 20]
+
+rebol2&gt;&gt; mold o
+== {make object! [
+    x: 10
+    y: 20
+]}
+
+rebol2&gt;&gt; set o [30 40]
+== [30 40]
+
+rebol2&gt;&gt; mold o
+== {make object! [
+    x: 30
+    y: 40
+]}
+</code></pre>
+<p>Here we see a hardened assumption that objects have fields and they are ordered.  Red has carried this assumption forward.</p>
+<p>It complicates features that try to be "more than blocks".  e.g. when R3-Alpha added "hidden" fields there was no definition of what SET via BLOCK! would do to it, so it just said "not allowed: would expose or modify hidden values."</p>
+<p>But it suggests the kinship to blocks being far closer than one would think.  This raises deep questions for the system.  And I feel like there's no way to answer those questions without putting stakes in the ground and listing the things that <em>must</em> work.</p>
+<p><em>(Clearly hiding fields doesn't have to work with SET.  What's the justification that all bets are off then?)</em></p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/6</link>
+        <pubDate>Sat, 16 Mar 2019 17:20:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-6</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1086" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/markeye/40/202_2.png" class="avatar"> MarkEye:</div>
+<blockquote>
+<p>Given your demonstration <code>block</code> , what should <code>block/x: 7</code> do?</p>
+</blockquote>
+</aside>
+<p>Good question, also what would <code>block/y: 30</code> do.  Presumably they'd either have to error -or- detach the set from the related instances, copying values if necessary.  Also to consider:  <strong>block: [final:] block/final: 10</strong></p>
+<p>Red recently revived old debates over whether SET-PATH! should be able to add to blocks, or if you should have to use append.  OBJECT!s don't let you set or get keys that aren't there (which protects against typos), and don't let you delete keys...because integer-based existing bindings would be invalidated if those slots wound up being reused.</p>
+<p>But I guess the thing to think about here is common use cases.  Perhaps the real parallel is to MAP!, and arbitrary additions and removals should be allowed.  I don't know, but either way there are more tools available to think about this.</p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/5</link>
+        <pubDate>Tue, 26 Feb 2019 06:59:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-5</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="1086">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>It would be good to have a literate counterpart—a refinement of SELECT (and FIND) that echoes the pathing behaviour</p>
+</blockquote>
+</aside>
+<p>PICK and POKE are the pathing equivalent...I'm not sure what you mean.  What aspect would SELECT or FIND need to emulate?</p>
+<p>If you mean "word matches set-word" I'm proposing that would be done with a comparison operator modification, that would open the doors to other things (I already dislike how FIND of INTEGER! matches both the datatype integer and instances of integer...it seems to me that this is better managed explicitly as one or the other, so <strong>find data .matches integer!</strong> would find an integer value while <strong>find data integer!</strong> would be the same as <strong>find data .is integer!</strong> (assuming lax equality defaults continue)</p>
+<p><em>(And note <strong>find data '.matches</strong> or <strong>find data lit .matches</strong> would explicitly look for .matches in the data)</em></p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/4</link>
+        <pubDate>Tue, 26 Feb 2019 06:50:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-4</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1086">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><strong>If we changed SELECT to a /SKIP default of 2, and went with the SET-WORD!-based behavior for pathing (hence also PICK+POKE), would that make everyone happy?</strong></p>
+</blockquote>
+</aside>
+<p>I'd not be against giving this a try—my main objection to the Rebol 2 behaviour was the unexpectedness in the <strong>[a b b c]</strong> example. It would be good to have a literate counterpart—a refinement of SELECT (and FIND) that echoes the pathing behaviour. Not quite sure what that'd be for the poking equivalent though.</p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/3</link>
+        <pubDate>Tue, 26 Feb 2019 05:08:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-3</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p>Given your demonstration <code>block</code>, what should <code>block/x: 7</code> do?</p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/2</link>
+        <pubDate>Tue, 26 Feb 2019 04:16:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-2</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+      <item>
+        <title>BLOCK! and OBJECT! Parity in Pathing/Picking</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebol didn't have any great answer for "object literals" and "map literals".  Yet literal objects ("dictionaries") are critical to JSON.  So it has seemed that Rebol needs an answer here.</p>
+<p>Notationally we're at a bit of a loss of how to represent them.  But something I began to wonder is if Rebol has been losing some of its advantage of having a SET-WORD! type.  If you look at:</p>
+<pre><code>array: [foo &lt;baz&gt; #bar]
+dictionary: [field1: ... field2: ...]
+</code></pre>
+<p>Couldn't it just be that the presence of SET-WORD!s in the dictionary-like thing is what gives you the tip-off?  Why exchange files with literal objects, instead of doing it with blocks?  The kinds of data exchanges we see using such forms are not rigorously glued to a schema--by design--the concept is that the sender and recipient are on the same page about things.</p>
+<p>There may be little benefit to having another container type saying "this is an object", <em>if objects and blocks act more or less interchangeably when used with keyed access</em>.  The user of the data would have the option to make a block into an object if they needed to, or not if they didnt?</p>
+<p>I've suggested before that I feel there's something wrong with "pickquality", where it's the idea that picking and pathing consider WORD!, SET-WORD!, ISSUE!, etc. to be equal.  I felt that if BLOCK!s are used for keyed access in this way, they should use SET-WORD!s...and then the seeking process in the block can look specifically for them.  If we use "scant evaluation", then this could even allow for SET-WORD! values.</p>
+<h2>Demonstration</h2>
+<pre><code>block: [
+    &lt;meta-tag 1&gt; &lt;meta-tag-2&gt; #meta-issue
+    string: "hello"
+    x: y: 100
+    code: '(1 + 2)
+    setword: 'something:
+]
+
+&gt;&gt; block/string
+== "hello"  ; skips info before set-word!
+
+&gt;&gt; block/x
+== 100  ; advances to first non-set-word value
+
+&gt;&gt; block/code
+== (1 + 2)  ; "scant" evaluation, removes quote
+
+ &gt;&gt; block/setword
+ == something:  ; also "scant" evaluation
+</code></pre>
+<p>Imagine being able to manipulate the block in a way that has parity with how it would act if it were an object.  So getting the quoting if necessary:</p>
+<pre><code>&gt;&gt; block: [thing: 10]
+
+&gt;&gt; block/thing: first [a b c]
+
+&gt;&gt; block
+== [thing: 'a]
+</code></pre>
+<p>You don't want path access to trigger an actual evaluation of something that isn't inert or quoted, so that should give an error:</p>
+<pre><code> &gt;&gt; block: [thing: (1 + 2)]
+ &gt;&gt; block/thing
+ ** Error: keyed access of block only works on inert and quoted types
+</code></pre>
+<p>To me, this really feels like a coherent direction, with something that has been very lacking in coherence historically.</p>
+<h2><a href="https://forum.rebol.info/t/strict-equality-lax-equality-equivalence-sameness-is-and/349/5">Cowpaths</a></h2>
+<p><a class="mention" href="/u/rgchris">@rgchris</a> very much likes the freedom in blocks to say <strong>[a 1 b 2]</strong> and not <strong>[a: 1 b: 2]</strong>.  So his direction of cleanup of the historical behavior would be to treat blocks as collections of 2-element records, which would prevent confusion if you wrote <strong>[a b b 2]</strong>.</p>
+<p>I appreciate wanting to have this choice.  But for pathing, I like this parity with objects idea.  I do not feel like enforcing the SET-WORD!s at odd numbered positions feels like the right choice there...I'd like to be able to be more free-form, as I would be able to do with MAKE OBJECT!.  It addresses several dark corners, and I think that it will make blocks stronger for data exchange.</p>
+<p>Pathing and selection are already not the same (as block/2 gives you the second item of the block, not an item immediately following an INTEGER! 2 inside the block).  <strong>If we changed SELECT to a /SKIP default of 2, and went with the SET-WORD!-based behavior for pathing (hence also PICK+POKE), would that make everyone happy?</strong></p>
+<pre><code>&gt;&gt; select [a b b 2] 'a
+== b
+
+&gt;&gt; select [a b b 2] 'b
+== 2
+</code></pre>
+<p>And I'd suggest that SELECT would have you use the data type you were selecting on.  So it would not consider SET-WORD! and WORD! the same (nor ISSUE! and WORD!, etc.)  With <a href="https://forum.rebol.info/t/brave-switch-new-world-skippable-predicates/1045">skippable functions to do the equality</a>, you could ask for varying behaviors:</p>
+<pre><code>&gt;&gt; select [a 1 10 20] .matches integer!
+== 20  ; e.g. a wasn't an INTEGER!, but 10 was (1 skipped going in steps of 2)
+</code></pre>
+<p>And one of those behaviors could ask for a more lax style of comparison which considered SET-WORD! and WORD! to be equal.  <code>.synonymizes</code>, perhaps.  or <code>.wordequals</code></p>
+<pre><code>&gt;&gt; select [a 1 b: 20] .wordequals first [a:]
+== 1
+
+&gt;&gt; select [a 1 b: 20] .synonymizes 'b
+== 20
+</code></pre>
+<p>In any case, the idea is that the SELECT command is about treating a block as records of fixed size.  I don't know if that means that it should not be used with objects (preferring PICK).  It might be clarifying.  PICK is a shorter word.</p>
+<p><em>(I also don't know what the applications are to having SELECT default to 2 characters at a time when selecting from strings.  But then again, I'm not really sure what sort of scenarios would get people to select out of a string in the first place, if all you get back is a single character.  Should it be limited to just ANY-ARRAY!?)</em></p>
+          <p><a href="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086/1</link>
+        <pubDate>Mon, 25 Feb 2019 22:43:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1086-1</guid>
+        <source url="https://forum.rebol.info/t/block-and-object-parity-in-pathing-picking/1086.rss">BLOCK! and OBJECT! Parity in Pathing/Picking</source>
+      </item>
+  </channel>
+</rss>

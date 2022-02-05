@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Stackless Generators and the API</title>
+    <link>https://forum.rebol.info/t/stackless-generators-and-the-api/1307</link>
+    <description>Imagine that you have some array you want to iterate over, and do some C processing on each element of that array.  Pseudocode:
+
+    void ProcessBlock(REBVAL *block) {
+        for-each item block [
+            ProcessItem(item);
+        ]
+    }
+
+You&#39;ve got a bit of a problem here, because you&#39;d like to express that for-each as Rebol code...but you are in C.  It seems like you can&#39;t use the FOR-EACH structure, you&#39;ve got to write something like:
+
+    void ProcessBlock(REBVAL*block) {
+        REBVAL *pos = rebValue(block);  // can&#39;t rebRelease(block) here, new handle
+
+        while (rebNot(&quot;tail?&quot;, pos)) {
+            REBVAL *item = rebValue(&quot;first&quot;, pos);
+            ProcessItem(item);
+            rebRelease(item);
+
+            pos = rebValue(&quot;next&quot;, rebR(pos));  // release old pos, get new pos
+        }
+        rebRelease(pos);  // need to release the pos (it&#39;s a tail value, not null)
+    }
+
+Ouch.  There&#39;s certainly more ways to do it; we could get the item count and use a C integer as an index and PICK the items.  But whatever we do, the point is that our iteration state is held in C variables.
+
+Our ideal might look more like:
+
+    void ProcessBlock(REBVAL *block) {
+        REBVAL *enumerator = rebEnumerator(block);
+
+        REBVAL *item;
+        while ((item = rebNext(enumerator)) {
+            ProcessItem(item);
+            rebRelease(item);
+        }
+
+        rebRelease(enumerator);
+    }
+
+Yet the goal of the API is not to export every possible thing we would want as a rebXXX() function, rather to make it possible to use a few fixed extractors and value builders to push the burden onto a more flexible interpreter.
+
+How about this, then?
+
+    void ProcessBlock(REBVAL *block) {
+        REBVAL *generator = rebValue(
+            &quot;generator [for-each item&quot;, block, &quot;[yield item]]&quot;
+        );
+
+        REBVAL *item;
+        while ((item = rebValue(generator)) {
+            ProcessItem(item);
+            rebRelease(item);
+        }
+
+        rebRelease(generator);
+    }
+
+Ta da!  It might not look like all that much of an advantage for this simple example, but the point is that it generalizes to much more complicated Rebol logic for the enumeration.  Imagine if it were using PARSE and sometimes you want to handle the value with Rebol code (which you do inline) and sometimes you want to hand it back to C for processing (which you do with a yield).
+
+I do want to get around to the C++ wrapper that would do the handle lifetime management implicitly, which if it mirrored RenCpp would look like:
+
+    void ProcessBlock(reb::Value &amp;block) {
+        auto generator = reb::Value {
+            &quot;generator [for-each item&quot;, block, &quot;[yield item]]&quot;
+        };
+
+        while (auto item = reb::Value { generator })
+            ProcessItem(item);
+    }
+
+But even the C version looks pretty darn nice for language interop!</description>
+    
+    <lastBuildDate>Sun, 19 Jul 2020 18:04:25 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/stackless-generators-and-the-api/1307.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Stackless Generators and the API</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Imagine that you have some array you want to iterate over, and do some C processing on each element of that array.  Pseudocode:</p>
+<pre><code>void ProcessBlock(REBVAL *block) {
+    for-each item block [
+        ProcessItem(item);
+    ]
+}
+</code></pre>
+<p>You've got a bit of a problem here, because you'd like to express that for-each as Rebol code...but you are in C.  It seems like you can't use the FOR-EACH structure, you've got to write something like:</p>
+<pre><code>void ProcessBlock(REBVAL*block) {
+    REBVAL *pos = rebValue(block);  // can't rebRelease(block) here, new handle
+
+    while (rebNot("tail?", pos)) {
+        REBVAL *item = rebValue("first", pos);
+        ProcessItem(item);
+        rebRelease(item);
+
+        pos = rebValue("next", rebR(pos));  // release old pos, get new pos
+    }
+    rebRelease(pos);  // need to release the pos (it's a tail value, not null)
+}
+</code></pre>
+<p>Ouch.  There's certainly more ways to do it; we could get the item count and use a C integer as an index and PICK the items.  But whatever we do, the point is that our iteration state is held in C variables.</p>
+<p>Our ideal might look more like:</p>
+<pre><code>void ProcessBlock(REBVAL *block) {
+    REBVAL *enumerator = rebEnumerator(block);
+
+    REBVAL *item;
+    while ((item = rebNext(enumerator)) {
+        ProcessItem(item);
+        rebRelease(item);
+    }
+
+    rebRelease(enumerator);
+}
+</code></pre>
+<p>Yet the goal of the API is not to export every possible thing we would want as a rebXXX() function, rather to make it possible to use a few fixed extractors and value builders to push the burden onto a more flexible interpreter.</p>
+<p>How about this, then?</p>
+<pre><code>void ProcessBlock(REBVAL *block) {
+    REBVAL *generator = rebValue(
+        "generator [for-each item", block, "[yield item]]"
+    );
+
+    REBVAL *item;
+    while ((item = rebValue(generator)) {
+        ProcessItem(item);
+        rebRelease(item);
+    }
+
+    rebRelease(generator);
+}
+</code></pre>
+<p>Ta da!  It might not look like all that much of an advantage for this simple example, but the point is that it generalizes to much more complicated Rebol logic for the enumeration.  Imagine if it were using PARSE and sometimes you want to handle the value with Rebol code (which you do inline) and sometimes you want to hand it back to C for processing (which you do with a yield).</p>
+<p>I do want to get around to the C++ wrapper that would do the handle lifetime management implicitly, which if it mirrored RenCpp would look like:</p>
+<pre><code>void ProcessBlock(reb::Value &amp;block) {
+    auto generator = reb::Value {
+        "generator [for-each item", block, "[yield item]]"
+    };
+
+    while (auto item = reb::Value { generator })
+        ProcessItem(item);
+}
+</code></pre>
+<p>But even the C version looks pretty darn nice for language interop!</p>
+          <p><a href="https://forum.rebol.info/t/stackless-generators-and-the-api/1307/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/stackless-generators-and-the-api/1307/1</link>
+        <pubDate>Sun, 19 Jul 2020 16:27:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1307-1</guid>
+        <source url="https://forum.rebol.info/t/stackless-generators-and-the-api/1307.rss">Stackless Generators and the API</source>
+      </item>
+  </channel>
+</rss>

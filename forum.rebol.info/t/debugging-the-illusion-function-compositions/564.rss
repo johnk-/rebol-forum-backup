@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Debugging the Illusion: Function Compositions</title>
+    <link>https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564</link>
+    <description>*I&#39;m trying to get the debugger working again.  It got broken back when the console was moved to usermode, and so its getting a rewrite to become more userspace itself.*
+
+---
+
+When you ask for a BACKTRACE, it numbers the function frames in the stack.  The numbers are a user convenience, so you can say things about which frame you want to inspect...or where you want to resume running from.  **debug 3** means switch the binding context of the console to the frame you saw numbered 3 in the backtrace, for instance, so it binds words that are function parameters there when you type in the console.
+
+In a single-threaded world--with a routine like BACKTRACE written in usermode--it has to take into account its own stack frames.  Presumably you don&#39;t want to see those, nor do you want other debug routines that try to use the numbers to face an issue of &quot;contamination&quot; from their own stack levels if they (like the aforementioned **debug**) try to turn those numbers back into FRAME! values on the user&#39;s behalf as part of their implementation.
+
+A user-friendly approach is to count frames backward from the last breakpoint.  So long as all the routines which use BACKTRACE&#39;s notion of numbering agree on that convention, they don&#39;t have to worry about their own stack frames intervening.
+
+But this raises a curious question: *when is a breakpoint on the stack*?  Let&#39;s say I want to make some kind of logging breakpoint, and I use ADAPT to do it:
+
+    logging-breakpoint: adapt &#39;breakpoint [
+        write/append %breakpoint-log.txt unspaced [
+            &quot;breakpoint hit at&quot; now newline
+        ]
+    ]
+
+*(Note: you&#39;d more likely want to HIJACK the regular BREAKPOINT with this adaptation than to call it via the LOGGING-BREAKPOINT name explicitly, but for the sake of this argument let&#39;s say you just call it directly under this new name.)*
+
+When I use LOGGING-BREAKPOINT it logs the time, and falls through to breakpoint as the underlying &quot;phase&quot; of the function.  But will BACKTRACE see BREAKPOINT on the stack?  Technically it is running BREAKPOINT&#39;s body at that moment... it&#39;s morally equivalent to:
+
+    equivalent-breakpoint: func [return: []] [
+        write/append %breakpoint-log.txt unspaced [
+            &quot;breakpoint hit at&quot; now newline
+        ]
+        breakpoint
+    ]
+
+This particular issue could be checked by another property...asking if a frame itself is `paused?`.  But it raises a good question.  What do you mean when you ask if a particular function is on the stack, in the face of compositions?
+
+Mechanically, there is something called a &quot;phase&quot;.  So when you call LOGGING-BREAKPOINT it is originally on the stack in the phase of its own adapted body...e.g. its phase is the FUNCTION! of :LOGGING-BREAKPOINT.  But when it falls off the end of the adaptation and continues running BREAKPOINT in the same FRAME!, it will be in the :BREAKPOINT phase.
+
+So this raises the question of what you get back when you ask for the FUNCTION-OF a FRAME!.  Should the answer be invariant (the top-level function of the frame, whose invocation began it) or should it change depending on how far you&#39;ve gotten in the execution?  Should there be a PHASE-OF which tells you the phase a frame is in, or should it be considered a &quot;black box&quot; and none of your business?</description>
+    
+    <lastBuildDate>Sun, 11 Mar 2018 17:35:17 +0000</lastBuildDate>
+    <category>Debugger</category>
+    <atom:link href="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Debugging the Illusion: Function Compositions</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="564">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/markeye/40/202_2.png" class="avatar"> MarkEye:</div>
+<blockquote>
+<p>(1) deepen the execution model, so "falling off the end" is no longer possible and the new frame is pushed on top of the "adaptation phase", and they both exit via popping; or</p>
+</blockquote>
+</aside>
+<p>The reuse of frames in ADAPT (and SPECIALIZE) is intentional.  They are as much for runtime efficiency as they are for saving on retyping function interfaces.</p>
+<aside class="quote no-group" data-post="2" data-topic="564">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/markeye/40/202_2.png" class="avatar"> MarkEye:</div>
+<blockquote>
+<p>maybe even a run-time switch to turn it on or off?</p>
+</blockquote>
+</aside>
+<p>Possible.  There are other areas where a "debug mode" would need to keep a memory of things that are typically thrown out.</p>
+<p>There's a "one-time-cost" of a hook point on calling dispatchers, which could have a slow-ish behavior in a debug build to forward certain function dispatchers to a debug variation.  So adapt's debug version could push a new frame for each phase, calling through to the apply mechanics...thus saving the state before the apply.</p>
+<p>It would slow things down somewhat, given how pervasive adaptations/specializations/etc. are.  You might only want it to apply to certain functions.</p>
+<p>It could also be "virtualized" in the sense that it can look at the chain of compositions and make FRAME! values which understand they are proxies.  But so long as the frame is actually mechanically reused, they won't save their own copies of the args and locals state...so it would say "--optimized out--" or something euphemistic like that.</p>
+          <p><a href="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564/3</link>
+        <pubDate>Sun, 11 Mar 2018 17:35:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-564-3</guid>
+        <source url="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564.rss">Debugging the Illusion: Function Compositions</source>
+      </item>
+      <item>
+        <title>Debugging the Illusion: Function Compositions</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p>Good question. I see two options:<br>
+(1) deepen the execution model, so "falling off the end" is no longer possible and the new frame is pushed on top of the "adaptation phase", and they both exit via popping; or<br>
+(2) allow frames to overwrite each other, and once done the debugger will never see the old one.</p>
+<p>I see this as the same thing as can be done in bash: you can call a function before exiting, and the caller sticks around, or you can exec a function, and the caller vanishes, never to be seen again.<br>
+To me it is clear which one is preferable for debugging, although it could possibly behave in the latter fashion in non-debug builds, provided the behaviour could be proven to be identical -- maybe even a run-time switch to turn it on or off?</p>
+          <p><a href="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564/2</link>
+        <pubDate>Sun, 11 Mar 2018 13:39:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-564-2</guid>
+        <source url="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564.rss">Debugging the Illusion: Function Compositions</source>
+      </item>
+      <item>
+        <title>Debugging the Illusion: Function Compositions</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><em>I'm trying to get the debugger working again.  It got broken back when the console was moved to usermode, and so its getting a rewrite to become more userspace itself.</em></p>
+<hr>
+<p>When you ask for a BACKTRACE, it numbers the function frames in the stack.  The numbers are a user convenience, so you can say things about which frame you want to inspect...or where you want to resume running from.  <strong>debug 3</strong> means switch the binding context of the console to the frame you saw numbered 3 in the backtrace, for instance, so it binds words that are function parameters there when you type in the console.</p>
+<p>In a single-threaded world--with a routine like BACKTRACE written in usermode--it has to take into account its own stack frames.  Presumably you don't want to see those, nor do you want other debug routines that try to use the numbers to face an issue of "contamination" from their own stack levels if they (like the aforementioned <strong>debug</strong>) try to turn those numbers back into FRAME! values on the user's behalf as part of their implementation.</p>
+<p>A user-friendly approach is to count frames backward from the last breakpoint.  So long as all the routines which use BACKTRACE's notion of numbering agree on that convention, they don't have to worry about their own stack frames intervening.</p>
+<p>But this raises a curious question: <em>when is a breakpoint on the stack</em>?  Let's say I want to make some kind of logging breakpoint, and I use ADAPT to do it:</p>
+<pre><code>logging-breakpoint: adapt 'breakpoint [
+    write/append %breakpoint-log.txt unspaced [
+        "breakpoint hit at" now newline
+    ]
+]
+</code></pre>
+<p><em>(Note: you'd more likely want to HIJACK the regular BREAKPOINT with this adaptation than to call it via the LOGGING-BREAKPOINT name explicitly, but for the sake of this argument let's say you just call it directly under this new name.)</em></p>
+<p>When I use LOGGING-BREAKPOINT it logs the time, and falls through to breakpoint as the underlying "phase" of the function.  But will BACKTRACE see BREAKPOINT on the stack?  Technically it is running BREAKPOINT's body at that moment... it's morally equivalent to:</p>
+<pre><code>equivalent-breakpoint: func [return: []] [
+    write/append %breakpoint-log.txt unspaced [
+        "breakpoint hit at" now newline
+    ]
+    breakpoint
+]
+</code></pre>
+<p>This particular issue could be checked by another property...asking if a frame itself is <code>paused?</code>.  But it raises a good question.  What do you mean when you ask if a particular function is on the stack, in the face of compositions?</p>
+<p>Mechanically, there is something called a "phase".  So when you call LOGGING-BREAKPOINT it is originally on the stack in the phase of its own adapted body...e.g. its phase is the FUNCTION! of :LOGGING-BREAKPOINT.  But when it falls off the end of the adaptation and continues running BREAKPOINT in the same FRAME!, it will be in the :BREAKPOINT phase.</p>
+<p>So this raises the question of what you get back when you ask for the FUNCTION-OF a FRAME!.  Should the answer be invariant (the top-level function of the frame, whose invocation began it) or should it change depending on how far you've gotten in the execution?  Should there be a PHASE-OF which tells you the phase a frame is in, or should it be considered a "black box" and none of your business?</p>
+          <p><a href="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564/1</link>
+        <pubDate>Sun, 11 Mar 2018 06:44:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-564-1</guid>
+        <source url="https://forum.rebol.info/t/debugging-the-illusion-function-compositions/564.rss">Debugging the Illusion: Function Compositions</source>
+      </item>
+  </channel>
+</rss>

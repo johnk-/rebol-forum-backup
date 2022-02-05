@@ -1,0 +1,304 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</title>
+    <link>https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565</link>
+    <description>When you make a new thing, you wind up with more and more instances of that thing to inform its usage.  And we now have a whole menagerie of [left enfix normal operations](https://forum.rebol.info/t/to-not-b-or-to-not-b-is-no-longer-a-question/409).  They are cool, but from using them regularly I notice aspects that are easy to get wrong...and may be hard for people to learn.
+
+Hence it&#39;s important--as new information comes to light--to ask if there are improvements we can make.  One question I&#39;ve wondered is the balance of *how much to evaluate on the left by default*.
+
+We first saw [@giuliolunati&#39;s &quot;dark corner&quot;](https://github.com/metaeducation/ren-c/issues/510)...the problem with telling enfix to &quot;just complete&quot;:
+
+     return if x &lt; 0 [&quot;a&quot;] else [&quot;b&quot;]
+
+The first time ELSE gets an *opportunity* to run is when the **[&quot;a&quot;]** block is sitting to its left.  By having a normal parameter type for its first argument (not `&#39;soft-quote`, `:hard-quote`, or `#tight`), it says it doesn&#39;t want to take that block unless it absolutely has to.  It wants &quot;some evaluation&quot;, if it can get it.
+
+If we take &quot;some evaluation&quot; to mean &quot;as much evaluation as possible&quot;, then we&#39;re in trouble...because **return if x &lt; 0 [&quot;a&quot;]** stands on its own.  So if you run it, the ELSE never happens!  With unlimited left completion, you would have to write:
+
+    return (if x &lt; 0 [&quot;a&quot;] else [&quot;b&quot;])
+
+There could also be some kind of operator, which could be a more convenient way of expressing this.  Hand-waving the details a bit, let&#39;s just call it **`&lt;-`**
+
+    return &lt;- if x &lt; 0 [&quot;a&quot;] else [&quot;b&quot;]
+
+But if you don&#39;t want to have to resort to such a thing, you need a rule that stops the evaluation.  This gave rise to the &quot;one expression&quot; limit.  It will only evaluate one complete expression, and after that...no more.  Since **if x &lt; 0 [&quot;a&quot;]** is one complete fulfilled expression, it considers itself satiated and runs the ELSE before the RETURN.
+
+When ELSE and company were the only left normal enfix operations, it was always able to complete an IF or UNLESS which provided a left boundary to &quot;wrap&quot; a condition wedged between it and the block.  Yet with more operators like OR, AND, THEN...the condition wasn&#39;t wrapped.  This meant seeing the other side of the coin more often.  Consider:
+
+    not all [
+       something1
+       something2
+    ] then [
+       print &quot;either something1 or something2 wasn&#39;t truthy&quot;
+    ]
+
+Here the limit can bite you.  THEN looks to its left, and because it&#39;s afraid to consume too much...it stops at the **all [something1 something2]**.  You get:
+
+    not (all [
+       something1
+       something2
+    ]) then [
+        print &quot;almost certainly not what you meant!&quot;
+    ]
+
+If we stick with the limit-of-one-rule, you could use parentheses around the (not all [...]) to get the effect.  You could also have an operator, but this time it would look like:
+
+    not all [
+       something1
+       something2
+    ] -&gt; then [
+       print &quot;either something1 or something2 wasn&#39;t truthy&quot;
+    ]
+
+From the point of view of interpreter complexity itself, there&#39;s not an obvious winner.  The evaluator has to have more or less the same code to support both models.
+
+With completion by default, you can quickly develop a sort of &quot;funny feeling&quot; about passing parameters which use left enfix normal.  If someone has been &quot;trained&quot; I think they&#39;d read `return if x &lt; 0 [&quot;a&quot;] else [&quot;b&quot;]` and think &quot;oh, my mind could complete **return if x &lt; 0 [&quot;a&quot;]**, so the evaluator would too!&quot;  Yet it feels a little more hidden to realize that **not all [...] then [...]** won&#39;t work when **all [...] then [...]** would.  Fuzzy argument, I realize.
+
+The stronger point, though, is if we&#39;re going to look at the two mitigating operators.  I think the **&lt;-** is easier to explain than the **-&gt;**.  And it seems like it&#39;s positioned more in the right place, where it should be.  **&lt;-** is saying *&quot;Hi, I&#39;m the left parentheses of an implicit GROUP! whose invisible right parentheses is after the next full expression...including its enfix suffixes.&quot;*  The positioning of -&gt; is weirder, and it&#39;s not as clearly a &quot;put this there&quot; kind of thing.
+
+It isn&#39;t a major change to the code, but it significantly affects experience.  Lately, I&#39;ve been wanting more complex expressions with my ORs and ANDs and THENs... and hitting it a lot more often than encountering the &quot;dark corner&quot; when it was bent the other way.  I have a feeling that letting it complete the left fully...and intervening with a GROUP! or operator when you don&#39;t want to...may be the better choice.</description>
+    
+    <lastBuildDate>Fri, 14 Dec 2018 00:41:34 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The example I cite for full completion here is <strong>NOT ALL [...] THEN [...]</strong>.</p>
+<p>But this no longer works, because THEN has been <a href="https://forum.rebol.info/t/taking-then-back-as-the-rightful-complement-to-else/731">taken back as the "rightful" conmplement to ELSE</a>, hence it senses NULLs.  But NOT returns a LOGIC!.  So when you complete to the left, the THEN clause always sees either #[true] or #[false] on the left, and runs.</p>
+<p>This caused a bug in real code when I was "trying to use it properly" based on the "simpler rule".  Sure, I could just change it to AND instead of THEN.  But when one of the key examples you use to defend a change fails, it's time to put on the thinking hat back on.</p>
+<h2>More data means a more informed decision</h2>
+<p>Throwing in a construct that suddenly "completes everything to the left" may not be as useful as it sounds.  I think I've not been as moved by it as I might have thought, nor has it been particularly "simplifying" (as the case above shows).</p>
+<p>It may be that the first rule, about completing one expression, was more on the right track.  Perhaps not perfect, and we can survey some examples.  It also has to be considered with the "annoying" property of last-parameters-of-functions being treated differently.</p>
+          <p><a href="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/6</link>
+        <pubDate>Fri, 14 Dec 2018 00:41:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-565-6</guid>
+        <source url="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565.rss">Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</source>
+      </item>
+      <item>
+        <title>Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p>At some point there's going to be a limit hit somewhere with what one can express without groups while eschewing a precedence system.</p>
+</blockquote>
+<p>This is just a fact.  And I don't think we want a precedence system.  I had a hard time with even accepting the "tight" parameter convention.  :-/</p>
+<p>Here's some code that caught my eye in <a href="https://github.com/rgchris/Scripts/commit/cd06f7d7d2cd5dd76194234a31b9d7ef13a64763#diff-5e9a4a5877298e1abf682bfc350978a9R192" rel="nofollow noopener">@rgchris's altjson</a>:</p>
+<pre><code>either parse json either padded [
+    [space ident space "(" space opt value space ")" opt ";" space]
+][
+    [space opt value space]
+][
+    pick tree 1
+][
+    do make error! "Not a valid JSON string"
+]
+</code></pre>
+<p>That looked a bit belabored to my eyes, so I wondered if Ren-C could bring anything to the table.  I offered this:</p>
+<pre><code>parse json compose [
+    (padded ?? [space ident space "("])
+    space opt value space
+    (padded ?? [")" opt ";" space])
+] or [
+    fail "Not a valid JSON string"
+]
+pick tree 1
+</code></pre>
+<p>It takes advantage of the "as-is" nature of <code>??</code>/<code>!!</code>/<code>?!</code>, and voiding its failure case.  And I've come to be very pleased with the OR semantics of the right hand side being a GROUP! vs. BLOCK!.  It looks harmonious to me.</p>
+<p>...but it is dependent on OR completing its left.  If it doesn't, it just completes the COMPOSE.</p>
+<blockquote>
+<p>if RETURN and similar must be at the end of their parent's expression list, then it seems fine that they should take precedence over what remains.</p>
+</blockquote>
+<p>I feel uneasy about the exception.  I'd think that if you were forced in these cases to say <code>return &lt;-</code> and received an error as feedback when you did not, that you would be more in the rhythm of understanding the rule.  It would "keep your mind in the game".</p>
+<p>I feel like <code>&lt;-</code> is pretty easy to understand.  People can "get" it pretty quickly (<em>"I want the behavior of a GROUP!, but I only want to specify where the group STARTS, the end is wherever the next expression ends naturally"</em>).  And then see <code>&lt;-</code> as being just as effective as a GROUP!'s <code>(</code> at being the terminal point of an enfix's end-of-the-road, looking leftward.</p>
+<p>It has generic usefulness, because often you want to use GROUP! for purposes like COMPOSE...and it's frustrating if that conflicts with your need for precedence in an expression, where the only way to do it is groups.  So I think people would find themselves embracing <code>&lt;-</code> for situations they wouldn't have thought of, to save GROUP! for composing (or whatever else that isn't precedence).</p>
+          <p><a href="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/5</link>
+        <pubDate>Wed, 18 Apr 2018 22:49:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-565-5</guid>
+        <source url="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565.rss">Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</source>
+      </item>
+      <item>
+        <title>Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="565">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I have a feeling that letting it complete the left fully...and intervening with a GROUP! or operator when you don't want to...may be the better choice.</p>
+</blockquote>
+</aside>
+<p>Probably would be more straight forward to comprehend.  I'd expect more groups in code bases to appear in any case.</p>
+<aside class="quote no-group" data-post="3" data-topic="565">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>RETURN is another function in this class, and you don't need the &lt;-?   Since it doesn't continue execution after the return, and all enfix could be otherwise is a mistake, why not make that implicit?</p>
+</blockquote>
+</aside>
+<p>Seems reasonable, if RETURN and similar must be at the end of their parent's expression list, then it seems fine that they should take precedence over what remains.</p>
+<p>Presumably though that's one expression to evaluate for RETURN's argument, for any more than that an error could be useful.</p>
+<aside class="quote no-group" data-post="3" data-topic="565">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But does it make sense for something like APPEND?  :-/  Is it more "run the enfix after me" or "wait and let me finish, then run the enfix"?</p>
+</blockquote>
+</aside>
+<p>At some point there's going to be a limit hit somewhere with what one can express without groups while eschewing a precedence system.</p>
+<aside class="quote no-group" data-post="3" data-topic="565">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>whether the benefit of the nuance in interface is worth its weight in complexity..</p>
+</blockquote>
+</aside>
+<p>Yeah...</p>
+          <p><a href="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/4</link>
+        <pubDate>Mon, 19 Mar 2018 03:47:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-565-4</guid>
+        <source url="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565.rss">Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</source>
+      </item>
+      <item>
+        <title>Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In the case of RETURN, one could theoretically give an error if there's residue hanging off of it (that isn't a comment/invisible):</p>
+<pre><code>&gt;&gt; func...[return if 1 &lt; 2 [print "try to return"] else [print "residue!"]]
+** Attempt to leave frame with residual code: `else [print "residue!"]`
+
+&gt;&gt; func...[return if 1 &lt; 2 [print "this would work"] comment ["yo"]]
+this would work
+</code></pre>
+<p><strong>However</strong>... as long as one is willing to introduce a function like <code>&lt;-</code>, is there any real harm in saying that RETURN is another function in this class, and you don't need the <code>&lt;-</code>?   Since it doesn't continue execution after the return, <em>and all enfix could be otherwise is a mistake</em>, why not make that implicit?</p>
+<p>That will help things that don't return, like THROW.  Perhaps the behavior would even be directly tied to an annotation that prohibits the idea that a function returns and continues execution.</p>
+<p>But does it make sense for something like APPEND?  :-/  Is it more "run the enfix after me" or "wait and let me finish, then run the enfix"?</p>
+<p>Really this all comes down to whether the benefit of the nuance in interface is worth its weight in complexity...</p>
+          <p><a href="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/3</link>
+        <pubDate>Mon, 12 Mar 2018 08:08:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-565-3</guid>
+        <source url="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565.rss">Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</source>
+      </item>
+      <item>
+        <title>Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've mentioned before that other languages have introduced operators for avoiding parentheses:</p>
+<aside class="onebox stackexchange">
+  <header class="source">
+      <a href="https://stackoverflow.com/questions/940382/what-is-the-difference-between-dot-and-dollar-sign/1290727#1290727" target="_blank" rel="noopener">stackoverflow.com</a>
+  </header>
+  <article class="onebox-body">
+      <a href="https://stackoverflow.com/users/71116/michael-steele" target="_blank" rel="noopener">
+    <img alt="Michael Steele" src="https://www.gravatar.com/avatar/7e3643cd0195fab5a3bfa310b5ea27e7?s=128&amp;d=identicon&amp;r=PG" class="thumbnail onebox-avatar" width="128" height="128">
+  </a>
+<h4>
+  <a href="https://stackoverflow.com/questions/940382/what-is-the-difference-between-dot-and-dollar-sign/1290727#1290727" target="_blank" rel="noopener">What is the difference between . (dot) and $ (dollar sign)?</a>
+</h4>
+
+<div class="tags">
+  <strong>haskell, syntax, function-composition</strong>
+</div>
+
+<div class="date">
+  
+  answered by
+  <a href="https://stackoverflow.com/users/71116/michael-steele" target="_blank" rel="noopener">
+    Michael Steele
+  </a>
+  on <a href="https://stackoverflow.com/questions/940382/what-is-the-difference-between-dot-and-dollar-sign/1290727#1290727" target="_blank" rel="noopener">10:01PM - 17 Aug 09 UTC</a>
+</div>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>Such operators are generically useful.  I feel like left arrow isn't too bad for it:</p>
+<pre><code>&gt;&gt; 1 + 2 * 3    
+== 9
+
+&gt;&gt; 1 + (2 * 3)
+== 7
+
+&gt;&gt; 1 + &lt;- 2 * 3
+== 7
+</code></pre>
+<p>This is sort of why I'm feeling more skeptical of the <code>-&gt;</code> alternative above.  It's weirder, so the situation motivating its necessity is arguably weirder.</p>
+          <p><a href="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/2</link>
+        <pubDate>Mon, 12 Mar 2018 03:45:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-565-2</guid>
+        <source url="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565.rss">Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</source>
+      </item>
+      <item>
+        <title>Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When you make a new thing, you wind up with more and more instances of that thing to inform its usage.  And we now have a whole menagerie of <a href="https://forum.rebol.info/t/to-not-b-or-to-not-b-is-no-longer-a-question/409">left enfix normal operations</a>.  They are cool, but from using them regularly I notice aspects that are easy to get wrong...and may be hard for people to learn.</p>
+<p>Hence it's important--as new information comes to light--to ask if there are improvements we can make.  One question I've wondered is the balance of <em>how much to evaluate on the left by default</em>.</p>
+<p>We first saw <a href="https://github.com/metaeducation/ren-c/issues/510" rel="nofollow noopener">@giuliolunati's "dark corner"</a>...the problem with telling enfix to "just complete":</p>
+<pre><code> return if x &lt; 0 ["a"] else ["b"]
+</code></pre>
+<p>The first time ELSE gets an <em>opportunity</em> to run is when the <strong>["a"]</strong> block is sitting to its left.  By having a normal parameter type for its first argument (not <code>'soft-quote</code>, <code>:hard-quote</code>, or <code>#tight</code>), it says it doesn't want to take that block unless it absolutely has to.  It wants "some evaluation", if it can get it.</p>
+<p>If we take "some evaluation" to mean "as much evaluation as possible", then we're in trouble...because <strong>return if x &lt; 0 ["a"]</strong> stands on its own.  So if you run it, the ELSE never happens!  With unlimited left completion, you would have to write:</p>
+<pre><code>return (if x &lt; 0 ["a"] else ["b"])
+</code></pre>
+<p>There could also be some kind of operator, which could be a more convenient way of expressing this.  Hand-waving the details a bit, let's just call it <strong><code>&lt;-</code></strong></p>
+<pre><code>return &lt;- if x &lt; 0 ["a"] else ["b"]
+</code></pre>
+<p>But if you don't want to have to resort to such a thing, you need a rule that stops the evaluation.  This gave rise to the "one expression" limit.  It will only evaluate one complete expression, and after that...no more.  Since <strong>if x &lt; 0 ["a"]</strong> is one complete fulfilled expression, it considers itself satiated and runs the ELSE before the RETURN.</p>
+<p>When ELSE and company were the only left normal enfix operations, it was always able to complete an IF or UNLESS which provided a left boundary to "wrap" a condition wedged between it and the block.  Yet with more operators like OR, AND, THEN...the condition wasn't wrapped.  This meant seeing the other side of the coin more often.  Consider:</p>
+<pre><code>not all [
+   something1
+   something2
+] then [
+   print "either something1 or something2 wasn't truthy"
+]
+</code></pre>
+<p>Here the limit can bite you.  THEN looks to its left, and because it's afraid to consume too much...it stops at the <strong>all [something1 something2]</strong>.  You get:</p>
+<pre><code>not (all [
+   something1
+   something2
+]) then [
+    print "almost certainly not what you meant!"
+]
+</code></pre>
+<p>If we stick with the limit-of-one-rule, you could use parentheses around the (not all [...]) to get the effect.  You could also have an operator, but this time it would look like:</p>
+<pre><code>not all [
+   something1
+   something2
+] -&gt; then [
+   print "either something1 or something2 wasn't truthy"
+]
+</code></pre>
+<p>From the point of view of interpreter complexity itself, there's not an obvious winner.  The evaluator has to have more or less the same code to support both models.</p>
+<p>With completion by default, you can quickly develop a sort of "funny feeling" about passing parameters which use left enfix normal.  If someone has been "trained" I think they'd read <code>return if x &lt; 0 ["a"] else ["b"]</code> and think "oh, my mind could complete <strong>return if x &lt; 0 ["a"]</strong>, so the evaluator would too!"  Yet it feels a little more hidden to realize that <strong>not all [...] then [...]</strong> won't work when <strong>all [...] then [...]</strong> would.  Fuzzy argument, I realize.</p>
+<p>The stronger point, though, is if we're going to look at the two mitigating operators.  I think the <strong>&lt;-</strong> is easier to explain than the <strong>-&gt;</strong>.  And it seems like it's positioned more in the right place, where it should be.  <strong>&lt;-</strong> is saying <em>"Hi, I'm the left parentheses of an implicit GROUP! whose invisible right parentheses is after the next full expression...including its enfix suffixes."</em>  The positioning of -&gt; is weirder, and it's not as clearly a "put this there" kind of thing.</p>
+<p>It isn't a major change to the code, but it significantly affects experience.  Lately, I've been wanting more complex expressions with my ORs and ANDs and THENs... and hitting it a lot more often than encountering the "dark corner" when it was bent the other way.  I have a feeling that letting it complete the left fully...and intervening with a GROUP! or operator when you don't want to...may be the better choice.</p>
+          <p><a href="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565/1</link>
+        <pubDate>Mon, 12 Mar 2018 00:52:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-565-1</guid>
+        <source url="https://forum.rebol.info/t/enfix-normal-revisited-unlimited-default-one-eval-operator/565.rss">Enfix Normal Revisited: Unlimited Default, One-Eval Operator?</source>
+      </item>
+  </channel>
+</rss>

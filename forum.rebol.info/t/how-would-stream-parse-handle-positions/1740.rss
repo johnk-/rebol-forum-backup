@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How Would Stream PARSE Handle Positions?</title>
+    <link>https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740</link>
+    <description>Generically speaking: when dealing with a streaming data source, you often don&#39;t know how many bytes or characters you want to read in advance.  You&#39;re looking for some pattern in the input to delimit it.
+
+(The simplest-yet-very-common example would be reading until a newline.)
+
+Go has dedicated operations for reading up-until one certain byte ([ReadBytes(byte)](https://pkg.go.dev/bufio#Reader.ReadBytes)) or one certain UTF-8 character byte sequence ([ReadString(codepoint)](https://pkg.go.dev/bufio#Reader.ReadString)).  These are methods of the buffered IO abstraction, because if you didn&#39;t go through a buffering middleman you&#39;d have to call a lower-level `Read()` just one byte at a time.  Otherwise the lack of a buffer would mean you wouldn&#39;t have anywhere to hold the queued-up extra data after a newline...if a Read() came back with a bigger chunk.
+
+Rigging up anything more detailed in Go is harder.  **So this is where I thought a streaming PARSE would offer an interesting answer for a lot of scenarios.**  Getting PARSE worked out correctly would save people the trouble of having to drive the progressive Read process themselves, just to get a more nuanced condition than &quot;until a certain byte is seen&quot;.
+
+## But Streams Aren&#39;t Series...So How Would You Call PARSE?
+
+When you parse a *series*, you don&#39;t &quot;consume&quot; it:
+
+    &gt;&gt; data: &quot;aaa&quot;
+
+    &gt;&gt; uparse data [some &quot;a&quot; (&lt;Yay, some A!&gt;)]
+    == &lt;Yay, some A!&gt;
+
+    &gt;&gt; data
+    == &quot;aaa&quot;  ; hasn&#39;t changed
+
+And you can do partial processing and get a position via `&lt;here&gt;`:
+
+    &gt;&gt; data: &quot;aaabbb&quot;
+
+    &gt;&gt; uparse data [some &quot;a&quot; &lt;here&gt;]
+    == &quot;bbb&quot;  ; this is a &quot;position&quot; that points into `data`
+
+    &gt;&gt; data
+    == &quot;aaabbb&quot;  ; again, the unchanged input
+
+**However, streams don&#39;t have any position *but* &quot;here&quot;.**  So how would `&lt;here&gt;` be any different from `&lt;input&gt;`?
+
+## Some Streams May Internally Know A Position, But Not All
+
+In Go we saw an example of how streaming is an interface that something can offer, while having other methods depending on the data source.  Those other methods can offer features like timeouts.  Or something like a file could offer the ability to re-seek so the next call reading from the stream would get from a random access position.
+
+*But that&#39;s all outside of the streaming interface.*  The stream itself is a black box.  And the position is &quot;inside&quot;...all references to the same stream interface will be updated if you read from any reference.
+
+With Rebol series, the position is &quot;outside&quot;...each instance has its own index.  So when you NEXT a series, you have to save the result, or you will get the same thing again:
+
+    &gt;&gt; series: [a b c]
+
+    &gt;&gt; next series
+    == [b c]
+
+    &gt;&gt; next series
+    == [b c]
+
+If streams worked this way, you&#39;d have to constantly be saving the new stream value every time you read from it, as another return value of the READ process.
+
+    [data stream]: read/part stream 10
+
+But if you did have to code like that, how would it react to a situation like this?
+
+    &gt;&gt; [data newstream]: read/part oldstream 10
+
+    &gt;&gt; read/part oldstream 10
+
+The (presumably) buffered stream no longer has the data on hand.  So it either preserves the data indefinitely or some of these calls would fail.
+
+## So Parsing Consumes Streams, But Not Series?
+
+Right now, there&#39;s no way to leave a stream alone, because reading it consumes it.
+
+The only way you&#39;d be able to &quot;consume&quot; a series value--e.g. advance the index of the input--would be to pass into parse a variable holding the input.  Because the index of the series is an immediate in the value itself.
+
+It seems unfortunate that something like a FILE! can know how to do random seeks, and not be able to save and restore positions in PARSE.  But if it did, what would the type of `&lt;here&gt;` be?  It would have to create a new stream instance into the same file...this would be like being able to say:
+
+    &gt;&gt; s2: clone stream  ; maybe file reads support, but tcp reads don&#39;t?
+
+    &gt;&gt; read stream
+    == #{ABCD0102}
+
+    &gt;&gt; read s2
+    == #{ABCD0102}
+
+It&#39;s probably bad for PARSE to be going this direction.
+
+## A Better Idea (?) *some* Streams Offer `&lt;index&gt;`, Some Don&#39;t
+
+It&#39;s already the case that SEEK will accept either an index number or a series position.  So when you ask for `&lt;index&gt;` it could tell you the position in the file.
+
+*(Although I should mention that file seeking has historically always been offset-based, starting with zero.  :-(  This was true in R3-Alpha and is also true in 1-based languages like Julia.)*
+
+This just rules out the idea of having `&lt;here&gt;` on a stream series altogether; to basically stamp out the concept that there is such a thing as a &quot;stream-at-position&quot;.  You only deal with positions separate from streams...and only on the streams that happen to offer them.</description>
+    
+    <lastBuildDate>Wed, 06 Oct 2021 16:40:01 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How Would Stream PARSE Handle Positions?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Generically speaking: when dealing with a streaming data source, you often don't know how many bytes or characters you want to read in advance.  You're looking for some pattern in the input to delimit it.</p>
+<p>(The simplest-yet-very-common example would be reading until a newline.)</p>
+<p>Go has dedicated operations for reading up-until one certain byte (<a href="https://pkg.go.dev/bufio#Reader.ReadBytes">ReadBytes(byte)</a>) or one certain UTF-8 character byte sequence (<a href="https://pkg.go.dev/bufio#Reader.ReadString">ReadString(codepoint)</a>).  These are methods of the buffered IO abstraction, because if you didn't go through a buffering middleman you'd have to call a lower-level <code>Read()</code> just one byte at a time.  Otherwise the lack of a buffer would mean you wouldn't have anywhere to hold the queued-up extra data after a newline...if a Read() came back with a bigger chunk.</p>
+<p>Rigging up anything more detailed in Go is harder.  <strong>So this is where I thought a streaming PARSE would offer an interesting answer for a lot of scenarios.</strong>  Getting PARSE worked out correctly would save people the trouble of having to drive the progressive Read process themselves, just to get a more nuanced condition than "until a certain byte is seen".</p>
+<h2>But Streams Aren't Series...So How Would You Call PARSE?</h2>
+<p>When you parse a <em>series</em>, you don't "consume" it:</p>
+<pre><code>&gt;&gt; data: "aaa"
+
+&gt;&gt; uparse data [some "a" (&lt;Yay, some A!&gt;)]
+== &lt;Yay, some A!&gt;
+
+&gt;&gt; data
+== "aaa"  ; hasn't changed
+</code></pre>
+<p>And you can do partial processing and get a position via <code>&lt;here&gt;</code>:</p>
+<pre><code>&gt;&gt; data: "aaabbb"
+
+&gt;&gt; uparse data [some "a" &lt;here&gt;]
+== "bbb"  ; this is a "position" that points into `data`
+
+&gt;&gt; data
+== "aaabbb"  ; again, the unchanged input
+</code></pre>
+<p><strong>However, streams don't have any position <em>but</em> "here".</strong>  So how would <code>&lt;here&gt;</code> be any different from <code>&lt;input&gt;</code>?</p>
+<h2>Some Streams May Internally Know A Position, But Not All</h2>
+<p>In Go we saw an example of how streaming is an interface that something can offer, while having other methods depending on the data source.  Those other methods can offer features like timeouts.  Or something like a file could offer the ability to re-seek so the next call reading from the stream would get from a random access position.</p>
+<p><em>But that's all outside of the streaming interface.</em>  The stream itself is a black box.  And the position is "inside"...all references to the same stream interface will be updated if you read from any reference.</p>
+<p>With Rebol series, the position is "outside"...each instance has its own index.  So when you NEXT a series, you have to save the result, or you will get the same thing again:</p>
+<pre><code>&gt;&gt; series: [a b c]
+
+&gt;&gt; next series
+== [b c]
+
+&gt;&gt; next series
+== [b c]
+</code></pre>
+<p>If streams worked this way, you'd have to constantly be saving the new stream value every time you read from it, as another return value of the READ process.</p>
+<pre><code>[data stream]: read/part stream 10
+</code></pre>
+<p>But if you did have to code like that, how would it react to a situation like this?</p>
+<pre><code>&gt;&gt; [data newstream]: read/part oldstream 10
+
+&gt;&gt; read/part oldstream 10
+</code></pre>
+<p>The (presumably) buffered stream no longer has the data on hand.  So it either preserves the data indefinitely or some of these calls would fail.</p>
+<h2>So Parsing Consumes Streams, But Not Series?</h2>
+<p>Right now, there's no way to leave a stream alone, because reading it consumes it.</p>
+<p>The only way you'd be able to "consume" a series value--e.g. advance the index of the input--would be to pass into parse a variable holding the input.  Because the index of the series is an immediate in the value itself.</p>
+<p>It seems unfortunate that something like a FILE! can know how to do random seeks, and not be able to save and restore positions in PARSE.  But if it did, what would the type of <code>&lt;here&gt;</code> be?  It would have to create a new stream instance into the same file...this would be like being able to say:</p>
+<pre><code>&gt;&gt; s2: clone stream  ; maybe file reads support, but tcp reads don't?
+
+&gt;&gt; read stream
+== #{ABCD0102}
+
+&gt;&gt; read s2
+== #{ABCD0102}
+</code></pre>
+<p>It's probably bad for PARSE to be going this direction.</p>
+<h2>A Better Idea (?) <em>some</em> Streams Offer <code>&lt;index&gt;</code>, Some Don't</h2>
+<p>It's already the case that SEEK will accept either an index number or a series position.  So when you ask for <code>&lt;index&gt;</code> it could tell you the position in the file.</p>
+<p><em>(Although I should mention that file seeking has historically always been offset-based, starting with zero.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  This was true in R3-Alpha and is also true in 1-based languages like Julia.)</em></p>
+<p>This just rules out the idea of having <code>&lt;here&gt;</code> on a stream series altogether; to basically stamp out the concept that there is such a thing as a "stream-at-position".  You only deal with positions separate from streams...and only on the streams that happen to offer them.</p>
+          <p><a href="https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740/1</link>
+        <pubDate>Wed, 06 Oct 2021 16:40:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1740-1</guid>
+        <source url="https://forum.rebol.info/t/how-would-stream-parse-handle-positions/1740.rss">How Would Stream PARSE Handle Positions?</source>
+      </item>
+  </channel>
+</rss>

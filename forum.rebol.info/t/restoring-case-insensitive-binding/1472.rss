@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Restoring Case-Insensitive Binding</title>
+    <link>https://forum.rebol.info/t/restoring-case-insensitive-binding/1472</link>
+    <description>I&#39;ve been working on the frustrating question of how to make case-insensitive binding work without sacrificing the gain of space of a platform pointer per word cell.
+
+It&#39;s rough and not pushed to master yet.  But it&#39;s mixing with Virtual Binding:
+
+    &gt;&gt; abba: 304
+    &gt;&gt; obj: make object! [abba: 1020]
+    &gt;&gt; code: [ABBA &#39;Abba &#39;&#39;abbA &#39;&#39;&#39;aBBa &#39;&#39;&#39;&#39;AbbA &#39;&#39;&#39;&#39;&#39;aBba]
+
+    &gt;&gt; do in obj compose [map-each x (code) [get dequote x]]
+    == [1020 1020 1020 1020 1020 1020]
+
+    &gt;&gt; map-each x code [get dequote x]
+    == [304 304 304 304 304 304]
+
+## Strategy: Assume More Than 3 Casing Variations Uncommon
+
+The design I&#39;ve gone with is to assume that there aren&#39;t that many case variations of the same word in most situations.  Maybe you have `accept-headers`, `Accept-Headers` and `ACCEPT-HEADERS`.  But you won&#39;t go too far beyond that with `ACcept-HEAdERS` etc.  If you do, then the words start to &quot;cost more&quot;.
+
+**Some of this stuff gets pretty vague in terms of whether I&#39;m playing by the &quot;rules&quot; or just twisting code into a pretzel**.
+
+I&#39;ve oft-mentioned the &quot;4 platform pointers per cell&quot; baseline.  That&#39;s pretty limited.  Also limiting is that R3-Alpha tried to do essentially everything with arrays and linked lists... and this is a far cry from being able to easily pick from any of dozens of vetted data structures to suit your problem.
+
+So what&#39;s going on here is that if you use a &quot;sufficiently weird spelling&quot;, then your cell turns into the kind that points to another cell for its content.  This is how QUOTED!s at the higher levels (4 quoting levels or more) work.
+
+**The ramifications are subtle and pervasive.**  A lot of code would assume it could just go and muck with parts of cells, but now that these expanded format cells can be shared you can impact cells you didn&#39;t mean to.  If you want to tweak a WORD! cell so that it&#39;s a SET-WORD!, you have to worry about whether it&#39;s an unusual-spelling word...and if so, you need to make a copy of the shared cell to update its bit patterns.  I&#39;ve established ways to check some of this at compile-time, but it&#39;s kind of hacked together at the moment and needs tuning.
+
+I&#39;m suspecting that the average program would never need any of these cells (4 levels of quoting or 4 case-variations)...but that makes it all the more important to find ways to test it, by making the uncommon case common.  Basically forcing all words to use the expanded format and seeing what breaks.
+
+## Object Keys Are Now Canon (Lowercase)
+
+This applies to MAKE OBJECT!, and things like function arguments:
+
+    &gt;&gt; make object! [ABC: 10, Def: 20]
+    == make object! [
+        abc: 10
+        def: 20
+    ]
+
+    &gt;&gt; func [ABC /Def] [print &quot;Functions too.&quot;]
+    == #[action! [abc /def]]
+
+I&#39;ve written about how I believe this is the only sane answer to dealing with it [(&quot;Case Insensitivity vs. Case Preservation (can&#39;t have both)&quot;)](https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/14).</description>
+    
+    <lastBuildDate>Sun, 24 Jan 2021 08:58:09 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/restoring-case-insensitive-binding/1472.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Restoring Case-Insensitive Binding</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've been working on the frustrating question of how to make case-insensitive binding work without sacrificing the gain of space of a platform pointer per word cell.</p>
+<p>It's rough and not pushed to master yet.  But it's mixing with Virtual Binding:</p>
+<pre><code>&gt;&gt; abba: 304
+&gt;&gt; obj: make object! [abba: 1020]
+&gt;&gt; code: [ABBA 'Abba ''abbA '''aBBa ''''AbbA '''''aBba]
+
+&gt;&gt; do in obj compose [map-each x (code) [get dequote x]]
+== [1020 1020 1020 1020 1020 1020]
+
+&gt;&gt; map-each x code [get dequote x]
+== [304 304 304 304 304 304]
+</code></pre>
+<h2>Strategy: Assume More Than 3 Casing Variations Uncommon</h2>
+<p>The design I've gone with is to assume that there aren't that many case variations of the same word in most situations.  Maybe you have <code>accept-headers</code>, <code>Accept-Headers</code> and <code>ACCEPT-HEADERS</code>.  But you won't go too far beyond that with <code>ACcept-HEAdERS</code> etc.  If you do, then the words start to "cost more".</p>
+<p><strong>Some of this stuff gets pretty vague in terms of whether I'm playing by the "rules" or just twisting code into a pretzel</strong>.</p>
+<p>I've oft-mentioned the "4 platform pointers per cell" baseline.  That's pretty limited.  Also limiting is that R3-Alpha tried to do essentially everything with arrays and linked lists... and this is a far cry from being able to easily pick from any of dozens of vetted data structures to suit your problem.</p>
+<p>So what's going on here is that if you use a "sufficiently weird spelling", then your cell turns into the kind that points to another cell for its content.  This is how QUOTED!s at the higher levels (4 quoting levels or more) work.</p>
+<p><strong>The ramifications are subtle and pervasive.</strong>  A lot of code would assume it could just go and muck with parts of cells, but now that these expanded format cells can be shared you can impact cells you didn't mean to.  If you want to tweak a WORD! cell so that it's a SET-WORD!, you have to worry about whether it's an unusual-spelling word...and if so, you need to make a copy of the shared cell to update its bit patterns.  I've established ways to check some of this at compile-time, but it's kind of hacked together at the moment and needs tuning.</p>
+<p>I'm suspecting that the average program would never need any of these cells (4 levels of quoting or 4 case-variations)...but that makes it all the more important to find ways to test it, by making the uncommon case common.  Basically forcing all words to use the expanded format and seeing what breaks.</p>
+<h2>Object Keys Are Now Canon (Lowercase)</h2>
+<p>This applies to MAKE OBJECT!, and things like function arguments:</p>
+<pre><code>&gt;&gt; make object! [ABC: 10, Def: 20]
+== make object! [
+    abc: 10
+    def: 20
+]
+
+&gt;&gt; func [ABC /Def] [print "Functions too."]
+== #[action! [abc /def]]
+</code></pre>
+<p>I've written about how I believe this is the only sane answer to dealing with it <a href="https://forum.rebol.info/t/case-insensitivity-vs-case-preservation-cant-have-both/1439/14">("Case Insensitivity vs. Case Preservation (can't have both)")</a>.</p>
+          <p><a href="https://forum.rebol.info/t/restoring-case-insensitive-binding/1472/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/restoring-case-insensitive-binding/1472/1</link>
+        <pubDate>Sun, 24 Jan 2021 08:58:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1472-1</guid>
+        <source url="https://forum.rebol.info/t/restoring-case-insensitive-binding/1472.rss">Restoring Case-Insensitive Binding</source>
+      </item>
+  </channel>
+</rss>

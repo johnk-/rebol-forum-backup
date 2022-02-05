@@ -1,0 +1,301 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Trickiness of the New ANY Combinator Concept</title>
+    <link>https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662</link>
+    <description>It&#39;s a bit of a pain to collect alternate rules.  For instance:
+
+    alternates: copy []
+
+    rules: [[some integer!] [3 text!]]
+
+    for-each rule rules [
+        append alternates compose [(rule) |]
+    ]
+
+    uparse data [alternates]
+
+That will give you alternates as **[[some integer!] | [3 text!] |]** 
+
+But that rule will *always succeed*...should both the component rules fail to match, it will act as a no-op.  Because it&#39;s equivalent to **[[some integer!] | [3 text!] | []]**, and **[]** will always succeed.
+
+You get a similar problem if you go the other way.
+
+    for-each rule rules [
+        append alternates compose [| (rule)]
+    ]
+
+Now you&#39;ve got a rule that is always a no-op: **[| [some integer!] | [3 text!]]**.  Again, this is equivalent to **[[] | [some integer!] | [3 text!]]**, and this time the **[]** succeeds before the other rules get a chance.
+
+You can hack around this by starting out with **alternates: [false]**.  This way, you can add the **[| (rule)]** and it will never run the false.  So it works.
+
+## Wouldn&#39;t a New Meaning for the ANY Combinator be Better?
+
+Having reclaimed ANY it seems it would be perfect for this.  Why not:
+
+    rules: [[some integer!] [3 text!]]
+    uparse data [any rules]
+
+You could leave your block in its regular old form, and use it that way.  Dyn-o-mite!
+
+**But wait.  BLOCK! already has semantics as a parse rule.**  Conventionally, ANY doesn&#39;t get to see the block at all... it gets a *parser function* which has been made out of the block.
+
+Uh oh.
+
+## Bad Option #1 - Quoting
+
+So ANY could say it&#39;s a quoting combinator.  This means it would get whatever single thing came after it... be it a WORD! or BLOCK! or whatever.  It could try its best to turn that into a BLOCK!.
+
+In the case above ANY would thus get the WORD! rules.  It could look up the WORD!, get a block.  And then walk through the block, combinatorizing each element in it and running the element in sequence.
+
+That&#39;s rather yucky.
+
+## Less Bad Option #2 - Take BLOCK! as synthesized rule product
+
+ANY would be a better citizen if it was willing to say that the BLOCK! it&#39;s going to walk through came to it by honest means.
+
+    rules: [[some integer!] [3 text!]]
+    uparse data [any (rules)]
+
+At first glance that seems weird to me.  But, is it really that weird?
+
+It seems to me this is what has to be done--and it makes much more sense than going down the rabbit hole of quoting and destabilizing the whole syntax.
+
+## Also, This Mitigates Compatibility Concerns
+
+If ANY only runs with rules that have BLOCK! synthesized products, that&#39;s a (small?) subset of all the ANYs that are out there historically.  It can choke if it doesn&#39;t like what it sees and tell you that you may be using the old sense of ANY.
+
+Even further, we probably *can* temporarily make ANY a quoting combinator that only accepts GROUP!...as a simulation of accepting any parser in the future.
+
+I&#39;m going ahead and adding it!</description>
+    
+    <lastBuildDate>Sun, 15 Aug 2021 09:43:28 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Trickiness of the New ANY Combinator Concept</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="BlackATTR" data-post="2" data-topic="1662">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>This is a good one.</p>
+</blockquote>
+</aside>
+<p>...indeed...</p>
+<h2>...What a Success Story ANY Turned Out To Be!!  <img src="https://forum.rebol.info/images/emoji/twitter/astonished.png?v=9" title=":astonished:" class="emoji" alt=":astonished:">
+</h2>
+<p>The first place I thought to try it out was in REWORD, because I remembered it created a list of alternate patterns for what it was going to replace.  So if you say:</p>
+<pre><code> reword/escape "a(thing)b(thing2)c" [thing "ALPHA" "thing2" "BETA"] ["(" ")"]
+</code></pre>
+<p>A simplified concept of the rules it built looked like:</p>
+<pre><code>keyword-suffix-rules: [
+    false
+       |
+    "thing" ")" (key: 'thing)
+       |
+    "thing2" ")" (key: "thing2")
+]
+
+match-rule: ["(" keyword-suffix-rules]
+</code></pre>
+<p><em>(If you're wondering why it's repeating the suffix ")" in each rule: the problem with putting it outside would be that "thing" would match "thing2" and then jump outside the rule block and see ")".  It would then be too late to consider thing2.)</em></p>
+<p>So here we see that false match thing.  We can get rid of that, and the |, AND use UPARSE rule synthesis to get the <strong>key:</strong> on the outside!</p>
+<pre><code>keyword-suffix-rules: [
+    ["thing" ")" ('thing)]
+    ["thing2" ")" ("thing2")]
+]
+
+match-rule: ["(", key: any (keyword-suffix-rules)]
+</code></pre>
+<h2>That's Nothing Compared To What It Did To Whitespace!</h2>
+<p>Continuing to look at the "generated list of alternates" scenario, it's a HUGE win for whitespace, which generates two levels of selection... one at the category level, and then for the instructions in the category:</p>
+<pre><code>any ([[
+    [space]
+    collect any @[
+        [keep @push space keep Number]
+        [keep @duplicate-top lf space]
+        [keep @duplicate-indexed tab space keep Number]
+        [keep @swap-top-2 lf tab]
+        [keep @discard-top lf lf]
+        [keep @slide-n-values tab lf keep Number]
+    ]
+] [
+    [tab space]
+    collect any @[
+        [keep @add space space]
+        ...
+    ]
+    ...
+]])
+</code></pre>
+<p>That's the stuff!  No sign of those pesky | and the weird edge cases they introduce.</p>
+<h2>But There Was A Surprise Application For ANY...</h2>
+<p>What if you don't feel the | are just wrong for your generated expressions, but not  right for your source expression?</p>
+<p>Let's say you're writing something with this kind of pattern:</p>
+<pre><code>uparse data [while [
+    ;
+    ; Here are some comments about what we're doing here
+    ; They might be long
+    ;
+    some "a", between "(" ")", '&lt;whatever&gt;
+|
+    ; It's not totally clear where to put that |.  Some people would put it
+    ; aligned in the same column as the SOME, others would put it at
+    ; indent level deeper.  But it's a non-sequitur
+    ;
+    x: [integer! | text!]
+    keep (:[{Writing random code for an example is a pain} x])
+|
+    ; This could go on for a number of alternates, let's stop here.
+    ; By the way, did you know there's a FAIL combinator now?  :-)
+    ; It will set the `near` of the error message to the input position.
+    ;
+    fail @["Tired of making things up, want to finish post"]
+]]
+</code></pre>
+<p><strong>This can be an application for ANY too!</strong>  Maybe you'd prefer to cluster your code in blocks and leave out the distracting <strong>|</strong>...</p>
+<pre><code>uparse data [while any @[
+    ;
+    ; Here are some comments about what we're doing here
+    ; They might be long
+    ;
+    [some "a", between "(" ")", '&lt;whatever&gt;]
+
+    ; It's not totally clear where to put that |.  Some people would put it
+    ; aligned in the same column as the SOME, others would put it at
+    ; indent level deeper.  But it's a non-sequitur
+    [
+        x: [integer! | text!]
+        keep (:[{Writing random code for an example is a pain} x])
+    ]
+
+    ; This could go on for a number of alternates, let's stop here.
+    ; By the way, did you know there's a FAIL combinator now?  :-)
+    ; It will set the `near` of the error message to the input position.
+    ;
+    fail @["Tired of making things up, want to finish post"]
+]]
+</code></pre>
+<p><strong>I hadn't thought of that, so it being useful for this was a surprise.</strong></p>
+<p>Note that you don't need to put the rules inside an ANY in BLOCK!s if they are single rules.  <strong><code>any @[some "a" some "b"]</code></strong> is legal, not just <strong><code>any @[[some "a"] [some "b"]]</code></strong>  The FAIL at the end there isn't in a block, for instance.</p>
+<p>Also notice that the @ form has the convenience of not making you put a coupled ) on the tail of an ANY rule.  So you're not just saving a character by not using a GROUP!, you're saving a character that could be an arbitrary distance from the ANY.  A small thing, but it makes usage lighter!</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/partying_face.png?v=9" title=":partying_face:" class="emoji only-emoji" alt=":partying_face:"></p>
+          <p><a href="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662/4</link>
+        <pubDate>Sun, 15 Aug 2021 05:55:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1662-4</guid>
+        <source url="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662.rss">The Trickiness of the New ANY Combinator Concept</source>
+      </item>
+      <item>
+        <title>The Trickiness of the New ANY Combinator Concept</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1662">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Less Bad Option <span class="hashtag">#2</span> - Take BLOCK! as synthesized rule product</p>
+</blockquote>
+</aside>
+<h2>How About Even Less Bad (And Maybe Good!) Option <span class="hashtag">#3</span> ?...</h2>
+<p>I realized something about the new rules with @... <em>it gives a way to pass BLOCK!s to rules and mark them as not being processed by the BLOCK! combinator</em>.  So ANY could take them:</p>
+<pre><code> uparse "a" [any (["a" "b"])]
+ &lt;=&gt;
+ uparse "a" [any @["a" "b"]]
+</code></pre>
+<p>At first that looks like a pretty modest improvement.  You save one character and avoid a call into the evaluator.</p>
+<p>But where it actually gets some punch comes from a neat feature of COMPOSE:</p>
+<pre><code>&gt;&gt; compose [any @(collect [keep "a" keep "b"])]
+== [any @["a" "b"]]
+</code></pre>
+<p>The COLLECT gave back a BLOCK!.  But COMPOSE just blended it so the result of the group had the @ on it.  (This works for ^META and SET: and :GET as well.)</p>
+<p>Now imagine you were trying to get the result <strong>[any (["a" "b"])]</strong> instead.  Hmmm.  Certainly possible, but uglier...</p>
+<pre><code>&gt;&gt; compose [any (as group! reduce [collect [keep "a" keep "b"]])]
+== [any (["a" "b"])]
+</code></pre>
+<p>That could be a special operation (and it is) but it has a weird name and contaminates source it is in:</p>
+<pre><code>&gt;&gt; compose [any (engroup collect [keep "a" keep "b"])]
+== [any (["a" "b"])]
+</code></pre>
+<p>It's preferable to be able to avoid all of that.  The @ version doesn't really need any explanation.</p>
+<p>(I think this is really only the beginning of the interesting applications of the @ types in UPARSE!)</p>
+          <p><a href="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662/3</link>
+        <pubDate>Sun, 15 Aug 2021 05:37:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1662-3</guid>
+        <source url="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662.rss">The Trickiness of the New ANY Combinator Concept</source>
+      </item>
+      <item>
+        <title>The Trickiness of the New ANY Combinator Concept</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>This is a good one. <img src="https://forum.rebol.info/images/emoji/twitter/+1.png?v=9" title=":+1:" class="emoji" alt=":+1:"></p>
+          <p><a href="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662/2</link>
+        <pubDate>Sat, 14 Aug 2021 21:09:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1662-2</guid>
+        <source url="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662.rss">The Trickiness of the New ANY Combinator Concept</source>
+      </item>
+      <item>
+        <title>The Trickiness of the New ANY Combinator Concept</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It's a bit of a pain to collect alternate rules.  For instance:</p>
+<pre><code>alternates: copy []
+
+rules: [[some integer!] [3 text!]]
+
+for-each rule rules [
+    append alternates compose [(rule) |]
+]
+
+uparse data [alternates]
+</code></pre>
+<p>That will give you alternates as <strong>[[some integer!] | [3 text!] |]</strong></p>
+<p>But that rule will <em>always succeed</em>...should both the component rules fail to match, it will act as a no-op.  Because it's equivalent to <strong>[[some integer!] | [3 text!] | []]</strong>, and <strong>[]</strong> will always succeed.</p>
+<p>You get a similar problem if you go the other way.</p>
+<pre><code>for-each rule rules [
+    append alternates compose [| (rule)]
+]
+</code></pre>
+<p>Now you've got a rule that is always a no-op: <strong>[| [some integer!] | [3 text!]]</strong>.  Again, this is equivalent to <strong>[[] | [some integer!] | [3 text!]]</strong>, and this time the <strong>[]</strong> succeeds before the other rules get a chance.</p>
+<p>You can hack around this by starting out with <strong>alternates: [false]</strong>.  This way, you can add the <strong>[| (rule)]</strong> and it will never run the false.  So it works.</p>
+<h2>Wouldn't a New Meaning for the ANY Combinator be Better?</h2>
+<p>Having reclaimed ANY it seems it would be perfect for this.  Why not:</p>
+<pre><code>rules: [[some integer!] [3 text!]]
+uparse data [any rules]
+</code></pre>
+<p>You could leave your block in its regular old form, and use it that way.  Dyn-o-mite!</p>
+<p><strong>But wait.  BLOCK! already has semantics as a parse rule.</strong>  Conventionally, ANY doesn't get to see the block at all... it gets a <em>parser function</em> which has been made out of the block.</p>
+<p>Uh oh.</p>
+<h2>Bad Option <span class="hashtag">#1</span> - Quoting</h2>
+<p>So ANY could say it's a quoting combinator.  This means it would get whatever single thing came after it... be it a WORD! or BLOCK! or whatever.  It could try its best to turn that into a BLOCK!.</p>
+<p>In the case above ANY would thus get the WORD! rules.  It could look up the WORD!, get a block.  And then walk through the block, combinatorizing each element in it and running the element in sequence.</p>
+<p>That's rather yucky.</p>
+<h2>Less Bad Option <span class="hashtag">#2</span> - Take BLOCK! as synthesized rule product</h2>
+<p>ANY would be a better citizen if it was willing to say that the BLOCK! it's going to walk through came to it by honest means.</p>
+<pre><code>rules: [[some integer!] [3 text!]]
+uparse data [any (rules)]
+</code></pre>
+<p>At first glance that seems weird to me.  But, is it really that weird?</p>
+<p>It seems to me this is what has to be done--and it makes much more sense than going down the rabbit hole of quoting and destabilizing the whole syntax.</p>
+<h2>Also, This Mitigates Compatibility Concerns</h2>
+<p>If ANY only runs with rules that have BLOCK! synthesized products, that's a (small?) subset of all the ANYs that are out there historically.  It can choke if it doesn't like what it sees and tell you that you may be using the old sense of ANY.</p>
+<p>Even further, we probably <em>can</em> temporarily make ANY a quoting combinator that only accepts GROUP!...as a simulation of accepting any parser in the future.</p>
+<p>I'm going ahead and adding it!</p>
+          <p><a href="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662/1</link>
+        <pubDate>Sat, 14 Aug 2021 18:35:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1662-1</guid>
+        <source url="https://forum.rebol.info/t/the-trickiness-of-the-new-any-combinator-concept/1662.rss">The Trickiness of the New ANY Combinator Concept</source>
+      </item>
+  </channel>
+</rss>

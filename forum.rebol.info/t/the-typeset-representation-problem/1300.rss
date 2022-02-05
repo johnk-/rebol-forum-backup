@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The TYPESET! representation problem</title>
+    <link>https://forum.rebol.info/t/the-typeset-representation-problem/1300</link>
+    <description>So DATATYPE! and TYPESET! are historically strange.  DATATYPE! has a very obvious rendering ambiguity:
+
+    r3-alpha&gt;&gt; type? integer!
+    == datatype!
+
+    r3-alpha&gt;&gt; block: reduce [integer!]
+    == [integer!]
+
+    r3-alpha&gt;&gt; type? first block
+    == datatype!
+
+    r3-alpha&gt;&gt; type? first [integer!]
+    == word!
+
+There is a proposal on the table to [apply the **@[...]** structural type](https://forum.rebol.info/t/should-datatype-be-killed-off-in-favor-of-integer-word-etc/1177/8?u=hostilefork) to the representation of datatypes:
+
+    &gt;&gt; type of 10
+    == @[integer]  ; alternately @[integer!] ...?
+
+*(Note: I&#39;m a bit torn on whether the brevity of @[integer] outweighs the need to have a duplicate symbol in the symbol table.  But that said: for most of them you&#39;d probably have the non-exclamation point symbol somewhere anyway... all you need is one variable called `block` to wind up with a symbol for it, so the brevity of @[block] might be worth it in the long run, especially considering there aren&#39;t all that many types.)*
+
+This would not be its only use for @[...] type in the system.  But the general understanding would be that in any dialect where types were of interest, that&#39;s what they would be for.
+
+You would still be able to use arbitrary quoting to get around the other meanings, for instance [modal parameters](https://forum.rebol.info/t/new-parameter-convention-concept-modal-arguments-or-the-arg/1187)
+
+    &gt;&gt; data: [a b c] 
+
+    &gt;&gt; append data @[integer]
+    == [a b c [integer]]  ; &quot;modal&quot; parameter, e.g. @ implies /ONLY
+
+    &gt;&gt; append data &#39;@[integer]
+    == [a b c [integer] @[integer]]  ; quote subverts modal interpretation
+
+    &gt;&gt; append data integer!
+    == [a b c [integer] @[integer] @[integer]]  ; word evaluation also not modal
+
+PARSE could also work around it with quoting, even if the plain intepretation was as a datatype match (after all, INTEGER! rules are a count unless escaped, BLOCK!s are rules... now even LOGIC! is interpreted as whether to continue the parse or not):
+
+    &gt;&gt; integer!
+    == @[integer]
+
+    &gt;&gt; did parse [1 2 @[integer]] [integer! @[integer] &#39;@[integer] end]
+    == #[true]
+
+# ...but what about TYPESET! ?
+
+TYPESET! took advantage of 64-bit integers--and a limitation of 64 fundamental types--to fit 64 bit flags into a single value cell to represent a typeset.  Besides the obvious lack of extensibility, this has a number of problems.  One of which is that typesets render in a pretty ugly way...a seemingly simple concept like ANY-TYPE! expands out fairly monstrously:
+
+    r3-alpha&gt;&gt; print mold any-type!
+    make typeset! [unset! none! logic! integer! decimal! percent! money! char!
+    pair! tuple! time! date! binary! string! file! email! url! tag! bitset! image!
+    vector! block! paren! path! set-path! get-path! lit-path! map! datatype!
+    typeset! word! set-word! get-word! lit-word! refinement! issue! native!
+    action! rebcode! command! op! closure! function! frame! object! module!
+    error! task! port! gob! event! handle! struct! library! utype!]
+
+    red&gt;&gt; print mold any-type!
+    make typeset! [datatype! unset! none! logic! block! paren! string! file!
+    url! char! integer! float! word! set-word! lit-word! get-word! refinement!
+    issue! native! action! op! function! path! lit-path! set-path! get-path!
+    routine! bitset! object! typeset! error! vector! hash! pair! percent! tuple!
+    map! binary! time! tag! email! handle! date! port! image! event!]
+
+People are used to typing in variables--like arrays or objects--and seeing what they look up to be a large amount of data.  But a typeclass like ANY-TYPE! doesn&#39;t typically have this &quot;explosive&quot; character...and it impedes readability.
+
+**If you look closely you&#39;ll see another sneaking problem hinted at by R3-Alpha&#39;s never-implemented UTYPE!** (for user-defined type).  Imagining that it had an implementation, this would suggest that all user-defined types would be considered equivalent in a TYPESET!.  If you took one user-defined type as a parameter, you would have to take them all, and do some filtering on it after the fact.
+
+*(In fact, [extension types](https://forum.rebol.info/t/user-defined-datatype-discussion/1203/2?u=hostilefork) in Ren-C--which *do* exist--have this very problem.  If you pass a GOB! to a native routine that expects a VECTOR! or a STRUCT!, it will currently crash.  This hasn&#39;t really come up yet because few are working with those types.  But it&#39;s something that a real answer to typesets would have to address, part of why I&#39;m mentioning all this.)*
+
+# This doesn&#39;t even touch upon the idea of &quot;type-classes&quot;...
+
+e.g. if you decide to make a base object with something like **book!: make object! [...]** and later **make book! [...]**, this &quot;book!&quot; is the kind of thing you might consider in some languages to be a class.  You might want to write a routine like **library-checkout: function [b [book!]] [...]**.   But there is no facility for this.
+
+But...[&quot;Derived binding&quot;](https://github.com/metaeducation/ren-c/pull/727) in Ren-C set up some groundwork for understanding derivation.  This was done for efficiency: to know the relationships in order to be able to forward references to base class members downward to the instance.   That avoided needing to make deep copies of every member function of objects each time a new instance is made...just so those functions could refer to the variables in the derivations.  Yet the relationship it had to encode to accomplish this could also be used as a type test to see if something came from a given type hierarchy.
+
+So the mechanics are there...and it seems it would be cool to implement.  But again, that depends on a notion of what a &quot;typeset&quot; actually is, which is the limiting factor.
+
+# And what about &quot;type-tests...&quot;?
+
+Still another question comes along for tests that are basically functions.  How about **even-integer!**, or **block-2!** where that&#39;s a block containing two elements?  These seem very useful, though potentially dangerous if the function has side effects... leading one to wonder if there should be a PURE annotation for functions that promise not to have side effects, and that they take all their parameters as CONST and won&#39;t use any non-PURE functions in their implementations or look at any variables that aren&#39;t parameters that haven&#39;t been permanently LOCK&#39;d.
+
+**I actually think maybe &quot;type test&quot; is the fundamental thing to be looking at, instead of some nebulous TYPESET! construct.**  If type tests can be held onto by name, and that name looks up a PURE function *(approximated as a regular function with a pinky promise to make it pure in the near term, maybe)*, then maybe that is better?
+
+This might point in a direction more like:
+
+    integer!: @[integer]  ; fundamental
+
+    any-value!: @(any-value?)  ; type function
+
+You could then write a native whose implementation was something along the lines of:
+
+     set-typeset: func [name [word!] types [block!]] [
+          types: reduce types
+          m: make map! length of types
+          for-each t types [
+              if not sym-block? :t [fail [:t &quot;is not a datatype&quot;]]
+              m/(t): true
+          ]
+          set name func [t] [m/(:t)]
+          
+          return reduce @(name)
+     ]
+
+Then imagine you said something like:
+
+    &gt;&gt; any-scalar!: set-typeset &#39;any-scalar? [integer! decimal! ...]
+    == @(any-scalar?)
+
+You&#39;d end up with an ANY-SCALAR! definition that was not entirely illegible...an inert value that looks up to a type-checking function.  Internally to the system there could be optimizations of this... imagine a generic MAPCHECKER function dispatcher which could be recognized by the evaluator to not even need to call it, but could go straight to the MAP!.
+
+Anyway... moral of the story is, I think it&#39;s time to kill off both DATATYPE! and TYPESET! as non-concrete, inextensible, render-unfriendly types...and lean on mechanisms we have a shot at exploiting in a meaningful way.
+
+I believe common cases could be made to be not significantly slower than today, using clever bit-packing.  Less common cases would have to cost more, but that&#39;s not as bad as being impossible or intractable...as they are today.</description>
+    
+    <lastBuildDate>Mon, 21 Dec 2020 19:00:46 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/the-typeset-representation-problem/1300.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The TYPESET! representation problem</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>So not be able to use a thing like number! as shorthand for types that could qualify as a number in function declarations and such. Well so be it than, or types should be typesettable where others are not.<br>
+Lets ditch the typeset in favor of more room for types that are useful.</p>
+          <p><a href="https://forum.rebol.info/t/the-typeset-representation-problem/1300/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-typeset-representation-problem/1300/4</link>
+        <pubDate>Mon, 21 Dec 2020 19:00:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1300-4</guid>
+        <source url="https://forum.rebol.info/t/the-typeset-representation-problem/1300.rss">The TYPESET! representation problem</source>
+      </item>
+      <item>
+        <title>The TYPESET! representation problem</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="iArnold" data-post="2" data-topic="1300">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>What is a typeset! good for?</p>
+</blockquote>
+</aside>
+<p>The reason typesets have a lot of unfixed errors and behavior is due to being ill-defined, non-extensible, and likely slated for removal.</p>
+<p>They've been used in places where you could put a single type, e.g. in PARSE:</p>
+<pre><code>&gt;&gt; int-or-text: make typeset! [integer! text!]
+
+&gt;&gt; did parse [1 "two" 3] [some int-or-text]
+== #[true]
+</code></pre>
+<p>That particular example could be done with a parse rule:</p>
+<pre><code>&gt;&gt; int-or-text: [integer! | text!]
+
+&gt;&gt; did parse [1 "two" 3] [some int-or-text]
+== #[true]
+</code></pre>
+<p>This shows generally how you can "dialect" type matching...which is something like Lisp's concept.  While there's no typesets, there's a way of putting pieces together to get a "type predicate" and then use that.</p>
+<p>There's an issue that we run into if we use WORD! for types (the way Lisp seems willing to do) in that we don't have enough information from <strong>integer!: 'integer</strong> for something like PARSE to tell that use of a WORD! means a type.  The parse rule would need to say explicitly that what it was doing was matching types:</p>
+<pre><code> &gt;&gt; int-or-text: [match-type 'integer | match-type 'text]
+</code></pre>
+<p>We'd kind of like some generic way of defining something across function prototypes and parse rules that says "this is a type", so you don't have to state that fact in the rule itself.</p>
+<p>In any case it needs to be different than it is today.</p>
+<aside class="quote no-group" data-username="iArnold" data-post="2" data-topic="1300">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>Is there any ANY-TYPE! or any other collective type like numeric for BINARY!, INTEGER!, DECIMAL! values?</p>
+</blockquote>
+</aside>
+<p>There are typesets like ANY-NUMBER! and ANY-SERIES!, but they fall under the same weaknesses as what has been outlined already.</p>
+          <p><a href="https://forum.rebol.info/t/the-typeset-representation-problem/1300/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-typeset-representation-problem/1300/3</link>
+        <pubDate>Fri, 18 Dec 2020 20:24:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1300-3</guid>
+        <source url="https://forum.rebol.info/t/the-typeset-representation-problem/1300.rss">The TYPESET! representation problem</source>
+      </item>
+      <item>
+        <title>The TYPESET! representation problem</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>What is a typeset! good for?</p>
+<pre><code>&gt;&gt; help typeset!
+r3: ../src/core/f-stubs.c:217: Datatype_From_Kind: Assertion `IS_DATATYPE(type)' failed.
+Afgebroken (geheugendump gemaakt)
+</code></pre>
+<p>from</p>
+<pre><code>Rebol 3 (Ren-C branch) [version: 2.102.0.4.40 build: 28-Nov-2020/20:55:57+0:00]
+</code></pre>
+<p>Is there any ANY-TYPE! or any other collective type like numeric for BINARY!, INTEGER!, DECIMAL! values?</p>
+          <p><a href="https://forum.rebol.info/t/the-typeset-representation-problem/1300/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-typeset-representation-problem/1300/2</link>
+        <pubDate>Fri, 18 Dec 2020 14:02:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1300-2</guid>
+        <source url="https://forum.rebol.info/t/the-typeset-representation-problem/1300.rss">The TYPESET! representation problem</source>
+      </item>
+      <item>
+        <title>The TYPESET! representation problem</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So DATATYPE! and TYPESET! are historically strange.  DATATYPE! has a very obvious rendering ambiguity:</p>
+<pre><code>r3-alpha&gt;&gt; type? integer!
+== datatype!
+
+r3-alpha&gt;&gt; block: reduce [integer!]
+== [integer!]
+
+r3-alpha&gt;&gt; type? first block
+== datatype!
+
+r3-alpha&gt;&gt; type? first [integer!]
+== word!
+</code></pre>
+<p>There is a proposal on the table to <a href="https://forum.rebol.info/t/should-datatype-be-killed-off-in-favor-of-integer-word-etc/1177/8">apply the <strong>@[...]</strong> structural type</a> to the representation of datatypes:</p>
+<pre><code>&gt;&gt; type of 10
+== @[integer]  ; alternately @[integer!] ...?
+</code></pre>
+<p><em>(Note: I'm a bit torn on whether the brevity of @[integer] outweighs the need to have a duplicate symbol in the symbol table.  But that said: for most of them you'd probably have the non-exclamation point symbol somewhere anyway... all you need is one variable called <code>block</code> to wind up with a symbol for it, so the brevity of @[block] might be worth it in the long run, especially considering there aren't all that many types.)</em></p>
+<p>This would not be its only use for @[...] type in the system.  But the general understanding would be that in any dialect where types were of interest, that's what they would be for.</p>
+<p>You would still be able to use arbitrary quoting to get around the other meanings, for instance <a href="https://forum.rebol.info/t/new-parameter-convention-concept-modal-arguments-or-the-arg/1187">modal parameters</a></p>
+<pre><code>&gt;&gt; data: [a b c] 
+
+&gt;&gt; append data @[integer]
+== [a b c [integer]]  ; "modal" parameter, e.g. @ implies /ONLY
+
+&gt;&gt; append data '@[integer]
+== [a b c [integer] @[integer]]  ; quote subverts modal interpretation
+
+&gt;&gt; append data integer!
+== [a b c [integer] @[integer] @[integer]]  ; word evaluation also not modal
+</code></pre>
+<p>PARSE could also work around it with quoting, even if the plain intepretation was as a datatype match (after all, INTEGER! rules are a count unless escaped, BLOCK!s are rules... now even LOGIC! is interpreted as whether to continue the parse or not):</p>
+<pre><code>&gt;&gt; integer!
+== @[integer]
+
+&gt;&gt; did parse [1 2 @[integer]] [integer! @[integer] '@[integer] end]
+== #[true]
+</code></pre>
+<h1>...but what about TYPESET! ?</h1>
+<p>TYPESET! took advantage of 64-bit integers--and a limitation of 64 fundamental types--to fit 64 bit flags into a single value cell to represent a typeset.  Besides the obvious lack of extensibility, this has a number of problems.  One of which is that typesets render in a pretty ugly way...a seemingly simple concept like ANY-TYPE! expands out fairly monstrously:</p>
+<pre><code>r3-alpha&gt;&gt; print mold any-type!
+make typeset! [unset! none! logic! integer! decimal! percent! money! char!
+pair! tuple! time! date! binary! string! file! email! url! tag! bitset! image!
+vector! block! paren! path! set-path! get-path! lit-path! map! datatype!
+typeset! word! set-word! get-word! lit-word! refinement! issue! native!
+action! rebcode! command! op! closure! function! frame! object! module!
+error! task! port! gob! event! handle! struct! library! utype!]
+
+red&gt;&gt; print mold any-type!
+make typeset! [datatype! unset! none! logic! block! paren! string! file!
+url! char! integer! float! word! set-word! lit-word! get-word! refinement!
+issue! native! action! op! function! path! lit-path! set-path! get-path!
+routine! bitset! object! typeset! error! vector! hash! pair! percent! tuple!
+map! binary! time! tag! email! handle! date! port! image! event!]
+</code></pre>
+<p>People are used to typing in variables--like arrays or objects--and seeing what they look up to be a large amount of data.  But a typeclass like ANY-TYPE! doesn't typically have this "explosive" character...and it impedes readability.</p>
+<p><strong>If you look closely you'll see another sneaking problem hinted at by R3-Alpha's never-implemented UTYPE!</strong> (for user-defined type).  Imagining that it had an implementation, this would suggest that all user-defined types would be considered equivalent in a TYPESET!.  If you took one user-defined type as a parameter, you would have to take them all, and do some filtering on it after the fact.</p>
+<p><em>(In fact, <a href="https://forum.rebol.info/t/user-defined-datatype-discussion/1203/2">extension types</a> in Ren-C--which <em>do</em> exist--have this very problem.  If you pass a GOB! to a native routine that expects a VECTOR! or a STRUCT!, it will currently crash.  This hasn't really come up yet because few are working with those types.  But it's something that a real answer to typesets would have to address, part of why I'm mentioning all this.)</em></p>
+<h1>This doesn't even touch upon the idea of "type-classes"...</h1>
+<p>e.g. if you decide to make a base object with something like <strong>book!: make object! [...]</strong> and later <strong>make book! [...]</strong>, this "book!" is the kind of thing you might consider in some languages to be a class.  You might want to write a routine like <strong>library-checkout: function [b [book!]] [...]</strong>.   But there is no facility for this.</p>
+<p>But...<a href="https://github.com/metaeducation/ren-c/pull/727">"Derived binding"</a> in Ren-C set up some groundwork for understanding derivation.  This was done for efficiency: to know the relationships in order to be able to forward references to base class members downward to the instance.   That avoided needing to make deep copies of every member function of objects each time a new instance is made...just so those functions could refer to the variables in the derivations.  Yet the relationship it had to encode to accomplish this could also be used as a type test to see if something came from a given type hierarchy.</p>
+<p>So the mechanics are there...and it seems it would be cool to implement.  But again, that depends on a notion of what a "typeset" actually is, which is the limiting factor.</p>
+<h1>And what about "type-tests..."?</h1>
+<p>Still another question comes along for tests that are basically functions.  How about <strong>even-integer!</strong>, or <strong>block-2!</strong> where that's a block containing two elements?  These seem very useful, though potentially dangerous if the function has side effects... leading one to wonder if there should be a PURE annotation for functions that promise not to have side effects, and that they take all their parameters as CONST and won't use any non-PURE functions in their implementations or look at any variables that aren't parameters that haven't been permanently LOCK'd.</p>
+<p><strong>I actually think maybe "type test" is the fundamental thing to be looking at, instead of some nebulous TYPESET! construct.</strong>  If type tests can be held onto by name, and that name looks up a PURE function <em>(approximated as a regular function with a pinky promise to make it pure in the near term, maybe)</em>, then maybe that is better?</p>
+<p>This might point in a direction more like:</p>
+<pre><code>integer!: @[integer]  ; fundamental
+
+any-value!: @(any-value?)  ; type function
+</code></pre>
+<p>You could then write a native whose implementation was something along the lines of:</p>
+<pre><code> set-typeset: func [name [word!] types [block!]] [
+      types: reduce types
+      m: make map! length of types
+      for-each t types [
+          if not sym-block? :t [fail [:t "is not a datatype"]]
+          m/(t): true
+      ]
+      set name func [t] [m/(:t)]
+      
+      return reduce @(name)
+ ]
+</code></pre>
+<p>Then imagine you said something like:</p>
+<pre><code>&gt;&gt; any-scalar!: set-typeset 'any-scalar? [integer! decimal! ...]
+== @(any-scalar?)
+</code></pre>
+<p>You'd end up with an ANY-SCALAR! definition that was not entirely illegible...an inert value that looks up to a type-checking function.  Internally to the system there could be optimizations of this... imagine a generic MAPCHECKER function dispatcher which could be recognized by the evaluator to not even need to call it, but could go straight to the MAP!.</p>
+<p>Anyway... moral of the story is, I think it's time to kill off both DATATYPE! and TYPESET! as non-concrete, inextensible, render-unfriendly types...and lean on mechanisms we have a shot at exploiting in a meaningful way.</p>
+<p>I believe common cases could be made to be not significantly slower than today, using clever bit-packing.  Less common cases would have to cost more, but that's not as bad as being impossible or intractable...as they are today.</p>
+          <p><a href="https://forum.rebol.info/t/the-typeset-representation-problem/1300/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-typeset-representation-problem/1300/1</link>
+        <pubDate>Thu, 09 Jul 2020 18:56:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1300-1</guid>
+        <source url="https://forum.rebol.info/t/the-typeset-representation-problem/1300.rss">The TYPESET! representation problem</source>
+      </item>
+  </channel>
+</rss>

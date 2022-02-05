@@ -1,0 +1,1065 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>What is a Port?</title>
+    <link>https://forum.rebol.info/t/what-is-a-port/617</link>
+    <description>From the [Rebol 3 Project Wiki](https://github.com/revault/rebol-wiki/wiki/Ports#basic-concepts &quot;Ports: Basic Concepts, Using Ports, Port Details, Error Handling&quot;):
+
+--------
+
+# Basic Concepts
+
+[As stated above](https://github.com/revault/rebol-wiki/wiki/Ports#introduction &quot;Ports: Introduction&quot;), a port is used to transfer data. However, the basic port definition is a bit more general than that. A port is actually more like a *stream of data* that undergoes some type of exchange, transformation, or effect.
+
+For example, a port is often used for I/O functions such as:
+
+* **console** input and output
+* **file** reading and writing
+* **directories** of files
+* **network** transferring of data
+* **event handling**, such as mouse clicks or keyboard input
+* **database access**
+
+But, a port can also be used for other types of functions:
+
+* **image conversion** - such as encoding or decoding a JPEG file.
+* **sound conversion** - such as encoding or decoding an audio file
+* **checksum computation** - keeping a running checksum
+* **compression and decompression** of data
+* **encryption and decryption** of data
+* **other codecs** for encoding and decoding data formats
+
+## Related to Series
+
+As you know, Rebol is built on the concept of a [Series](http://www.rebol.com/docs/core23/rebolcore-6.html).
+
+**A series is a set of values arranged in a specific order. It is a sequence.**
+
+A port is a special type of series. Not only is it a sequence, but it can also hold *state information* like an object, and access [external devices](https://github.com/revault/rebol-wiki/wiki/Devices) for I/O or other high-speed operations, such as image conversion or encryption.
+
+In Rebol 2, ports were built on a pure series model. However, we found this approach to be problematic because ports are not pure series. They also embody state (information).
+
+For example, a file can be thought of as a stream of bytes. But, a file also has other important attributes such a file name, a location within a directory, creation and modification dates, permissions like read-only or allow execution, and ownership information. These attributes fall outside of a pure series model.
+
+## New Definition
+
+Rebol 3 moves away from the pure series model of Rebol 2 and more toward an I/O stream model. Now it is closer to the concept found in other programming environments and languages.
+
+So, a port can be defined as:
+
+* **a series of values** - such as a sequence of bytes
+* **holds state information** - such as file attributes
+* can **access the external world** - network communication, for example
+* **can have side effects** - internal changes, such as compression
+
+The pure series model is gone. Ports are more pragmatic now, and this has resulted in a port system that is cleaner, smaller, faster, and more extensible than ever before.
+
+## Main Components
+
+A port consists of these main ideas:
+
+1. **A name** that specifies the general type of port (scheme)
+2. **An object** that holds information (state of port)
+3. **A set of functions** that are applied to that object (actions)
+
+The name of a port is called a **&#39;scheme&#39;**. Example schemes are:
+
+* **console**
+* **file**
+* **dir** - file directory
+* **event** - gui events (mainly)
+* **TCP** - networking
+* **HTTP** - web connections
+* **clipboard** - cut and paste
+* **sound** - for audio output
+* **system** - system state changes
+
+Many other types of schemes can exist, and they are often built on top of lower level schemes. For example, FTP for file transfer is built on the TCP networking scheme.
+
+Here is an example. In this line:
+
+```rebol
+port: open tcp://www.rebol.net
+data: read http://www.rebol.com
+```
+
+the first scheme is TCP; the second is HTTP. (Note that this is consistent with the definition of a URL.)
+
+The object holds information such as:
+
+* the type of the port (file, network, database, etc.)
+* the name and location (path) of a file
+* the URI of a network connection
+* a network host name and port number
+* a buffer of data being transferred
+* date and time info
+* structures used by external devices
+
+This object is of a specific Rebol *datatype*, called a *PORT!*
+
+Specific *action functions* can be applied to a port. Some common actions are:
+
+* **make** - create a new port
+* **open** - initialize the port
+* **close** - finalize the port
+* **read** - read data from port
+* **write** - write data to port
+* **query** - get other information from port
+* **update** - detect external changes to the port
+
+But, there are many other actions as well, as generally defined by Rebol datatypes.
+
+# Using Ports
+
+## Two Basic Methods
+
+There are two basic methods to use a port: **implicit** and **explicit**.
+
+When you write code such as:
+
+```rebol
+write %index.html read http://www.rebol.net
+```
+
+you are using **implicit** ports. This is a shortcut notation to keep simple code simple. You are only using a single port action, such as **read** or **write** and all the other details are hidden behind those functions.
+
+However, if you write code such as:
+
+```rebol
+file: open %data.dat
+write file data1
+write file data2
+...
+close file
+```
+
+then you are using **explicit** ports. Here you specify each action separately. You **open** the port, then **read** and **write** to the port, and then **close** the port. Each action must be specified.
+
+## Fast and Easy
+
+Implicit ports are the fast and easy way to perform various I/O actions in Rebol.
+
+A few examples are:
+
+```rebol
+data: read %todo.dat
+write %plans.r data
+query %docs.txt
+page: read http://www.rebol.net
+result: write http://rebol.net/cgi/act.r data
+data: read ftp://www.rebol.net/projects.dat
+host: read dns://www.rebol.net
+```
+
+This type of usage depends on the type of port (the scheme). The example above uses the file, http, ftp, and dns schemes. Those schemes have been designed to support implicit actions.
+
+Notice that for local files, the file datatype is used to indicate usage of the file scheme. The line:
+
+```rebol
+data: read file://todo.dat
+```
+
+is equally valid. Think of the file datatype as an abbreviation for that. Both methods use the same file scheme to perform the I/O.
+
+Other schemes do not support implicit usage. For example:
+
+```text
+&gt;&gt; data: read tcp://www.rebol.com
+** Access error: Port is not open: tcp://www.rebol.com
+** Where: read
+** Near: read tcp://www.rebol.com
+```
+
+This error occurs because TCP does not support an implicit **read** action. That&#39;s because TCP is a lower level scheme that requires a higher level protocol in order to be useful.
+
+## Full Control
+
+Explicit ports give you full control over each I/O action. 
+For example, let&#39;s say you want to read a large file in small 20000 byte chunks. You might use these steps:
+
+```rebol
+file: open %bigdata.dat
+while [not zero? data: read/part file 20000] [
+    process data
+]
+close file
+```
+
+This common method will be familiar to most programmers. The file is opened, reads are done, and the file is closed. Each action is done separately.
+
+This type of explicit I/O is common for large files that would consume a lot of memory if you read them with implicit I/O. For example, if the *bigdata.dat* file is 10 GB, you would not be able to read it all into memory at one time.
+
+Explicit I/O is also used when you need strict control over each action. This is often done if you need to seek to different locations within a file or write your own network protocol.
+
+For example, let&#39;s say you need to read data from three different parts of a large file. In that case you would use read to seek to each part of the file to do the read:
+
+```rebol
+file: open %bigdata.dat
+da-head: read/part file 4000
+da-body: read/seek/part file 12000 10000
+da-tail: read/seek/part file 56000 4000
+close file
+```
+
+# Port Details
+
+This section describes some of the important concepts you need to know about ports.
+
+## Port Datatype
+
+A port is a Rebol datatype. If you use explicit ports, you will need to use the port datatype as *a type of handle* to access the port. If you&#39;ve used handles before in other languages, that concept is probably familiar to you already.
+
+In Rebol a port is very similar to an object because it stores information in named fields. We often call these fields *the state* of the port. When various actions are performed, the state will change, depending on the action. A port differs from an object in that it responds in a special way to specific datatype actions such as **open**, **read**, **write**, and several others.
+
+## Port Schemes
+
+A *scheme* is a type of port.
+
+You will use schemes to identify the type of port access you need as well as the protocol to use.
+
+For example, when you access a local file, you are using the **file** scheme. When you read a web page, you use the **http** scheme, which is a higher level protocol built on top of the **tcp** scheme.
+
+Each scheme has a unique name that is used to identify it. For example, **file**, **http**, and **tcp** are the scheme names shown above. A scheme name can be used as part of a URL, or separately, depending on requirements.
+
+The Rebol system manages a list of available schemes. These schemes can be built-in, can be loaded separately, or can even be user defined within a script.
+
+A lot more about schemes can be found in the [Port Implementation](https://github.com/revault/rebol-wiki/wiki/Port-Implementation) section.
+
+## Making Ports
+
+All ports are made from a *spec* -- a specification of the port&#39;s attributes. As you have seen above, the spec can be something quite simple, such as a file name or URL. But, a port spec can also be a block that includes many fields to indicate various options for the port.
+
+All of these can be used as port specs:
+
+```rebol
+%file.txt  ; a file name
+tcp://www.rebol.com ; a URL
+[scheme: &#39;tcp host: &quot;www.rebol.net&quot;] ; a block
+&#39;tcp  ; just the port&#39;s scheme name
+object ; an object that specifies the port
+port ; a existing port
+```
+
+There are a couple ways to make a port, depending on your required level of control.
+
+One method is to use the **make** action, as you would for any datatype. The general form is:
+
+```rebol
+port: make port! spec
+```
+
+Where **port!** is the port datatype itself, and spec is the specification as described above.
+
+Here are some examples:
+
+```rebol
+port1: make port! %file.txt
+port2: make port! tcp://www.rebol.net
+port3: make port! [scheme: &#39;tcp host: &quot;www.rebol.net&quot;]
+```
+
+These examples will create a port object and initialize its various fields.
+
+One of the most common methods to create a port is with the **open** function. Unlike **make** the **open** function does not require a port! datatype. It knows that it is being provided with a spec. For example:
+
+```rebol
+port: open tcp://www.rebol.net
+```
+
+will create a new port and also perform initializations associated with the **open** action.
+
+More details about **open** are discussed later.
+
+## Port Actions
+
+Port actions can be thought of as functions that act on ports. 
+
+More precisely, port actions are *polymorphic datatype actions* similar to those used on all other datatypes. If you&#39;re not sure what that means, don&#39;t worry about it here. Just think of ports like objects that have a well-defined set of methods that act on them.
+
+The actions defined for ports are:
+
+&lt;dl&gt;
+&lt;dt&gt;make&lt;/dt&gt;
+&lt;dd&gt;make a new port object&lt;/dd&gt;
+&lt;dt&gt;to&lt;/dt&gt;
+&lt;dd&gt;special (convert an object to a port)&lt;/dd&gt;
+&lt;dt&gt;open&lt;/dt&gt;
+&lt;dd&gt;initialize external operations&lt;/dd&gt;
+&lt;dt&gt;close&lt;/dt&gt;
+&lt;dd&gt;conclude external operations&lt;/dd&gt;
+&lt;dt&gt;write&lt;/dt&gt;
+&lt;dd&gt;transfer data to the port&lt;/dd&gt;
+&lt;dt&gt;read&lt;/dt&gt;
+&lt;dd&gt;transfer data from the port&lt;/dd&gt;
+&lt;dt&gt;query&lt;/dt&gt;
+&lt;dd&gt;get information about the port&lt;/dd&gt;
+&lt;dt&gt;update&lt;/dt&gt;
+&lt;dd&gt;update the port&#39;s state&lt;/dd&gt;
+&lt;dt&gt;create&lt;/dt&gt;
+&lt;dd&gt;create an external object of port type&lt;/dd&gt;
+&lt;dt&gt;delete&lt;/dt&gt;
+&lt;dd&gt;delete an external object of port type&lt;/dd&gt;
+&lt;dt&gt;rename&lt;/dt&gt;
+&lt;dd&gt;rename an external object of port type&lt;/dd&gt;
+
+Note that not all port actions can be used on all port schemes. For example, the **rename** action has no purpose when used on a *sound* port scheme.
+
+Ports also allow basic equality comparisons:
+
+&lt;dl&gt;
+&lt;dt&gt;equal?&lt;/dt&gt;
+&lt;dd&gt;ports are the same object&lt;/dd&gt;
+&lt;dt&gt;not-equal?&lt;/dt&gt;
+&lt;dd&gt;ports are not the same object&lt;/dd&gt;
+&lt;/dl&gt;
+
+For the exact usage of each action use Rebol&#39;s built-in help function. (In this way the action information is always accurate.)
+
+```text
+&gt;&gt; ? open
+USAGE:
+        OPEN spec /new /read /write /seek /allow access
+
+DESCRIPTION:
+        Opens a port. Makes a new port from a specification, if necessary.
+        OPEN is an action value.
+
+ARGUMENTS:
+        spec (port! file! url! block!)
+
+REFINEMENTS:
+        /new -- Create new file - if it exists, reset it (truncate)
+        /read -- Open for read access
+        /write -- Open for write access
+        /seek -- Optimize for random access
+        /allow -- Specifies protection attributes
+                access (block!)
+```
+
+All of the port actions are provided with the port (or spec in the case of implicit port usage) as their first argument.
+
+See the [Port Examples](https://github.com/revault/rebol-wiki/wiki/Port-Examples) section for various examples of how to use port actions.
+
+## Asynchronous Usage
+
+Actions on a port can be *synchronous* or *asynchronous*. 
+
+In general:
+
+* **Synchronous actions** will not return until the requested function has completed.
+* **Asynchronous actions** will return as soon as possible, even if the function is still being performed.
+
+Both modes are useful, depending on program requirements.
+
+Whether an action happens asynchronously depends on a few things. Here are the basic rules:
+
+* Implicit port usage is synchronous. This provides ease-of-use.
+* Explicit port usage is asynchronous, but only if the port scheme supports it and an awake handler has been provided.
+* Some actions are synchronous, even when applied to an asynchronous port.
+
+Note that it is possible to operate an asynchronous port in a synchronous manner, when so desired. But, it is not possible to operate a synchronous port in an asynchronous manner. (To do so, you must use a Rebol task as an asynchronous thread.)
+
+See the [Port Examples](https://github.com/revault/rebol-wiki/wiki/Port-Examples) page for examples of both modes of operation.
+
+# Error Handling
+
+In general, port actions can generate errors in the same way as other Rebol functions, and you can catch and process these *error exceptions* in the same way.
+
+For example, if you want to handle an error during an **open** action, you can wrap the code with an error handling function such as **try**:
+
+```rebol
+if error? err: try [port: open spec] [
+    handle-error err
+]
+```
+
+A shorthand method is to use **attempt**:
+
+```rebol
+either port: attempt [open spec] [
+    perform-io...
+][
+    print [&quot;Cannot open&quot; spec]
+]
+```
+
+So, you can wrap each separate port action in an error handler, or you can wrap all of your port actions together in a single error handler:
+
+```rebol
+err: try [
+    file: open %bigdata.dat
+    da-head: read/part file 4000
+    da-body: read/seek/part file 12000 10000
+    da-tail: read/seek/part file 56000 4000
+]
+close file
+
+if error? err [
+    print [&quot;Port error:&quot; form err]
+]
+```
+
+For asynchronous port operation, error handling can be a bit more complicated. *(And more work is needed here.)*</description>
+    
+    <lastBuildDate>Tue, 15 May 2018 21:12:02 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/what-is-a-port/617.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="11" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/gchiu/40/22_2.png" class="avatar"> gchiu:</div>
+<blockquote>
+<p>Er, isn’t that because someone removed the lines processing in the scheme?</p>
+</blockquote>
+</aside>
+<p>I guess it's up to you to find a place where it ever was for R3-Alpha.  As far as I can tell it was never implemented.</p>
+<p>It's difficult to implement in a generic way.  In Ren-C, just because someone asked about it (I think), I added a bit of a hack in READ that if it sees you get a /LINES refinement and have a port produce a BINARY!, it converts it to text and then turns it into lines.  Or if it's a TEXT! then it will break it into lines.  But this is relatively inefficient when compared with the idea of a port that did the conversion to lines as it went.</p>
+<p>My point is just about the very complex set of concerns.  What qualifies /LINES as a refinement in the finite universe of "the only choices for what read" has?  And if it was qualified, how was it justified that it was skipped over.</p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/12</link>
+        <pubDate>Tue, 15 May 2018 21:12:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-12</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="7" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Try read/lines <a href="http://example.com" rel="nofollow noopener">http://example.com</a>, for instance.  You get back an unprocessed BINARY!.</p>
+</blockquote>
+</aside>
+<p>Er, isn't that because someone removed the lines processing in the scheme?</p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/11</link>
+        <pubDate>Tue, 15 May 2018 21:06:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-11</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>My bad, I see what you mean.</p>
+<aside class="quote no-group quote-modified" data-post="9" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>And thus far, it’s the only “feature” that I see involved.  Everything else is something I could do more conveniently and clearly by making an OBJECT! with methods called “read” and “write” and “open”…or whatever methods I wanted.</p>
+</blockquote>
+</aside>
+<p>Perhaps this is the case (effectively this is what you're doing anyway), however it does offer some consistency and access to native verbs.</p>
+<pre><code class="lang-auto">for-each resource [
+    %a-file.dat
+    http://some.place/foo
+    ftp:///some.place/bar.r
+][
+    probe read resource
+]
+</code></pre>
+<p>It also gives you a framework for building in related state, metadata and documentation. Also auto-breakdown of URLs.</p>
+<p>It also offers a best-practice model for implementing such things. There are a few examples (from memory) in Rebol 2 where someone has gone the alternate verb route or the object route, what you end up with is an interface that is less than easy or intuitive to use or maintain.</p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/10</link>
+        <pubDate>Tue, 15 May 2018 15:12:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-10</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="8" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>That overlooks the efficiency that can be gained by the explicit model.</p>
+</blockquote>
+</aside>
+<p>I'm not overlooking any efficiency.  I'm just saying that if I am a port author, then the concept being that I could theoretically just implement the port as the explicit version.  And then the shorthand would be available for users, because that is a feature of the port model which I get by following the rules of implementing ports.</p>
+<p>And thus far, it's the only "feature" that I see involved.  Everything else is something I could do more conveniently and clearly by making an OBJECT! with methods called "read" and "write" and "open"...or whatever methods I wanted.</p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/9</link>
+        <pubDate>Tue, 15 May 2018 15:08:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-9</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="7" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>This “such as” bothers me, because there’s a fair amount of magic assumed here.  How do I know if it’s a sequence of bytes, or a pizza?</p>
+<p>This puts a lot of pressure on READ and WRITE:</p>
+<p>data: read %todo.dat<br>
+write %plans.r data</p>
+<p>What does this mean?  So it knows from the .DAT extension what to do (a table that tells it how to decode things that end in the .DAT extension?)  And it gets Rebol-compatible records it can write out to %plans.r?</p>
+</blockquote>
+</aside>
+<p>This is scheme-dependent. The only place where the FILE scheme would vary on READ (processes a stream of bytes) is if a file is a directory (returns block of contained files) or non-existent (returns error).</p>
+<p>READ is just a conduit for the READ actor within the scheme.</p>
+<aside class="quote no-group quote-modified" data-post="7" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If I feel there’s anything to the Rebol I/O model, it is mostly centering around being able to write one kind of PORT! object for the explicit behavior, and then get–somewhat “for free”–the implicit.</p>
+</blockquote>
+</aside>
+<p>That overlooks the efficiency that can be gained by the explicit model. Take <a href="https://github.com/revault/rebol-wiki/wiki/Schemes-HTTP#lower-level-synchronous-read-or-write-with-keep-alive" title="HTTP Scheme: Lower Level" rel="nofollow noopener">HTTP as an example</a>: you can process multiple requests with one port (and thus a single persistent TCP connection).</p>
+<pre><code class="lang-auto">rebol-site: port: open http://www.rebol.com/
+result: read port
+
+result2: write port [get %file1.html]
+result3: write port [get %file2.html]
+
+result4: write port [post %target-file [Header: "Value"] {Request contents}]
+close port
+</code></pre>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/8</link>
+        <pubDate>Tue, 15 May 2018 15:05:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-8</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p>So, a port can be defined as:</p>
+<ul>
+<li>a series of values - such as a sequence of bytes</li>
+</ul>
+</blockquote>
+<p>This "such as" bothers me, because there's a fair amount of magic assumed here.  How do I know if it's a sequence of bytes, or a pizza?</p>
+<p>This puts a lot of pressure on READ and WRITE:</p>
+<blockquote>
+<pre><code>data: read %todo.dat
+write %plans.r data
+</code></pre>
+</blockquote>
+<p>What does this mean?  So it knows from the .DAT extension what to do (a table that tells it how to decode things that end in the .DAT extension?)  And it gets Rebol-compatible records it can write out to %plans.r?</p>
+<p>Let's look at the refinements on READ and WRITE in R3-Alpha:</p>
+<pre><code>READ source /part length /seek index /string /lines
+WRITE destination data /part length /seek index /append /allow access /lines
+</code></pre>
+<p>Given the way R3-Alpha's not-very-fancy <a href="https://en.wikipedia.org/wiki/Multiple_dispatch" rel="nofollow noopener">Multiple Dispatch</a> model worked, those are the only refinements you will <em>ever</em> be able to pass to READ and WRITE.  And there was no guarantee a port would pay attention to them.  Try <strong><code>read/lines http://example.com</code></strong>, for instance.  You get back an unprocessed BINARY!.</p>
+<blockquote>
+<p>There are two basic methods to use a port: <strong>implicit</strong> and <strong>explicit</strong>.</p>
+</blockquote>
+<p>If I feel there's anything to the Rebol I/O model, it is mostly centering around being able to write one kind of PORT! object for the explicit behavior, and then get--somewhat "for free"--the implicit.</p>
+<p>So that seems to be the thing to focus on...defining it, defining its limits, and showing realistic scenarios of what it might be used to accomplish--in a way that adds benefit over just making a bunch of disparate functions which can have their own pertinent refinements, like READ-CLIPBOARD, READ-HTTP, etc.</p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/7</link>
+        <pubDate>Tue, 15 May 2018 08:00:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-7</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[Oldes]]></dc:creator>
+        <description><![CDATA[
+            <p>Instead of:</p>
+<pre><code>err: try [
+    file: open %bigdata.dat
+    da-head: read/part file 4000
+    da-body: read/seek/part file 12000 10000
+    da-tail: read/seek/part file 56000 4000
+]
+close file
+
+if error? err [
+    print ["Port error:" form err]
+]
+</code></pre>
+<p>there should be:</p>
+<pre><code>err: try [
+    file: open %bigdata.dat
+    da-head: read/part file 4000
+    da-body: read/seek/part file 12000 10000
+    da-tail: read/seek/part file 56000 4000
+    close file
+]
+
+if error? err [
+    print ["Port error:" form err]
+]
+</code></pre>
+<p>Because is something is going to fail in the <code>try</code> code, than it is the file opening. If it fails, the <code>file</code> would be <code>none</code> and one would receive uncatched error, because <code>close</code> does not handle <code>none</code> value.</p>
+<p>Or even better:</p>
+<pre><code>err: try [
+    file: open %bigdata.dat
+    da-head: read/part file 4000
+    da-body: read/seek/part file 12000 10000
+    da-tail: read/seek/part file 56000 4000
+]
+if file [close file]
+
+if error? err [
+    print ["Port error:" form err]
+]
+</code></pre>
+<p>Which will close the <code>file</code> in case, when fails the reading in the <code>try</code> block above.</p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/6</link>
+        <pubDate>Mon, 14 May 2018 16:54:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-6</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>But, a port can also be used for other types of functions:</p>
+<ul>
+<li>
+<p><strong>image conversion</strong> - such as encoding or decoding a JPEG file.</p>
+</li>
+<li>
+<p><strong>sound conversion</strong> - such as encoding or decoding an audio file</p>
+</li>
+<li>
+<p><strong>checksum computation</strong> - keeping a running checksum</p>
+</li>
+<li>
+<p><strong>compression and decompression</strong> of data</p>
+</li>
+<li>
+<p><strong>encryption and decryption</strong> of data</p>
+</li>
+<li>
+<p><strong>other codecs</strong> for encoding and decoding data formats</p>
+</li>
+</ul>
+</blockquote>
+</aside>
+<p>I don't ever recall seeing examples of how these are supposed to work.</p>
+<p>The following is a spitball projection of, say, compression:</p>
+<pre><code class="lang-auto">big-file: open %a-big-file.bin
+
+compressor: open [scheme: zip target: %a-big-file.zip]
+insert compressor big-file
+close compressor
+</code></pre>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/5</link>
+        <pubDate>Mon, 14 May 2018 03:54:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-5</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>A <em>scheme</em> is a type of port.</p>
+</blockquote>
+</aside>
+<p>I think this is wrong: a <em>scheme</em> is the prototype for a port. All ports inherit the actions/properties of their parent scheme.</p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/4</link>
+        <pubDate>Mon, 14 May 2018 03:37:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-4</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>One slight complication here is where READ/WRITE is handled for both <em>implicit</em> and <em>explicit</em> modes of a scheme:</p>
+<pre><code class="lang-auto">read %a-file.txt
+
+port: open %a-file.txt
+read port
+close port
+</code></pre>
+<p>As I understand it, the scheme author is responsible for monitoring whether an instance is <em>implicit</em> or <em>explicit</em>. Related: OPEN?</p>
+<p>From a user point of view, it's possible that the simplest way to understand the difference between <em>implicit</em> from <em>explicit</em> is whether one passes a FILE! or URL! value to READ vs. passing a PORT! value.</p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/3</link>
+        <pubDate>Mon, 14 May 2018 03:32:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-3</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="1" data-topic="617">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>The name of a port is called a <strong>‘scheme’</strong>.</p>
+</blockquote>
+</aside>
+<p>This doesn't quite parse, to me it should read: <em>The name of a port corresponds to the name of the scheme on which it is based.</em></p>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/2</link>
+        <pubDate>Mon, 14 May 2018 03:27:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-2</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+      <item>
+        <title>What is a Port?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>From the <a href="https://github.com/revault/rebol-wiki/wiki/Ports#basic-concepts" title="Ports: Basic Concepts, Using Ports, Port Details, Error Handling" rel="nofollow noopener">Rebol 3 Project Wiki</a>:</p>
+<hr>
+<h1>Basic Concepts</h1>
+<p><a href="https://github.com/revault/rebol-wiki/wiki/Ports#introduction" title="Ports: Introduction" rel="nofollow noopener">As stated above</a>, a port is used to transfer data. However, the basic port definition is a bit more general than that. A port is actually more like a <em>stream of data</em> that undergoes some type of exchange, transformation, or effect.</p>
+<p>For example, a port is often used for I/O functions such as:</p>
+<ul>
+<li>
+<strong>console</strong> input and output</li>
+<li>
+<strong>file</strong> reading and writing</li>
+<li>
+<strong>directories</strong> of files</li>
+<li>
+<strong>network</strong> transferring of data</li>
+<li>
+<strong>event handling</strong>, such as mouse clicks or keyboard input</li>
+<li><strong>database access</strong></li>
+</ul>
+<p>But, a port can also be used for other types of functions:</p>
+<ul>
+<li>
+<strong>image conversion</strong> - such as encoding or decoding a JPEG file.</li>
+<li>
+<strong>sound conversion</strong> - such as encoding or decoding an audio file</li>
+<li>
+<strong>checksum computation</strong> - keeping a running checksum</li>
+<li>
+<strong>compression and decompression</strong> of data</li>
+<li>
+<strong>encryption and decryption</strong> of data</li>
+<li>
+<strong>other codecs</strong> for encoding and decoding data formats</li>
+</ul>
+<h2>Related to Series</h2>
+<p>As you know, Rebol is built on the concept of a <a href="http://www.rebol.com/docs/core23/rebolcore-6.html" rel="nofollow noopener">Series</a>.</p>
+<p><strong>A series is a set of values arranged in a specific order. It is a sequence.</strong></p>
+<p>A port is a special type of series. Not only is it a sequence, but it can also hold <em>state information</em> like an object, and access <a href="https://github.com/revault/rebol-wiki/wiki/Devices" rel="nofollow noopener">external devices</a> for I/O or other high-speed operations, such as image conversion or encryption.</p>
+<p>In Rebol 2, ports were built on a pure series model. However, we found this approach to be problematic because ports are not pure series. They also embody state (information).</p>
+<p>For example, a file can be thought of as a stream of bytes. But, a file also has other important attributes such a file name, a location within a directory, creation and modification dates, permissions like read-only or allow execution, and ownership information. These attributes fall outside of a pure series model.</p>
+<h2>New Definition</h2>
+<p>Rebol 3 moves away from the pure series model of Rebol 2 and more toward an I/O stream model. Now it is closer to the concept found in other programming environments and languages.</p>
+<p>So, a port can be defined as:</p>
+<ul>
+<li>
+<strong>a series of values</strong> - such as a sequence of bytes</li>
+<li>
+<strong>holds state information</strong> - such as file attributes</li>
+<li>can <strong>access the external world</strong> - network communication, for example</li>
+<li>
+<strong>can have side effects</strong> - internal changes, such as compression</li>
+</ul>
+<p>The pure series model is gone. Ports are more pragmatic now, and this has resulted in a port system that is cleaner, smaller, faster, and more extensible than ever before.</p>
+<h2>Main Components</h2>
+<p>A port consists of these main ideas:</p>
+<ol>
+<li>
+<strong>A name</strong> that specifies the general type of port (scheme)</li>
+<li>
+<strong>An object</strong> that holds information (state of port)</li>
+<li>
+<strong>A set of functions</strong> that are applied to that object (actions)</li>
+</ol>
+<p>The name of a port is called a <strong>'scheme'</strong>. Example schemes are:</p>
+<ul>
+<li><strong>console</strong></li>
+<li><strong>file</strong></li>
+<li>
+<strong>dir</strong> - file directory</li>
+<li>
+<strong>event</strong> - gui events (mainly)</li>
+<li>
+<strong>TCP</strong> - networking</li>
+<li>
+<strong>HTTP</strong> - web connections</li>
+<li>
+<strong>clipboard</strong> - cut and paste</li>
+<li>
+<strong>sound</strong> - for audio output</li>
+<li>
+<strong>system</strong> - system state changes</li>
+</ul>
+<p>Many other types of schemes can exist, and they are often built on top of lower level schemes. For example, FTP for file transfer is built on the TCP networking scheme.</p>
+<p>Here is an example. In this line:</p>
+<pre><code class="lang-auto">port: open tcp://www.rebol.net
+data: read http://www.rebol.com
+</code></pre>
+<p>the first scheme is TCP; the second is HTTP. (Note that this is consistent with the definition of a URL.)</p>
+<p>The object holds information such as:</p>
+<ul>
+<li>the type of the port (file, network, database, etc.)</li>
+<li>the name and location (path) of a file</li>
+<li>the URI of a network connection</li>
+<li>a network host name and port number</li>
+<li>a buffer of data being transferred</li>
+<li>date and time info</li>
+<li>structures used by external devices</li>
+</ul>
+<p>This object is of a specific Rebol <em>datatype</em>, called a <em>PORT!</em></p>
+<p>Specific <em>action functions</em> can be applied to a port. Some common actions are:</p>
+<ul>
+<li>
+<strong>make</strong> - create a new port</li>
+<li>
+<strong>open</strong> - initialize the port</li>
+<li>
+<strong>close</strong> - finalize the port</li>
+<li>
+<strong>read</strong> - read data from port</li>
+<li>
+<strong>write</strong> - write data to port</li>
+<li>
+<strong>query</strong> - get other information from port</li>
+<li>
+<strong>update</strong> - detect external changes to the port</li>
+</ul>
+<p>But, there are many other actions as well, as generally defined by Rebol datatypes.</p>
+<h1>Using Ports</h1>
+<h2>Two Basic Methods</h2>
+<p>There are two basic methods to use a port: <strong>implicit</strong> and <strong>explicit</strong>.</p>
+<p>When you write code such as:</p>
+<pre><code class="lang-auto">write %index.html read http://www.rebol.net
+</code></pre>
+<p>you are using <strong>implicit</strong> ports. This is a shortcut notation to keep simple code simple. You are only using a single port action, such as <strong>read</strong> or <strong>write</strong> and all the other details are hidden behind those functions.</p>
+<p>However, if you write code such as:</p>
+<pre><code class="lang-auto">file: open %data.dat
+write file data1
+write file data2
+...
+close file
+</code></pre>
+<p>then you are using <strong>explicit</strong> ports. Here you specify each action separately. You <strong>open</strong> the port, then <strong>read</strong> and <strong>write</strong> to the port, and then <strong>close</strong> the port. Each action must be specified.</p>
+<h2>Fast and Easy</h2>
+<p>Implicit ports are the fast and easy way to perform various I/O actions in Rebol.</p>
+<p>A few examples are:</p>
+<pre><code class="lang-auto">data: read %todo.dat
+write %plans.r data
+query %docs.txt
+page: read http://www.rebol.net
+result: write http://rebol.net/cgi/act.r data
+data: read ftp://www.rebol.net/projects.dat
+host: read dns://www.rebol.net
+</code></pre>
+<p>This type of usage depends on the type of port (the scheme). The example above uses the file, http, ftp, and dns schemes. Those schemes have been designed to support implicit actions.</p>
+<p>Notice that for local files, the file datatype is used to indicate usage of the file scheme. The line:</p>
+<pre><code class="lang-auto">data: read file://todo.dat
+</code></pre>
+<p>is equally valid. Think of the file datatype as an abbreviation for that. Both methods use the same file scheme to perform the I/O.</p>
+<p>Other schemes do not support implicit usage. For example:</p>
+<pre><code class="lang-nohighlight">&gt;&gt; data: read tcp://www.rebol.com
+** Access error: Port is not open: tcp://www.rebol.com
+** Where: read
+** Near: read tcp://www.rebol.com
+</code></pre>
+<p>This error occurs because TCP does not support an implicit <strong>read</strong> action. That's because TCP is a lower level scheme that requires a higher level protocol in order to be useful.</p>
+<h2>Full Control</h2>
+<p>Explicit ports give you full control over each I/O action.<br>
+For example, let's say you want to read a large file in small 20000 byte chunks. You might use these steps:</p>
+<pre><code class="lang-auto">file: open %bigdata.dat
+while [not zero? data: read/part file 20000] [
+    process data
+]
+close file
+</code></pre>
+<p>This common method will be familiar to most programmers. The file is opened, reads are done, and the file is closed. Each action is done separately.</p>
+<p>This type of explicit I/O is common for large files that would consume a lot of memory if you read them with implicit I/O. For example, if the <em>bigdata.dat</em> file is 10 GB, you would not be able to read it all into memory at one time.</p>
+<p>Explicit I/O is also used when you need strict control over each action. This is often done if you need to seek to different locations within a file or write your own network protocol.</p>
+<p>For example, let's say you need to read data from three different parts of a large file. In that case you would use read to seek to each part of the file to do the read:</p>
+<pre><code class="lang-auto">file: open %bigdata.dat
+da-head: read/part file 4000
+da-body: read/seek/part file 12000 10000
+da-tail: read/seek/part file 56000 4000
+close file
+</code></pre>
+<h1>Port Details</h1>
+<p>This section describes some of the important concepts you need to know about ports.</p>
+<h2>Port Datatype</h2>
+<p>A port is a Rebol datatype. If you use explicit ports, you will need to use the port datatype as <em>a type of handle</em> to access the port. If you've used handles before in other languages, that concept is probably familiar to you already.</p>
+<p>In Rebol a port is very similar to an object because it stores information in named fields. We often call these fields <em>the state</em> of the port. When various actions are performed, the state will change, depending on the action. A port differs from an object in that it responds in a special way to specific datatype actions such as <strong>open</strong>, <strong>read</strong>, <strong>write</strong>, and several others.</p>
+<h2>Port Schemes</h2>
+<p>A <em>scheme</em> is a type of port.</p>
+<p>You will use schemes to identify the type of port access you need as well as the protocol to use.</p>
+<p>For example, when you access a local file, you are using the <strong>file</strong> scheme. When you read a web page, you use the <strong>http</strong> scheme, which is a higher level protocol built on top of the <strong>tcp</strong> scheme.</p>
+<p>Each scheme has a unique name that is used to identify it. For example, <strong>file</strong>, <strong>http</strong>, and <strong>tcp</strong> are the scheme names shown above. A scheme name can be used as part of a URL, or separately, depending on requirements.</p>
+<p>The Rebol system manages a list of available schemes. These schemes can be built-in, can be loaded separately, or can even be user defined within a script.</p>
+<p>A lot more about schemes can be found in the <a href="https://github.com/revault/rebol-wiki/wiki/Port-Implementation" rel="nofollow noopener">Port Implementation</a> section.</p>
+<h2>Making Ports</h2>
+<p>All ports are made from a <em>spec</em> -- a specification of the port's attributes. As you have seen above, the spec can be something quite simple, such as a file name or URL. But, a port spec can also be a block that includes many fields to indicate various options for the port.</p>
+<p>All of these can be used as port specs:</p>
+<pre><code class="lang-auto">%file.txt  ; a file name
+tcp://www.rebol.com ; a URL
+[scheme: 'tcp host: "www.rebol.net"] ; a block
+'tcp  ; just the port's scheme name
+object ; an object that specifies the port
+port ; a existing port
+</code></pre>
+<p>There are a couple ways to make a port, depending on your required level of control.</p>
+<p>One method is to use the <strong>make</strong> action, as you would for any datatype. The general form is:</p>
+<pre><code class="lang-auto">port: make port! spec
+</code></pre>
+<p>Where <strong>port!</strong> is the port datatype itself, and spec is the specification as described above.</p>
+<p>Here are some examples:</p>
+<pre><code class="lang-auto">port1: make port! %file.txt
+port2: make port! tcp://www.rebol.net
+port3: make port! [scheme: 'tcp host: "www.rebol.net"]
+</code></pre>
+<p>These examples will create a port object and initialize its various fields.</p>
+<p>One of the most common methods to create a port is with the <strong>open</strong> function. Unlike <strong>make</strong> the <strong>open</strong> function does not require a port! datatype. It knows that it is being provided with a spec. For example:</p>
+<pre><code class="lang-auto">port: open tcp://www.rebol.net
+</code></pre>
+<p>will create a new port and also perform initializations associated with the <strong>open</strong> action.</p>
+<p>More details about <strong>open</strong> are discussed later.</p>
+<h2>Port Actions</h2>
+<p>Port actions can be thought of as functions that act on ports.</p>
+<p>More precisely, port actions are <em>polymorphic datatype actions</em> similar to those used on all other datatypes. If you're not sure what that means, don't worry about it here. Just think of ports like objects that have a well-defined set of methods that act on them.</p>
+<p>The actions defined for ports are:</p>
+<dl>
+<dt>make</dt>
+<dd>make a new port object</dd>
+<dt>to</dt>
+<dd>special (convert an object to a port)</dd>
+<dt>open</dt>
+<dd>initialize external operations</dd>
+<dt>close</dt>
+<dd>conclude external operations</dd>
+<dt>write</dt>
+<dd>transfer data to the port</dd>
+<dt>read</dt>
+<dd>transfer data from the port</dd>
+<dt>query</dt>
+<dd>get information about the port</dd>
+<dt>update</dt>
+<dd>update the port's state</dd>
+<dt>create</dt>
+<dd>create an external object of port type</dd>
+<dt>delete</dt>
+<dd>delete an external object of port type</dd>
+<dt>rename</dt>
+<dd>rename an external object of port type</dd>
+<p>Note that not all port actions can be used on all port schemes. For example, the <strong>rename</strong> action has no purpose when used on a <em>sound</em> port scheme.</p>
+<p>Ports also allow basic equality comparisons:</p>
+<dl>
+<dt>equal?</dt>
+<dd>ports are the same object</dd>
+<dt>not-equal?</dt>
+<dd>ports are not the same object</dd>
+</dl>
+<p>For the exact usage of each action use Rebol's built-in help function. (In this way the action information is always accurate.)</p>
+<pre><code class="lang-nohighlight">&gt;&gt; ? open
+USAGE:
+        OPEN spec /new /read /write /seek /allow access
+
+DESCRIPTION:
+        Opens a port. Makes a new port from a specification, if necessary.
+        OPEN is an action value.
+
+ARGUMENTS:
+        spec (port! file! url! block!)
+
+REFINEMENTS:
+        /new -- Create new file - if it exists, reset it (truncate)
+        /read -- Open for read access
+        /write -- Open for write access
+        /seek -- Optimize for random access
+        /allow -- Specifies protection attributes
+                access (block!)
+</code></pre>
+<p>All of the port actions are provided with the port (or spec in the case of implicit port usage) as their first argument.</p>
+<p>See the <a href="https://github.com/revault/rebol-wiki/wiki/Port-Examples" rel="nofollow noopener">Port Examples</a> section for various examples of how to use port actions.</p>
+<h2>Asynchronous Usage</h2>
+<p>Actions on a port can be <em>synchronous</em> or <em>asynchronous</em>.</p>
+<p>In general:</p>
+<ul>
+<li>
+<strong>Synchronous actions</strong> will not return until the requested function has completed.</li>
+<li>
+<strong>Asynchronous actions</strong> will return as soon as possible, even if the function is still being performed.</li>
+</ul>
+<p>Both modes are useful, depending on program requirements.</p>
+<p>Whether an action happens asynchronously depends on a few things. Here are the basic rules:</p>
+<ul>
+<li>Implicit port usage is synchronous. This provides ease-of-use.</li>
+<li>Explicit port usage is asynchronous, but only if the port scheme supports it and an awake handler has been provided.</li>
+<li>Some actions are synchronous, even when applied to an asynchronous port.</li>
+</ul>
+<p>Note that it is possible to operate an asynchronous port in a synchronous manner, when so desired. But, it is not possible to operate a synchronous port in an asynchronous manner. (To do so, you must use a Rebol task as an asynchronous thread.)</p>
+<p>See the <a href="https://github.com/revault/rebol-wiki/wiki/Port-Examples" rel="nofollow noopener">Port Examples</a> page for examples of both modes of operation.</p>
+<h1>Error Handling</h1>
+<p>In general, port actions can generate errors in the same way as other Rebol functions, and you can catch and process these <em>error exceptions</em> in the same way.</p>
+<p>For example, if you want to handle an error during an <strong>open</strong> action, you can wrap the code with an error handling function such as <strong>try</strong>:</p>
+<pre><code class="lang-auto">if error? err: try [port: open spec] [
+    handle-error err
+]
+</code></pre>
+<p>A shorthand method is to use <strong>attempt</strong>:</p>
+<pre><code class="lang-auto">either port: attempt [open spec] [
+    perform-io...
+][
+    print ["Cannot open" spec]
+]
+</code></pre>
+<p>So, you can wrap each separate port action in an error handler, or you can wrap all of your port actions together in a single error handler:</p>
+<pre><code class="lang-auto">err: try [
+    file: open %bigdata.dat
+    da-head: read/part file 4000
+    da-body: read/seek/part file 12000 10000
+    da-tail: read/seek/part file 56000 4000
+]
+close file
+
+if error? err [
+    print ["Port error:" form err]
+]
+</code></pre>
+<p>For asynchronous port operation, error handling can be a bit more complicated. <em>(And more work is needed here.)</em></p>
+</dl>
+          <p><a href="https://forum.rebol.info/t/what-is-a-port/617/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-is-a-port/617/1</link>
+        <pubDate>Mon, 14 May 2018 03:17:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-617-1</guid>
+        <source url="https://forum.rebol.info/t/what-is-a-port/617.rss">What is a Port?</source>
+      </item>
+  </channel>
+</rss>

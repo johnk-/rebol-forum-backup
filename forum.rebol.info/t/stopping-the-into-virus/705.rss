@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Stopping the /INTO Virus</title>
+    <link>https://forum.rebol.info/t/stopping-the-into-virus/705</link>
+    <description>In R3-Alpha, an /INTO option was added to REDUCE and COMPOSE.  It blended the functionality of INSERT into these routines, so as to avoid the overhead of creating an intermediate series that would just be thrown away:
+
+    &gt;&gt; data: copy [a b c]
+    &gt;&gt; insert data reduce [10 + 20 30 + 40]
+    &gt;&gt; data
+    [30 70 a b c]
+
+    &gt;&gt; data: copy [a b c]
+    &gt;&gt; reduce/into [10 + 20 30 + 40] data
+    &gt;&gt; data
+    [30 70 a b c]
+
+So **no new functionality is added**...this is a refinement whose sole purpose is to be a lower-overhead way of doing what you could do already.
+
+But...it&#39;s narrower.  There&#39;s no /PART refinement, so you&#39;re going to get all of the reduced data inserted if you use /INTO.  There&#39;s no /DUP, so you&#39;ll get one copy only.  There&#39;s no /ONLY, so arrays will be spliced in.  And from a Ren-C perspective, there&#39;s no /LINE (which APPEND+MODIFY+INSERT have now)...so you can&#39;t have the inserted data give a newline marker.
+
+Plus, /INTO just has INSERT semantics, and returns the tail of the operation.  You can&#39;t do MODIFY.  And if you want to optimize `append data reduce [...]` you&#39;d have to generally say `head reduce/into [...] tail data`.  Noting that each function call in the evaluator has cost, and path dispatch takes longer than ordinary dispatch in the first place, one might wonder just how much it&#39;s saving...?
+
+I don&#39;t want to get into a bunch of artificial examples of /INTO usage to show what it&#39;s faster or slower at...but to make my point here, some R3-Alpha timing of that:
+
+    &gt;&gt; data: copy [a b c]
+    &gt;&gt; delta-time [loop 1000000 [append data reduce [10 + 20 30 + 40]]]
+    == 0:00:00.481017
+
+    &gt;&gt; data: copy [a b c]
+    &gt;&gt; delta-time [loop 1000000 [head reduce/into [10 + 20 30 + 40] tail data]] 
+    == 0:00:00.397192
+
+I&#39;m sure you can craft some situations where it can be shown to perform better...especially when the GC is taken into account.  But what I&#39;m trying to get at is that **I think this is the wrong place to be looking for optimization.**
+
+1. It&#39;s asking users to write their code in an unnatural form with more limited options than they&#39;d expect from APPEND+INSERT+MODIFY.  (While trying to write the above example I got mixed up and tried to write `reduce/into data [stuff to reduce]` because saying where to put the reduced data first feels more natural...)
+2. It creates a cognitive uneasiness (&quot;am I doing this right? should I have used a REDUCE/INTO&quot;), leading people to write less clear code *in pursuit of a performance benefit that may or may not materialize*.
+3. Everyone writing an operation that generates a new series will now wonder if they have to make an /INTO version as well.
+4. REDUCE&#39;s increased complexity means more documentation, more refinements to fulfill in the frame, more checking of those refinements, more cost to evaluate the PATH! when the refinement is used, etc.
+5. This is all for *no increase in functionality*.
+
+While all these points are a bit grim, it&#39;s actually #3 that worries me most.  An even more frightening thought is if people start worrying about adding the missing /PART, /DUP, /LINE components.  :worried:  We can see that /INTO is a precedent that suddenly creeps into the source level consciousness of everyone writing code.
+
+There are a lot of areas to look at for making the system run on the whole faster without the downsides that /INTO brings to the table.  There should be a heavy skepticism about introducing these kinds of things.  Maybe it can speed some things up, but for what collateral damage?
+
+So I want /INTO to die, and tackle optimization in more systemic ways.  And it&#39;s easier to tackle systemic optimization when there&#39;s less code, following more predictable rules.
+
+---
+
+Note: Just looking at the [one use of COMPOSE/INTO in R3-Alpha](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/sys-ports.r#L109) for a moment:
+
+    opt [#&quot;:&quot; copy s2 digits (compose/into [port-id: (to integer! s2)] tail out)]
+
+...it&#39;s a good data point on this being a bad direction.  Compare with:
+
+    opt [#&quot;:&quot; copy s2 digits (append out compose [port-id: (to integer! s2)])]
+
+I think playing to Rebol&#39;s strengths means doing everything possible to make the second case acceptable enough in performance that such distortions aren&#39;t worth it within the domains it would be applied to.
+
+(I&#39;d also like to add that use of CHAR! literals like #&quot;:&quot; in PARSE rules that are processing ANY-STRING! is another area where we need to work to make sure that it&#39;s not sufficient performance benefit to warrant doing that instead of plain &quot;:&quot;.  Those are the kinds of things that need to be solved at acceptable cost as well, to get the source to be as clear as it can.  You should only be using character literals if matching CHAR! values in BLOCK!s...)</description>
+    
+    <lastBuildDate>Wed, 09 Dec 2020 04:45:02 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/stopping-the-into-virus/705.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Stopping the /INTO Virus</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>/INTO has always seemed a bit awkward. At a native level, it would seem marginally better (readable) to have INSERT/REDUCE or APPEND/REDUCE, but as REDUCE is kin to COLLECT and COMPOSE, you wouldn't want to have refinements for each of those plus the infinite variants of composers that one could conceive. Whether as a mezzanines or within an 'optimization' module, it may be better still to have dedicated functions more suited to this: COLLECT-INTO/COMPOSE-INTO/REDUCE-INTO. For tidyness if perhaps less optimized, an INTO function that takes a prefix argument for the composition method—COLLECT INTO.</p>
+<p>I'm not quite sure how I feel about this as REDUCE is a fairly essential function and I'm reducing (<img src="https://forum.rebol.info/images/emoji/twitter/smiley.png?v=9" title=":smiley:" class="emoji" alt=":smiley:">) it to a specialization of a REDUCE-like function that takes a block argument as a target—perhaps it should ever have been thus.</p>
+<p>This goes back to another pet of mine and that is to have consistent natives within some type of Core module so as not to pollute the 'global' namespace. Essentially a new user can do <code>help "collect"</code> and only have the prescribed one appear, but can still access the more elemental one by doing <code>core/collect copy [] [...collect body...]</code> (or by another name: <code>primitive/collect make block! 16 [...collect body...]</code>)</p>
+          <p><a href="https://forum.rebol.info/t/stopping-the-into-virus/705/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/stopping-the-into-virus/705/4</link>
+        <pubDate>Tue, 08 Dec 2020 17:49:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-705-4</guid>
+        <source url="https://forum.rebol.info/t/stopping-the-into-virus/705.rss">Stopping the /INTO Virus</source>
+      </item>
+      <item>
+        <title>Stopping the /INTO Virus</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="705">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>There are a lot of areas to look at for making the system run on the whole faster without the downsides that /INTO brings to the table. There should be a heavy skepticism about introducing these kinds of things. Maybe it can speed some things up, but for what collateral damage?</p>
+<p>So I want /INTO to die, and tackle optimization in more systemic ways. And it's easier to tackle systemic optimization when there's less code, following more predictable rules.</p>
+</blockquote>
+</aside>
+<p>^-- me in June 2018</p>
+<p><a href="https://github.com/red/red/issues/3340#issuecomment-563512944">Gregg Irwin in December 2019</a>: "TL;DR Remove /into everywhere in Red."</p>
+<blockquote>
+<p>Is <code>/into</code>  a good idea at all, anywhere? I vote No. It came about in R3, and I think was championed by Brian Hawley. I'm biased, as I never liked it (Brian I like fine, just not <code>/into</code>). AFAIK, it has never been a proven win. It's an unnecessary complication.</p>
+</blockquote>
+<p>Not that talking sense is going to make much impact over there...</p>
+          <p><a href="https://forum.rebol.info/t/stopping-the-into-virus/705/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/stopping-the-into-virus/705/3</link>
+        <pubDate>Wed, 02 Dec 2020 04:39:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-705-3</guid>
+        <source url="https://forum.rebol.info/t/stopping-the-into-virus/705.rss">Stopping the /INTO Virus</source>
+      </item>
+      <item>
+        <title>Stopping the /INTO Virus</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>My confidence of /INTO being bad means <a href="https://github.com/metaeducation/ren-c/commit/5f8e4e857ef6db325bbb750d6ecbd6f84bd7e3cd" rel="nofollow noopener"><strong>the deed is done and /INTO is gone</strong></a>.</p>
+<p>Though I had one little moment of pause when noticing that COLLECT/INTO was able to KEEP into a string:</p>
+<pre><code>&gt;&gt; collect/into [keep 'A keep [B C]] x: copy ""
+== "ABC"
+</code></pre>
+<p>What it's doing is basically equivalent to the following:</p>
+<pre><code>&gt;&gt; x: to text! collect [keep 'A keep [B C]]
+== "ABC"
+</code></pre>
+<p>The difference is, the /INTO version "folds" any data it gets into the string as it goes.  Using TO TEXT! after-the-fact means that if you do thousands of KEEPs, you'll wind up with a collected BLOCK! that's thousands of elements long...that can't be GC'd as you go.  COLLECT/INTO would contribute material to the string one element at a time with no intermediate block.</p>
+<p>Having a string target for /INTO when the source material is a block is thus materially different.  When the target is a block anyway, you wind up gathering the same amount of total state...and the GC will clean up any intermediates.  But targeting a block instead of folding a string means you might run up against an operation your system had enough memory to do with the fold, but not with the block.</p>
+<h3>Still...COLLECT/INTO an ANY-STRING! is a false economy</h3>
+<p>The folding nature of /INTO might make it sound good on paper.  But if we look at the big picture, we can see why it's not very compelling.  I'm going to write this all out because I want there to be no doubt that exterminating it was the right move.</p>
+<hr>
+<p><strong>You only get the TO TEXT! semantics of the underlying INSERT.</strong>  There are a lot of ways to turn blocks into text, or to fold strings together.  How often is what INSERT would do exactly what you wanted?</p>
+<p>Most of the time I've used COLLECT with strings I find myself writing <code>spaced collect [...]</code>.  But SPACED treats single characters differently from strings.  It assumes you don't want them to participate in the delimiting but want them treated as-is:</p>
+<pre><code>&gt;&gt; spaced ["a" "b" #"c" "d"]
+== "a bcd"
+</code></pre>
+<p>This is actually very important, because it means newlines don't get delimited since they are a CHAR!.  You see weird behaviors on that in R3-Alpha/Rebol2/Red:</p>
+<pre><code>red&gt; form reduce ["a" newline "b"]
+== "a ^/b"
+</code></pre>
+<p>If a COLLECT/INTO is just folding text and throwing the material it has away, it can't do such subtleties.</p>
+<hr>
+<p><strong>You're losing the power of the evaluator.</strong>  KEEP itself doesn't evaluate, so once something is folded into a string...you don't have any bindings or anything to evaluate anymore.  That's lame.  One thing about KEEP is that you don't have your hands tied with it... you can say things like:</p>
+<pre><code>x: unspaced collect [
+   for-each [flag string] data [
+       ...
+       if flag [keep 'reverse]
+       keep string
+       ...
+    ]
+]
+</code></pre>
+<p>But if you folded it as you went, you'd wind up needing some nested collect:</p>
+<pre><code>x: collect/into [
+   for-each [flag string] data [
+       ...
+       keep reduce collect [
+           if flag [keep 'reverse]
+           keep string
+       ]
+       ...
+    ]
+] result: copy ""
+</code></pre>
+<p>The second is less clear than the first.  And as I said in the first point, it's not like UNSPACED is even the logic you'll be wanting.</p>
+<hr>
+<p><strong>The KEEP result doesn't return what you added and may not be that interesting.</strong>  You get what was passed to keep passed through just like when you're adding to a block:</p>
+<pre><code> &gt;&gt; collect/into [print ["KEEP returned:" mold keep [A B C]]] result: copy ""
+KEEP returned: [A B C]
+== "ABC"
+</code></pre>
+<p>It's just another axis of "your application might have different ideas of what's useful"</p>
+<hr>
+<p><strong>If you actually have an issue with scale, your problem is probably complicated enough you'd prefer your own emitter.</strong>  Stressing the point again: there are tons of ways one might want to make strings from blocks, and the odds COLLECT/INTO picked the one matching your scenario are slim.  Probably even slimmer if you're dealing with some gigantic bunch of data that requires folding as you go.</p>
+<p>COLLECT is deliberately not a hard function to write (and it's even less so without /INTO complicating it!) You can roll your own emitter very easily:</p>
+<pre><code>result: copy ""
+emit: specialize 'append [series: result]
+</code></pre>
+<p>Now your EMIT has /ONLY and /DUP and /LINE and /PART.  That was quick.  But what if we wanted to have a different return than <code>result</code> that we've accumulated so far (which APPEND returns).  How about an ENCLOSE?</p>
+<pre><code>result: copy ""
+emit: enclose (specialize 'append [series: result]) func [f [frame!]] [
+    f/value: to-text f/value ;-- will be return result due to ELIDE
+    elide do f ;-- runs the append (F/VALUE unavailable after DO F)
+]
+</code></pre>
+<p>So now your <code>emit [A B C]</code> gives you "ABC" as a result, the part of the string it added.  Sky's the limit.</p>
+<h3>And that's why you shouldn't shed a tear for the folding /INTO</h3>
+<p>Summarized simply:</p>
+<blockquote>
+<p>It will <em>always</em> be clearer and more powerful to to express a string-targeting COLLECT/INTO as a block-targeting collect with operations that then process that accumulated block.</p>
+<p>Thus, the only reason you would have ever favored a string-targeting COLLECT/INTO would be if your problem was one of performance or scale such that holding that intermediate block (and elements it holds) would be excessive.  But anyone in that situation probably has complex needs that the limited COLLECT/INTO behavior wouldn't meet anyway!</p>
+<p>So it's better to have people learn how to use the powerful tools for designing COLLECT-like abstractions themselves and keep COLLECT simple.</p>
+</blockquote>
+<p>So you shouldn't miss it, nor should you be missing the following bugs, all of which are now "resolved" in Ren-C:</p>
+<ul>
+<li>
+<a href="https://github.com/rebol/rebol-issues/issues/2081" rel="nofollow noopener">#2081</a> Make REDUCE/INTO and COMPOSE/INTO work when targeting any-string</li>
+<li>
+<a href="https://github.com/rebol/rebol-issues/issues/2061" rel="nofollow noopener">#2061</a> REDUCE/into of non-block doesn't insert into target</li>
+<li>
+<a href="https://github.com/rebol/rebol-issues/issues/2062" rel="nofollow noopener">#2062</a> COMPOSE/into of non-block doesn't insert into target</li>
+<li>
+<a href="https://github.com/rebol/rebol-issues/issues/1748" rel="nofollow noopener">#1748</a> REDUCE/into and COMPOSE/into bypass PROTECT <span class="hashtag">#1748</span>
+</li>
+<li>
+<a href="https://github.com/rebol/rebol-issues/issues/620" rel="nofollow noopener">#620</a> EXTRACT /into buffer option <span class="hashtag">#620</span>
+</li>
+<li>
+<a href="https://github.com/rebol/rebol-issues/issues/623" rel="nofollow noopener">#623</a> READ /into buffer option. <span class="hashtag">#623</span>
+</li>
+<li>
+<a href="https://github.com/rebol/rebol-issues/issues/709" rel="nofollow noopener">#709</a> MAP-EACH /into buffer option</li>
+<li>
+<a href="https://github.com/rebol/rebol-issues/issues/621" rel="nofollow noopener">#621</a> Change COLLECT /into option to use insert semantics</li>
+</ul>
+<p>And you can see why I call it a virus.  It's not adding functionality, but all of a sudden here it is being tacked on to everything and anything.</p>
+          <p><a href="https://forum.rebol.info/t/stopping-the-into-virus/705/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/stopping-the-into-virus/705/2</link>
+        <pubDate>Sat, 23 Jun 2018 12:04:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-705-2</guid>
+        <source url="https://forum.rebol.info/t/stopping-the-into-virus/705.rss">Stopping the /INTO Virus</source>
+      </item>
+      <item>
+        <title>Stopping the /INTO Virus</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In R3-Alpha, an /INTO option was added to REDUCE and COMPOSE.  It blended the functionality of INSERT into these routines, so as to avoid the overhead of creating an intermediate series that would just be thrown away:</p>
+<pre><code>&gt;&gt; data: copy [a b c]
+&gt;&gt; insert data reduce [10 + 20 30 + 40]
+&gt;&gt; data
+[30 70 a b c]
+
+&gt;&gt; data: copy [a b c]
+&gt;&gt; reduce/into [10 + 20 30 + 40] data
+&gt;&gt; data
+[30 70 a b c]
+</code></pre>
+<p>So <strong>no new functionality is added</strong>...this is a refinement whose sole purpose is to be a lower-overhead way of doing what you could do already.</p>
+<p>But...it's narrower.  There's no /PART refinement, so you're going to get all of the reduced data inserted if you use /INTO.  There's no /DUP, so you'll get one copy only.  There's no /ONLY, so arrays will be spliced in.  And from a Ren-C perspective, there's no /LINE (which APPEND+MODIFY+INSERT have now)...so you can't have the inserted data give a newline marker.</p>
+<p>Plus, /INTO just has INSERT semantics, and returns the tail of the operation.  You can't do MODIFY.  And if you want to optimize <code>append data reduce [...]</code> you'd have to generally say <code>head reduce/into [...] tail data</code>.  Noting that each function call in the evaluator has cost, and path dispatch takes longer than ordinary dispatch in the first place, one might wonder just how much it's saving...?</p>
+<p>I don't want to get into a bunch of artificial examples of /INTO usage to show what it's faster or slower at...but to make my point here, some R3-Alpha timing of that:</p>
+<pre><code>&gt;&gt; data: copy [a b c]
+&gt;&gt; delta-time [loop 1000000 [append data reduce [10 + 20 30 + 40]]]
+== 0:00:00.481017
+
+&gt;&gt; data: copy [a b c]
+&gt;&gt; delta-time [loop 1000000 [head reduce/into [10 + 20 30 + 40] tail data]] 
+== 0:00:00.397192
+</code></pre>
+<p>I'm sure you can craft some situations where it can be shown to perform better...especially when the GC is taken into account.  But what I'm trying to get at is that <strong>I think this is the wrong place to be looking for optimization.</strong></p>
+<ol>
+<li>It's asking users to write their code in an unnatural form with more limited options than they'd expect from APPEND+INSERT+MODIFY.  (While trying to write the above example I got mixed up and tried to write <code>reduce/into data [stuff to reduce]</code> because saying where to put the reduced data first feels more natural...)</li>
+<li>It creates a cognitive uneasiness ("am I doing this right? should I have used a REDUCE/INTO"), leading people to write less clear code <em>in pursuit of a performance benefit that may or may not materialize</em>.</li>
+<li>Everyone writing an operation that generates a new series will now wonder if they have to make an /INTO version as well.</li>
+<li>REDUCE's increased complexity means more documentation, more refinements to fulfill in the frame, more checking of those refinements, more cost to evaluate the PATH! when the refinement is used, etc.</li>
+<li>This is all for <em>no increase in functionality</em>.</li>
+</ol>
+<p>While all these points are a bit grim, it's actually <span class="hashtag">#3</span> that worries me most.  An even more frightening thought is if people start worrying about adding the missing /PART, /DUP, /LINE components.  <img src="//forum.rebol.info/images/emoji/twitter/worried.png?v=7" title=":worried:" class="emoji" alt=":worried:">  We can see that /INTO is a precedent that suddenly creeps into the source level consciousness of everyone writing code.</p>
+<p>There are a lot of areas to look at for making the system run on the whole faster without the downsides that /INTO brings to the table.  There should be a heavy skepticism about introducing these kinds of things.  Maybe it can speed some things up, but for what collateral damage?</p>
+<p>So I want /INTO to die, and tackle optimization in more systemic ways.  And it's easier to tackle systemic optimization when there's less code, following more predictable rules.</p>
+<hr>
+<p>Note: Just looking at the <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/sys-ports.r#L109" rel="nofollow noopener">one use of COMPOSE/INTO in R3-Alpha</a> for a moment:</p>
+<pre><code>opt [#":" copy s2 digits (compose/into [port-id: (to integer! s2)] tail out)]
+</code></pre>
+<p>...it's a good data point on this being a bad direction.  Compare with:</p>
+<pre><code>opt [#":" copy s2 digits (append out compose [port-id: (to integer! s2)])]
+</code></pre>
+<p>I think playing to Rebol's strengths means doing everything possible to make the second case acceptable enough in performance that such distortions aren't worth it within the domains it would be applied to.</p>
+<p>(I'd also like to add that use of CHAR! literals like #":" in PARSE rules that are processing ANY-STRING! is another area where we need to work to make sure that it's not sufficient performance benefit to warrant doing that instead of plain ":".  Those are the kinds of things that need to be solved at acceptable cost as well, to get the source to be as clear as it can.  You should only be using character literals if matching CHAR! values in BLOCK!s...)</p>
+          <p><a href="https://forum.rebol.info/t/stopping-the-into-virus/705/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/stopping-the-into-virus/705/1</link>
+        <pubDate>Sat, 23 Jun 2018 01:27:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-705-1</guid>
+        <source url="https://forum.rebol.info/t/stopping-the-into-virus/705.rss">Stopping the /INTO Virus</source>
+      </item>
+  </channel>
+</rss>

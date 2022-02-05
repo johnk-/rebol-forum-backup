@@ -1,0 +1,403 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Comparison Semantics</title>
+    <link>https://forum.rebol.info/t/comparison-semantics/1318</link>
+    <description>I mentioned that there were historical [ways to overflow the C stack besides the evaluator](https://forum.rebol.info/t/switching-to-stackless-why-this-why-now/1247/5).  Anything that uses C recursion could be a problem...so the internals of copying, molding, and comparison were some examples of that.
+
+These overflows were guarded by the evil non-standard checks (that don&#39;t work in Wasm).  So while they may not seem like a priority, they&#39;re things that have to be changed.
+
+Revisiting code for these functions is a sensible time for reviewing the sanity of the model of how these things were being done.  There&#39;s work involved in the stackless conversion, and it also helps break the monotony to think about another issue.
+
+I decided to look at comparison this week--the core question of what it is, and how other languages approach it.  It&#39;s really complicated and kind of overwhelming...so I&#39;m looking to find a &quot;good enough&quot; answer that leaves room for future-forward improvements.
+
+## A Performance Observation
+
+Consider an API for two-argument generic compare operation that can return one of three answers:
+
+     &gt;&gt; compare 10 20
+     == LT  ; Less-Than
+
+     &gt;&gt; compare 0 0
+     == EQ  ; Equal
+
+     &gt;&gt; compare 30 4
+     == GT  ; Greater-Than
+
+Many languages provide something along these lines.  For instance: C has `strcmp()` which will compare two strings and return -1 for the first less than the second, 0 for equal, and 1 for the first being greater than the second.  This interface is enough that you can use it as the basis for your **&gt;**, **&lt;** and **=** operators...as well as your **&gt;=**, **&lt;=** and **&lt;&gt;** operators.
+
+But...what if your datatype can very quickly determine if things are equal or not, and then there&#39;s a greater cost to checking the finer point of whether it is less than or greater than something?  It might help if you passed the kind of comparison you wanted to do in as a three-argument operation.  So that would be more like:
+
+    &gt;&gt; compare &#39;EQ 10 20
+    == #[false]
+
+    &gt;&gt; compare &#39;GE 30 4   ; Greater-or-Equal
+    == #[true]
+
+Or you could just define six different entry points, instead of passing in the parameter of the operation you want.  C++ is like that...each comparison operator (&gt;, &lt;, &lt;=, &gt;=, ==, !=)  can be overloaded separately.  This can be done even to the point of being internally contradictory...or just using the symbols, but not having anything to do with comparisons at all.
+
+As a notable data point: Python2 used a single method on objects called `__cmp__` that returned -1 or 0 or 1.  This was changed in Python3 to allow six separate overloading entry points with [&quot;rich comparisons&quot;](https://www.python.org/dev/peps/pep-0207/).  Their motivation was not performance, but to break off the constraints of integer results so that NumPy arrays could do something along the lines of:
+
+    &gt;&gt; [10 2 0] &lt; [3 4 0]
+    == [#[true] #[false] #[true]] 
+
+(This might not make sense for BLOCK! in Rebol, but perhaps it would make sense for VECTOR! or other types.)
+
+## Making Equality (Eq) and Ordering (Ord) Separate
+
+Another thing to consider in designing comparison methodology into types is if it&#39;s best to separate out the characteristics of equality and ordering completely.
+
+The place to look for thinking on this front is Haskell, which makes [Eq](http://hackage.haskell.org/package/base-4.14.0.0/docs/Data-Eq.html) and [Ord](http://hackage.haskell.org/package/base-4.14.0.0/docs/Data-Ord.html) &quot;typeclasses&quot; (which you can think of as something like &quot;interfaces&quot; in OOP, basically a list of supported functions that members of that typeclass must implement).
+
+Rust followed along with its own Eq and Ord, and added something called [&quot;PartialEq&quot;](https://stackoverflow.com/questions/55128808/when-is-it-appropriate-to-require-only-partialeq-and-not-eq) which relates to wanting to avoid some strange edge cases in floating point numbers.
+
+*(Rust&#39;s discernment is probably one worth weighing in, as they had the benefit of hindsight to make the decision on its importance: [&quot;Floating point values do not have a sensible notion of equality. Arguably, it is an error in Haskell that the expression even type checks.&quot;](https://stackoverflow.com/questions/6038740/comparison-between-fractional-type))*
+
+## Comparing Types to Each Other vs. Other Types
+
+Allowing different types to compare is a whole separate can of worms.  You&#39;ll note that historically, Rebol is willing to do equality comparisons (and just consider unlike types to be not equal most of the time):
+
+    rebol2&gt;&gt; [] == &lt;tag&gt;
+    == false
+
+    rebol2&gt;&gt; 0 == none
+    == false
+
+But the relative comparison operators were less tolerant:
+
+    rebol2&gt;&gt; [] &lt; &lt;tag&gt;
+    ** Script Error: Expected one of: block! - not: tag!
+
+    rebol2&gt;&gt; 0 &lt; none
+    ** Script Error: Expected one of: integer! - not: none!
+
+But this intolerance makes the behavior of SORT seem suspect:
+
+    rebol2&gt;&gt; sort [[] &lt;tag&gt; 0 none]
+    == [none 0 &lt;tag&gt; []]
+
+There clearly was some notion of ordering involved.  It seems either that should also be an error, or the comparison should match what you&#39;d get from a sort.
+
+The plot thickens when you noticed R3-Alpha still errors on the comparison, but does the sort differently:
+
+    r3-alpha&gt;&gt; sort [[] &lt;tag&gt; 0 none]     
+    == [0 &lt;tag&gt; [] none]
+
+And Red has yet another answer:
+
+    red&gt;&gt; sort [[] &lt;tag&gt; 0 none]
+    == [[] 0 none &lt;tag&gt;]
+
+Putting all that aside for a moment :roll_eyes: we can imagine that letting types compare themselves to others could be a bit of a minefield.  What if A and B are different types, and you say **if A == B [...]**... and ask A whether it&#39;s equal to B and says yes.  But if you wrote it the other way and asked **if B == A [...]** the type for B said they weren&#39;t equal?
+
+If you read that [Python 3 Rich Types document](https://www.python.org/dev/peps/pep-0207/) I linked earlier, there&#39;s no fancy answer.  They just say the object on the left gets first dibs to interpret its comparison to the right value.  Then if the left says it doesn&#39;t know how to do the request (it can return `None` instead of a comparison result), the object on the right gets a chance to compare with the left.
+
+*(I&#39;ll mention that C++ puts the left type in charge for comparisons when they are declared as member functions, with no pre-defined system of delegating to the right...though you could invent one for your own types.  However, it&#39;s also possible to do &quot;global overloads&quot; which can be registered for any pair of types.  These don&#39;t belong to either the left or right hand side.)*
+ 
+## The Role of Implicit Coercion in Comparison
+
+Adding even more nuance into this whole mire, is the question of higher-level mechanics in the language which automatically convert values between types in order to make them comparable to each other.  :-/  If these mechanics exist, then it means that two types might be able to compare with each other even when they don&#39;t have any specific methods for understanding the other type.
+
+This plays a big part in C++.  But Rebol would appear to not have such a mechanism, as it doesn&#39;t even let you pass INTEGER! to DECIMAL! parameters:
+
+    &gt;&gt; f: func [d [decimal!]] [print [&quot;The decimal is:&quot; d]]
+    &gt;&gt; f 10
+    ** Script error: f does not allow integer! for its d argument
+
+The reality is a bit more subtle, however... as you can compare integers and decimals.  This actually comes from a coercion mechanic that is hard-coded specifically into the comparison operators.
+
+## R3-Alpha&#39;s Comparison Methodization was *REALLY* ad hoc
+
+[Compare_Values()](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/n-math.c#L290) -- which is the main entry point for the implementation of operators like &gt;, &lt;, =... is outright bizarre:
+
+&gt;     REBINT Compare_Values(REBVAL *a, REBVAL *b, REBINT strictness)
+&gt;
+&gt;     Compare 2 values depending on level of strictness.
+&gt;     NOTE: MODIFIES a and b args.
+&gt;
+&gt;     Strictness:
+&gt;     0 - coerced equality
+&gt;     1 - equivalence
+&gt;     2 - strict equality
+&gt;     3 - same (identical bits)
+&gt;
+&gt;     -1 - greater or equal
+&gt;     -2 - greater
+
+The `Compare_Values()` routine does the kind of baked in higher-level coercion of numeric types described.  Ultimately it decides if it needs to fall-through to a type specific method, which is a function named CT_XXX like `CT_Object()` or `CT_Word()`.  Those functions are guaranteed that the two arguments have been coerced into the same typeclass--(e.g. both ANY-WORD!) but not necessarily the exact same type.
+
+Using magic numbers makes the process somewhat obtuse. But the CT_XXX methods can return `-1` if the comparison requested by &quot;strictness&quot; is not legal, 0 if it didn&#39;t match the constraint, and 1 if it did match.  The method implementations are very scattershot, and I&#39;ve started hammering them into a conventional and simple form so they still pass the tests...but can be looked at more clearly.
+
+## Rebol&#39;s Main Difference: &quot;Levels&quot; of Equality
+
+A real curveball we see here is that Rebol is trying to methodize different kinds of equality.  **No other methodization of comparisons in other languages seems to have this.**
+
+*(Note: Strict equality and Sameness are two levels people are familiar with.  &quot;Equivalence&quot; refers to the EQUIV? operation, that could ask if two words were not just the same case-insensitive word but also bound to the same thing...Ren-C axed this fairly early on as there were no usages in the code, and it seemed to just confuse things.  If it came up, someone could ask if they wanted by checking the bindings themselves.)*
+
+When other languages have a difference between equality and &quot;strict&quot; equality, the strict form merely limits what coercion is done.  The phrasing for instance of JavaScript&#39;s `===` operator is *&quot;check BOTH value AND type&quot;*.  This could cover Rebol&#39;s difference between `1.0 == 1` and `1.0 = 1`, but it wouldn&#39;t cover the case sensitivity aspect of the current string comparison behavior.
+
+Have to go, so I&#39;ll cut this survey post short.  But I&#39;ll close by saying:
+
+* It would be a simpler world if strict equality **==** (or **is**) had the simple definition like `===` in JavaScript:
+
+        is: ==: func [a b] [
+            did all [
+                (type of :a) = (type of :b)
+                :a = :b
+            ]
+        ]
+
+    But that won&#39;t account for case-sensitivity.  Which is a bummer. 
+
+* I have an uneasy feeling about building comparison operators on top of method code that carries along a boolean &quot;strict&quot; argument.  It seems like a kind of arbitrary and poorly-defined wart.  I&#39;m not sure what the alternatives are, however, if the current abilities are to be preserved.
+
+* My intuition is that it&#39;s probably better to build &quot;downwards in formality&quot; from the typeclasses of Haskell/Rust, as opposed to trying to build &quot;upwards in formality&quot; from something like Python&#39;s approach, just because I am skeptical of the organic comparisons that can so easily become inconsistent...e.g. by prioritizing the left side&#39;s answer in a comparison over the right.
+
+* Having done some surveying about what others do, it&#39;s probably a good next step to just kind of work through what actual user scenarios are that use comparisons...and how to make those scenarios work.  I showed `sort` giving 3 different results on Red, R3-Alpha, and Rebol2 for a collection of unlike objects...which suggests there&#39;s a real need to lay out what a sensible minimal set of requirements are to make &quot;real&quot; sorting scenarios behave well.
+
+Bottom line is there&#39;s a lot to think about, and I didn&#39;t even get to Unicode canonization vs. normalization as it relates to built in string compare concepts.  :-/  Stay tuned...</description>
+    
+    <lastBuildDate>Tue, 29 Sep 2020 06:01:07 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/comparison-semantics/1318.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Comparison Semantics</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="10" data-topic="474">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/10">Retaking ++ and -- : how to get the old functionality?</a>
+</div>
+<blockquote>
+<p>Perhaps <strong>&lt;-&gt;</strong> could be SWAP (which I've been thinking could be extended to words.</p>
+</blockquote>
+</aside>
+<p>Looking at it, I wonder if it might be in the comparison space as "not equal, but trivially convertible"?  Maybe a nicer-to-look-at alternative to <code>~=</code></p>
+<pre><code>x: &lt;foo&gt;
+y: "foo"
+
+&gt;&gt; x = y
+== #[false]
+
+&gt;&gt; x &lt;-&gt; y
+== #[true]
+
+&gt;&gt; x ~= y  ; uglier...
+== #[true]
+</code></pre>
+<p>The idea of it looking kind of like <code>&lt;&gt;</code> isn't necessarily that bad, because it's saying they're not actually equal.</p>
+<p>In any case, I'm still rather opposed to the idea that:</p>
+<pre><code>rebol2&gt;&gt; (first [a]) = (first [a:])
+== true
+</code></pre>
+<p>Case sensitivity is bad enough, but having the natural and easy-to-reach-for equality operator say a SET-WORD! and a WORD! are equal is a bridge too far.  Also note:</p>
+<pre><code>rebol2&gt;&gt; [a] = [a:]
+== false
+</code></pre>
+<p>Anyway, just wanted to mention the possibility of using a newly opened-up arrow word for a comparison purpose...</p>
+          <p><a href="https://forum.rebol.info/t/comparison-semantics/1318/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/comparison-semantics/1318/5</link>
+        <pubDate>Tue, 29 Sep 2020 06:01:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1318-5</guid>
+        <source url="https://forum.rebol.info/t/comparison-semantics/1318.rss">Comparison Semantics</source>
+      </item>
+      <item>
+        <title>Comparison Semantics</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1318">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>This was changed in Python3 to allow six separate overloading entry points with <a href="https://www.python.org/dev/peps/pep-0207/" rel="nofollow noopener">"rich comparisons"</a>. Their motivation was not performance, but to break off the constraints of integer results so that NumPy arrays could do something along the lines of:</p>
+<pre><code>&gt;&gt; [10 2 0] &lt; [3 4 0]
+== [#[true] #[false] #[true]] 
+</code></pre>
+</blockquote>
+</aside>
+<p>Another example of how Python users have exploited rich comparisons is <a href="http://www.sqlalchemy.org/" rel="nofollow noopener">SQLAlchemy</a>.  There, they make it so that comparisons of their types <em>actually produce filters</em>, e.g.:</p>
+<pre><code>model1.filter(model1.column &lt;= model2.column)
+</code></pre>
+<p>...would result in a SQL query along the lines of:</p>
+<pre><code>select model1.*
+from model1
+left join model2 on model1.foreign_key == model2.primary_key
+where
+    model1.column &lt;= model2.column
+</code></pre>
+<p>They could have done this in separate assignments:</p>
+<pre><code>filt = model1.column &lt;= model2.column
+model1.filter(filt)
+</code></pre>
+<p><strong>I'm conflicted over how to think about this.</strong>  We could argue that Python only needs such weirdness because they are more boxed-in when it comes to being able to use symbols like <strong>&lt;=</strong> in a customized way.  They can't make dialects and just inspect WORD!s structurally.  They could solve this by taking a BLOCK! to your filter(), instead of burdening the evaluator with some odd overload of &lt;=.  (Though that wouldn't let them break the expressions out into variables, as with <code>filt</code> above.)</p>
+<p>On the other hand...comparing vectors represents a more sympathetic case.  <strong>comparisons: vector1 &lt; vector2</strong> does not have anything analogous to the filter() that is in control, and seems reasonable.  So if one's goal is to make the most freeform language ever invented, then shouldn't <strong>&lt;</strong> be hookable?</p>
+<p>One way of looking at it could be if operators like <strong>&lt;</strong> were a generic hookable function at a higher level than <strong>lesser?</strong>.  So things like SORT would be based on the comparison mechanics, and what <strong>&lt;</strong> did would be customizable through overloads...falling back to LESSER? if there weren't any.</p>
+          <p><a href="https://forum.rebol.info/t/comparison-semantics/1318/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/comparison-semantics/1318/4</link>
+        <pubDate>Thu, 27 Aug 2020 15:25:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1318-4</guid>
+        <source url="https://forum.rebol.info/t/comparison-semantics/1318.rss">Comparison Semantics</source>
+      </item>
+      <item>
+        <title>Comparison Semantics</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>In creating a chess game (or the like) there is a need to order the moves from better expectancy to lowest expectancy, or the other way, does not really matter as long as the moves get sorted. The generated move value is often the same for many moves depending on the complexity of the evaluation function.<br>
+Anyway the most algorithms for sorting are always sorting only the values not the objects they belong to. It would be helpful if such a service came with the language.</p>
+          <p><a href="https://forum.rebol.info/t/comparison-semantics/1318/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/comparison-semantics/1318/3</link>
+        <pubDate>Fri, 21 Aug 2020 15:08:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1318-3</guid>
+        <source url="https://forum.rebol.info/t/comparison-semantics/1318.rss">Comparison Semantics</source>
+      </item>
+      <item>
+        <title>Comparison Semantics</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Great summary of a messy topic.</p>
+          <p><a href="https://forum.rebol.info/t/comparison-semantics/1318/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/comparison-semantics/1318/2</link>
+        <pubDate>Wed, 19 Aug 2020 16:34:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1318-2</guid>
+        <source url="https://forum.rebol.info/t/comparison-semantics/1318.rss">Comparison Semantics</source>
+      </item>
+      <item>
+        <title>Comparison Semantics</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I mentioned that there were historical <a href="https://forum.rebol.info/t/switching-to-stackless-why-this-why-now/1247/5">ways to overflow the C stack besides the evaluator</a>.  Anything that uses C recursion could be a problem...so the internals of copying, molding, and comparison were some examples of that.</p>
+<p>These overflows were guarded by the evil non-standard checks (that don't work in Wasm).  So while they may not seem like a priority, they're things that have to be changed.</p>
+<p>Revisiting code for these functions is a sensible time for reviewing the sanity of the model of how these things were being done.  There's work involved in the stackless conversion, and it also helps break the monotony to think about another issue.</p>
+<p>I decided to look at comparison this week--the core question of what it is, and how other languages approach it.  It's really complicated and kind of overwhelming...so I'm looking to find a "good enough" answer that leaves room for future-forward improvements.</p>
+<h2>A Performance Observation</h2>
+<p>Consider an API for two-argument generic compare operation that can return one of three answers:</p>
+<pre><code> &gt;&gt; compare 10 20
+ == LT  ; Less-Than
+
+ &gt;&gt; compare 0 0
+ == EQ  ; Equal
+
+ &gt;&gt; compare 30 4
+ == GT  ; Greater-Than
+</code></pre>
+<p>Many languages provide something along these lines.  For instance: C has <code>strcmp()</code> which will compare two strings and return -1 for the first less than the second, 0 for equal, and 1 for the first being greater than the second.  This interface is enough that you can use it as the basis for your <strong>&gt;</strong>, <strong>&lt;</strong> and <strong>=</strong> operators...as well as your <strong>&gt;=</strong>, <strong>&lt;=</strong> and <strong>&lt;&gt;</strong> operators.</p>
+<p>But...what if your datatype can very quickly determine if things are equal or not, and then there's a greater cost to checking the finer point of whether it is less than or greater than something?  It might help if you passed the kind of comparison you wanted to do in as a three-argument operation.  So that would be more like:</p>
+<pre><code>&gt;&gt; compare 'EQ 10 20
+== #[false]
+
+&gt;&gt; compare 'GE 30 4   ; Greater-or-Equal
+== #[true]
+</code></pre>
+<p>Or you could just define six different entry points, instead of passing in the parameter of the operation you want.  C++ is like that...each comparison operator (&gt;, &lt;, &lt;=, &gt;=, ==, !=)  can be overloaded separately.  This can be done even to the point of being internally contradictory...or just using the symbols, but not having anything to do with comparisons at all.</p>
+<p>As a notable data point: Python2 used a single method on objects called <code>__cmp__</code> that returned -1 or 0 or 1.  This was changed in Python3 to allow six separate overloading entry points with <a href="https://www.python.org/dev/peps/pep-0207/" rel="nofollow noopener">"rich comparisons"</a>.  Their motivation was not performance, but to break off the constraints of integer results so that NumPy arrays could do something along the lines of:</p>
+<pre><code>&gt;&gt; [10 2 0] &lt; [3 4 0]
+== [#[true] #[false] #[true]] 
+</code></pre>
+<p>(This might not make sense for BLOCK! in Rebol, but perhaps it would make sense for VECTOR! or other types.)</p>
+<h2>Making Equality (Eq) and Ordering (Ord) Separate</h2>
+<p>Another thing to consider in designing comparison methodology into types is if it's best to separate out the characteristics of equality and ordering completely.</p>
+<p>The place to look for thinking on this front is Haskell, which makes <a href="http://hackage.haskell.org/package/base-4.14.0.0/docs/Data-Eq.html" rel="nofollow noopener">Eq</a> and <a href="http://hackage.haskell.org/package/base-4.14.0.0/docs/Data-Ord.html" rel="nofollow noopener">Ord</a> "typeclasses" (which you can think of as something like "interfaces" in OOP, basically a list of supported functions that members of that typeclass must implement).</p>
+<p>Rust followed along with its own Eq and Ord, and added something called <a href="https://stackoverflow.com/questions/55128808/when-is-it-appropriate-to-require-only-partialeq-and-not-eq" rel="nofollow noopener">"PartialEq"</a> which relates to wanting to avoid some strange edge cases in floating point numbers.</p>
+<p><em>(Rust's discernment is probably one worth weighing in, as they had the benefit of hindsight to make the decision on its importance: <a href="https://stackoverflow.com/questions/6038740/comparison-between-fractional-type" rel="nofollow noopener">"Floating point values do not have a sensible notion of equality. Arguably, it is an error in Haskell that the expression even type checks."</a>)</em></p>
+<h2>Comparing Types to Each Other vs. Other Types</h2>
+<p>Allowing different types to compare is a whole separate can of worms.  You'll note that historically, Rebol is willing to do equality comparisons (and just consider unlike types to be not equal most of the time):</p>
+<pre><code>rebol2&gt;&gt; [] == &lt;tag&gt;
+== false
+
+rebol2&gt;&gt; 0 == none
+== false
+</code></pre>
+<p>But the relative comparison operators were less tolerant:</p>
+<pre><code>rebol2&gt;&gt; [] &lt; &lt;tag&gt;
+** Script Error: Expected one of: block! - not: tag!
+
+rebol2&gt;&gt; 0 &lt; none
+** Script Error: Expected one of: integer! - not: none!
+</code></pre>
+<p>But this intolerance makes the behavior of SORT seem suspect:</p>
+<pre><code>rebol2&gt;&gt; sort [[] &lt;tag&gt; 0 none]
+== [none 0 &lt;tag&gt; []]
+</code></pre>
+<p>There clearly was some notion of ordering involved.  It seems either that should also be an error, or the comparison should match what you'd get from a sort.</p>
+<p>The plot thickens when you noticed R3-Alpha still errors on the comparison, but does the sort differently:</p>
+<pre><code>r3-alpha&gt;&gt; sort [[] &lt;tag&gt; 0 none]     
+== [0 &lt;tag&gt; [] none]
+</code></pre>
+<p>And Red has yet another answer:</p>
+<pre><code>red&gt;&gt; sort [[] &lt;tag&gt; 0 none]
+== [[] 0 none &lt;tag&gt;]
+</code></pre>
+<p>Putting all that aside for a moment <img src="https://forum.rebol.info/images/emoji/twitter/roll_eyes.png?v=9" title=":roll_eyes:" class="emoji" alt=":roll_eyes:"> we can imagine that letting types compare themselves to others could be a bit of a minefield.  What if A and B are different types, and you say <strong>if A == B [...]</strong>... and ask A whether it's equal to B and says yes.  But if you wrote it the other way and asked <strong>if B == A [...]</strong> the type for B said they weren't equal?</p>
+<p>If you read that <a href="https://www.python.org/dev/peps/pep-0207/" rel="nofollow noopener">Python 3 Rich Types document</a> I linked earlier, there's no fancy answer.  They just say the object on the left gets first dibs to interpret its comparison to the right value.  Then if the left says it doesn't know how to do the request (it can return <code>None</code> instead of a comparison result), the object on the right gets a chance to compare with the left.</p>
+<p><em>(I'll mention that C++ puts the left type in charge for comparisons when they are declared as member functions, with no pre-defined system of delegating to the right...though you could invent one for your own types.  However, it's also possible to do "global overloads" which can be registered for any pair of types.  These don't belong to either the left or right hand side.)</em></p>
+<h2>The Role of Implicit Coercion in Comparison</h2>
+<p>Adding even more nuance into this whole mire, is the question of higher-level mechanics in the language which automatically convert values between types in order to make them comparable to each other.  :-/  If these mechanics exist, then it means that two types might be able to compare with each other even when they don't have any specific methods for understanding the other type.</p>
+<p>This plays a big part in C++.  But Rebol would appear to not have such a mechanism, as it doesn't even let you pass INTEGER! to DECIMAL! parameters:</p>
+<pre><code>&gt;&gt; f: func [d [decimal!]] [print ["The decimal is:" d]]
+&gt;&gt; f 10
+** Script error: f does not allow integer! for its d argument
+</code></pre>
+<p>The reality is a bit more subtle, however... as you can compare integers and decimals.  This actually comes from a coercion mechanic that is hard-coded specifically into the comparison operators.</p>
+<h2>R3-Alpha's Comparison Methodization was <em>REALLY</em> ad hoc</h2>
+<p><a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/n-math.c#L290" rel="nofollow noopener">Compare_Values()</a> -- which is the main entry point for the implementation of operators like &gt;, &lt;, =... is outright bizarre:</p>
+<blockquote>
+<pre><code>REBINT Compare_Values(REBVAL *a, REBVAL *b, REBINT strictness)
+
+Compare 2 values depending on level of strictness.
+NOTE: MODIFIES a and b args.
+
+Strictness:
+0 - coerced equality
+1 - equivalence
+2 - strict equality
+3 - same (identical bits)
+
+-1 - greater or equal
+-2 - greater
+</code></pre>
+</blockquote>
+<p>The <code>Compare_Values()</code> routine does the kind of baked in higher-level coercion of numeric types described.  Ultimately it decides if it needs to fall-through to a type specific method, which is a function named CT_XXX like <code>CT_Object()</code> or <code>CT_Word()</code>.  Those functions are guaranteed that the two arguments have been coerced into the same typeclass--(e.g. both ANY-WORD!) but not necessarily the exact same type.</p>
+<p>Using magic numbers makes the process somewhat obtuse. But the CT_XXX methods can return <code>-1</code> if the comparison requested by "strictness" is not legal, 0 if it didn't match the constraint, and 1 if it did match.  The method implementations are very scattershot, and I've started hammering them into a conventional and simple form so they still pass the tests...but can be looked at more clearly.</p>
+<h2>Rebol's Main Difference: "Levels" of Equality</h2>
+<p>A real curveball we see here is that Rebol is trying to methodize different kinds of equality.  <strong>No other methodization of comparisons in other languages seems to have this.</strong></p>
+<p><em>(Note: Strict equality and Sameness are two levels people are familiar with.  "Equivalence" refers to the EQUIV? operation, that could ask if two words were not just the same case-insensitive word but also bound to the same thing...Ren-C axed this fairly early on as there were no usages in the code, and it seemed to just confuse things.  If it came up, someone could ask if they wanted by checking the bindings themselves.)</em></p>
+<p>When other languages have a difference between equality and "strict" equality, the strict form merely limits what coercion is done.  The phrasing for instance of JavaScript's <code>===</code> operator is <em>"check BOTH value AND type"</em>.  This could cover Rebol's difference between <code>1.0 == 1</code> and <code>1.0 = 1</code>, but it wouldn't cover the case sensitivity aspect of the current string comparison behavior.</p>
+<p>Have to go, so I'll cut this survey post short.  But I'll close by saying:</p>
+<ul>
+<li>
+<p>It would be a simpler world if strict equality <strong>==</strong> (or <strong>is</strong>) had the simple definition like <code>===</code> in JavaScript:</p>
+<pre><code>  is: ==: func [a b] [
+      did all [
+          (type of :a) = (type of :b)
+          :a = :b
+      ]
+  ]
+</code></pre>
+<p>But that won't account for case-sensitivity.  Which is a bummer.</p>
+</li>
+<li>
+<p>I have an uneasy feeling about building comparison operators on top of method code that carries along a boolean "strict" argument.  It seems like a kind of arbitrary and poorly-defined wart.  I'm not sure what the alternatives are, however, if the current abilities are to be preserved.</p>
+</li>
+<li>
+<p>My intuition is that it's probably better to build "downwards in formality" from the typeclasses of Haskell/Rust, as opposed to trying to build "upwards in formality" from something like Python's approach, just because I am skeptical of the organic comparisons that can so easily become inconsistent...e.g. by prioritizing the left side's answer in a comparison over the right.</p>
+</li>
+<li>
+<p>Having done some surveying about what others do, it's probably a good next step to just kind of work through what actual user scenarios are that use comparisons...and how to make those scenarios work.  I showed <code>sort</code> giving 3 different results on Red, R3-Alpha, and Rebol2 for a collection of unlike objects...which suggests there's a real need to lay out what a sensible minimal set of requirements are to make "real" sorting scenarios behave well.</p>
+</li>
+</ul>
+<p>Bottom line is there's a lot to think about, and I didn't even get to Unicode canonization vs. normalization as it relates to built in string compare concepts.  :-/  Stay tuned...</p>
+          <p><a href="https://forum.rebol.info/t/comparison-semantics/1318/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/comparison-semantics/1318/1</link>
+        <pubDate>Wed, 19 Aug 2020 09:58:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1318-1</guid>
+        <source url="https://forum.rebol.info/t/comparison-semantics/1318.rss">Comparison Semantics</source>
+      </item>
+  </channel>
+</rss>

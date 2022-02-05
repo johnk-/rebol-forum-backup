@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+    <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413</link>
+    <description>I&#39;ve chiseled and shaped things to the point where there&#39;s hopefully only one frame-mutation that happens during frame execution, that only happens for one datatype, and only when the field isn&#39;t hidden from view.  I explain all that here:
+
+[&quot;Default Values And MAKE FRAME!&quot;](https://forum.rebol.info/t/default-values-and-make-frame/1412/)
+
+I mention something particular, which is that in the world of labeled BAD-WORD!s and isotopes, some of those labels are leaking into the mechanics of implementation.
+
+Some of these are &quot;easy to change&quot; (like the convention of returning `~none~`).  You can wrap a function that returns none to rename its output.  You could load in a new mezzanine and skinned natives and reuse the evaluator as-is.
+
+But `~unset~` is getting baked in at a deeper level.  It&#39;s something used by binding, and MAKE FRAME!:
+
+    &gt;&gt; f: make frame! :append
+    == make frame! [
+        series: ~unset~
+        value: ~unset~
+        part: ~unset~
+        only: ~unset~
+        dup: ~unset~
+        line: ~unset~
+    ]
+
+**Should We Change The Unset Convention to Plain ~**
+
+I like the idea of a core engine that *doesn&#39;t have any references to specific English words*.  It would be neat if you could load up a whole different DLL of natives and Mezzanines.  But this is showing a specific behavior tied to a particular spelling of a word.
+
+But what if we moved to plain `~` for unset?  That would mean seeing this instead:
+
+    &gt;&gt; f: make frame! :append
+    == make frame! [
+        series: ~
+        value: ~
+        part: ~
+        only: ~
+        dup: ~
+        line: ~
+    ]
+
+You still get the idea (bunch of not defined things), it&#39;s just cleaner.  Then imagine this:
+
+    &gt;&gt; f.value: &#39;~baddie~
+    == make frame! [
+        series: ~
+        value: &#39;~baddie~
+        part: ~
+        only: #
+        dup: ~
+        line: ~
+    ]
+
+    &gt;&gt; apv: make action! f
+
+    &gt;&gt; apv [1 2 3]
+    == [1 2 3 ~baddie~]
+
+It kind of pops doesn&#39;t it, *that only the unlabeled `~` were treated as unspecialized*?  All those `~unset~` feel like noise.
+
+## The Distinguished State As The Unusual State
+
+In terms of looking at BAD-WORD! and asking what the &quot;distinguished&quot; state is, it seems pretty clear that *no name* is that distinguished state.
+
+If you&#39;re wondering what the difference between a &quot;built-in behavior of DO&quot; and a &quot;built-in behavior of the evaluator&quot; is, it comes down to what it&#39;s *technically possible for you to replace without recompiling the C code*.
+
+Right now `~none~` is the signal to the console not to print any output (used by HELP for example).  But you could tweak to change the console.  But the unset is recognized by the internal frame mechanics.
+
+**So should ~ be the &quot;system void!&quot;, known to mean &quot;unset&quot;?**
+
+It may seem more obtuse.  But people typing **help ~** would be able to get an explanation of it.
+
+One thing that&#39;s particular about this state is *it can&#39;t be converted to WORD!*.  (**null = label of ~**)   So this makes it distinct on a sort of special level.  It kind of seems like if any one single BAD-WORD! state should be having this mean property, *that* should be the undefined and weird state.</description>
+    
+    <lastBuildDate>Sun, 22 Aug 2021 05:28:48 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="BlackATTR" data-post="2" data-topic="1413">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p><code>~</code> feels too minimal</p>
+</blockquote>
+</aside>
+<p>I had a passing thought that maybe there is a compromise here, where <strong>~</strong> is a <em>synonym</em> for <strong>~unset~</strong></p>
+<p>The idea would be that non-isotopes would render as the whole word, but when null <em>isotopes</em> are rendered in objects they would look like ~.</p>
+<pre><code>&gt;&gt; obj: make object! [
+    iso: ~unset~
+    plain: '~unset~
+]
+== make object! [
+    iso: ~
+    plain: '~unset~
+]
+</code></pre>
+<p>Remember that in "MAKE OBJECT! notation" (e.g. escaped/quoted notation) everything that's not inert is escaped...and isotopes are not escaped to show their isotope status.</p>
+<p>But I think this idea is kind of a bust for two reasons.</p>
+<pre><code> &gt;&gt; code: [item: ~, if not set? 'item [print "My code changed :-("]]
+ == [item: ~unset~, if not set? 'item [print "My code changed :-("]]
+</code></pre>
+<p>There are of course other cases where you lose the exact thing you wrote.  But that kind of feels like it sucks more than the average "quotes became braces on a string" or "my date format got reordered".  ~ seems genuinely different.</p>
+<p>Speaking of which: we assume this ~ and ~unset~ synonym would be forced to render as ~ when it appeared in a PATH!.</p>
+<p>But having written some path merging code, I've needed to do things like test to see if the head of a path is a blank or not.  If ~ was a BAD-WORD!, then its neither-true-nor-false status would cause glitches in trying to analyze and merge paths containing it.</p>
+<p><em>That actually might not be so bad...</em>  Because you generally don't want to be able to do things like:</p>
+<pre><code>&gt;&gt; join '/a/b/c/ ~/d/e/f
+== /a/b/c/~/d/e/f   ; this is probably not what you want
+</code></pre>
+<p>Having the ~ be a special disruptive case would cue you to special handling.</p>
+<p>But, that's weird.  And if we make ~ a BAD-WORD! that you can put in a path, it makes prohibition of other bad words in paths seem weird.</p>
+<p><strong>Long story short: I think we just keep ~ as a special WORD! and live with the ~unset~ pollution.</strong></p>
+<p>On the plus side, we don't see as many unsets now that Sea of Words is in effect...because we're not creating a zillion variables for words that don't have a definition.  Most places you see unsets will be calls to action.  optional arguments in function frames--like refinements that you're allowed to leave blank--will just have to be a casualty of this.</p>
+<p>So I think this decision is made...</p>
+<h2>~ is a WORD!... BAD-WORDS! are English known to the Interpreter</h2>
+          <p><a href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/8</link>
+        <pubDate>Sun, 22 Aug 2021 05:28:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1413-8</guid>
+        <source url="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss">BAD-WORD! Choices: The Role of English in the Evaluator</source>
+      </item>
+      <item>
+        <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-username="hostilefork" data-post="1" data-topic="1413">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I discuss something particular, which is that in the world of <em><strike>named voids</strike></em> BAD-WORD!s, some of those BAD-WORD!s are leaking into the mechanics of implementation. Some of these are "easy to change" (like the convention of returning <code>~void~</code>). You can wrap a function that returns void to rename its output. You could load in a new mezzanine and skinned natives and reuse the evaluator as-is.</p>
+<p>But <code>~undefined~</code> is getting baked in at a deeper level. It's something used by binding, and MAKE FRAME!:</p>
+</blockquote>
+</aside>
+<p>I'm afraid this has become the way it is.  Certain words... like <strong>~null~</strong> and <strong>~void~</strong> and <strong>~unset~</strong> are getting baked in with specific meanings and behaviors.</p>
+<p>While making <em>non-English-centric dialects</em> might be fair game, and creating a customized console experience that translates some of these ideas at a higher level... the mechanics are going to be stuck here until the language itself gets abstracted into something more graph-like where WORD!s are linked and mentioned by GUID in binary source files...and names are put on as renderings.</p>
+<p>For the medium that this is, I think I've made peace with the BAD-WORD! isotopes getting special behaviors.  (But the non-isotope forms are all handled equivalently...except in as much that they are connected through evaluation to the behaviors when they take on their isotope form.)</p>
+<blockquote>
+<p>Should We Change The Undefined Convention to Plain ~ ?</p>
+</blockquote>
+<p>I mentioned the change from <strong><code>~undefined~</code></strong> to <strong><code>~unset~</code></strong>.</p>
+<p>Then I made plain <strong>~</strong> generate an <strong>~unset~ isotope</strong>.</p>
+<p>I explain why in <strong><a href="https://forum.rebol.info/t/three-single-character-intents-x-x-and-x/1620">Three Single-Character Intents… x:_, x: ‘, and x: ~</a></strong></p>
+<p>You can override this if you think of more interesting applications in your own code.</p>
+          <p><a href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/7</link>
+        <pubDate>Sun, 20 Jun 2021 03:16:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1413-7</guid>
+        <source url="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss">BAD-WORD! Choices: The Role of English in the Evaluator</source>
+      </item>
+      <item>
+        <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="BlackATTR" data-post="2" data-topic="1413">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p><code>~</code> feels too minimal.</p>
+</blockquote>
+</aside>
+<p>I've been leaning to giving <strong><code>~</code></strong> back to WORD!.  This would normalize its behavior in PATH!s like <strong><code>~/foo/bar</code></strong>, and open it up as a potential operator in its own right...which turns out to be quite powerful for single-character tokens.  You can then give meanings to:</p>
+<ul>
+<li><code>~ abc</code></li>
+<li><code>~ (foo bar)</code></li>
+<li>
+<code>~ [baz mumble]</code> etc. etc.</li>
+</ul>
+<p>This takes a character that is kind of more ugly than you want to use in the average word, and opens up applications for it.  (I feel that handling <code>$</code> and <code>$$</code> and <code>$$$</code> in this way gives a slew of advantages which are nearly as good as having a full lexical form... if $ can quote a word, then <code>$ abc</code> is for the most part better than <code>$abc</code>, you get a binding and everything.)</p>
+<p>But since labeled VOID!s follow WORD! rules, opening up <strong><code>~</code></strong> as a WORD! means that <strong><code>~~~</code></strong> is a legal VOID!.  That isn't really the end of the world, but it means you probably shouldn't let more than one tilde be a WORD! to avoid ambiguity.</p>
+<p>That then distinguishes <strong><code>~~~</code></strong> somewhat, for whatever that is worth.  Which I don't think is worth much, I like looking at and typing <strong>~void~</strong> or even <strong>~undefined~</strong> better.</p>
+<p><strong>So summary is that I think the "odd man out" of ~ should go back to being a WORD!</strong>  It gets 99% of its usefulness there as an operator, and has the common application as home directory in PATH!s.  This then lets us disallow VOID! in paths otherwise--which feels more correct.  It means all VOID!s have non-empty labels, making them align fully with WORD!.</p>
+<p><strong>That excludes ~ as a possibility for the purpose I suggest in the original post.</strong>  And I want to rule out <code>~~~</code> because while it will be a legal VOID!, I don't particularly like typing it or looking at it.  <em>(Maybe because it's so unappealing, it could be the "don't even show this one in the console" unique signal...)</em></p>
+          <p><a href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/6</link>
+        <pubDate>Wed, 09 Dec 2020 20:03:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1413-6</guid>
+        <source url="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss">BAD-WORD! Choices: The Role of English in the Evaluator</source>
+      </item>
+      <item>
+        <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>English is a fact of life in programming, so I have no problem with some English in the evaluator.</p>
+<p>~ is ok for me, too.</p>
+<p>Just don't start with localised values in the evaluator it's more trouble than worth. (German Excel functions, anyone?)</p>
+          <p><a href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/5</link>
+        <pubDate>Wed, 25 Nov 2020 09:02:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1413-5</guid>
+        <source url="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss">BAD-WORD! Choices: The Role of English in the Evaluator</source>
+      </item>
+      <item>
+        <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm ok with all of these shorter proposals. If there's a darned good reason to dial it all the way down to <code>~</code>, I can be easily persuaded.</p>
+          <p><a href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/4</link>
+        <pubDate>Tue, 24 Nov 2020 23:51:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1413-4</guid>
+        <source url="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss">BAD-WORD! Choices: The Role of English in the Evaluator</source>
+      </item>
+      <item>
+        <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>There's also <strong><code>~~</code></strong>, which if you think of the ~ as a delimiter around things could make unlabeled voids a little fatter and easier to see.</p>
+<p>But one motivator behind using <strong><code>~</code></strong> is so you can still get <strong><code>~/foo/bar</code></strong> as a PATH!.</p>
+<p>We could exempt <strong><code>~</code></strong> as a WORD!, which might make sense, if all VOID!s have labels (and it would make the PATH! exemption less random).  Basically, if we're not going to use it for unlabeled voids because it's too slight, maybe it should be allowed to be used for other things.</p>
+          <p><a href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/3</link>
+        <pubDate>Tue, 24 Nov 2020 21:35:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1413-3</guid>
+        <source url="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss">BAD-WORD! Choices: The Role of English in the Evaluator</source>
+      </item>
+      <item>
+        <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p>Note: This comment was made when ~unset~ was the longer ~undefined~.</p>
+</blockquote>
+<p>I think that <code>~undefined~</code> seems too long and <code>~</code> feels too minimal. What about whittling it down a bit to <code>~undef~</code>, <code>~def?~</code> or just <code>~?~</code>.</p>
+          <p><a href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/2</link>
+        <pubDate>Tue, 24 Nov 2020 21:32:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1413-2</guid>
+        <source url="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss">BAD-WORD! Choices: The Role of English in the Evaluator</source>
+      </item>
+      <item>
+        <title>BAD-WORD! Choices: The Role of English in the Evaluator</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've chiseled and shaped things to the point where there's hopefully only one frame-mutation that happens during frame execution, that only happens for one datatype, and only when the field isn't hidden from view.  I explain all that here:</p>
+<p><a href="https://forum.rebol.info/t/default-values-and-make-frame/1412/">"Default Values And MAKE FRAME!"</a></p>
+<p>I mention something particular, which is that in the world of labeled BAD-WORD!s and isotopes, some of those labels are leaking into the mechanics of implementation.</p>
+<p>Some of these are "easy to change" (like the convention of returning <code>~none~</code>).  You can wrap a function that returns none to rename its output.  You could load in a new mezzanine and skinned natives and reuse the evaluator as-is.</p>
+<p>But <code>~unset~</code> is getting baked in at a deeper level.  It's something used by binding, and MAKE FRAME!:</p>
+<pre><code>&gt;&gt; f: make frame! :append
+== make frame! [
+    series: ~unset~
+    value: ~unset~
+    part: ~unset~
+    only: ~unset~
+    dup: ~unset~
+    line: ~unset~
+]
+</code></pre>
+<p><strong>Should We Change The Unset Convention to Plain ~</strong></p>
+<p>I like the idea of a core engine that <em>doesn't have any references to specific English words</em>.  It would be neat if you could load up a whole different DLL of natives and Mezzanines.  But this is showing a specific behavior tied to a particular spelling of a word.</p>
+<p>But what if we moved to plain <code>~</code> for unset?  That would mean seeing this instead:</p>
+<pre><code>&gt;&gt; f: make frame! :append
+== make frame! [
+    series: ~
+    value: ~
+    part: ~
+    only: ~
+    dup: ~
+    line: ~
+]
+</code></pre>
+<p>You still get the idea (bunch of not defined things), it's just cleaner.  Then imagine this:</p>
+<pre><code>&gt;&gt; f.value: '~baddie~
+== make frame! [
+    series: ~
+    value: '~baddie~
+    part: ~
+    only: #
+    dup: ~
+    line: ~
+]
+
+&gt;&gt; apv: make action! f
+
+&gt;&gt; apv [1 2 3]
+== [1 2 3 ~baddie~]
+</code></pre>
+<p>It kind of pops doesn't it, <em>that only the unlabeled <code>~</code> were treated as unspecialized</em>?  All those <code>~unset~</code> feel like noise.</p>
+<h2>The Distinguished State As The Unusual State</h2>
+<p>In terms of looking at BAD-WORD! and asking what the "distinguished" state is, it seems pretty clear that <em>no name</em> is that distinguished state.</p>
+<p>If you're wondering what the difference between a "built-in behavior of DO" and a "built-in behavior of the evaluator" is, it comes down to what it's <em>technically possible for you to replace without recompiling the C code</em>.</p>
+<p>Right now <code>~none~</code> is the signal to the console not to print any output (used by HELP for example).  But you could tweak to change the console.  But the unset is recognized by the internal frame mechanics.</p>
+<p><strong>So should ~ be the "system void!", known to mean "unset"?</strong></p>
+<p>It may seem more obtuse.  But people typing <strong>help ~</strong> would be able to get an explanation of it.</p>
+<p>One thing that's particular about this state is <em>it can't be converted to WORD!</em>.  (<strong>null = label of ~</strong>)   So this makes it distinct on a sort of special level.  It kind of seems like if any one single BAD-WORD! state should be having this mean property, <em>that</em> should be the undefined and weird state.</p>
+          <p><a href="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413/1</link>
+        <pubDate>Sun, 22 Nov 2020 13:52:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1413-1</guid>
+        <source url="https://forum.rebol.info/t/bad-word-choices-the-role-of-english-in-the-evaluator/1413.rss">BAD-WORD! Choices: The Role of English in the Evaluator</source>
+      </item>
+  </channel>
+</rss>

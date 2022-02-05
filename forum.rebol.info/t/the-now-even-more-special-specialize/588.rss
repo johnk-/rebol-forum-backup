@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The now even-more-special SPECIALIZE</title>
+    <link>https://forum.rebol.info/t/the-now-even-more-special-specialize/588</link>
+    <description>An early-ish addtion to Ren-C was SPECIALIZE.  It creates a variation of a function which has some parameters removed, because they have been set to constant values.
+
+The syntax is that you give it a FUNCTION! (or a WORD! or PATH! by which it can find a function), and a block of code.  It will bind the SET-WORD!s in that block to the parameter names of the function you are specializing.  Then it will run it:
+
+    &gt;&gt; append-abc: specialize &#39;append/only [
+        print &quot;block runs arbitrary code!&quot;
+        if 1 &lt; 2 [value: [a b c]]
+    ]
+    block runs arbitrary code!
+
+    &gt;&gt; block: copy [x y]
+
+    &gt;&gt; append-abc block
+    == [x y [a b c]]
+
+*(Note: One disadvantage of this particular syntax is that it ties you to the names of the parameters.  That&#39;s not an intrinsic flaw of the specialization mechanic, just this SPECIALIZE native, and other ways of making the generator are possible if people wanted to.)*
+
+### Not a frivolous feature--a CRITICAL one
+
+Whatever the syntax of specializations, they were *very important* to add.  They&#39;re key to reducing the size of the language definition.  Because otherwise, you haven&#39;t clearly captured the relationships between functions...you wind up with a lot of slightly different code saying the same thing.  Each re-implementation is a chance for introducing some weird variation!
+
+For instance: in R3-Alpha, how were FIRST, SECOND, THIRD, ... defined?  They were [all their own NATIVEs](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/n-data.c#L660)...each one implemented with the C function `Do_Ordinal()`.  As it so happens, the implementation mechanism was very dicey.  But it also raises a question for anyone who wants to write ELEVENTH... do you have to crack open the C to do that?
+
+By defining **first: specialize &#39;pick [picker: 1]**, the pattern is much clearer.  This mode of cleanup was applied in many places, avoiding writing more C code when the relationship could just be established in Rebol.
+
+### But it had to be fast...
+
+For specialization to be palatable, the design had to be done in such a way that it didn&#39;t get slower.
+
+Consider in R3-Alpha: what if you wanted a version of APPEND that always had /ONLY, but wanted to expose all the existing refinements and documentation?  Let&#39;s do it the &quot;easy&quot; way *(which makes assumptions that a correct answer would need PARSE and a whole lot of edge case processing to get right)*
+
+    r3-alpha&gt; spec: spec-of :append
+    r3-alpha&gt; remove/part (find spec /only) 2
+    r3-alpha&gt; apo: func spec [
+        apply/only :append reduce [
+            :series :value :part :length :only :dup :count
+        ]
+    ]
+
+    r3-alpha&gt; delta-time [block: copy [] loop 100000 [apo block [a]]]
+    == 0:00:00.114358
+
+    r3-alpha&gt; delta-time [block: copy [] loop 100000 [append/only block [a]]]
+    == 0:00:00.034088
+
+So now you have something that&#39;s almost 4x as slow.  In Ren-C:
+
+    ren-c&gt; apo: specialize &#39;append [only: true]
+
+    ren-c&gt; delta-time [block: copy [] loop 100000 [apo block [a]]]
+    == 0:00:00.053084
+
+    ren-c&gt; delta-time [block: copy [] loop 100000 [append/only block [a]]]
+    == 0:00:00.047722
+
+It&#39;s nice to see Ren-C is indeed within striking distance performance-wise on the plain APPEND/ONLY.  (The evaluator is doing *an incredible lot more* for that price, but I still aim to narrow that gap...as time permits).  But that aside, think of the specialization in relative terms...it added only about 12%.
+
+Driving this margin down makes us comfortable defining one function in terms of another, without feeling anxious and thinking it has to be done in C.
+
+### Partial Refinements
+
+One thing that the early SPECIALIZE could not do was let you provide refinements without all of their arguments.  That is because what it was doing was storing a value in each argument position.  And TRUE for a refinement isn&#39;t enough to know where the order is.
+
+This blocked an interesting feature, namely being able to specialize functions with GET-PATH!.  Consider these situations:
+
+    foo: func [/ref1 arg1 /ref2 arg2 /ref3 arg3] [...]
+
+    foo23: :foo/ref2/ref3
+    foo32: :foo/ref3/ref2
+
+    foo23 A B ;-- should give A to arg2 and B to arg3
+    foo32 A B ;-- should give B to arg2 and A to arg3
+
+Merely filling in the slots for the refinements specified with TRUE will not provide enough information for a call to be able to tell the difference between the intents. Also, a call to `foo23/ref1 A B C` does not want to make arg1 A, because it should act like `foo/ref2/ref3/ref1 A B C`.
+
+To make a long story short: **This works now!**  And reasonably efficiently.  Not only that, SPECIALIZE is smart enough to figure out how to give you one partial refinement &quot;for free&quot;, it will just assume it is the last to be fulfilled:
+
+    specialize &#39;append/dup/part [] ;-- legal
+    specialize &#39;append/dup [part: true] ;-- legal, assumes append/dup/part
+    specialize &#39;append/part [dup: true] ;-- legal, assumes append/part/dup
+    specialize &#39;append [part: true dup: true] ;-- ambiguous
+
+In fact, SPECIALIZE has a fair bit of smarts--automatically realizing you want a refinement just by using its arguments.
+
+### Binding footnote
+
+The block SPECIALIZE takes is a block of code where SET-WORD! is bound to the arguments of the function.  Regular words are not.  It really runs whatever code otherwise, so you can put IF statements in it, or whatever you like:
+
+    &gt;&gt; value: 10
+
+    &gt;&gt; apV: specialize &#39;append [if 1 &lt; 2 [value: value] | print &quot;runs code!&quot;]
+    runs code!
+
+    &gt;&gt; block: copy []
+
+    &gt;&gt; apV block
+    10
+
+The idea that a WORD! and a SET-WORD! have different bindings in a block of code is a bit odd but not without precedent.  e.g. in C++, `class C {int m; C (int m) : m (m + 1) { ... }}` has a member initialization syntax, where the `m (m + 1)` means &quot;initialize member m with the parameter m plus 1&quot;.  *(It&#39;s assumed you aren&#39;t interested in initializing the member in terms of itself.)*
+
+Whether this is a great idea or not, it has seemed useful so far.  Feedback would be useful, as binding remains one of the great bugaboos of the language.</description>
+    
+    <lastBuildDate>Thu, 12 Apr 2018 13:02:01 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/the-now-even-more-special-specialize/588.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The now even-more-special SPECIALIZE</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Binding is one of the great WTFs of the language. Still, SPECIALIZE seems like it offers a lot of benefits. Looking forward to exploring this. Straight-up fiyah!</p>
+          <p><a href="https://forum.rebol.info/t/the-now-even-more-special-specialize/588/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-now-even-more-special-specialize/588/2</link>
+        <pubDate>Thu, 12 Apr 2018 13:02:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-588-2</guid>
+        <source url="https://forum.rebol.info/t/the-now-even-more-special-specialize/588.rss">The now even-more-special SPECIALIZE</source>
+      </item>
+      <item>
+        <title>The now even-more-special SPECIALIZE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>An early-ish addtion to Ren-C was SPECIALIZE.  It creates a variation of a function which has some parameters removed, because they have been set to constant values.</p>
+<p>The syntax is that you give it a FUNCTION! (or a WORD! or PATH! by which it can find a function), and a block of code.  It will bind the SET-WORD!s in that block to the parameter names of the function you are specializing.  Then it will run it:</p>
+<pre><code>&gt;&gt; append-abc: specialize 'append/only [
+    print "block runs arbitrary code!"
+    if 1 &lt; 2 [value: [a b c]]
+]
+block runs arbitrary code!
+
+&gt;&gt; block: copy [x y]
+
+&gt;&gt; append-abc block
+== [x y [a b c]]
+</code></pre>
+<p><em>(Note: One disadvantage of this particular syntax is that it ties you to the names of the parameters.  That's not an intrinsic flaw of the specialization mechanic, just this SPECIALIZE native, and other ways of making the generator are possible if people wanted to.)</em></p>
+<h3>Not a frivolous feature--a CRITICAL one</h3>
+<p>Whatever the syntax of specializations, they were <em>very important</em> to add.  They're key to reducing the size of the language definition.  Because otherwise, you haven't clearly captured the relationships between functions...you wind up with a lot of slightly different code saying the same thing.  Each re-implementation is a chance for introducing some weird variation!</p>
+<p>For instance: in R3-Alpha, how were FIRST, SECOND, THIRD, ... defined?  They were <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/n-data.c#L660" rel="nofollow noopener">all their own NATIVEs</a>...each one implemented with the C function <code>Do_Ordinal()</code>.  As it so happens, the implementation mechanism was very dicey.  But it also raises a question for anyone who wants to write ELEVENTH... do you have to crack open the C to do that?</p>
+<p>By defining <strong>first: specialize 'pick [picker: 1]</strong>, the pattern is much clearer.  This mode of cleanup was applied in many places, avoiding writing more C code when the relationship could just be established in Rebol.</p>
+<h3>But it had to be fast...</h3>
+<p>For specialization to be palatable, the design had to be done in such a way that it didn't get slower.</p>
+<p>Consider in R3-Alpha: what if you wanted a version of APPEND that always had /ONLY, but wanted to expose all the existing refinements and documentation?  Let's do it the "easy" way <em>(which makes assumptions that a correct answer would need PARSE and a whole lot of edge case processing to get right)</em></p>
+<pre><code>r3-alpha&gt; spec: spec-of :append
+r3-alpha&gt; remove/part (find spec /only) 2
+r3-alpha&gt; apo: func spec [
+    apply/only :append reduce [
+        :series :value :part :length :only :dup :count
+    ]
+]
+
+r3-alpha&gt; delta-time [block: copy [] loop 100000 [apo block [a]]]
+== 0:00:00.114358
+
+r3-alpha&gt; delta-time [block: copy [] loop 100000 [append/only block [a]]]
+== 0:00:00.034088
+</code></pre>
+<p>So now you have something that's almost 4x as slow.  In Ren-C:</p>
+<pre><code>ren-c&gt; apo: specialize 'append [only: true]
+
+ren-c&gt; delta-time [block: copy [] loop 100000 [apo block [a]]]
+== 0:00:00.053084
+
+ren-c&gt; delta-time [block: copy [] loop 100000 [append/only block [a]]]
+== 0:00:00.047722
+</code></pre>
+<p>It's nice to see Ren-C is indeed within striking distance performance-wise on the plain APPEND/ONLY.  (The evaluator is doing <em>an incredible lot more</em> for that price, but I still aim to narrow that gap...as time permits).  But that aside, think of the specialization in relative terms...it added only about 12%.</p>
+<p>Driving this margin down makes us comfortable defining one function in terms of another, without feeling anxious and thinking it has to be done in C.</p>
+<h3>Partial Refinements</h3>
+<p>One thing that the early SPECIALIZE could not do was let you provide refinements without all of their arguments.  That is because what it was doing was storing a value in each argument position.  And TRUE for a refinement isn't enough to know where the order is.</p>
+<p>This blocked an interesting feature, namely being able to specialize functions with GET-PATH!.  Consider these situations:</p>
+<pre><code>foo: func [/ref1 arg1 /ref2 arg2 /ref3 arg3] [...]
+
+foo23: :foo/ref2/ref3
+foo32: :foo/ref3/ref2
+
+foo23 A B ;-- should give A to arg2 and B to arg3
+foo32 A B ;-- should give B to arg2 and A to arg3
+</code></pre>
+<p>Merely filling in the slots for the refinements specified with TRUE will not provide enough information for a call to be able to tell the difference between the intents. Also, a call to <code>foo23/ref1 A B C</code> does not want to make arg1 A, because it should act like <code>foo/ref2/ref3/ref1 A B C</code>.</p>
+<p>To make a long story short: <strong>This works now!</strong>  And reasonably efficiently.  Not only that, SPECIALIZE is smart enough to figure out how to give you one partial refinement "for free", it will just assume it is the last to be fulfilled:</p>
+<pre><code>specialize 'append/dup/part [] ;-- legal
+specialize 'append/dup [part: true] ;-- legal, assumes append/dup/part
+specialize 'append/part [dup: true] ;-- legal, assumes append/part/dup
+specialize 'append [part: true dup: true] ;-- ambiguous
+</code></pre>
+<p>In fact, SPECIALIZE has a fair bit of smarts--automatically realizing you want a refinement just by using its arguments.</p>
+<h3>Binding footnote</h3>
+<p>The block SPECIALIZE takes is a block of code where SET-WORD! is bound to the arguments of the function.  Regular words are not.  It really runs whatever code otherwise, so you can put IF statements in it, or whatever you like:</p>
+<pre><code>&gt;&gt; value: 10
+
+&gt;&gt; apV: specialize 'append [if 1 &lt; 2 [value: value] | print "runs code!"]
+runs code!
+
+&gt;&gt; block: copy []
+
+&gt;&gt; apV block
+10
+</code></pre>
+<p>The idea that a WORD! and a SET-WORD! have different bindings in a block of code is a bit odd but not without precedent.  e.g. in C++, <code>class C {int m; C (int m) : m (m + 1) { ... }}</code> has a member initialization syntax, where the <code>m (m + 1)</code> means "initialize member m with the parameter m plus 1".  <em>(It's assumed you aren't interested in initializing the member in terms of itself.)</em></p>
+<p>Whether this is a great idea or not, it has seemed useful so far.  Feedback would be useful, as binding remains one of the great bugaboos of the language.</p>
+          <p><a href="https://forum.rebol.info/t/the-now-even-more-special-specialize/588/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-now-even-more-special-specialize/588/1</link>
+        <pubDate>Thu, 12 Apr 2018 12:27:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-588-1</guid>
+        <source url="https://forum.rebol.info/t/the-now-even-more-special-specialize/588.rss">The now even-more-special SPECIALIZE</source>
+      </item>
+  </channel>
+</rss>

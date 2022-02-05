@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Speaking With Tics: Should Quoted Arguments Always Be Apostrophe&#39;d?</title>
+    <link>https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359</link>
+    <description>In the past it has been discussed whether it is better or worse to have quoted things be apostrophe&#39;d.  
+
+Historical Rebol actively prohibits the use of a lit-word! with FOREACH for the loop variable:
+
+    &gt;&gt; foreach &#39;x [1 2 3] [print [x]]
+    ** Script Error: foreach expected word argument of type: get-word word block
+
+R3-Alpha and Red don&#39;t allow it either.
+
+But it might seem you&#39;d want to be able to do this in Ren-C...because there are quoting constructs that can quote backwards:
+
+    &gt;&gt; backquote: enfixed func [:x] [print [&quot;I backquoted&quot; x]]
+    == make action! [[:x] [...]]
+
+    &gt;&gt; foo: backquote
+    I backquoted foo:
+
+So if you try `for-each foo`, the backwards-quoting FOO would get the FOR-EACH before the forwards-quoting FOR-EACH could get the FOO.  That&#39;s just the order that the evaluator works in *(unless there&#39;s nothing to the right of FOO, which is the exception that would allow HELP FOO to work)*.
+
+You can work around that with:
+
+    for-each (&#39;foo) [1 2 3] [print [x]]
+
+But it seems like it would be nicer if you could write it without the parentheses.
+
+## Should All Quoting Sites *REQUIRE* Quoted Input?
+
+The quoted parameter convention exists to save you the trouble of quoting the callsites. *If this isn&#39;t what that&#39;s for, then what **is** it for?*
+
+I&#39;d be happy to buck the status quo if I thought it were clearly wrong.  But when we look across the board we see how nice and fluent **type of foo** looks vs. **&#39;type of foo**.  Over time it gets internalized to the point that **type: type of foo** doesn&#39;t feel weird at all (thought it might look so when you see it the first time).
+
+While there&#39;s something to be said for the educational value of seeing when a word is being used by name vs. by value, it&#39;s just... &quot;uglier&quot;
+
+    type: &#39;type of foo
+
+We seem lose something about knowing the &quot;rules of OF&quot; and the parts of speech involved by context, in order to add a bit of visual noise.  To my tastes, it seems this is not in the same &quot;clear win&quot; zone over `type-of` and `type?` that we were in before.
+
+It seems to me a core experimental theory in the language is that there is value in allowing acclimations in our mind to writing things that &quot;start looking natural&quot; even if they don&#39;t follow systemic rules.  That speedbump of typing **type of x** of hitting the apostrophe key, as well as the visual jarringness, suggests it&#39;s a place to take advantage of not quoting *when it&#39;s possible*.
+
+## Should All Quoting Sites Merely *PERMIT* Quoted Input?
+
+I mentioned that the current workaround for slipping past cases of things like backquoting operators is to use a GROUP!.
+
+    for-each (&#39;foo) [1 2 3] [print [x]]
+
+We might ask if the operation with the quoting slot should be lenient and let you just alternately write:
+
+    for-each &#39;foo [1 2 3] [print [x]]
+
+Quoted words won&#39;t dispatch functions, so you don&#39;t have to worry about FOO&#39;s associated behavior if you do this.
+
+A problem with being lenient in that way is that now the function spec is expanded to where it has to accept either WORD! -or- QUOTED! in its quoted slot.  That complicates things, and now the author of the quoting function needs to be bothered with the quote-or-not of their argument.
+
+If you take the easy-way-out and just DEQUOTE your argument (which leaves it as is if it&#39;s not quoted), then you may be permitting things with arbitrary numbers of quotes.
+
+    for-each &#39;&#39;&#39;&#39;&#39;&#39;&#39;&#39;&#39;foo [1 2 3] [print [x]]
+
+I&#39;m pretty sure UNQUOTE should require its argument to be quoted, for the sake of sanity.  So the implementation of functions like FOR-EACH would get hairier if they were to have to check and preprocess their arguments, e.g. to permit one-and-only one level of quote that they strip off.  This could be made easier with some helper for the purpose, though.
+
+## A Benefit To Requiring Quotes
+
+I&#39;ve mentioned in the past that for things like FOR-EACH, if we *required* the first argument to be quoted then there could be a special interpretation for when there wasn&#39;t a quote.  e.g. just run a function without naming a variable:
+
+    &gt;&gt; for-each [&quot;No&quot; &quot;Variable&quot;] :print
+    No
+    Variable
+
+This keeps you from having to write something like:
+
+    for-each _ [&quot;No&quot; &quot;Variable&quot;] :print
+
+A plain function declaration isn&#39;t particularly interesting in this form, even with a lambda it&#39;s wordier (and symboly-er) than the old-style without:
+
+    for-each [1 2 3] x -&gt; [print [x]]
+
+But when you bring in something like [&quot;POINTFREE&quot;](https://forum.rebol.info/t/looking-into-a-usermode-pointfree/1236) it gets more interesting:
+
+    &gt;&gt; block: [a b c]
+
+    &gt;&gt; for-each [1 2 3] (&lt;- append block)
+
+    &gt;&gt; block
+    == [a b c 1 2 3]
+
+With the idea that **#** is legal, it might look better if you &quot;opt-in&quot; to the variables:
+
+    for-each # [1 2 3] (&lt;- append block)
+
+This would let you do a template for what you want and don&#39;t want passed to your function.
+
+    &gt;&gt; block: [a b c]
+
+    &gt;&gt; for-each [# _] [1 2 3 4] (&lt;- append block)
+
+    &gt;&gt; block
+    == [a b c 1 3]
+
+This allows us to justify why the variable slot has usefulness even if we&#39;re not using a variable.  Maybe that&#39;s the answer.  And if we shorten FOR-EACH to simply EACH it would come out cleaner, even in complex invocations:
+
+    each [# _] [1 2 3 4] (&lt;- append block)
+
+## Switch to `#` for opt-in on variables, allow (but don&#39;t require) QUOTED! ?
+
+...is this a plan?  Does it cover all the angles?</description>
+    
+    <lastBuildDate>Wed, 07 Oct 2020 20:36:44 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Speaking With Tics: Should Quoted Arguments Always Be Apostrophe&#39;d?</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Can't wait to see the feedback on this one. <img src="https://forum.rebol.info/images/emoji/twitter/innocent.png?v=9" title=":innocent:" class="emoji" alt=":innocent:"><br>
+I think of a natural word! as a get-word; if I want to pass an inert word! to be used in a for-each body, it seems more consistent that it be a quoted! (note: quoted! not necessary when passing a block! of words).  I have no problem with it being required either, but I imagine this is going to be a problem for some developers and I would understand their resistance to the idea.<br>
+I'm still trying to wrap my head around the # opt-in.</p>
+          <p><a href="https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359/2</link>
+        <pubDate>Wed, 07 Oct 2020 20:36:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1359-2</guid>
+        <source url="https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359.rss">Speaking With Tics: Should Quoted Arguments Always Be Apostrophe&#39;d?</source>
+      </item>
+      <item>
+        <title>Speaking With Tics: Should Quoted Arguments Always Be Apostrophe&#39;d?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In the past it has been discussed whether it is better or worse to have quoted things be apostrophe'd.</p>
+<p>Historical Rebol actively prohibits the use of a lit-word! with FOREACH for the loop variable:</p>
+<pre><code>&gt;&gt; foreach 'x [1 2 3] [print [x]]
+** Script Error: foreach expected word argument of type: get-word word block
+</code></pre>
+<p>R3-Alpha and Red don't allow it either.</p>
+<p>But it might seem you'd want to be able to do this in Ren-C...because there are quoting constructs that can quote backwards:</p>
+<pre><code>&gt;&gt; backquote: enfixed func [:x] [print ["I backquoted" x]]
+== make action! [[:x] [...]]
+
+&gt;&gt; foo: backquote
+I backquoted foo:
+</code></pre>
+<p>So if you try <code>for-each foo</code>, the backwards-quoting FOO would get the FOR-EACH before the forwards-quoting FOR-EACH could get the FOO.  That's just the order that the evaluator works in <em>(unless there's nothing to the right of FOO, which is the exception that would allow HELP FOO to work)</em>.</p>
+<p>You can work around that with:</p>
+<pre><code>for-each ('foo) [1 2 3] [print [x]]
+</code></pre>
+<p>But it seems like it would be nicer if you could write it without the parentheses.</p>
+<h2>Should All Quoting Sites <em>REQUIRE</em> Quoted Input?</h2>
+<p>The quoted parameter convention exists to save you the trouble of quoting the callsites. <em>If this isn't what that's for, then what <strong>is</strong> it for?</em></p>
+<p>I'd be happy to buck the status quo if I thought it were clearly wrong.  But when we look across the board we see how nice and fluent <strong>type of foo</strong> looks vs. <strong>'type of foo</strong>.  Over time it gets internalized to the point that <strong>type: type of foo</strong> doesn't feel weird at all (thought it might look so when you see it the first time).</p>
+<p>While there's something to be said for the educational value of seeing when a word is being used by name vs. by value, it's just... "uglier"</p>
+<pre><code>type: 'type of foo
+</code></pre>
+<p>We seem lose something about knowing the "rules of OF" and the parts of speech involved by context, in order to add a bit of visual noise.  To my tastes, it seems this is not in the same "clear win" zone over <code>type-of</code> and <code>type?</code> that we were in before.</p>
+<p>It seems to me a core experimental theory in the language is that there is value in allowing acclimations in our mind to writing things that "start looking natural" even if they don't follow systemic rules.  That speedbump of typing <strong>type of x</strong> of hitting the apostrophe key, as well as the visual jarringness, suggests it's a place to take advantage of not quoting <em>when it's possible</em>.</p>
+<h2>Should All Quoting Sites Merely <em>PERMIT</em> Quoted Input?</h2>
+<p>I mentioned that the current workaround for slipping past cases of things like backquoting operators is to use a GROUP!.</p>
+<pre><code>for-each ('foo) [1 2 3] [print [x]]
+</code></pre>
+<p>We might ask if the operation with the quoting slot should be lenient and let you just alternately write:</p>
+<pre><code>for-each 'foo [1 2 3] [print [x]]
+</code></pre>
+<p>Quoted words won't dispatch functions, so you don't have to worry about FOO's associated behavior if you do this.</p>
+<p>A problem with being lenient in that way is that now the function spec is expanded to where it has to accept either WORD! -or- QUOTED! in its quoted slot.  That complicates things, and now the author of the quoting function needs to be bothered with the quote-or-not of their argument.</p>
+<p>If you take the easy-way-out and just DEQUOTE your argument (which leaves it as is if it's not quoted), then you may be permitting things with arbitrary numbers of quotes.</p>
+<pre><code>for-each '''''''''foo [1 2 3] [print [x]]
+</code></pre>
+<p>I'm pretty sure UNQUOTE should require its argument to be quoted, for the sake of sanity.  So the implementation of functions like FOR-EACH would get hairier if they were to have to check and preprocess their arguments, e.g. to permit one-and-only one level of quote that they strip off.  This could be made easier with some helper for the purpose, though.</p>
+<h2>A Benefit To Requiring Quotes</h2>
+<p>I've mentioned in the past that for things like FOR-EACH, if we <em>required</em> the first argument to be quoted then there could be a special interpretation for when there wasn't a quote.  e.g. just run a function without naming a variable:</p>
+<pre><code>&gt;&gt; for-each ["No" "Variable"] :print
+No
+Variable
+</code></pre>
+<p>This keeps you from having to write something like:</p>
+<pre><code>for-each _ ["No" "Variable"] :print
+</code></pre>
+<p>A plain function declaration isn't particularly interesting in this form, even with a lambda it's wordier (and symboly-er) than the old-style without:</p>
+<pre><code>for-each [1 2 3] x -&gt; [print [x]]
+</code></pre>
+<p>But when you bring in something like <a href="https://forum.rebol.info/t/looking-into-a-usermode-pointfree/1236">"POINTFREE"</a> it gets more interesting:</p>
+<pre><code>&gt;&gt; block: [a b c]
+
+&gt;&gt; for-each [1 2 3] (&lt;- append block)
+
+&gt;&gt; block
+== [a b c 1 2 3]
+</code></pre>
+<p>With the idea that <strong>#</strong> is legal, it might look better if you "opt-in" to the variables:</p>
+<pre><code>for-each # [1 2 3] (&lt;- append block)
+</code></pre>
+<p>This would let you do a template for what you want and don't want passed to your function.</p>
+<pre><code>&gt;&gt; block: [a b c]
+
+&gt;&gt; for-each [# _] [1 2 3 4] (&lt;- append block)
+
+&gt;&gt; block
+== [a b c 1 3]
+</code></pre>
+<p>This allows us to justify why the variable slot has usefulness even if we're not using a variable.  Maybe that's the answer.  And if we shorten FOR-EACH to simply EACH it would come out cleaner, even in complex invocations:</p>
+<pre><code>each [# _] [1 2 3 4] (&lt;- append block)
+</code></pre>
+<h2>Switch to <code>#</code> for opt-in on variables, allow (but don't require) QUOTED! ?</h2>
+<p>...is this a plan?  Does it cover all the angles?</p>
+          <p><a href="https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359/1</link>
+        <pubDate>Wed, 07 Oct 2020 19:32:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1359-1</guid>
+        <source url="https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359.rss">Speaking With Tics: Should Quoted Arguments Always Be Apostrophe&#39;d?</source>
+      </item>
+  </channel>
+</rss>

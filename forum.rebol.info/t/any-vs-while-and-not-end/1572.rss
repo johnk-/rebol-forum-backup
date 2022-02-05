@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ANY vs. WHILE... and NOT END</title>
+    <link>https://forum.rebol.info/t/any-vs-while-and-not-end/1572</link>
+    <description>So the distinction between ANY and WHILE in R3-Alpha (and Red) is subtle...which is that there is an implicit NOT END built into ANY:
+
+    r3-alpha&gt; parse &quot;aa&quot; [any [opt &quot;a&quot;]]
+    == #[true]
+
+    r3-alpha&gt; parse &quot;aa&quot; [while [opt &quot;a&quot;]]
+    ; infinite loop
+
+Note here that the OPT is critical to the distinction.  If the rule would fail at the end, then you don&#39;t see a difference.  It&#39;s not *&quot;any number of a&quot;* that&#39;s running infinitely since the As are limited, it&#39;s *&quot;any number of optional a&quot;* which is unlimited.  For comparison:
+
+    r3-alpha&gt; parse &quot;aa&quot; [any [&quot;a&quot;]]
+    == #[true]
+
+    r3-alpha&gt; parse &quot;aa&quot; [while [&quot;a&quot;]]
+    == #[true]
+
+I tentatively removed the distinction in UPARSE, saying that ANY and SOME will keep running so long as the rule does not fail.  Reasoning being that if you are iterating and want to stop at the end, you can do so by writing **any [not end, ...]**
+
+One might wonder why you would want a parse rule that kept going even at the end.  For one thing, so long as rules can modify the content, the end might not stay at the end...you could imagine a rule repeating and inserting new material.
+
+UPARSE in particular is something that can pull data from multiple sources...the INPUT is just one of those sources.
+
+    &gt;&gt; number: func [&lt;static&gt; counter (4)] [if counter &gt; 0 [counter: counter - 1]]
+
+    &gt;&gt; uparse &quot;abc&quot; [return collect [any [opt keep skip, keep @(number)]]]
+    == [#a 3 #b 2 #c 1 0]
+
+Here we see it kept on collecting so long as the NUMBER generator would give back a non-null result.  So it had an additional collect step even when the input provided no source data.
+
+&gt; Note: I wanted a way of saying to keep going so long as one or the other, or both, were true...but keep them in order.  I don&#39;t  see a good way to do that.  Here is a clumsy way:
+&gt;
+&gt;     any [
+&gt;         (keepgoing: false)
+&gt;         opt [keep skip, (keepgoing: true)]
+&gt;         opt [keep @(number), (keepgoing: true)]
+&gt;         keepgoing
+&gt;     ]
+&gt;
+&gt; I feel like it should be easier.  :-/  It&#39;s too bad SOME is taken, because **some [keep skip, keep @(number)]** could arguably mean this.  In DO we could use an analogue to this as well, as a non-short-circuit version of ANY.
+
+In any case, the point is that the END-disregarding WHILE exists in R3-Alpha/Red parse for a reason of generality.  You could be in a circumstance where a rule is at the end yet does not fail, and you want to keep iterating regardless.
+
+Note also that there&#39;s no SOME form of WHILE, which mandates at least one match with END not stopping it.
+
+All things considered, is it worth it to have the nuance of END behavior...and a separate construct, or should you be expected to put **not end** in your rule if you need end to terminate a set of conditions that wouldn&#39;t otherwise fail on it anyway?</description>
+    
+    <lastBuildDate>Sat, 03 Apr 2021 18:53:25 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/any-vs-while-and-not-end/1572.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>ANY vs. WHILE... and NOT END</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1572">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>All things considered, is it worth it to have the nuance of END behavior...and a separate construct, or should you be expected to put <strong>not end</strong> in your rule if you need end to terminate a set of conditions that wouldn't otherwise fail on it anyway?</p>
+</blockquote>
+</aside>
+<p>So the nuance turns out to be a little bit harder to deal with when END is one of the conditions you want to act upon:</p>
+<pre><code>some [
+    ...
+  | ...
+  | end (print "I'm doing the END stuff")
+]
+</code></pre>
+<p>I ran across this style in rebolek's markdown processor.  The SOME uses the "no progress" rule to determine when to stop...so even if there's an END at the start it's willing to run one time through.</p>
+<p>If all you have are WHILE-style primitives, you can't use <strong><code>not end</code></strong> to terminate it, you have to use <strong>end break</strong>.</p>
+<pre><code>some [
+    ...
+  | ...
+  | end (print "I'm doing the END stuff") break
+]
+</code></pre>
+<blockquote>
+<p><em>Note: Something about BREAK, ACCEPT, and REJECT have seemed historically confusing too me.  Red only offers BREAK and REJECT...where BREAK returns success from the repeating rule and REJECT returns failure.</em></p>
+<p><em>I might prefer the two be STOP (quit iterating but don't consider anything bad to have happened, so "accept") and BREAK (disrupt with incomplete status).  That might line up better.  Not sure.</em></p>
+</blockquote>
+<p><strong>This remains a subtle question, and I'm still very much on the fence about whether having a more "nuanced" default does more harm than good, just because it makes it less likely you'll get in an infinite loop.</strong></p>
+<p>What I think we know:</p>
+<ul>
+<li>
+<p>Having a construct be called "WHILE" and then having it keep applying until the rule you give it fails is the <em>easiest looping PARSE rule to comprehend</em>.</p>
+</li>
+<li>
+<p>A rule with the WHILE name and behavior was introduced in R3-Alpha due to a belief in its necessity.  Red being somewhat conservative in accepting the necessity of R3-Alpha-isms added it as well.</p>
+</li>
+<li>
+<p>The meaning of ANY in DO code (pick the first of these expressions that "matches") corresponds very closely to something that in PARSE would be the alternate done with vertical bar <strong><code>|</code></strong>.  It does not evoke the idea of "looping".</p>
+</li>
+<li>
+<p>If SOME and ANY are deemed to be "must make progress" then only WHILE will have an analogue with ANY.  There will be no "loop at least once with no progress requirement".</p>
+</li>
+</ul>
+<p>I feel there's a clear value that can be articulated about having <strong>while</strong> and <strong>some</strong> be the two clearly explainable looping instructions...which will keep going until they don't match or break...has a number of concrete advantages.</p>
+<p>What you lose in this bargain is the likes of:</p>
+<pre><code>&gt;&gt; parse "aa" [any ["a" (print "found A") | end (print "hit end!")]]
+found A
+found A
+hit end!  ; finished
+</code></pre>
+<p>You would instead get:</p>
+<pre><code>&gt;&gt; parse "aa" [while ["a" (print "found A") | end (print "hit end!")]]
+found A
+found A
+hit end!
+hit end!
+hit end!... ; infinite loop
+</code></pre>
+<p>So you would have to find some way to get such a rule to stop.  Historically:</p>
+<pre><code>&gt;&gt; parse "aa" [while ["a" (print "found A") | end (print "hit end!") break]]
+found A
+found A
+hit end!</code></pre>
+          <p><a href="https://forum.rebol.info/t/any-vs-while-and-not-end/1572/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/any-vs-while-and-not-end/1572/2</link>
+        <pubDate>Sat, 03 Apr 2021 18:53:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1572-2</guid>
+        <source url="https://forum.rebol.info/t/any-vs-while-and-not-end/1572.rss">ANY vs. WHILE... and NOT END</source>
+      </item>
+      <item>
+        <title>ANY vs. WHILE... and NOT END</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So the distinction between ANY and WHILE in R3-Alpha (and Red) is subtle...which is that there is an implicit NOT END built into ANY:</p>
+<pre><code>r3-alpha&gt; parse "aa" [any [opt "a"]]
+== #[true]
+
+r3-alpha&gt; parse "aa" [while [opt "a"]]
+; infinite loop
+</code></pre>
+<p>Note here that the OPT is critical to the distinction.  If the rule would fail at the end, then you don't see a difference.  It's not <em>"any number of a"</em> that's running infinitely since the As are limited, it's <em>"any number of optional a"</em> which is unlimited.  For comparison:</p>
+<pre><code>r3-alpha&gt; parse "aa" [any ["a"]]
+== #[true]
+
+r3-alpha&gt; parse "aa" [while ["a"]]
+== #[true]
+</code></pre>
+<p>I tentatively removed the distinction in UPARSE, saying that ANY and SOME will keep running so long as the rule does not fail.  Reasoning being that if you are iterating and want to stop at the end, you can do so by writing <strong>any [not end, ...]</strong></p>
+<p>One might wonder why you would want a parse rule that kept going even at the end.  For one thing, so long as rules can modify the content, the end might not stay at the end...you could imagine a rule repeating and inserting new material.</p>
+<p>UPARSE in particular is something that can pull data from multiple sources...the INPUT is just one of those sources.</p>
+<pre><code>&gt;&gt; number: func [&lt;static&gt; counter (4)] [if counter &gt; 0 [counter: counter - 1]]
+
+&gt;&gt; uparse "abc" [return collect [any [opt keep skip, keep @(number)]]]
+== [#a 3 #b 2 #c 1 0]
+</code></pre>
+<p>Here we see it kept on collecting so long as the NUMBER generator would give back a non-null result.  So it had an additional collect step even when the input provided no source data.</p>
+<blockquote>
+<p>Note: I wanted a way of saying to keep going so long as one or the other, or both, were true...but keep them in order.  I don't  see a good way to do that.  Here is a clumsy way:</p>
+<pre><code>any [
+    (keepgoing: false)
+    opt [keep skip, (keepgoing: true)]
+    opt [keep @(number), (keepgoing: true)]
+    keepgoing
+]
+</code></pre>
+<p>I feel like it should be easier.  :-/  It's too bad SOME is taken, because <strong>some [keep skip, keep @(number)]</strong> could arguably mean this.  In DO we could use an analogue to this as well, as a non-short-circuit version of ANY.</p>
+</blockquote>
+<p>In any case, the point is that the END-disregarding WHILE exists in R3-Alpha/Red parse for a reason of generality.  You could be in a circumstance where a rule is at the end yet does not fail, and you want to keep iterating regardless.</p>
+<p>Note also that there's no SOME form of WHILE, which mandates at least one match with END not stopping it.</p>
+<p>All things considered, is it worth it to have the nuance of END behavior...and a separate construct, or should you be expected to put <strong>not end</strong> in your rule if you need end to terminate a set of conditions that wouldn't otherwise fail on it anyway?</p>
+          <p><a href="https://forum.rebol.info/t/any-vs-while-and-not-end/1572/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/any-vs-while-and-not-end/1572/1</link>
+        <pubDate>Sat, 27 Mar 2021 08:44:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1572-1</guid>
+        <source url="https://forum.rebol.info/t/any-vs-while-and-not-end/1572.rss">ANY vs. WHILE... and NOT END</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Right Quoting Left vs. Left Quoting Right... Fight!</title>
+    <link>https://forum.rebol.info/t/right-quoting-left-vs-left-quoting-right-fight/1434</link>
+    <description>One might think it obvious that an ordinary function that quotes its first argument needs to &quot;win&quot; when it quotes right... even if an enfix function after it quotes left.  Because you want **help -&gt;** to give you the help for **-&gt;**, and not try to construct a function with the named parameter `help` (and then fail, due to having no body).
+
+It&#39;s not quite that simple.  To cut to the core of why not, consider the following from the evaluator&#39;s point of view:
+
+    (print &quot;message&quot;, &#39;lib)/help -&gt;
+
+Let&#39;s pretend for a moment that the evaluator gives the left hand side first dibs if it quotes its first argument.  In that world, if the left is looked up and doesn&#39;t quote the right, then the right hand side gets second dibs...and is checked if it quotes its left argument.
+
+But notice that to get the knowledge of if left-quotes-right or not, *you have to evaluate that path*.  That can do processing which has costs you might not want... and groups can have side-effects (like the printing of the message).  But [since enfix dispatches from words only](https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794), it doesn&#39;t have that problem; it can be checked &quot;cheaply&quot; with no side-effects, making what the right hand side wants of the left a good fit for the first thing to check...falling through to the expensive operation with side-effects that you then *know* wins.
+
+So that&#39;s why I&#39;ve been letting right quoting over left win.  But you might ask: how can HELP work without making you say  **help &#39;-&gt;** (which might lead down the road of consistency and making you type **help &#39;append**) ?  Because there&#39;s been a rule: **&quot;Right operators that quote left get priority, BUT become inert if they have nothing following them.&quot;**
+
+    help -&gt;                                ; gives you the help for lambda
+    help -&gt; [print [&quot;argument is&quot; help]]   ; gives you an arity-1 function 
+
+Weird, but it seemed to work well enough.
+
+Reviewing it now, it&#39;s somewhat limiting.  It means you can&#39;t have postfix operations that quote their left hand sides and take non-inert items on their left.  But the alternative would mean never being able to left-quote paths, or having dodgy properties when you do.  Hm.
+
+## Can It Be Narrower?
+
+Might only &quot;common quoting&quot; **:left** escapable parameters have this loophole, with &quot;I *really* want to quote it&quot; operators being presumed rare enough to break HELP...and still run at end?
+
+That sounds nice, but the &quot;I really want to quote it&quot; forms aren&#39;t going to be so rare.  Remember that we want:
+
+    &gt;&gt; integer! = type of 1
+    == #[true]
+
+This means the left can&#39;t be **:property** and deferent to enfix, which would let `integer! = type` run first (the way branches are deferent, to support lambdas).  I was proposing it be **&#39;:property** as a distinction, to say it&#39;s escapable -but- on only one unit of value.
+
+So now we&#39;re back to what **help of** would do.  We could argue that in this case, OF could sense that it&#39;s at the end...but doesn&#39;t have an endable next parameter...and it is the *incompleteness* that drives it to be deferent vs. error.  *However, maybe it would win if it didn&#39;t take any arguments, and that would be acceptable...?*
+
+Let&#39;s make a sample postfix non-deferent operation.  Remember that in this model, HELP takes an escapable argument (at least **:topic**, possibly **&#39;:topic**)
+
+    &gt;&gt; ?: enfixed func [&#39;:left] [print [&quot;is&quot; if not :left [&quot;not&quot;] &quot;truthy&quot;]]
+
+    &gt;&gt; _ ?
+    is not truthy
+
+    &gt;&gt; help ?
+    is truthy
+
+    &gt;&gt; help :(&#39;?)   ; generic escapability (help gets the WORD! `?`)
+    ? is an ACTION!
+    ...help text here...
+
+    &gt;&gt; help :?   ; also generic escapability (help gets the ACTION!)
+    ? is an ACTION!  ; and ACTION! now carries labels, so it can know the &quot;?&quot;
+    ...help text here...
+
+    &gt;&gt; help &#39;?   ; unescaped, HELP gets QUOTED! (`&#39;?`)
+    ? is an ACTION!  ; maybe HELP does the unquote internally, to give the answeer?
+    ...help text here...
+
+To me, this seems to give a number of options to someone who wants to get HELP on a left quoting enfix operation.  Enough options to not make left-quoting enfix of words and paths impossible.
+
+And how bad would this be, really?  If we narrowed it down to where the only operators that require escaping to get HELP are those that are *genuinely* postfix hard-or-medium-quoting with no arguments... *that&#39;s a pretty small set*.  To date, we have ZERO such operators in the box, they only exist in tests.
+
+(e.g. OF quotes, but still needs another argument, so that would drive its deference so that **help of** would dispatch to HELP with OF as the parameter...while **help of 10** would dispatch to OF with &#39;help as the property and 10 as the value)
+
+## This is important!
+
+**Having these things work out is the point, because this is what the unique offering is.**  These issues all lock together on foundational questions e.g. those pointed out by [`&quot;speaking with tics&quot;`](https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359).
+
+When left-quoting enfix operators can subvert a quote from the right, that means when you say **for-each x** you can&#39;t be sure that X won&#39;t act on the FOR-EACH.  But we can see that as different rom the situation **type of** is in...since OF gets the first shot.
+
+Does that suggest the &quot;out-of-the-box&quot; constructs always have you put ticks on things you want literally on the right?  It doesn&#39;t seem we&#39;d want to bear the consequences of that on HELP...
+
+    &gt;&gt; help append
+    ** Script Error: append is missing its series argument
+
+     &gt;&gt; help &#39;append
+     ; this would work...
+
+Just have to keep everything all lined up.</description>
+    
+    <lastBuildDate>Tue, 15 Dec 2020 05:56:55 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/right-quoting-left-vs-left-quoting-right-fight/1434.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Right Quoting Left vs. Left Quoting Right... Fight!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>One might think it obvious that an ordinary function that quotes its first argument needs to "win" when it quotes right... even if an enfix function after it quotes left.  Because you want <strong>help -&gt;</strong> to give you the help for <strong>-&gt;</strong>, and not try to construct a function with the named parameter <code>help</code> (and then fail, due to having no body).</p>
+<p>It's not quite that simple.  To cut to the core of why not, consider the following from the evaluator's point of view:</p>
+<pre><code>(print "message", 'lib)/help -&gt;
+</code></pre>
+<p>Let's pretend for a moment that the evaluator gives the left hand side first dibs if it quotes its first argument.  In that world, if the left is looked up and doesn't quote the right, then the right hand side gets second dibs...and is checked if it quotes its left argument.</p>
+<p>But notice that to get the knowledge of if left-quotes-right or not, <em>you have to evaluate that path</em>.  That can do processing which has costs you might not want... and groups can have side-effects (like the printing of the message).  But <a href="https://forum.rebol.info/t/letting-go-of-enfix-path-dreams-but-fixing-it-with-magic/794">since enfix dispatches from words only</a>, it doesn't have that problem; it can be checked "cheaply" with no side-effects, making what the right hand side wants of the left a good fit for the first thing to check...falling through to the expensive operation with side-effects that you then <em>know</em> wins.</p>
+<p>So that's why I've been letting right quoting over left win.  But you might ask: how can HELP work without making you say  <strong>help '-&gt;</strong> (which might lead down the road of consistency and making you type <strong>help 'append</strong>) ?  Because there's been a rule: <strong>"Right operators that quote left get priority, BUT become inert if they have nothing following them."</strong></p>
+<pre><code>help -&gt;                                ; gives you the help for lambda
+help -&gt; [print ["argument is" help]]   ; gives you an arity-1 function 
+</code></pre>
+<p>Weird, but it seemed to work well enough.</p>
+<p>Reviewing it now, it's somewhat limiting.  It means you can't have postfix operations that quote their left hand sides and take non-inert items on their left.  But the alternative would mean never being able to left-quote paths, or having dodgy properties when you do.  Hm.</p>
+<h2>Can It Be Narrower?</h2>
+<p>Might only "common quoting" <strong>:left</strong> escapable parameters have this loophole, with "I <em>really</em> want to quote it" operators being presumed rare enough to break HELP...and still run at end?</p>
+<p>That sounds nice, but the "I really want to quote it" forms aren't going to be so rare.  Remember that we want:</p>
+<pre><code>&gt;&gt; integer! = type of 1
+== #[true]
+</code></pre>
+<p>This means the left can't be <strong>:property</strong> and deferent to enfix, which would let <code>integer! = type</code> run first (the way branches are deferent, to support lambdas).  I was proposing it be <strong>':property</strong> as a distinction, to say it's escapable -but- on only one unit of value.</p>
+<p>So now we're back to what <strong>help of</strong> would do.  We could argue that in this case, OF could sense that it's at the end...but doesn't have an endable next parameter...and it is the <em>incompleteness</em> that drives it to be deferent vs. error.  <em>However, maybe it would win if it didn't take any arguments, and that would be acceptable...?</em></p>
+<p>Let's make a sample postfix non-deferent operation.  Remember that in this model, HELP takes an escapable argument (at least <strong>:topic</strong>, possibly <strong>':topic</strong>)</p>
+<pre><code>&gt;&gt; ?: enfixed func [':left] [print ["is" if not :left ["not"] "truthy"]]
+
+&gt;&gt; _ ?
+is not truthy
+
+&gt;&gt; help ?
+is truthy
+
+&gt;&gt; help :('?)   ; generic escapability (help gets the WORD! `?`)
+? is an ACTION!
+...help text here...
+
+&gt;&gt; help :?   ; also generic escapability (help gets the ACTION!)
+? is an ACTION!  ; and ACTION! now carries labels, so it can know the "?"
+...help text here...
+
+&gt;&gt; help '?   ; unescaped, HELP gets QUOTED! (`'?`)
+? is an ACTION!  ; maybe HELP does the unquote internally, to give the answeer?
+...help text here...
+</code></pre>
+<p>To me, this seems to give a number of options to someone who wants to get HELP on a left quoting enfix operation.  Enough options to not make left-quoting enfix of words and paths impossible.</p>
+<p>And how bad would this be, really?  If we narrowed it down to where the only operators that require escaping to get HELP are those that are <em>genuinely</em> postfix hard-or-medium-quoting with no arguments... <em>that's a pretty small set</em>.  To date, we have ZERO such operators in the box, they only exist in tests.</p>
+<p>(e.g. OF quotes, but still needs another argument, so that would drive its deference so that <strong>help of</strong> would dispatch to HELP with OF as the parameter...while <strong>help of 10</strong> would dispatch to OF with 'help as the property and 10 as the value)</p>
+<h2>This is important!</h2>
+<p><strong>Having these things work out is the point, because this is what the unique offering is.</strong>  These issues all lock together on foundational questions e.g. those pointed out by <a href="https://forum.rebol.info/t/speaking-with-tics-should-quoted-arguments-always-be-apostrophed/1359"><code>"speaking with tics"</code></a>.</p>
+<p>When left-quoting enfix operators can subvert a quote from the right, that means when you say <strong>for-each x</strong> you can't be sure that X won't act on the FOR-EACH.  But we can see that as different rom the situation <strong>type of</strong> is in...since OF gets the first shot.</p>
+<p>Does that suggest the "out-of-the-box" constructs always have you put ticks on things you want literally on the right?  It doesn't seem we'd want to bear the consequences of that on HELP...</p>
+<pre><code>&gt;&gt; help append
+** Script Error: append is missing its series argument
+
+ &gt;&gt; help 'append
+ ; this would work...
+</code></pre>
+<p>Just have to keep everything all lined up.</p>
+          <p><a href="https://forum.rebol.info/t/right-quoting-left-vs-left-quoting-right-fight/1434/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/right-quoting-left-vs-left-quoting-right-fight/1434/1</link>
+        <pubDate>Mon, 14 Dec 2020 23:53:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1434-1</guid>
+        <source url="https://forum.rebol.info/t/right-quoting-left-vs-left-quoting-right-fight/1434.rss">Right Quoting Left vs. Left Quoting Right... Fight!</source>
+      </item>
+  </channel>
+</rss>

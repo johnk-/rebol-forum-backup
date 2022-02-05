@@ -1,0 +1,440 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+    <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233</link>
+    <description>It turned out that @orr721 had been using Ren-C with ODBC for a couple of years (to process data from Microsoft Excel).  I&#39;d been on the fence about its relevance, because it seems a very &quot;legacy&quot; type of technology... I&#39;m more interested in graph databases and non-SQL-oriented storage engines.  Also, the bit of PORT!-related cruft as an interface seemed very poorly thought out (as I feel [pretty much all of ports have been shown to be](https://forum.rebol.info/t/on-the-critique-of-port/1213/2?u=hostilefork)).
+
+But since he&#39;d been using it and [filed a bug report](https://github.com/metaeducation/ren-c/issues/1017)--and I&#39;ve been asking people to give me reproducible tests for things they care about to put on Travis--I figured I could patch it up.  I did so in a way that pushed it along even further as a libRebol client; various commits I made showed [flexing the muscles of the API and its approach](https://github.com/metaeducation/ren-c/commit/c63a00159c7bd7012a4791a61a31da8be3e202d6#diff-2eef67ba3a28651b52e60f00b96f2607R338).
+
+But not wanting the work to atrophy again, I created a new [rebol-odbc GitHub with its own .travis.yml file and issue database](https://github.com/metaeducation/rebol-odbc).  I made it run a primordial but somewhat broad [insert and select `%odbc-test.reb`](https://github.com/metaeducation/rebol-odbc/blob/master/tests/odbc-test.reb), which puts various datatypes into a table from Rebol values, and then checks to see that the same values can be gotten back out.
+
+The test is now automated and [running and succeeding on MySQL](https://travis-ci.org/metaeducation/rebol-odbc/jobs/599462561#L601) as well as [succeeding under SQLite](https://travis-ci.org/metaeducation/rebol-odbc/jobs/599462561#L724) on unixodbc.  Linux is the more complicated environment to get thing working on, as ODBC originates from Microsoft--so it&#39;s more turnkey there.
+
+## I Might Be Underestimating How Useful This Is
+
+**Rebol2&#39;s ODBC abilities were considered valuable enough that they were a paid feature.  One implication of that is that few people ever had a chance to experience a single-download tool that can manipulate ODBC databases and translate fields to native types, while offering the language abilities of Rebol2.**  (So they sure haven&#39;t seen what such a tool with Ren-C can do!)
+
+I went hunting for a vetted open-source alternative client that could do arbitrary SQL commands on DBC databases on your machine.  There was pretty much no kind of &quot;simple&quot; option.
+
+But I already had Python available on the machine:
+
+    shell&gt; python --version
+    Python 2.7.15+
+
+So since there was a &quot;pyodbc&quot; I thought I&#39;d install it.  However to get it, I had to install the Python Package Manager.  This is what `sudo apt install python-pip` gave back:
+
+    The following additional packages will be installed:
+      libexpat1-dev libjs-sphinxdoc libpython-all-dev libpython-dev libpython2-dev libpython2.7 libpython2.7-dev
+      libpython2.7-minimal libpython2.7-stdlib python-all python-all-dev python-asn1crypto python-cffi-backend
+      python-configparser python-crypto python-cryptography python-dev python-entrypoints python-enum34 python-idna
+      python-ipaddress python-keyring python-keyrings.alt python-pip-whl python-pkg-resources python-secretstorage
+      python-setuptools python-six python-wheel python-xdg python2-dev python2.7 python2.7-dev python2.7-minimal
+    Suggested packages:
+      python-crypto-doc python-cryptography-doc python-cryptography-vectors python-enum34-doc gnome-keyring
+      gir1.2-gnomekeyring-1.0 python-fs python-gdata python-keyczar python-secretstorage-doc python-setuptools-doc
+      python2.7-doc binfmt-support
+    The following NEW packages will be installed:
+      libexpat1-dev libjs-sphinxdoc libpython-all-dev libpython-dev libpython2-dev libpython2.7-dev python-all
+      python-all-dev python-asn1crypto python-cffi-backend python-configparser python-crypto python-cryptography
+      python-dev python-entrypoints python-enum34 python-idna python-ipaddress python-keyring python-keyrings.alt
+      python-pip python-pip-whl python-pkg-resources python-secretstorage python-setuptools python-six python-wheel
+      python-xdg python2-dev python2.7-dev
+    The following packages will be upgraded:
+      libpython2.7 libpython2.7-minimal libpython2.7-stdlib python2.7 python2.7-minimal
+    5 upgraded, 30 newly installed, 0 to remove and 191 not upgraded.
+    Need to get 40.1 MB of archives.
+    After this operation, 66.7 MB of additional disk space will be used.
+
+So I need to download and decompress 40.1 MB of data, to take up 66.7 MB of disk (spread across who knows how many files), when I already had a python interpreter on the machine?  **And this won&#39;t even get me pyodbc!**  :-(
+
+All right, fine.  After installing, I&#39;d gone from 2.7.15+ to 2.7.16:
+
+    shell&gt; python --version
+    Python 2.7.16
+
+Running **pip install pyodbc** wasn&#39;t egregiously big, but still seemed dauntingly complex:
+
+    Collecting pyodbc
+      Downloading https://files.pythonhosted.org/packages/75/29/aa190749bac37ede0f11a68a75e7055254699c11572bd94213f1163dfd8f/pyodbc-4.0.27.tar.gz (242kB)
+    100% |████████████████████████████████| 245kB 1.9MB/s 
+    Building wheels for collected packages: pyodbc
+      Running setup.py bdist_wheel for pyodbc ... done
+      Stored in directory: /home/hostilefork/.cache/pip/wheels/87/b7/78/0740a2ed98bfe463525ad42d535370e34141c5d36b2d00dcaf
+    Successfully built pyodbc
+    Installing collected packages: pyodbc
+    Successfully installed pyodbc-4.0.27
+
+Putting aside the &quot;what the heck is&quot; `...wheels/87/b7/78/0740a2...`, the package manager actually built the shared library.  So the specification of the package is parallel to our &quot;extensions&quot;--presumably if you&#39;re on windows then `pip install pyodbc` would be able to adapt its compiler settings and make a .DLL against Windows APIs as opposed to a `.so` against POSIX.  Unlike **apt**, it seems that **pip** does installation on a per-user basis by default.
+
+    -rwxrwxr-x 1 hostilefork hostilefork 832848 Oct 18 17:33 /home/hostilefork/.local/lib/python2.7/site-packages/pyodbc.so*
+
+So over 800k of binaries *just for the ODBC part*.  That doesn&#39;t make much sense, as most all the ODBC functionality is a shared library.  What could all of that be?
+
+## Maybe There Is Opportunity Here
+
+I don&#39;t know how big the cross-platform ODBC market is, and I&#39;ve already mentioned my personal reluctance in getting involved in packaging binaries.  But I did have a thought...
+
+I&#39;ve already suggested that the Trojan Horse of distributing the system might be to give people utilities built on Rebol that don&#39;t try and sell them the language, but try to sell them particular functionality (a dialect, etc.) built with the language.
+
+**What if every encapped application could sense its filename and then if it was `r3` (or `rebol`, or some other list of special terms) it would automatically act as plain Rebol?**
+
+This means userbases could be identified to market a tool to.  You build for the platforms of interest to them and encap the tool inside it.
+
+I don&#39;t know what kind of ODBC-powered tool people might imagine, but it seems the world doesn&#39;t really even have a basic cross-platform string-based SQL query sorted out.  If you imagine just a few nice features built on the usermode console and a dialect, I wonder... *might there even be money in that*?
+
+My own attention should be on the web build--but if there were others who came with an interest in this, it wouldn&#39;t hurt.  I don&#39;t know.  As I say, I just sensed a vacuum and was struck at how there might be an opportunity here.  :man_shrugging:</description>
+    
+    <lastBuildDate>Mon, 30 Nov 2020 16:50:53 +0000</lastBuildDate>
+    <category>Databases</category>
+    <atom:link href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>I had seen something already but can't wrap my head around it. I have created a simple database using the tool SQLite Browser from <a href="http://sqlitebrowser.org">http://sqlitebrowser.org</a> and now am in possession of a second SQLite db. (Previous was made during my assessment task using Python:</p>
+<pre><code>import sqlite3
+#To be sure create a folder db using bash.
+conn = sqlite3.connect('db/sqlite3test.db')
+</code></pre>
+<p>)</p>
+<p>That creates a database when no existing database was found.<br>
+Perhaps that is where my 'desire' to create a database comes from.</p>
+<p>But it is now the task to talk to it. Looks like I have libsqlite.so installed but not yet libsqlite3odbc.so<br>
+To be continued.</p>
+<p>Yes I managed to connect to my database!</p>
+<pre><code>cat /etc/odbcinst.ini
+[SQLite]
+Description=SQLite ODBC Driver
+Driver=libsqliteodbc.so
+Setup=libsqliteodbc.so
+UsageCount=1
+
+[SQLite3]
+Description=SQLite3 ODBC Driver
+Driver=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
+Setup=/usr/lib/x86_64-linux-gnu/odbc/libsqlite3odbc.so
+UsageCount=1
+</code></pre>
+<p>_</p>
+<pre><code>connection: open [scheme: 'odbc target: "driver={SQLite3};database=/path/to/testr3db"]
+</code></pre>
+<p>I now am facing a prompt that want something from me.. but what is it... scary prompt &gt; <img src="https://forum.rebol.info/images/emoji/twitter/wink.png?v=9" title=":wink:" class="emoji" alt=":wink:"></p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/13</link>
+        <pubDate>Sun, 29 Nov 2020 18:36:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-13</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="iArnold" data-post="11" data-topic="1233">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>Don't fancy giving info like databasename from the Linux command line when starting Ren-C.</p>
+</blockquote>
+</aside>
+<p>You don't get to set the rules when using ODBC.</p>
+<p>ODBC is an abstraction layer which requires you to have ODBC itself (built-in on Windows, unixodbc on Linux) as well as a driver that implements the ODBC protocol for the database you wish to use.  Then, you have to have a database set up already with a "DSN" name hooked to it.</p>
+<p>In other words, ODBC doesn't have "create database" commands.  It lets you create tables in an already existing database.</p>
+<p>You can see how the ODBC tests do it here.  An empty database can be created with <strong><code>sqlite3 test.db "VACCUM;"</code></strong>.  I'm using the <a href="https://github.com/metaeducation/rebol-odbc/blob/659a30962c785e2271bd75662da43858d9802b81/.travis.yml#L238"><code>myodbc-installer</code> command for convenience</a>, but it's really just doing some simple edits to config files.</p>
+<p>(The people who make unixODBC specifically warn you not to edit the config files by hand, but to go through their APIs, because they make no guarantees about the file formats.  However it seems the file formats became assumed constant enough that this isn't as big a deal as they make it.)</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/12</link>
+        <pubDate>Sun, 29 Nov 2020 16:26:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-12</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>How to start with ODBC and SQLite3 from Ren-C?<br>
+Especially starting a new database and connecting to it?<br>
+Don't fancy giving info like databasename from the Linux command line when starting Ren-C.<br>
+And creating a new SQLite3 database using Python and continuing with that is not a real option either <img src="https://forum.rebol.info/images/emoji/twitter/wink.png?v=9" title=":wink:" class="emoji" alt=":wink:"></p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/11</link>
+        <pubDate>Sun, 29 Nov 2020 10:37:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-11</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I think ODBC is useful and a solid feature for Ren-C. The ability to connect to a DBMS is table stakes. Otoh, I don't think that ODBC is necessarily a significant draw for Ren-C either. For Win development, I think <a href="https://www.linqpad.net/WhyLINQBeatsSQL.aspx" rel="nofollow noopener">LINQ</a> has things sewn-up, and for other platforms my guess would be that you run into PHP/Wordpress, Ruby-on-Rails, the many frameworks of Python, Java and then Node.js and that ilk. And while Python may have a lot of libraries/dependencies, I still think it would take a lot to peel devs away from the safety of that community, its documentation and support etc.</p>
+<p>Then again, a lot comes down to whatever compelling features there are to a Ren-C solution. While I don't think being smaller/compact is enough to pull many devs to a new lang paradigm, if there are other ideas in the mix it might tick enough boxes for some-- e.g., WASM db-record editing (or dashboard UIs) that connect to cloud-based doc stores, graph databases, webAPIs etc. Buzzwords aside, that's the direction the industry is headed in. Projects looking to replatform will justify their funding/ROI using the benefits of the new infrastructure (serverless, node, wasm) rather than investing in code rewrites for legacy stacks. New projects will start from day one in the newer paradigm, as we've witnessed for the past few years.</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/10</link>
+        <pubDate>Mon, 21 Oct 2019 23:07:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-10</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Yes, please report errors on GitHub.</p>
+<p>Let's tidy this thread up to be about the wisdom of possibly taking ODBC-based tooling projects seriously as something to try to get <em>someone</em> to invest in and support (despite its "legacy"-ish status and divergence from the main web focus).</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/9</link>
+        <pubDate>Sun, 20 Oct 2019 22:19:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-9</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[orr721]]></dc:creator>
+        <description><![CDATA[
+            <p>error reports should go to github right? I will create an issue there next time if that is the case...</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/8</link>
+        <pubDate>Sun, 20 Oct 2019 20:52:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-8</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[orr721]]></dc:creator>
+        <description><![CDATA[
+            <p>sorry, I was too excited and a bit too quick to report. I did not test the NUMBER=9 version (mingw-x86, OS_ID=0.3.1) as it failed the automatic travis build. so this is the result now with the latest exe:</p>
+<p><code>r3-e44b696.exe odbc-test.reb testsql3 --sqlite --show-sql</code></p>
+<p>bigint_s does not match (is this expected as well?):</p>
+<pre><code>&gt;&gt; SQL: "DROP TABLE test_bigint_s"                                                                                                  
+&gt;&gt; SQL: {CREATE TABLE test_bigint_s ( id INTEGER PRIMARY KEY NOT NULL , val BIGINT NOT NULL )}                                      
+Inserting as BIGINT                                                                                                                 
+[-9223372036854775808 -10 0 10 9223372036854775807]                                                                                 
+&gt;&gt; SQL: "INSERT INTO test_bigint_s (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "INSERT INTO test_bigint_s (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "INSERT INTO test_bigint_s (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "INSERT INTO test_bigint_s (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "INSERT INTO test_bigint_s (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "SELECT val FROM test_bigint_s"                                                                                             
+=&gt; [0 -10 0 10 -1]                                                                                                                  
+QUERY DID NOT MATCH ORIGINAL DATA                                                                                                   
+</code></pre>
+<p>bigint_u fails hard: (this is expected according to comments in odbc-test.reb)</p>
+<pre><code>&gt;&gt; SQL: "DROP TABLE test_bigint_u"                                                                                                  
+&gt;&gt; SQL: {CREATE TABLE test_bigint_u ( id INTEGER PRIMARY KEY NOT NULL , val BIGINT UNSIGNED NOT NULL )}                             
+Inserting as BIGINT UNSIGNED                                                                                                        
+[0 10 20 30 9223372036854775807]                                                                                                    
+&gt;&gt; SQL: "INSERT INTO test_bigint_u (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "INSERT INTO test_bigint_u (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "INSERT INTO test_bigint_u (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "INSERT INTO test_bigint_u (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "INSERT INTO test_bigint_u (val) VALUES ( ? )"                                                                              
+&gt;&gt; SQL: "SELECT val FROM test_bigint_u"                                                                                             
+Test had an error: make error! [                                                                                                    
+    type: _                                                                                                                         
+    id: _                                                                                                                           
+    message: "INTEGER! can't hold some unsigned 64-bit values"                                                                      
+    near: [                                                                                                                         
+        copy-odbc port/locals part ~~]                                                                                              
+    where: [copy-odbc _ copy for-each trap do catch either else _ do console]                                                       
+    file: _                                                                                                                         
+    line: 113                                                                                                                       
+]  
+</code></pre>
+<p>decimal does not match:</p>
+<pre><code>&gt;&gt; SQL: "DROP TABLE test_decimal"                                                                         
+&gt;&gt; SQL: {CREATE TABLE test_decimal ( id INTEGER PRIMARY KEY NOT NULL , val DECIMAL(3,2) NOT NULL )}       
+Inserting as DECIMAL(3,2)                                                                                 
+[-3.4 -1.2 0.0 5.6 7.8]                                                                                   
+&gt;&gt; SQL: "INSERT INTO test_decimal (val) VALUES ( ? )"                                                     
+&gt;&gt; SQL: "INSERT INTO test_decimal (val) VALUES ( ? )"                                                     
+&gt;&gt; SQL: "INSERT INTO test_decimal (val) VALUES ( ? )"                                                     
+&gt;&gt; SQL: "INSERT INTO test_decimal (val) VALUES ( ? )"                                                     
+&gt;&gt; SQL: "INSERT INTO test_decimal (val) VALUES ( ? )"                                                     
+&gt;&gt; SQL: "SELECT val FROM test_decimal"                                                                    
+=&gt; ["-3.^@" "-1.^@" "0" "5.6" "7.8"]                                                                      
+QUERY DID NOT MATCH ORIGINAL DATA 
+</code></pre>
+<p>and finally binary does not match:</p>
+<pre><code>&gt;&gt; SQL: "DROP TABLE test_binary"                                                                          
+&gt;&gt; SQL: {CREATE TABLE test_binary ( id INTEGER PRIMARY KEY NOT NULL , val BINARY(3) NOT NULL )}           
+Inserting as BINARY(3)                                                                                    
+[#{000000} #{010203} #{FFFFFF}]                                                                           
+&gt;&gt; SQL: "INSERT INTO test_binary (val) VALUES ( ? )"                                                      
+&gt;&gt; SQL: "INSERT INTO test_binary (val) VALUES ( ? )"                                                      
+&gt;&gt; SQL: "INSERT INTO test_binary (val) VALUES ( ? )"                                                      
+&gt;&gt; SQL: "SELECT val FROM test_binary"                                                                     
+=&gt; ["X'0^@剅^@^@^@譪" "X'0^@剅^@^@^@譪" "X'F^@剅^@^@^@譪"]                                                
+QUERY DID NOT MATCH ORIGINAL DATA
+</code></pre>
+<p>I will be more careful next time..</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/7</link>
+        <pubDate>Sun, 20 Oct 2019 20:47:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-7</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>I guess it's PostgresSQL then though I've avoided using this since I've been mainly working on embedded work.</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/6</link>
+        <pubDate>Sun, 20 Oct 2019 18:16:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-6</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[orr721]]></dc:creator>
+        <description><![CDATA[
+            <p>the whole odbc-test.reb passed correctly for me on Windows 10 64bit, SQLite3 ODBC Driver 32/64bit v. 0.9996</p>
+<p>run with<br>
+<code>r3-5ce6dff-debug-cpp.exe odbc-test.reb testsql3 --sqlite --show-sql</code></p>
+<p>all tests returned<br>
+<code>QUERY MATCHED ORIGINAL DATA</code></p>
+<p>great..</p>
+<p>I will try to modify it for Excel ODBC connection when my problems mentioned above are somehow resolved.</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/5</link>
+        <pubDate>Sun, 20 Oct 2019 13:31:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-5</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[orr721]]></dc:creator>
+        <description><![CDATA[
+            <p>hi,</p>
+<p>I have tested it with SQLite ODBC driver on Windows and it works as expected. (a simple SELECT statement for all records)</p>
+<p>However for some reason it can't find my tables in the "database" Excel ODBC connection (I get an error stating the ODBC could not find the table). I suspect it will be some error with escaping the special characters as the Excel tables have names like Sheet0$, Sheet1$, etc. I can't test further because the 'tables statement itself doesn' work (I have filed an issue on this on github).</p>
+<p>This is blocking further testing my UTF-8 problem with Excel ODBC connection as well. In the meantime have verified that when I convert the files to SQLite UTF-8 works.</p>
+<p>Regarding your previous suggestion to use binary! type. How would I get a binary! result from the <strong>odbc-execute</strong> function?</p>
+<p>thanks again!</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/4</link>
+        <pubDate>Sun, 20 Oct 2019 12:38:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-4</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><a class="mention" href="/u/gchiu">@gchiu</a> : On the topic of this thread (cc: <a class="mention" href="/u/blackattr">@BlackATTR</a>, <a class="mention" href="/u/orr721">@orr721</a>), please see the improvements to the %odbc-test.reb which the small <a href="https://forum.rebol.info/t/rethinking-the-odbc-dialect-inline-parameters/1234">dialect change I posted about</a> was able to make:</p>
+<p><a href="https://github.com/metaeducation/rebol-odbc/commit/3338fd0a59cbbafdc8d03129221b711426325a0b" rel="nofollow noopener">commit 3338fd0: "Make use of new ODBC-EXECUTE functionality"</a></p>
+<p>When you think about how little code it took to write ODBC-EXECUTE and how clean it is, this may show some of the "opportunity" for building whatever is in the imagination.  It's hard to think of anything else that packs that much punch with that much flexibility and can look good doing it.  (Much less anything that can be squeezed down into a little standalone executable on any platform you can think of...)</p>
+<aside class="quote no-group" data-post="2" data-topic="1233">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/gchiu/40/22_2.png" class="avatar"> gchiu:</div>
+<blockquote>
+<p>having it on both Windows and Linux for me is a big plus.</p>
+</blockquote>
+</aside>
+<p>I did put more effort than I probably should have into seeing if I could set up Firebird on Linux as one of the Travis tests.  But it does not appear the unixodbc driver is maintained, and as databases go its relative unpopularity makes it hard to deal with.  There were a long series of problems at every point: not only is their driver only available from SourceForge (spam central with no direct download link to use on Travis, you have to host it yourself)...the archive was corrupt and the driver didn't work.</p>
+<p>I did eventually get it built myself and configured and working with Python's ODBC.  But it seems a time sink to try to keep pushing on it.  We'd be better off verifying and checking the PostgreSQL support.</p>
+<p>When you get back in a mood to do database testing then re-file any bugs on relevant code you use.</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/3</link>
+        <pubDate>Sun, 20 Oct 2019 09:39:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-3</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>I built my EMR on using ODBC and having it on both Windows and Linux for me is a big plus.</p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/2</link>
+        <pubDate>Sun, 20 Oct 2019 05:41:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-2</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+      <item>
+        <title>ODBC: Maybe a Relevant Target for Tooling?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It turned out that <a class="mention" href="/u/orr721">@orr721</a> had been using Ren-C with ODBC for a couple of years (to process data from Microsoft Excel).  I'd been on the fence about its relevance, because it seems a very "legacy" type of technology... I'm more interested in graph databases and non-SQL-oriented storage engines.  Also, the bit of PORT!-related cruft as an interface seemed very poorly thought out (as I feel <a href="https://forum.rebol.info/t/on-the-critique-of-port/1213/2">pretty much all of ports have been shown to be</a>).</p>
+<p>But since he'd been using it and <a href="https://github.com/metaeducation/ren-c/issues/1017" rel="nofollow noopener">filed a bug report</a>--and I've been asking people to give me reproducible tests for things they care about to put on Travis--I figured I could patch it up.  I did so in a way that pushed it along even further as a libRebol client; various commits I made showed <a href="https://github.com/metaeducation/ren-c/commit/c63a00159c7bd7012a4791a61a31da8be3e202d6#diff-2eef67ba3a28651b52e60f00b96f2607R338" rel="nofollow noopener">flexing the muscles of the API and its approach</a>.</p>
+<p>But not wanting the work to atrophy again, I created a new <a href="https://github.com/metaeducation/rebol-odbc" rel="nofollow noopener">rebol-odbc GitHub with its own .travis.yml file and issue database</a>.  I made it run a primordial but somewhat broad <a href="https://github.com/metaeducation/rebol-odbc/blob/master/tests/odbc-test.reb" rel="nofollow noopener">insert and select <code>%odbc-test.reb</code></a>, which puts various datatypes into a table from Rebol values, and then checks to see that the same values can be gotten back out.</p>
+<p>The test is now automated and <a href="https://travis-ci.org/metaeducation/rebol-odbc/jobs/599462561#L601" rel="nofollow noopener">running and succeeding on MySQL</a> as well as <a href="https://travis-ci.org/metaeducation/rebol-odbc/jobs/599462561#L724" rel="nofollow noopener">succeeding under SQLite</a> on unixodbc.  Linux is the more complicated environment to get thing working on, as ODBC originates from Microsoft--so it's more turnkey there.</p>
+<h2>I Might Be Underestimating How Useful This Is</h2>
+<p><strong>Rebol2's ODBC abilities were considered valuable enough that they were a paid feature.  One implication of that is that few people ever had a chance to experience a single-download tool that can manipulate ODBC databases and translate fields to native types, while offering the language abilities of Rebol2.</strong>  (So they sure haven't seen what such a tool with Ren-C can do!)</p>
+<p>I went hunting for a vetted open-source alternative client that could do arbitrary SQL commands on DBC databases on your machine.  There was pretty much no kind of "simple" option.</p>
+<p>But I already had Python available on the machine:</p>
+<pre><code>shell&gt; python --version
+Python 2.7.15+
+</code></pre>
+<p>So since there was a "pyodbc" I thought I'd install it.  However to get it, I had to install the Python Package Manager.  This is what <code>sudo apt install python-pip</code> gave back:</p>
+<pre><code>The following additional packages will be installed:
+  libexpat1-dev libjs-sphinxdoc libpython-all-dev libpython-dev libpython2-dev libpython2.7 libpython2.7-dev
+  libpython2.7-minimal libpython2.7-stdlib python-all python-all-dev python-asn1crypto python-cffi-backend
+  python-configparser python-crypto python-cryptography python-dev python-entrypoints python-enum34 python-idna
+  python-ipaddress python-keyring python-keyrings.alt python-pip-whl python-pkg-resources python-secretstorage
+  python-setuptools python-six python-wheel python-xdg python2-dev python2.7 python2.7-dev python2.7-minimal
+Suggested packages:
+  python-crypto-doc python-cryptography-doc python-cryptography-vectors python-enum34-doc gnome-keyring
+  gir1.2-gnomekeyring-1.0 python-fs python-gdata python-keyczar python-secretstorage-doc python-setuptools-doc
+  python2.7-doc binfmt-support
+The following NEW packages will be installed:
+  libexpat1-dev libjs-sphinxdoc libpython-all-dev libpython-dev libpython2-dev libpython2.7-dev python-all
+  python-all-dev python-asn1crypto python-cffi-backend python-configparser python-crypto python-cryptography
+  python-dev python-entrypoints python-enum34 python-idna python-ipaddress python-keyring python-keyrings.alt
+  python-pip python-pip-whl python-pkg-resources python-secretstorage python-setuptools python-six python-wheel
+  python-xdg python2-dev python2.7-dev
+The following packages will be upgraded:
+  libpython2.7 libpython2.7-minimal libpython2.7-stdlib python2.7 python2.7-minimal
+5 upgraded, 30 newly installed, 0 to remove and 191 not upgraded.
+Need to get 40.1 MB of archives.
+After this operation, 66.7 MB of additional disk space will be used.
+</code></pre>
+<p>So I need to download and decompress 40.1 MB of data, to take up 66.7 MB of disk (spread across who knows how many files), when I already had a python interpreter on the machine?  <strong>And this won't even get me pyodbc!</strong>  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>All right, fine.  After installing, I'd gone from 2.7.15+ to 2.7.16:</p>
+<pre><code>shell&gt; python --version
+Python 2.7.16
+</code></pre>
+<p>Running <strong>pip install pyodbc</strong> wasn't egregiously big, but still seemed dauntingly complex:</p>
+<pre><code>Collecting pyodbc
+  Downloading https://files.pythonhosted.org/packages/75/29/aa190749bac37ede0f11a68a75e7055254699c11572bd94213f1163dfd8f/pyodbc-4.0.27.tar.gz (242kB)
+100% |████████████████████████████████| 245kB 1.9MB/s 
+Building wheels for collected packages: pyodbc
+  Running setup.py bdist_wheel for pyodbc ... done
+  Stored in directory: /home/hostilefork/.cache/pip/wheels/87/b7/78/0740a2ed98bfe463525ad42d535370e34141c5d36b2d00dcaf
+Successfully built pyodbc
+Installing collected packages: pyodbc
+Successfully installed pyodbc-4.0.27
+</code></pre>
+<p>Putting aside the "what the heck is" <code>...wheels/87/b7/78/0740a2...</code>, the package manager actually built the shared library.  So the specification of the package is parallel to our "extensions"--presumably if you're on windows then <code>pip install pyodbc</code> would be able to adapt its compiler settings and make a .DLL against Windows APIs as opposed to a <code>.so</code> against POSIX.  Unlike <strong>apt</strong>, it seems that <strong>pip</strong> does installation on a per-user basis by default.</p>
+<pre><code>-rwxrwxr-x 1 hostilefork hostilefork 832848 Oct 18 17:33 /home/hostilefork/.local/lib/python2.7/site-packages/pyodbc.so*
+</code></pre>
+<p>So over 800k of binaries <em>just for the ODBC part</em>.  That doesn't make much sense, as most all the ODBC functionality is a shared library.  What could all of that be?</p>
+<h2>Maybe There Is Opportunity Here</h2>
+<p>I don't know how big the cross-platform ODBC market is, and I've already mentioned my personal reluctance in getting involved in packaging binaries.  But I did have a thought...</p>
+<p>I've already suggested that the Trojan Horse of distributing the system might be to give people utilities built on Rebol that don't try and sell them the language, but try to sell them particular functionality (a dialect, etc.) built with the language.</p>
+<p><strong>What if every encapped application could sense its filename and then if it was <code>r3</code> (or <code>rebol</code>, or some other list of special terms) it would automatically act as plain Rebol?</strong></p>
+<p>This means userbases could be identified to market a tool to.  You build for the platforms of interest to them and encap the tool inside it.</p>
+<p>I don't know what kind of ODBC-powered tool people might imagine, but it seems the world doesn't really even have a basic cross-platform string-based SQL query sorted out.  If you imagine just a few nice features built on the usermode console and a dialect, I wonder... <em>might there even be money in that</em>?</p>
+<p>My own attention should be on the web build--but if there were others who came with an interest in this, it wouldn't hurt.  I don't know.  As I say, I just sensed a vacuum and was struck at how there might be an opportunity here.  <img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji" alt=":man_shrugging:"></p>
+          <p><a href="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233/1</link>
+        <pubDate>Sun, 20 Oct 2019 03:52:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1233-1</guid>
+        <source url="https://forum.rebol.info/t/odbc-maybe-a-relevant-target-for-tooling/1233.rss">ODBC: Maybe a Relevant Target for Tooling?</source>
+      </item>
+  </channel>
+</rss>

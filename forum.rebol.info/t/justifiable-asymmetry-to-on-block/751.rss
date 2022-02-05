@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Justifiable Asymmetry: TO on BLOCK!?</title>
+    <link>https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751</link>
+    <description>I&#39;ve [previously pitched](https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649) the following stakes in the ground for TO conversions:
+
+1. **A TO conversion won&#39;t run arbitrary code that you pass to it**.  It won&#39;t even GET any variables, much less evaluate.
+2. **Every TO conversion targeting a series type performs a new allocation**
+3. **A TO conversion of a value to its own datatype will do the same thing as COPY**
+
+These rules are mechanical, and aren&#39;t saying much about what TO means &quot;semantically&quot;.  It feels like we should be able to say that **TO TEXT! 10** is &quot;10&quot; and **TO INTEGER! &quot;10&quot;** is 10.  But it gets a bit more vague from there.
+
+As additional guidance, I&#39;ve also proposed a rule for APPEND and its bretheren:
+
+&gt; *&quot;If the type of the value being appended doesn&#39;t match the type of what you are appending to, it will act as equivalently as if it had been converted with TO into the target type first.&quot;*
+
+So whatever **append copy [a b c] &#39;x/y/z** does, it would be the same as **append copy [a b c] to block! &#39;x/y/z**.
+
+### Should there be symmetry?
+
+The historical ergonomics of splicing by default are not always good:
+
+    &gt;&gt; block: copy [a b c]
+    &gt;&gt; path: &#39;d/e
+    &gt;&gt; append block path
+    == [a b c d e]
+
+We know that **[a b c d/e]** would be more useful in almost all cases.  If you have a PATH! in your hand, the path-ness is likely relevant to what you want to do.
+
+I&#39;ve proposed weird rules like &quot;only splice if the types match&quot;, but that can be a bit awkward:
+
+    &gt;&gt; group: copy quote (a b c)
+    &gt;&gt; append group collect [keep &#39;d | keep [e f]]
+    == (a b c [d e f])
+
+Due to their nature (and special logographic **[o]** status), blocks really are just a good generic carrier for material.  Hence their BLOCK!-ness quite well *not* be that important.  So here, I&#39;d think that having to say  **append group as group! collect [...]** is kind of annoying.  
+
+So I suggested [&quot;only splice blocks&quot;](https://forum.rebol.info/t/make-splicing-by-default-only-apply-when-appending-a-block/226) might be a more predictable-feeling rule.  This way, you&#39;re not worrying about the combinatorics of what you&#39;re inserting *and* what you&#39;re inserting into.
+
+Merging that with the rules above would give you some asymmetry, however:
+
+    &gt;&gt; to block! &#39;a/b/c
+    == [a/b/c]
+
+    &gt;&gt; to path! [a b c]
+    a/b/c
+
+    &gt;&gt; to block! quote (a b c)
+    [(a b c)]
+
+    &gt;&gt; to group! [a b c]
+    (a b c)
+
+TO BLOCK! of any non-block array would just put it into a block, while TO PATH! or TO GROUP! of a block array would act more like COPY AS PATH! and COPY AS GROUP!.
+
+But looking a bit closer, it seems that maybe the rule should really just apply to not breaking up paths.
+
+### So what if the difference is just PATH!s?
+
+    &gt;&gt; to block! &#39;a/b/c
+    == [a/b/c] ;-- 1 new element when APPENDed to BLOCK!
+
+    &gt;&gt; to group! &#39;a/b/c
+    == (a/b/c) ;-- 1 new element when APPENDed to GROUP!
+
+    &gt;&gt; to block! quote (a b c)
+    == [a b c] ;-- 3 new elements when APPENDed to BLOCK! (splice)
+
+    &gt;&gt; to group! [a b c]
+    == (a b c) ;-- 3 new elements when APPENDed to GROUP! (splice)
+
+    &gt;&gt; to path! [a b c]
+    == a/b/c ;-- 3 new elements when APPENDed to PATH! (splice)
+
+    &gt;&gt; to path! quote (a b c)
+    == a/b/c ;-- 3 new elements when APPENDed to PATH! (splice)
+
+This puts BLOCK! and GROUP! into the same category of &quot;things that splice by default&quot;.  They certainly -look- more similar to each other than either looks to path due to the elements being not glued together...perhaps &quot;spaces mean splices&quot;?
+
+It also reduces the likelihood of creating 1-element paths via TO (you&#39;d only get that for 1-element GROUP!s and BLOCK!s).
+
+It&#39;s an asymmetry, but feels sort of explainable.  Note that the AS operators are fully symmetric, and you can say **copy as block! &#39;a/b/c** and get **[a b c]**.  So this is really just about making the TO and APPEND/INSERT/CHANGE matrix more useful.
+
+**So...are people on board with this?**</description>
+    
+    <lastBuildDate>Thu, 12 Aug 2021 02:16:43 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Justifiable Asymmetry: TO on BLOCK!?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="3" data-topic="751">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Also, we now have BLOCKIFY and ENBLOCK (and GROUPIFY and ENGROUP).</p>
+</blockquote>
+</aside>
+<p>So ENBLOCK was conceived as the idea of making it easy to put something in a block:</p>
+<pre><code>&gt;&gt; value: second [a (10 + 20) b]
+&gt;&gt; enblock value
+== [(10 + 20)]
+
+&gt;&gt; enblock 300 + 4
+== [304]
+</code></pre>
+<p>I don't know if it's a terrible idea to have such a function, but I noticed that with GET-BLOCK! being committed to REDUCE behavior, there's another option that generally looks clearer:</p>
+<pre><code>&gt;&gt; value: second [a (10 + 20) b]
+&gt;&gt; :[value]
+== [(10 + 20)]
+
+&gt;&gt; :[300 + 4]
+== [304]
+</code></pre>
+<p>The special case of what to do about ENBLOCK of NULL was to give an empty block:</p>
+<pre><code>&gt;&gt; enblock null
+== []
+</code></pre>
+<p>I'm still on the fence about vaporization in blocks due to potential problems with positional usages...though <a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634">UNPACK changes the game a bit on that</a>.</p>
+<p>Anyway, I just want to mention this because I went to reach for ENBLOCK and realized that GET-BLOCK! was a lot clearer to look at in the case I was writing.  (!)</p>
+          <p><a href="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751/4</link>
+        <pubDate>Thu, 12 Aug 2021 02:16:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-751-4</guid>
+        <source url="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751.rss">Justifiable Asymmetry: TO on BLOCK!?</source>
+      </item>
+      <item>
+        <title>Justifiable Asymmetry: TO on BLOCK!?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Something I still think is a good idea:</h2>
+<aside class="quote no-group" data-post="1" data-topic="751">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I’ve <a href="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649">previously pitched</a> the following stakes in the ground for TO conversions:</p>
+<ol>
+<li>
+<strong>A TO conversion won’t run arbitrary code that you pass to it</strong> . It won’t even GET any variables, much less evaluate.</li>
+<li><strong>Every TO conversion targeting a series type performs a new allocation</strong></li>
+<li><strong>A TO conversion of a value to its own datatype will do the same thing as COPY</strong></li>
+</ol>
+<p>These rules are mechanical, and aren’t saying much about what TO means “semantically”. It feels like we should be able to say that <strong>TO TEXT! 10</strong> is “10” and <strong>TO INTEGER! “10”</strong> is 10. But it gets a bit more vague from there.</p>
+</blockquote>
+</aside>
+<h2>Something I no longer think is a good idea:</h2>
+<aside class="quote no-group quote-modified" data-post="1" data-topic="751">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I’ve also proposed a rule for APPEND and its bretheren:</p>
+<blockquote>
+<p><em>“If the type of the value being appended doesn’t match the type of what you are appending to, it will act as equivalently as if it had been converted with TO into the target type first.”</em></p>
+</blockquote>
+<p>So whatever <strong>append copy [a b c] 'x/y/z</strong> does, it would be the same as <strong>append copy [a b c] to block! 'x/y/z</strong> .</p>
+</blockquote>
+</aside>
+<h2>I think my proposal from a few years ago is more on track</h2>
+<p>When the semantics of TO were first being debated, I suggested that if v1 is a value of type1, then the following is either true or it fails:</p>
+<pre><code> v2 = to type2 to type1 (v2: to type2 v1)
+</code></pre>
+<p>The premise here would be that a TO conversion preserves a value well enough to convert it back, in a process that reaches steady state after one conversion.</p>
+<p>Not all types can represent all other types.  So if there's <code>to integer! some-block</code> you can't put every possible block in an integer somehow.  That's where the errors come in.</p>
+<h2>Example</h2>
+<pre><code>&gt;&gt; once: to block! "abc"
+== [#"a" #"b" #c]
+&gt;&gt; to text! once
+== "abc"  ; reached steady state after one round trip conversion
+
+&gt;&gt; once: [#"a" #"b" _ "c"]
+&gt;&gt; temp: to text! once
+== "abc"
+&gt;&gt; twice: to block! temp
+== [#"a" #"b" #"c"]  
+&gt;&gt; to text! twice
+== "abc"  ; reached steady state after two round trip conversions
+</code></pre>
+<p>Being able to turn TEXT! into a BLOCK! of CHAR! is an important facet of UTF-8 everywhere, as complex string algorithms can benefit from the fixed-cell-size access.  So this isn't a frivolous example.</p>
+<p>Also, trying to shoehorn things into the other idea meant <strong>to block! 'a/b/c</strong> gave back <strong>[a/b/c]</strong>.  Now that PATH! is immutable, this isn't very good.  Also, we now have BLOCKIFY and ENBLOCK (and GROUPIFY and ENGROUP).</p>
+<p>So I think this idea of information-preserving-and-settling or error is probably the right one.  The splicing rule for blocks comes specifically from ANY-ARRAY! now, and ANY-PATH! is not an ANY-ARRAY! so that takes care of that.  Hence there's no TO conversions done by APPEND.</p>
+          <p><a href="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751/3</link>
+        <pubDate>Fri, 25 Jan 2019 14:50:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-751-3</guid>
+        <source url="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751.rss">Justifiable Asymmetry: TO on BLOCK!?</source>
+      </item>
+      <item>
+        <title>Justifiable Asymmetry: TO on BLOCK!?</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>Seems plausable. The thing the path is representing is important, and splitting up the path, although that can have its uses, is commonly not wanted either.</p>
+<p>As with most cases, proof and pudding.</p>
+          <p><a href="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751/2</link>
+        <pubDate>Mon, 23 Jul 2018 13:21:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-751-2</guid>
+        <source url="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751.rss">Justifiable Asymmetry: TO on BLOCK!?</source>
+      </item>
+      <item>
+        <title>Justifiable Asymmetry: TO on BLOCK!?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've <a href="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649">previously pitched</a> the following stakes in the ground for TO conversions:</p>
+<ol>
+<li>
+<strong>A TO conversion won't run arbitrary code that you pass to it</strong>.  It won't even GET any variables, much less evaluate.</li>
+<li><strong>Every TO conversion targeting a series type performs a new allocation</strong></li>
+<li><strong>A TO conversion of a value to its own datatype will do the same thing as COPY</strong></li>
+</ol>
+<p>These rules are mechanical, and aren't saying much about what TO means "semantically".  It feels like we should be able to say that <strong>TO TEXT! 10</strong> is "10" and <strong>TO INTEGER! "10"</strong> is 10.  But it gets a bit more vague from there.</p>
+<p>As additional guidance, I've also proposed a rule for APPEND and its bretheren:</p>
+<blockquote>
+<p><em>"If the type of the value being appended doesn't match the type of what you are appending to, it will act as equivalently as if it had been converted with TO into the target type first."</em></p>
+</blockquote>
+<p>So whatever <strong>append copy [a b c] 'x/y/z</strong> does, it would be the same as <strong>append copy [a b c] to block! 'x/y/z</strong>.</p>
+<h3>Should there be symmetry?</h3>
+<p>The historical ergonomics of splicing by default are not always good:</p>
+<pre><code>&gt;&gt; block: copy [a b c]
+&gt;&gt; path: 'd/e
+&gt;&gt; append block path
+== [a b c d e]
+</code></pre>
+<p>We know that <strong>[a b c d/e]</strong> would be more useful in almost all cases.  If you have a PATH! in your hand, the path-ness is likely relevant to what you want to do.</p>
+<p>I've proposed weird rules like "only splice if the types match", but that can be a bit awkward:</p>
+<pre><code>&gt;&gt; group: copy quote (a b c)
+&gt;&gt; append group collect [keep 'd | keep [e f]]
+== (a b c [d e f])
+</code></pre>
+<p>Due to their nature (and special logographic <strong>[o]</strong> status), blocks really are just a good generic carrier for material.  Hence their BLOCK!-ness quite well <em>not</em> be that important.  So here, I'd think that having to say  <strong>append group as group! collect [...]</strong> is kind of annoying.</p>
+<p>So I suggested <a href="https://forum.rebol.info/t/make-splicing-by-default-only-apply-when-appending-a-block/226">"only splice blocks"</a> might be a more predictable-feeling rule.  This way, you're not worrying about the combinatorics of what you're inserting <em>and</em> what you're inserting into.</p>
+<p>Merging that with the rules above would give you some asymmetry, however:</p>
+<pre><code>&gt;&gt; to block! 'a/b/c
+== [a/b/c]
+
+&gt;&gt; to path! [a b c]
+a/b/c
+
+&gt;&gt; to block! quote (a b c)
+[(a b c)]
+
+&gt;&gt; to group! [a b c]
+(a b c)
+</code></pre>
+<p>TO BLOCK! of any non-block array would just put it into a block, while TO PATH! or TO GROUP! of a block array would act more like COPY AS PATH! and COPY AS GROUP!.</p>
+<p>But looking a bit closer, it seems that maybe the rule should really just apply to not breaking up paths.</p>
+<h3>So what if the difference is just PATH!s?</h3>
+<pre><code>&gt;&gt; to block! 'a/b/c
+== [a/b/c] ;-- 1 new element when APPENDed to BLOCK!
+
+&gt;&gt; to group! 'a/b/c
+== (a/b/c) ;-- 1 new element when APPENDed to GROUP!
+
+&gt;&gt; to block! quote (a b c)
+== [a b c] ;-- 3 new elements when APPENDed to BLOCK! (splice)
+
+&gt;&gt; to group! [a b c]
+== (a b c) ;-- 3 new elements when APPENDed to GROUP! (splice)
+
+&gt;&gt; to path! [a b c]
+== a/b/c ;-- 3 new elements when APPENDed to PATH! (splice)
+
+&gt;&gt; to path! quote (a b c)
+== a/b/c ;-- 3 new elements when APPENDed to PATH! (splice)
+</code></pre>
+<p>This puts BLOCK! and GROUP! into the same category of "things that splice by default".  They certainly -look- more similar to each other than either looks to path due to the elements being not glued together...perhaps "spaces mean splices"?</p>
+<p>It also reduces the likelihood of creating 1-element paths via TO (you'd only get that for 1-element GROUP!s and BLOCK!s).</p>
+<p>It's an asymmetry, but feels sort of explainable.  Note that the AS operators are fully symmetric, and you can say <strong>copy as block! 'a/b/c</strong> and get <strong>[a b c]</strong>.  So this is really just about making the TO and APPEND/INSERT/CHANGE matrix more useful.</p>
+<p><strong>So...are people on board with this?</strong></p>
+          <p><a href="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751/1</link>
+        <pubDate>Mon, 23 Jul 2018 00:08:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-751-1</guid>
+        <source url="https://forum.rebol.info/t/justifiable-asymmetry-to-on-block/751.rss">Justifiable Asymmetry: TO on BLOCK!?</source>
+      </item>
+  </channel>
+</rss>

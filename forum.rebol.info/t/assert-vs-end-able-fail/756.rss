@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ASSERT vs. [end]able FAIL</title>
+    <link>https://forum.rebol.info/t/assert-vs-end-able-fail/756</link>
+    <description>To concretize this discussion point, let&#39;s use a simple example.  We have some C functions with names like &quot;RL_rebRun&quot; that we want to extract &quot;rebRun&quot; from.  We could say:
+
+    parse cname [&quot;RL_&quot; copy rebName to end]
+
+After this rebName will either be whatever it was beforehand (if it didn&#39;t start with &quot;RL_&quot;), or it could be something like &quot;rebRun&quot;.  How might we verify it worked?
+
+### What about ASSERT?
+
+PARSE now returns null (not false) on failure, so it can participate in the NULL protocols (e.g. be used with things like ELSE).  But null is still falsey, so it can be used with ASSERT:
+
+    assert [parse cname [&quot;RL_&quot; copy rebName to end]]
+
+That doesn&#39;t look too terrible, though it is a bit &quot;disruptive&quot;.  The assert has taken the center stage as the first word you see, as opposed to having the failure handling be more of an exception/afterthought.
+
+But here&#39;s another thing you might not know.  [The implementation of ASSERT is a no-op in Ren-C](https://github.com/metaeducation/ren-c/blob/e8f4a8b9c689062c4b14398ec69db61d4114633e/src/mezz/base-funcs.r#L19):
+
+    assert: func [
+        {Ensure conditions are conditionally true if hooked by debugging}
+        return: &lt;void&gt;
+        conditions [block!]
+            {Block of conditions to evaluate and test for logical truth}
+    ][
+    ]
+
+This is because ASSERT has no default implementation, but can be HIJACKed by a debug mode with a custom validation or output routine.
+
+As it so happens we don&#39;t have &quot;debug mode&quot; yet.  So it just gets HIJACKed during boot.  But the point is that it&#39;s designed so that asserts could be no-ops in a &quot;release&quot; mode...which wouldn&#39;t run the code at all.  In our case, that means no PARSE, and rebName is never set.
+
+### How about an ELSE with a FAIL?
+
+    parse cname [&quot;RL_&quot; copy rebName to end] else [
+        fail &quot;The name didn&#39;t start with RL_&quot;
+    ]
+
+That works, but now we&#39;re on the hook for writing some kind of error message.
+
+*Or.. are we?*  What if we just wrote:
+
+    parse cname [&quot;RL_&quot; copy rebName to end] else [fail]
+
+If you think about it, a FAIL with no arguments doesn&#39;t have a lot of options for what to do besides report an error.  So why not make it `&lt;end&gt;`-able (the same way HELP can accept either no arguments or one argument), and assume that a FAIL with no arguments is just a way of saying &quot;fail here&quot;?
+
+There are other applications for this:
+
+    switch type of x [
+        integer! [...]
+        text! [...]
+        fail
+    ]
+
+That&#39;s more succinct than `default [fail]`.  And maybe it&#39;s not right for everyone, but it&#39;s interesting in a sort of &quot;you get what you pay for&quot; failure message.  If it happens often and you think it deserves a more informative message than just showing you a place in the code where it happened, you can expand on it.
+
+I think I like it.  In fact, thinking about it just got me to realize that we could [make any RETURN willing to take no argument](https://github.com/metaeducation/ren-c/pull/835) to act as **return void** would, and make things simpler and more flexible.  So why not have FAIL go the same route?</description>
+    
+    <lastBuildDate>Wed, 25 Jul 2018 19:31:11 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/assert-vs-end-able-fail/756.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>ASSERT vs. [end]able FAIL</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>To concretize this discussion point, let's use a simple example.  We have some C functions with names like "RL_rebRun" that we want to extract "rebRun" from.  We could say:</p>
+<pre><code>parse cname ["RL_" copy rebName to end]
+</code></pre>
+<p>After this rebName will either be whatever it was beforehand (if it didn't start with "RL_"), or it could be something like "rebRun".  How might we verify it worked?</p>
+<h3>What about ASSERT?</h3>
+<p>PARSE now returns null (not false) on failure, so it can participate in the NULL protocols (e.g. be used with things like ELSE).  But null is still falsey, so it can be used with ASSERT:</p>
+<pre><code>assert [parse cname ["RL_" copy rebName to end]]
+</code></pre>
+<p>That doesn't look too terrible, though it is a bit "disruptive".  The assert has taken the center stage as the first word you see, as opposed to having the failure handling be more of an exception/afterthought.</p>
+<p>But here's another thing you might not know.  <a href="https://github.com/metaeducation/ren-c/blob/e8f4a8b9c689062c4b14398ec69db61d4114633e/src/mezz/base-funcs.r#L19" rel="nofollow noopener">The implementation of ASSERT is a no-op in Ren-C</a>:</p>
+<pre><code>assert: func [
+    {Ensure conditions are conditionally true if hooked by debugging}
+    return: &lt;void&gt;
+    conditions [block!]
+        {Block of conditions to evaluate and test for logical truth}
+][
+]
+</code></pre>
+<p>This is because ASSERT has no default implementation, but can be HIJACKed by a debug mode with a custom validation or output routine.</p>
+<p>As it so happens we don't have "debug mode" yet.  So it just gets HIJACKed during boot.  But the point is that it's designed so that asserts could be no-ops in a "release" mode...which wouldn't run the code at all.  In our case, that means no PARSE, and rebName is never set.</p>
+<h3>How about an ELSE with a FAIL?</h3>
+<pre><code>parse cname ["RL_" copy rebName to end] else [
+    fail "The name didn't start with RL_"
+]
+</code></pre>
+<p>That works, but now we're on the hook for writing some kind of error message.</p>
+<p><em>Or.. are we?</em>  What if we just wrote:</p>
+<pre><code>parse cname ["RL_" copy rebName to end] else [fail]
+</code></pre>
+<p>If you think about it, a FAIL with no arguments doesn't have a lot of options for what to do besides report an error.  So why not make it <code>&lt;end&gt;</code>-able (the same way HELP can accept either no arguments or one argument), and assume that a FAIL with no arguments is just a way of saying "fail here"?</p>
+<p>There are other applications for this:</p>
+<pre><code>switch type of x [
+    integer! [...]
+    text! [...]
+    fail
+]
+</code></pre>
+<p>That's more succinct than <code>default [fail]</code>.  And maybe it's not right for everyone, but it's interesting in a sort of "you get what you pay for" failure message.  If it happens often and you think it deserves a more informative message than just showing you a place in the code where it happened, you can expand on it.</p>
+<p>I think I like it.  In fact, thinking about it just got me to realize that we could <a href="https://github.com/metaeducation/ren-c/pull/835" rel="nofollow noopener">make any RETURN willing to take no argument</a> to act as <strong>return void</strong> would, and make things simpler and more flexible.  So why not have FAIL go the same route?</p>
+          <p><a href="https://forum.rebol.info/t/assert-vs-end-able-fail/756/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/assert-vs-end-able-fail/756/1</link>
+        <pubDate>Wed, 25 Jul 2018 19:31:11 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-756-1</guid>
+        <source url="https://forum.rebol.info/t/assert-vs-end-able-fail/756.rss">ASSERT vs. [end]able FAIL</source>
+      </item>
+  </channel>
+</rss>

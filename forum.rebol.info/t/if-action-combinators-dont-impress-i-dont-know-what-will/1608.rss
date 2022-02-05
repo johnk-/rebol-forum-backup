@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</title>
+    <link>https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608</link>
+    <description>Have you ever been parsing and wanted to call a plain old function on a value?
+
+Let&#39;s say you are collecting some numbers, and you want to negate them.
+
+    &gt;&gt; uparse [1 2 3] [collect some [
+          num: integer! (num: negate num) keep (num)
+       ]]
+    == [-1 -2 -3]
+
+You&#39;re stuck having to name it, transform it, and then (possibly) reference the name again.
+
+UPARSE&#39;s mechanics actually make this a bit better already, since GROUP! results can be used directly:
+
+    &gt;&gt; uparse [1 2 3] [collect some [
+           num: integer! keep (negate num)
+       ]]
+    == [-1 -2 -3]
+
+But you still have to cross over into a GROUP! if you want to do any negation, and use a name to move the parsed value into the domain of DO.
+
+## Meet A New Trick: ACTION! Combinators
+
+You can pick whatever syntax you like for it (UPARSE is customizable, remember?)
+
+But I&#39;m using **paths that end in slash** to mean &quot;call a normal function but acquire its arguments via the synthesized result of PARSE rules&quot;.
+
+    &gt;&gt; uparse [1 2 3] [collect some [
+           keep negate/ integer!
+       ]]
+    == [-1 -2 -3]
+
+:exploding_head: 
+
+You can call any function this way normally by providing each argument in a group.
+
+    &gt;&gt; x: 510
+    &gt;&gt; uparse [] [multiply/ (1 + 1) (x)]
+    == 1020
+
+But that&#39;s easier read as **`((1 + 1) * x)`**.  You of course don&#39;t want to do it unless at least some of your arguments come from a rule that&#39;s not a GROUP!:
+
+    &gt;&gt; data: copy &quot;&quot;
+    &gt;&gt; uparse [&quot;a&quot; &quot;b&quot;] [some [append/dup/ (data) text! (2)]]
+    &gt;&gt; data
+    == &quot;aabb&quot;
+
+**I think the primary usefulness is for functions without side-effects where you just want to do a quick transformation on some information you are assigning or collecting.**
+
+But that doesn&#39;t mean you can&#39;t write some interesting machines.
+
+    &gt;&gt; data: copy &quot;&quot;
+
+    &gt;&gt; uparse [&quot;abc&quot; &lt;reverse&gt; &quot;DEF&quot; &quot;ghi&quot;] [
+           while [
+               append/ (data) [
+                   &#39;&lt;reverse&gt; reverse/ copy/ text!
+                   | text!
+               ]
+           ]
+       ]
+
+    &gt;&gt; data
+    == &quot;abcFEDghi&quot;
+
+**The foundations of Ren-C are strong, which is why such things can be made.**  All that stuff about MAKE FRAME! and ADAPT and AUGMENT etc. are about giving control of time and space to the users to build such combinators.
+
+## Does This Mean Fewer Combinators Needed?
+
+Anything that doesn&#39;t advance the series position doesn&#39;t need to speak the combinator interface.
+
+So, for instance, ELIDE.
+
+    &gt;&gt; uparse [&quot;a&quot; &quot;b&quot; &lt;c&gt;] [collect [some keep text!] elide/ tag!]
+    == [&quot;a&quot; &quot;b&quot;]
+
+But ELIDE is rather useful, so aliasing it as a combinator to invoke it without the slash seems nice.  However, this aliasing process should be cheap and easy... to &quot;combinatorize&quot; a function.
+
+But as I say, a plain function doesn&#39;t know anything about advancing input and speaking the combinator protocol.  *What&#39;s great is how close I&#39;ve made combinator protocol to ordinary functions.*  I&#39;m kind of gloating a lot about it, because it&#39;s neat.  :slight_smile:
+
+## Can We Generalize a Rollback Mechanism?
+
+COLLECT is set up so that if you do some KEEPs in a rule that ultimately fails, the keeps roll back.
+
+One of the things limiting the usefulness of this mechanism for functions with side effects (APPEND as opposed to NEGATE) is that they don&#39;t get rolled back on failure.
+
+I&#39;ve wondered if there could be some kind of DEFER operation which captures GROUP! operations and only runs them if a certain point is reached.  Being able to defer any rule that can have side effects might be nice, so that would include these ACTION! combinators.  Worth thinking about.</description>
+    
+    <lastBuildDate>Thu, 05 Aug 2021 16:03:38 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="BlackATTR" data-post="2" data-topic="1608">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>You're really outdoing yourself Brian!</p>
+</blockquote>
+</aside>
+<p>Maybe overdoing.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>So... it always happens that if you make something that takes no parameters, someone will want to add a parameter...</p>
+<p>...and once they can add 1 parameter, they will want to add N parameters, for any N.</p>
+<p>...and once they can add N parameters they'll want to be able to <em>variably</em> add (0...N) parameters...</p>
+<p>So of course this is the case with combinators.  This ACTION! combinator (which runs when a PATH! ends in a slash, and looks up to an ACTION!) is effectively variadic.</p>
+<p>Here it is with NEGATE, which takes one argument:</p>
+<pre><code>&gt;&gt; uparse [1] [negate/ integer!]
+== -1
+</code></pre>
+<p>Here it is with ADD, which takes two arguments:</p>
+<pre><code>&gt;&gt; uparse [1 2] [add/ integer! integer!]
+== 3
+</code></pre>
+<p>Which goes to show you that the combinator for ACTION! doesn't take a fixed number of parsers.  Each instance of the combinator takes as many parsers as the function takes arguments.</p>
+<h2>The Nightmare That Is Variadic Combinators</h2>
+<p><strong>This really grates against the way the combinators work.</strong>  Because the body of the combinator only runs once it has been turned into a parser... e.g. all the combinator's arguments have been "combinated out".  So all that remains is the input parameter.</p>
+<p>To clarify what I mean by "combinated out": If you say <strong>some between "(" ")"</strong>, the fact that BETWEEN takes two parsers is of no matter to SOME.  BETWEEN gets "combinated" to where it looks like a parser function that's no different from any other.  By the time SOME sees it, the left and right parser parameters have all been wired up--those parameters have vanished.  Hence SOME's code is stylized in a way that works just as well for <strong>some "a"</strong> or any other "fully combinated" parser.</p>
+<p>But ACTION! throws a wrench into this.  The combinator can't say in advance how many parsers it needs, <em>it depends on the action.</em>  And by the time you're running the body of the combinator it is too late...the expectation is that all the "combinating" is done by then.</p>
+<p>Making matters more frustrating is that even if you do manage to AUGMENT the interface of something like the ACTION! combinator, <a href="https://forum.rebol.info/t/understanding-frame-s-and-phases/1645">the rules are that the base combinator doesn't see those fields</a>.  That's a good rule: there is a reason for it.  But it means that if parameters get added then there has to be a way to tunnel the augmented frame with the view of the higher level variables down so that when the fulfilled combinator is run as a parser it can see those variables.</p>
+<p>I managed to hack around this to implement the first version--and I knew what I was doing was a bit dicey.  But the cracks show when trying to design a unified rollback service.  The service has to know about all parsers that are parameters...to automatically put in the piping that does rollback.</p>
+<h2>I've Hacked It Up Again, By Not Using Auto-Rollback</h2>
+<p>So the ACTION! combinator just goes without the auto rollback mechanism, and manages it manually like the BLOCK! combinator does.  But there's no conceptual reason why it would need custom code for its rollback.  It's just because the generalized analysis doesn't get a chance to see the parsers and do the automatic thing to them...because the parser parameters are not visible at that phase.</p>
+<p>This is going to be a thorn so I thought I'd talk about it.  This way everyone knows that although the ACTION! combinators are working, they are on the ropes a bit as being maybe "overdoing it".</p>
+<p>But I do like this feature, and am definitely going to try to figure out a better way and keep it alive if I can.  This kind of UPARSE feature is powerful and I hate to rule things like it out.</p>
+          <p><a href="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608/3</link>
+        <pubDate>Thu, 05 Aug 2021 16:03:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1608-3</guid>
+        <source url="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608.rss">If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</source>
+      </item>
+      <item>
+        <title>If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Outstanding... what a performance! You're really outdoing yourself Brian! <img src="https://forum.rebol.info/images/emoji/twitter/clap.png?v=9" title=":clap:" class="emoji" alt=":clap:"> <img src="https://forum.rebol.info/images/emoji/twitter/clap.png?v=9" title=":clap:" class="emoji" alt=":clap:"> <img src="https://forum.rebol.info/images/emoji/twitter/clap.png?v=9" title=":clap:" class="emoji" alt=":clap:"></p>
+          <p><a href="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608/2</link>
+        <pubDate>Tue, 18 May 2021 02:47:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1608-2</guid>
+        <source url="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608.rss">If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</source>
+      </item>
+      <item>
+        <title>If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Have you ever been parsing and wanted to call a plain old function on a value?</p>
+<p>Let's say you are collecting some numbers, and you want to negate them.</p>
+<pre><code>&gt;&gt; uparse [1 2 3] [collect some [
+      num: integer! (num: negate num) keep (num)
+   ]]
+== [-1 -2 -3]
+</code></pre>
+<p>You're stuck having to name it, transform it, and then (possibly) reference the name again.</p>
+<p>UPARSE's mechanics actually make this a bit better already, since GROUP! results can be used directly:</p>
+<pre><code>&gt;&gt; uparse [1 2 3] [collect some [
+       num: integer! keep (negate num)
+   ]]
+== [-1 -2 -3]
+</code></pre>
+<p>But you still have to cross over into a GROUP! if you want to do any negation, and use a name to move the parsed value into the domain of DO.</p>
+<h2>Meet A New Trick: ACTION! Combinators</h2>
+<p>You can pick whatever syntax you like for it (UPARSE is customizable, remember?)</p>
+<p>But I'm using <strong>paths that end in slash</strong> to mean "call a normal function but acquire its arguments via the synthesized result of PARSE rules".</p>
+<pre><code>&gt;&gt; uparse [1 2 3] [collect some [
+       keep negate/ integer!
+   ]]
+== [-1 -2 -3]
+</code></pre>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/exploding_head.png?v=9" title=":exploding_head:" class="emoji only-emoji" alt=":exploding_head:"></p>
+<p>You can call any function this way normally by providing each argument in a group.</p>
+<pre><code>&gt;&gt; x: 510
+&gt;&gt; uparse [] [multiply/ (1 + 1) (x)]
+== 1020
+</code></pre>
+<p>But that's easier read as <strong><code>((1 + 1) * x)</code></strong>.  You of course don't want to do it unless at least some of your arguments come from a rule that's not a GROUP!:</p>
+<pre><code>&gt;&gt; data: copy ""
+&gt;&gt; uparse ["a" "b"] [some [append/dup/ (data) text! (2)]]
+&gt;&gt; data
+== "aabb"
+</code></pre>
+<p><strong>I think the primary usefulness is for functions without side-effects where you just want to do a quick transformation on some information you are assigning or collecting.</strong></p>
+<p>But that doesn't mean you can't write some interesting machines.</p>
+<pre><code>&gt;&gt; data: copy ""
+
+&gt;&gt; uparse ["abc" &lt;reverse&gt; "DEF" "ghi"] [
+       while [
+           append/ (data) [
+               '&lt;reverse&gt; reverse/ copy/ text!
+               | text!
+           ]
+       ]
+   ]
+
+&gt;&gt; data
+== "abcFEDghi"
+</code></pre>
+<p><strong>The foundations of Ren-C are strong, which is why such things can be made.</strong>  All that stuff about MAKE FRAME! and ADAPT and AUGMENT etc. are about giving control of time and space to the users to build such combinators.</p>
+<h2>Does This Mean Fewer Combinators Needed?</h2>
+<p>Anything that doesn't advance the series position doesn't need to speak the combinator interface.</p>
+<p>So, for instance, ELIDE.</p>
+<pre><code>&gt;&gt; uparse ["a" "b" &lt;c&gt;] [collect [some keep text!] elide/ tag!]
+== ["a" "b"]
+</code></pre>
+<p>But ELIDE is rather useful, so aliasing it as a combinator to invoke it without the slash seems nice.  However, this aliasing process should be cheap and easy... to "combinatorize" a function.</p>
+<p>But as I say, a plain function doesn't know anything about advancing input and speaking the combinator protocol.  <em>What's great is how close I've made combinator protocol to ordinary functions.</em>  I'm kind of gloating a lot about it, because it's neat.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<h2>Can We Generalize a Rollback Mechanism?</h2>
+<p>COLLECT is set up so that if you do some KEEPs in a rule that ultimately fails, the keeps roll back.</p>
+<p>One of the things limiting the usefulness of this mechanism for functions with side effects (APPEND as opposed to NEGATE) is that they don't get rolled back on failure.</p>
+<p>I've wondered if there could be some kind of DEFER operation which captures GROUP! operations and only runs them if a certain point is reached.  Being able to defer any rule that can have side effects might be nice, so that would include these ACTION! combinators.  Worth thinking about.</p>
+          <p><a href="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608/1</link>
+        <pubDate>Tue, 18 May 2021 01:48:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1608-1</guid>
+        <source url="https://forum.rebol.info/t/if-action-combinators-dont-impress-i-dont-know-what-will/1608.rss">If ACTION! Combinators Don&#39;t Impress, I Don&#39;t Know What Will</source>
+      </item>
+  </channel>
+</rss>

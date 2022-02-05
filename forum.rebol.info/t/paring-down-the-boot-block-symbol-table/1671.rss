@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Paring Down the Boot Block Symbol Table</title>
+    <link>https://forum.rebol.info/t/paring-down-the-boot-block-symbol-table/1671</link>
+    <description>Rebol has historically had a file called %words.r, that points out words that the C code would like to be able to recognize quickly by ID numbers.
+
+So if you want to write something like C code for PARSE that recognizes keywords, you might write something like:
+
+    switch (VAL_WORD_ID(word)) {
+      case SYM_SOME:
+          // code for implementing a some rule..
+         break;
+ 
+     case SYM_WHILE:
+         // code for implementing a while rule...
+        break;
+    }
+
+etc.  In C you can only switch() on integers, not pointers.  So these SYM_XXX values have to be agreed upon by the C code and the symbol-loading subsystem.
+
+Some tricks depend on actual ordering of these symbols, or ranges of them.  But most of the time, it doesn&#39;t really matter.
+
+If something doesn&#39;t have a symbol ID, then you have to do slower creations and comparisons by string... or create your own instance of a symbol and then compare to that symbol by pointer.
+
+## Another Idea: Nix the Table And Trust Determinism
+
+Right now the way the loading process goes, you have your list of words in %words.r and they count up.  Let&#39;s imagine:
+
+    apple
+    banana
+    orange
+    ...
+
+So apple becomes SYM_APPLE = 1, banana becomes SYM_BANANA = 2, orange becomes SYM_ORANGE = 3, etc.
+
+The beginning of the boot block has these words in a block, and then stuff using them
+
+    [
+        [apple banana orange ...]
+        [foo: func [] [eat &#39;apple] peel orange/banana ...]
+        ...
+    ]
+
+Each of those word cells takes up 4 platform pointers, so 32 bytes apiece.  Which is a fair amount to pay to convey the contract between the C code and the interpreter that APPLE needs to have an associated shorthand of 1, BANANA needs a shorthand of 2, etc.
+
+**But if you don&#39;t care about the values, why not use whatever the value was organically?**  
+
+Imagine that list at the beginning wasn&#39;t there:
+
+    [
+        [foo: func [] [eat &#39;apple] peel orange/banana ...]
+        ...
+    ]
+
+The scanner can still give a number to basically every unique word that&#39;s in the boot block if it wants to.  It would just come out in a different order... FOO would be 1, FUNC would be 2, EAT would be 3, APPLE would be 4 etc.
+
+You don&#39;t necessarily want a giant C file of SYM_XXX for absolutely every word used in the mezzanine.  But what could be done here would be that %words.r would be an indication of *registering interest* in what value a loaded word ultimately got.
+
+**But how do you know what order the scanner is going to visit words in?**  Well, you don&#39;t...and you get a chicken and an egg problem.  You can&#39;t build the executable to scan without the SYM_XXX numbers.
+
+**...unless the scanner was a separate library that could be linked and run standalone...**  If the scanner was factored you could have one compile step that built it, and then linked it into a small executable just for the purposes of generating an enum of SYM_XXX values for a particular boot block.
+
+Not something likely to happen this year (or this lifetime), but... I thought it was interesting to think that if the code were a little more self-aware, the array of words in the boot block could be cut way back to only words that required having sequential integer numbers for some optimization.  *(Or *specific* numbers for some optimization...the only case of that is that the spelling of datatype words line up with the enum value of the datatype in the system.)*
+
+## Another Related Idea: An Internet Registry for WORD &lt;=&gt; ID
+
+&gt; Note: This concept is actually contentious with the above...
+
+If we really wanted to (and weren&#39;t concerned about size), we could get a dictionary off the Internet of the 65535 most common words, and number them all in advance.  Then we could tell people who write C extensions that they can use those numbers in their code, so their extensions would be faster if they happened to want to deal with that spelling of that word.
+
+Except then the r3.exe would have a big fat dictionary inside it with a list of strings that extensions may never use.
+
+But putting the dictionary in isn&#39;t actually necessary.  If you trust extension authors to be true to the string table, then just publish the table on the Internet in an agreed upon place.  All an extension has to when it gets loaded is to supply the list of strings and numbers out of that table it wants to use.  You only pay for the entries in the table you need...and it doesn&#39;t cost any more than having those strings would anyway.
+
+The system could then reconcile and notice if one extension said &quot;banana&quot; is 1020 and another said &quot;banana&quot; is 304.  It could just say one of those extensions is wrong and refuse to load them.  It can do so without r3.exe needing to store the string &quot;banana&quot; or information about it being 304 intrinsically.
+
+*The reason I say it&#39;s contentious is because changes in the boot block would shuffle the symbol IDs around.  This means the deterministic (but changing) approach would create symbol values that would force extensions to be recompiled, while a committed database of numbers would not.*</description>
+    
+    <lastBuildDate>Thu, 19 Aug 2021 08:36:44 +0000</lastBuildDate>
+    <category>Optimization</category>
+    <atom:link href="https://forum.rebol.info/t/paring-down-the-boot-block-symbol-table/1671.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Paring Down the Boot Block Symbol Table</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>I think I would prefer a slower compile over such a dictionary.</p>
+          <p><a href="https://forum.rebol.info/t/paring-down-the-boot-block-symbol-table/1671/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/paring-down-the-boot-block-symbol-table/1671/2</link>
+        <pubDate>Thu, 19 Aug 2021 08:36:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1671-2</guid>
+        <source url="https://forum.rebol.info/t/paring-down-the-boot-block-symbol-table/1671.rss">Paring Down the Boot Block Symbol Table</source>
+      </item>
+      <item>
+        <title>Paring Down the Boot Block Symbol Table</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebol has historically had a file called %words.r, that points out words that the C code would like to be able to recognize quickly by ID numbers.</p>
+<p>So if you want to write something like C code for PARSE that recognizes keywords, you might write something like:</p>
+<pre><code>switch (VAL_WORD_ID(word)) {
+  case SYM_SOME:
+      // code for implementing a some rule..
+     break;
+
+ case SYM_WHILE:
+     // code for implementing a while rule...
+    break;
+}
+</code></pre>
+<p>etc.  In C you can only switch() on integers, not pointers.  So these SYM_XXX values have to be agreed upon by the C code and the symbol-loading subsystem.</p>
+<p>Some tricks depend on actual ordering of these symbols, or ranges of them.  But most of the time, it doesn't really matter.</p>
+<p>If something doesn't have a symbol ID, then you have to do slower creations and comparisons by string... or create your own instance of a symbol and then compare to that symbol by pointer.</p>
+<h2>Another Idea: Nix the Table And Trust Determinism</h2>
+<p>Right now the way the loading process goes, you have your list of words in %words.r and they count up.  Let's imagine:</p>
+<pre><code>apple
+banana
+orange
+...
+</code></pre>
+<p>So apple becomes SYM_APPLE = 1, banana becomes SYM_BANANA = 2, orange becomes SYM_ORANGE = 3, etc.</p>
+<p>The beginning of the boot block has these words in a block, and then stuff using them</p>
+<pre><code>[
+    [apple banana orange ...]
+    [foo: func [] [eat 'apple] peel orange/banana ...]
+    ...
+]
+</code></pre>
+<p>Each of those word cells takes up 4 platform pointers, so 32 bytes apiece.  Which is a fair amount to pay to convey the contract between the C code and the interpreter that APPLE needs to have an associated shorthand of 1, BANANA needs a shorthand of 2, etc.</p>
+<p><strong>But if you don't care about the values, why not use whatever the value was organically?</strong></p>
+<p>Imagine that list at the beginning wasn't there:</p>
+<pre><code>[
+    [foo: func [] [eat 'apple] peel orange/banana ...]
+    ...
+]
+</code></pre>
+<p>The scanner can still give a number to basically every unique word that's in the boot block if it wants to.  It would just come out in a different order... FOO would be 1, FUNC would be 2, EAT would be 3, APPLE would be 4 etc.</p>
+<p>You don't necessarily want a giant C file of SYM_XXX for absolutely every word used in the mezzanine.  But what could be done here would be that %words.r would be an indication of <em>registering interest</em> in what value a loaded word ultimately got.</p>
+<p><strong>But how do you know what order the scanner is going to visit words in?</strong>  Well, you don't...and you get a chicken and an egg problem.  You can't build the executable to scan without the SYM_XXX numbers.</p>
+<p><strong>...unless the scanner was a separate library that could be linked and run standalone...</strong>  If the scanner was factored you could have one compile step that built it, and then linked it into a small executable just for the purposes of generating an enum of SYM_XXX values for a particular boot block.</p>
+<p>Not something likely to happen this year (or this lifetime), but... I thought it was interesting to think that if the code were a little more self-aware, the array of words in the boot block could be cut way back to only words that required having sequential integer numbers for some optimization.  <em>(Or <em>specific</em> numbers for some optimization...the only case of that is that the spelling of datatype words line up with the enum value of the datatype in the system.)</em></p>
+<h2>Another Related Idea: An Internet Registry for WORD &lt;=&gt; ID</h2>
+<blockquote>
+<p>Note: This concept is actually contentious with the above...</p>
+</blockquote>
+<p>If we really wanted to (and weren't concerned about size), we could get a dictionary off the Internet of the 65535 most common words, and number them all in advance.  Then we could tell people who write C extensions that they can use those numbers in their code, so their extensions would be faster if they happened to want to deal with that spelling of that word.</p>
+<p>Except then the r3.exe would have a big fat dictionary inside it with a list of strings that extensions may never use.</p>
+<p>But putting the dictionary in isn't actually necessary.  If you trust extension authors to be true to the string table, then just publish the table on the Internet in an agreed upon place.  All an extension has to when it gets loaded is to supply the list of strings and numbers out of that table it wants to use.  You only pay for the entries in the table you need...and it doesn't cost any more than having those strings would anyway.</p>
+<p>The system could then reconcile and notice if one extension said "banana" is 1020 and another said "banana" is 304.  It could just say one of those extensions is wrong and refuse to load them.  It can do so without r3.exe needing to store the string "banana" or information about it being 304 intrinsically.</p>
+<p><em>The reason I say it's contentious is because changes in the boot block would shuffle the symbol IDs around.  This means the deterministic (but changing) approach would create symbol values that would force extensions to be recompiled, while a committed database of numbers would not.</em></p>
+          <p><a href="https://forum.rebol.info/t/paring-down-the-boot-block-symbol-table/1671/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/paring-down-the-boot-block-symbol-table/1671/1</link>
+        <pubDate>Thu, 19 Aug 2021 00:59:26 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1671-1</guid>
+        <source url="https://forum.rebol.info/t/paring-down-the-boot-block-symbol-table/1671.rss">Paring Down the Boot Block Symbol Table</source>
+      </item>
+  </channel>
+</rss>

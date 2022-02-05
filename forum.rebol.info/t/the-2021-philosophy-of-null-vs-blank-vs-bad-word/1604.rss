@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The 2021 Philosophy of NULL vs. BLANK! vs. BAD-WORD!</title>
+    <link>https://forum.rebol.info/t/the-2021-philosophy-of-null-vs-blank-vs-bad-word/1604</link>
+    <description>I was looking at rebmake code where many variables had been assigned to a BLANK!:
+
+    extension-class: make object! [
+        class: #extension
+        name: _
+        loadable: yes  ; can be loaded at runtime
+        modules: _
+        source: _  ; main script
+        depends: _  ; additional C files compiled in
+        requires: _  ; it might require other extensions
+        ...
+    ]
+
+It struck me that the code had to take a lot of precautions to wind up not putting these real BLANK! values into blocks.  If something like **`depends`** can be-a-BLOCK-or-not, then when you write code like **append items depends** there&#39;s always the risk that it&#39;s still a blank.  You had to OPT it:
+
+    append items opt depends  ; if depends was a BLANK!, make it a NULL
+
+That&#39;s easy to forget, and a nightmare to go back and find where the blanks are coming from...since there was no error-in-the-moment.  There had been functions created to hunt and check through blocks for BLANK!s, since it was a common way to get things to trip up...but you were doing it all after-the-fact, when it was too late.
+
+**What I&#39;ve been talking about sounds like a much better plan**:
+
+* Make these kinds of things NULL to start off with
+
+* Have it so that APPEND and friends will error if you append a NULL, but perform a no-op if you append a BLANK! (if not quoted or /ONLY)
+
+* Use TRY at the callsites that want to show that they are wishing to opt-out of an append in the cases where they really were aware the value could be NULL.
+
+I tried it, and indeed it did seem like a much better plan.  Unfortunately... *I forgot that the reason it had been done this way was that the bootstrap executable errored when you accessed plain NULL variables, because those were considered &quot;unset&quot;.*  :man_facepalming: 
+
+That historical accident aside...the exercise showed the unique value of what NULL does today...as a *conditionally-false* and *non-valued* thing.  If we tried to make anything else serve this role (let&#39;s say the unfriendly BAD-WORD! **~null~**) then things would be twisting out of shape to accomplish it.
+
+## There&#39;s No Single Answer To What To Initialize Variables To
+
+A BAD-WORD! is a good choice when you really expect something to happen before anybody even looks at the variable.
+
+      config: ~initialize-system-not-called~
+
+      initialize-system: func [
+          {Let&#39;s say this function reads the config file}
+      ][
+          ...
+          config: [...]
+      ]
+
+This causes a nice labeled message anytime someone references CONFIG too early.  We&#39;re now at the point where that error happens on GET-WORD! or plain WORD!...which has the nice property of making GET-WORD! clearly convey that you intend to defuse a function execution.
+
+Going this route would create a pain point for anyone who thought they were going to test for whether you had a config initialized by testing **if config [...]**.  So that has to be considered as whether it&#39;s what you want.
+
+Because on the other hand, you should use NULL as the initialization for something you may run some code and find it doesn&#39;t assign, and you want to be able to test that.
+
+     directory: null
+
+     for-each [key val] config [
+         if key = &#39;directory [
+             if directory [
+                 fail [&quot;Directory was already set by config:&quot; directory]
+             ]
+             directory: val
+         ]
+     ]
+
+This will be a better choice if you want most operations to fail if they try to use the directory that hasn&#39;t been assigned.  BLANK! is a more permissive choice, as it would be willing to APPEND and be a no-op (for example).   More functions are willing to take BLANK!.  It&#39;s easy to convert a NULL to a BLANK! with TRY, so you aren&#39;t far from it when you need it.
+
+You still might want to initialize variables to blank, if that suits your thoughts of what&#39;s convenient.  You&#39;ll get fewer errors to point out you&#39;re using something you haven&#39;t &quot;assigned meaningfully&quot;, but maybe that is desirable for your case.
+
+The Rebmake case shows a situation where the NULL is likely better, even if BLANK!s vaporize in appends by default.  Because an APPEND/ONLY ... VAR or a APPEND ... @ VAR will still append that blank you may not want.
+
+## Literalizing Operators Further Justify NULL
+
+NULL has  a critical property as a non-valued thing with the literalizing operators.
+
+    &gt;&gt; ^ if false [&lt;let&#39;s make a null&gt;]
+    ; null
+
+    &gt;&gt; ^ ^ if false [&lt;let&#39;s make a null&gt;]
+    ; null
+
+**No matter how many times you literalize a NULL, the result is still NULL.**  If we tried to make any *value* interact with the literalized domain, we wouldn&#39;t have this, and it is critical.
+
+I&#39;ve said before and I&#39;ve said it again: If you like Ren-C features (let&#39;s say, UPARSE?) then you like NULL whether you realize it or not.  It&#39;s foundational.
+
+## But Fewer Operations Will Be Taking NULL Now...
+
+It was already the case that not a lot of operations would take NULL.  In the interest of erroring, the [BLANK!-in-NULL-out convention](https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954) had been established and working well. 
+
+Now APPEND and friends are joining the fold, also taking the meaning that BLANK! is a request to &quot;opt-out&quot;...with NULL representing an error.  You&#39;ll be required to TRY arguments to opt out of the null cases.
+
+There&#39;s some question of how this should impact something like COMPOSE.  I feel like as a dialect, COMPOSE is in something of a different space.  It&#39;s not a &quot;function taking arguments&quot;, it&#39;s a template for code at a high level.  I think the choice for dialects to vaporize NULLs is something unique to their flow and operation...a bit different from function arguments.
+
+In other words, I still am quite attached to:
+
+     &gt;&gt; compose [&lt;a&gt; (if false [&lt;b&gt;]) &lt;c&gt;]
+     == [&lt;a&gt; &lt;c&gt;]
+
+I don&#39;t want to have to write:
+
+     &gt;&gt; compose [&lt;a&gt; (try if false [&lt;b&gt;]) &lt;c&gt;]
+     == [&lt;a&gt; &lt;c&gt;]
+     
+And I also don&#39;t want to have to worry about all the quoting operations to get things as /ONLY by default inside COMPOSE.  The idea of using **(( ))** is that it could go to the semantics of splicing, and then blanks would vaporize and you&#39;d have to quote any evaluative values...
+
+More discussion on this to come.</description>
+    
+    <lastBuildDate>Tue, 01 Jun 2021 23:47:47 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/the-2021-philosophy-of-null-vs-blank-vs-bad-word/1604.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The 2021 Philosophy of NULL vs. BLANK! vs. BAD-WORD!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I was looking at rebmake code where many variables had been assigned to a BLANK!:</p>
+<pre><code>extension-class: make object! [
+    class: #extension
+    name: _
+    loadable: yes  ; can be loaded at runtime
+    modules: _
+    source: _  ; main script
+    depends: _  ; additional C files compiled in
+    requires: _  ; it might require other extensions
+    ...
+]
+</code></pre>
+<p>It struck me that the code had to take a lot of precautions to wind up not putting these real BLANK! values into blocks.  If something like <strong><code>depends</code></strong> can be-a-BLOCK-or-not, then when you write code like <strong>append items depends</strong> there's always the risk that it's still a blank.  You had to OPT it:</p>
+<pre><code>append items opt depends  ; if depends was a BLANK!, make it a NULL
+</code></pre>
+<p>That's easy to forget, and a nightmare to go back and find where the blanks are coming from...since there was no error-in-the-moment.  There had been functions created to hunt and check through blocks for BLANK!s, since it was a common way to get things to trip up...but you were doing it all after-the-fact, when it was too late.</p>
+<p><strong>What I've been talking about sounds like a much better plan</strong>:</p>
+<ul>
+<li>
+<p>Make these kinds of things NULL to start off with</p>
+</li>
+<li>
+<p>Have it so that APPEND and friends will error if you append a NULL, but perform a no-op if you append a BLANK! (if not quoted or /ONLY)</p>
+</li>
+<li>
+<p>Use TRY at the callsites that want to show that they are wishing to opt-out of an append in the cases where they really were aware the value could be NULL.</p>
+</li>
+</ul>
+<p>I tried it, and indeed it did seem like a much better plan.  Unfortunately... <em>I forgot that the reason it had been done this way was that the bootstrap executable errored when you accessed plain NULL variables, because those were considered "unset".</em>  <img src="https://forum.rebol.info/images/emoji/twitter/man_facepalming.png?v=9" title=":man_facepalming:" class="emoji" alt=":man_facepalming:"></p>
+<p>That historical accident aside...the exercise showed the unique value of what NULL does today...as a <em>conditionally-false</em> and <em>non-valued</em> thing.  If we tried to make anything else serve this role (let's say the unfriendly BAD-WORD! <strong>~null~</strong>) then things would be twisting out of shape to accomplish it.</p>
+<h2>There's No Single Answer To What To Initialize Variables To</h2>
+<p>A BAD-WORD! is a good choice when you really expect something to happen before anybody even looks at the variable.</p>
+<pre><code>  config: ~initialize-system-not-called~
+
+  initialize-system: func [
+      {Let's say this function reads the config file}
+  ][
+      ...
+      config: [...]
+  ]
+</code></pre>
+<p>This causes a nice labeled message anytime someone references CONFIG too early.  We're now at the point where that error happens on GET-WORD! or plain WORD!...which has the nice property of making GET-WORD! clearly convey that you intend to defuse a function execution.</p>
+<p>Going this route would create a pain point for anyone who thought they were going to test for whether you had a config initialized by testing <strong>if config [...]</strong>.  So that has to be considered as whether it's what you want.</p>
+<p>Because on the other hand, you should use NULL as the initialization for something you may run some code and find it doesn't assign, and you want to be able to test that.</p>
+<pre><code> directory: null
+
+ for-each [key val] config [
+     if key = 'directory [
+         if directory [
+             fail ["Directory was already set by config:" directory]
+         ]
+         directory: val
+     ]
+ ]
+</code></pre>
+<p>This will be a better choice if you want most operations to fail if they try to use the directory that hasn't been assigned.  BLANK! is a more permissive choice, as it would be willing to APPEND and be a no-op (for example).   More functions are willing to take BLANK!.  It's easy to convert a NULL to a BLANK! with TRY, so you aren't far from it when you need it.</p>
+<p>You still might want to initialize variables to blank, if that suits your thoughts of what's convenient.  You'll get fewer errors to point out you're using something you haven't "assigned meaningfully", but maybe that is desirable for your case.</p>
+<p>The Rebmake case shows a situation where the NULL is likely better, even if BLANK!s vaporize in appends by default.  Because an APPEND/ONLY ... VAR or a APPEND ... @ VAR will still append that blank you may not want.</p>
+<h2>Literalizing Operators Further Justify NULL</h2>
+<p>NULL has  a critical property as a non-valued thing with the literalizing operators.</p>
+<pre><code>&gt;&gt; ^ if false [&lt;let's make a null&gt;]
+; null
+
+&gt;&gt; ^ ^ if false [&lt;let's make a null&gt;]
+; null
+</code></pre>
+<p><strong>No matter how many times you literalize a NULL, the result is still NULL.</strong>  If we tried to make any <em>value</em> interact with the literalized domain, we wouldn't have this, and it is critical.</p>
+<p>I've said before and I've said it again: If you like Ren-C features (let's say, UPARSE?) then you like NULL whether you realize it or not.  It's foundational.</p>
+<h2>But Fewer Operations Will Be Taking NULL Now...</h2>
+<p>It was already the case that not a lot of operations would take NULL.  In the interest of erroring, the <a href="https://forum.rebol.info/t/blank-in-null-out-convention-vs-logic-returning-actions/954">BLANK!-in-NULL-out convention</a> had been established and working well.</p>
+<p>Now APPEND and friends are joining the fold, also taking the meaning that BLANK! is a request to "opt-out"...with NULL representing an error.  You'll be required to TRY arguments to opt out of the null cases.</p>
+<p>There's some question of how this should impact something like COMPOSE.  I feel like as a dialect, COMPOSE is in something of a different space.  It's not a "function taking arguments", it's a template for code at a high level.  I think the choice for dialects to vaporize NULLs is something unique to their flow and operation...a bit different from function arguments.</p>
+<p>In other words, I still am quite attached to:</p>
+<pre><code> &gt;&gt; compose [&lt;a&gt; (if false [&lt;b&gt;]) &lt;c&gt;]
+ == [&lt;a&gt; &lt;c&gt;]
+</code></pre>
+<p>I don't want to have to write:</p>
+<pre><code> &gt;&gt; compose [&lt;a&gt; (try if false [&lt;b&gt;]) &lt;c&gt;]
+ == [&lt;a&gt; &lt;c&gt;]
+</code></pre>
+<p>And I also don't want to have to worry about all the quoting operations to get things as /ONLY by default inside COMPOSE.  The idea of using <strong>(( ))</strong> is that it could go to the semantics of splicing, and then blanks would vaporize and you'd have to quote any evaluative values...</p>
+<p>More discussion on this to come.</p>
+          <p><a href="https://forum.rebol.info/t/the-2021-philosophy-of-null-vs-blank-vs-bad-word/1604/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-2021-philosophy-of-null-vs-blank-vs-bad-word/1604/1</link>
+        <pubDate>Fri, 14 May 2021 14:44:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1604-1</guid>
+        <source url="https://forum.rebol.info/t/the-2021-philosophy-of-null-vs-blank-vs-bad-word/1604.rss">The 2021 Philosophy of NULL vs. BLANK! vs. BAD-WORD!</source>
+      </item>
+  </channel>
+</rss>

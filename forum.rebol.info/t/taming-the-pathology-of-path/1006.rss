@@ -1,0 +1,420 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Taming the Pathology of PATH!</title>
+    <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006</link>
+    <description>PATH! has long been a thorn.  Because it has been considered an ANY-SERIES!--with a position and an index--you can get into all kinds of trouble.  Such as decaying into something indistinguishable from a WORD!, and then to nothing at all.  In Rebol2/Red:
+
+    &gt;&gt; p: to path! [a b]
+    == a/b
+
+    &gt;&gt; type? next p
+    == path!
+    &gt;&gt; next p
+    == b  ;-- ack, looks like a WORD!
+
+    &gt;&gt; type? next next p
+    == path!
+    &gt;&gt; next next p
+    ==    ;-- uhhhh, nothing?
+
+That&#39;s a glaring problem, but there&#39;s many other reasons it makes a bad generic array.  Try putting WORD! variations in it:
+
+    red&gt;&gt; to get-path! [a b]
+    == :a/b
+    red&gt;&gt; p: to path! [:a b]
+    == :a/b
+    red&gt;&gt; to get-path! p
+    == ::a/b
+
+Worse still, put a PATH! in a PATH!.
+
+    &gt;&gt; left: clear make path! [x x]
+    &gt;&gt; append left &#39;a/b
+    &gt;&gt; append left &#39;c
+
+    &gt;&gt; right: clear make path! [x x]
+    &gt;&gt; append right &#39;a
+    &gt;&gt; append right &#39;b/c
+
+    &gt;&gt; left
+    == a/b/c
+    &gt;&gt; first left
+    == a/b
+
+    &gt;&gt; right
+    == a/b/c
+    &gt;&gt; first right
+    == a
+
+## New Paradigm: PATH! is NOT an ANY-SERIES!
+
+I did something that swept away a big pile of these concerns.  I took PATH! out of the ANY-SERIES! category and made them immutable.  Since there&#39;s a controlled number of points that can make paths, you can set rules for them (e.g. no fewer than two elements, no paths-in-paths).  And since there are no direct modifiers, they can&#39;t be changed to disobey this rule.  Since there is no INDEX OF due to it not being an any series, you can never think of it as being anywhere but &quot;at the head&quot;.
+
+It&#39;s not as limiting as it may sound at first.  You can still PICK elements out of a path by index, or use FOR-EACH on them.  If you ever get to a point where you really want to rearrange and restructure a path, you can convert it to a BLOCK! or GROUP! and then back.  And while making operators that remove items from paths might be a little tricky, aggregating them together is not.
+
+Surprisingly (or perhaps not?), *this didn&#39;t actually cause that much of a ripple*.  Basically nothing was using PATH! as a generic container anyway--because compared to GROUP! and BLOCK!, paths were *really bad* at being generic containers.  They&#39;re never all that long, because they ignore newline handling (embedded blocks/groups can have newlines, but at the level of the slashes in the path itself, there are no newlines).
+
+It&#39;s been great so far, and I think there&#39;s no going back.
+
+## How Many Constraints Should There Be?
+
+I mentioned length of at least 2, and no paths-in-paths.  Those are pretty obvious.
+
+But what else?  We can stop **::a/b** from ever existing.  But historically, the following has been idiomatic and accepted as a common and correct syntax:
+
+     a/:b: c
+
+I&#39;ve wondered if **a/(b): c** is superior to the point that the path creation rules prohibit embedded get-words.  If you couldn&#39;t put any GET-SET-LIT inside path elements, it could stop ambiguities.
+
+Furthermore, some types (like FILE! or URL!) have slashes in them.  Should inserting them into paths be an error, or at least use those slashes to point out where path segments are and split along them?
+
+## Why this is in &quot;Philosophy&quot;: The Role of PATH!s in Dialects
+
+One thing that got me to think about this is that I&#39;ve got a dialect which lets you define BLOCK! rules or PATH! rules:
+
+     e: &#39;j/k/l
+     h: [m n/o p]
+     dialect [a/b/c [d e f] g/h/i]
+
+Pathing means &quot;AND these things together&quot;.  Blocks mean &quot;OR these things together&quot;.  And like PARSE rules, if you look up a word and get to a BLOCK! or PATH! that&#39;s just recursed on and used as if you&#39;d written the rule right there.
+
+Some of the elemental rules were GET-WORD!.  If GET-WORD! weren&#39;t legal in paths, that would put a constraint on this dialect regarding its elements that the block wouldn&#39;t impose.
+
+But...you can work around this with a block.
+
+     dialect [[:a]/b/c [d :e f] g/h/[:i]]
+
+That feels very...clean.  Now you have a generic solution where you&#39;re using PATH!s as a dialect component that doesn&#39;t lose any capability BLOCK! or GROUP! had, without worrying about tapdancing around gibberish paths.
+
+And we actually are entering an era of what are called [&quot;mirrored types&quot;](https://forum.rebol.info/t/mirrored-type-bytes-explained/1008), which would allow 1-element blocks and 1-element groups that are immutable to *fit entirely in a cell* with no dynamic allocation or pointer to elsewhere.
+
+Mirrored types were invented so **/foo** could be a PATH! and cost no more than the old word-class REFINEMENT! did.  But seeing them in action, it suggests applying it for GROUP!s and BLOCK!s too.  Those embedded blocks could cost no more than a plain GET-WORD! today.  With PATH! being immutable, making those blocks and groups immutable makes sense too.  (By default on scanning I mean... if you make a path with a length-1 immutable block *under* the path level, it can preserve that mutability.)
+
+When you put all these concepts together, it feels like it ties up loose ends and ambiguities. Will people miss **`a/:b:`**...or can the likes of **`a/(b):`** and **`a/[b]:`** or **`:(a)/b`** and **`:[a]/b`** cover pretty much everything?</description>
+    
+    <lastBuildDate>Thu, 20 Jun 2019 18:47:52 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1006">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I did something that swept away a big pile of these concerns. I took PATH! out of the ANY-SERIES! category and made them immutable. Since there's a controlled number of points that can make paths, you can set rules for them (e.g. no fewer than two elements, no paths-in-paths). And since there are no direct modifiers, they can't be changed to disobey this rule. Since there is no INDEX OF due to it not being an any series, you can never think of it as being anywhere but "at the head".</p>
+</blockquote>
+</aside>
+<p>I think immutable paths make sense, and disallowing single-element paths or paths with anything but WORD!, TEXT!, INTEGER!, DECIMAL!, BLOCK!, GROUP!, and BLANK! may make sense.  (TAG! or other types perhaps, also, but the key is just to stop ambiguous constructions at the moment of creation.)</p>
+<p>But taking ANY-PATH! out of ANY-SERIES! may be unnecessary.</p>
+<p>The way it could make sense could be if we follow the concept that arrays with iteration positions other than the head are rendered is to include the index.  e.g.:</p>
+<pre><code> &gt;&gt; p: 'foo/baz/bar
+ == foo/baz/bar
+
+ &gt;&gt; next p
+ == 2|foo/baz/bar
+</code></pre>
+<p>Not saying this notation is ideal, but the concept is that any non-head series shows its index value and the full data.  So no matter how big your data, offsetting it by an index doesn't hide it in molding.  If you have the need to truncate a series, you either have it mutable or COPY the data out.</p>
+<p>The console could truncate to show you the most likely relevant portion, e.g. from the index position on.  This would be similar to how it truncates the output of very long molds at the tail...it's just truncating long molds at the head.</p>
+<p>This ties in with the very important <a href="https://forum.rebol.info/t/where-the-series-ends-simplifying-out-of-bounds-rules/1141">"Where the Series Ends"</a> post.  That discusses the hidden index semantics, proposing there being no difference between that and a separately tracked INTEGER!...so it is purely an efficiency trick.  Looked at this way helps answer a lot of questions about why that field is there, and prevents having two separate branches of semantics...one for when you use the index internal to the series, and one for when you are operating relative to some external index.</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/10</link>
+        <pubDate>Wed, 19 Jun 2019 19:01:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-10</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="8" data-topic="1006">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>I actually meant when a text! is joined to a url!, or otherwise converted to one, and maybe vice versa.</p>
+</blockquote>
+</aside>
+<p>I had a thought in this vein, when considering TO in terms of the "stable state round-trip" philosophy.  I've thought that might be interesting if TO TEXT! was all it took for a URL to get encoded, and TO URL! took it back to readable again.  If such TO conversions were being run automatically, then maybe it would be sensible for operations like JOIN to be similar when working with combinations.</p>
+<p>What made me hesitant to pursue is that if we went this route with FILE!, it would result in inconsistent behavior on Windows vs. Linux.  You'd have to make sure every TEXT! plus FILE! operation had the backslashes going the right way in the TEXT!.</p>
+<pre><code>linux&gt;&gt; join "abc" %d/e/f
+== "abcd/e/f"
+
+windows&gt;&gt; join "abc" %d/e/f
+== "abcd\e\f"
+</code></pre>
+<p>It may be that URL encoding is a different beast.  But I think there's a pretty high bar for "magic" in a system--if there's going to be any, it better be <em>really good magic</em> with a <em>clearly amazing payoff</em>.  Otherwise it's just more complexity, which is a net negative--even if you tinker around and find it has a slight advantage overall.</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/9</link>
+        <pubDate>Wed, 13 Mar 2019 14:43:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-9</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="7" data-topic="1006">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If you mean URL-encoding on URL!, the behavior of retaining “as-is”</p>
+</blockquote>
+</aside>
+<p>I actually meant when a text! is joined to a url!, or otherwise converted to one, and maybe vice versa.</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/8</link>
+        <pubDate>Wed, 13 Mar 2019 14:20:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-8</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="6" data-topic="1006">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>In my own url! handling I only needed joining so far.<br>
+I think I used deeper surgery for helping with url-encoding issues.</p>
+</blockquote>
+</aside>
+<p>Good data point, thanks!</p>
+<aside class="quote no-group" data-post="6" data-topic="1006">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>Today, how about doing url-encoding on strings, and nothing on quoted strings?</p>
+</blockquote>
+</aside>
+<p>If you mean URL-encoding on URL!, the behavior of retaining "as-is" behavior was a request from <a class="mention" href="/u/rgchris">@rgchris</a>.<br>
+Here is the rationale I summarized in the comments:</p>
+<pre><code>// While Rebol2, R3-Alpha, and Red attempted to apply some amount of decoding
+// (e.g. how %20 is "space" in http:// URL!s), Ren-C leaves URLs "as-is".
+// This means a URL may be copied from a web browser bar and pasted back.
+// It also means that the URL may be used with custom schemes (odbc://...)
+// that have different ideas of the meaning of characters like `%`.
+//
+// !!! The current concept is that URL!s typically represent the *decoded*
+// forms, and thus express unicode codepoints normally...preserving either of:
+//
+//     https://duckduckgo.com/?q=hergé+&amp;+tintin
+//     https://duckduckgo.com/?q=hergé+%26+tintin
+//
+// Then, the encoded forms with UTF-8 bytes expressed in %XX form would be
+// converted as TEXT!, where their datatype suggests the encodedness:
+//
+//     {https://duckduckgo.com/?q=herg%C3%A9+%26+tintin}
+//
+// (This is similar to how local FILE!s, where e.g. slashes become backslash
+// on Windows, are expressed as TEXT!.)
+</code></pre>
+<p>Offhand, I feel like it sounds more likely to me that URL! is most convenient when people can round-trip the rather lenient expressions being put in their browser, as-is.  Attempts we do at LOAD-time to canonize as part of the data type itself may frustrate, and do more harm than good.</p>
+<p>I'm not in-the-know enough to know about the legality of schemes or fragments/pieces of URL!s where % does not mean URL-encoding.  Obviously a Rebol scheme <em>could</em> do this, but I don't know if any official legal URL ever can.  If not, it's probably inadvisable to permit Rebol schemes to.</p>
+<p>I do understand this is an important issue, but it would help to see complete scenarios that are pain points and a list of all the tradeoffs.</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/7</link>
+        <pubDate>Wed, 13 Mar 2019 10:32:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-7</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>In my own url! handling I only needed joining so far.<br>
+I think I used deeper surgery for helping with url-encoding issues.<br>
+Today, how about doing url-encoding on strings, and nothing on quoted strings?</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/6</link>
+        <pubDate>Wed, 13 Mar 2019 06:15:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-6</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>This is pretty parallel to a problem in URL!.</p>
+<p>We have the problem of:</p>
+<pre><code>&gt;&gt; reverse http://hostilefork.com
+== moc.krofelitsoh//:ptth
+</code></pre>
+<p>What you end up with still claims to be a URL!, but wouldn't load back as one.  In fact, it would be loaded under today's conventions as a PATH!, since <code>//</code> denotes a BLANK! path segment.  :-/</p>
+<p>Historically the idea was that it's just a matter of noticing when something isn't rendering as a "natural" of its type, and falling back on some alternate notation.  Whatever it would be, we'd hope it wouldn't be any uglier than:</p>
+<pre><code> #[url! "moc.krofelitsoh//:ptth"]
+</code></pre>
+<p>But as with PATH!, we can question just how useful is it to allow freaks of nature to exist vs. making them immutable and not allowing them.  If you could turn URL!s into TEXT! easily enough, and turn them back, isn't that good enough?</p>
+<p>Pieces of URL! being URL! is not that interesting.  Consider being rid of the <a href="https://forum.rebol.info/t/skepticism-of-parse-preserving-precise-input-type/1084">PARSE behavior of matching datatypes for COPY</a>:</p>
+<pre><code> url: http://example.com/foo
+ parse url ["http://example.com/" copy stuff: to end]
+</code></pre>
+<p>That will now again give you STUFF as the neutral string "foo" like in Rebol2.  It's not a URL! of simply "foo" (and hence really should show as <code>#[url! "foo"]</code>).  That seems more desirable.</p>
+<p>Is pretty much any kind of surgery on URL!s necessary?  How often could one's needs not just be taken care of with JOIN-ing them...as being tried for PATH!, and convert otherwise?</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/5</link>
+        <pubDate>Tue, 12 Mar 2019 19:27:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-5</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="1006" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>What is the problem you see with get-words in paths, and set-words at the end ?</p>
+</blockquote>
+</aside>
+<p>Ambiguity.  If GET-WORD!s can be put in paths, then you can't tell if <strong>:a/b/c</strong> is an ordinary PATH! with a GET-WORD! at the beginning, or a GET-PATH! with an ordinary WORD! at the beginning.</p>
+<p>Same for <strong>a/b/c:</strong>... is that an ordinary PATH! with a SET-WORD! at the end, or a SET-PATH! with an ordinary WORD! at the end?</p>
+<p>Every now and again it has been wondered if this suggests that there shouldn't be a SET-PATH! and GET-PATH!, but that those should simply be ordinary PATH!s with SET-WORD!s at the tail and GET-WORD!s at the head.  This breaks down when you want <strong>a/b/(c + d):</strong> because you'd need a SET-GROUP!, or <strong>a/b/1:</strong> because you'd need a SET-INTEGER!, etc. for all types.  It also breaks down because it inhibits the cheap/easy transformation of these path types into each other by flipping one byte without affecting the shared path array itself.</p>
+<p>States that don't seem ambiguous, like <strong>::a/b/c</strong> are still quite ugly...and actually can still be ambiguous.  e.g. is that a three-element GET-PATH! with a GET-WORD! <strong>:a</strong> at the head, or a two-element GET-PATH! with a GET-PATH! <strong>:a/b</strong> at the head.  I also think things like <strong>a/b/:c:</strong> are awful-looking, and don't have good bones for the language.</p>
+<p>But the good news of all of this is that I think I have an answer for all of this with immutable paths, that are checked for properties at time of creation, to address all these issues...and I may be able to do it quite efficiently.</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/4</link>
+        <pubDate>Fri, 18 Jan 2019 19:20:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-4</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>What is the problem you see with get-words in paths, and set-words at the end ?</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/3</link>
+        <pubDate>Fri, 18 Jan 2019 17:54:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-3</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="1" data-topic="1006">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>When you put all these concepts together, it feels like it ties up loose ends and ambiguities. Will people miss <strong><code>a/:b:</code></strong> …or can the likes of <strong><code>a/(b):</code></strong> and <strong><code>a/[b]:</code></strong> or <strong><code>:(a)/b</code></strong> and <strong><code>:[a]/b</code></strong> cover pretty much everything?</p>
+</blockquote>
+</aside>
+<p>The only thing I can think of that would make me be upset about losing <strong>a/:b</strong> and having to use <strong>a/(b)</strong>, is having that get involved in COMPOSE/DEEP when I didn't mean it to.</p>
+<pre><code> compose/deep [
+      .../(don't want composed): [(want composed) ...]
+ ]
+</code></pre>
+<p>But we have better solutions to this today.</p>
+<pre><code> compose/deep &lt;*&gt; [
+      .../(don't want composed): [(&lt;*&gt; want composed) ...]
+ ]
+</code></pre>
+<p>...and a shallow compose won't see groups in paths.  I think that is enough for me.</p>
+<p>The other issue is that right now GET refuses to fetch paths if they contain any GROUP!s.  We could update this rule to make it refuse to fetch paths if they contain anything that runs any ACTION!s, so any inert groups would be fair game.</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/2</link>
+        <pubDate>Fri, 11 Jan 2019 05:52:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-2</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+      <item>
+        <title>Taming the Pathology of PATH!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>PATH! has long been a thorn.  Because it has been considered an ANY-SERIES!--with a position and an index--you can get into all kinds of trouble.  Such as decaying into something indistinguishable from a WORD!, and then to nothing at all.  In Rebol2/Red:</p>
+<pre><code>&gt;&gt; p: to path! [a b]
+== a/b
+
+&gt;&gt; type? next p
+== path!
+&gt;&gt; next p
+== b  ;-- ack, looks like a WORD!
+
+&gt;&gt; type? next next p
+== path!
+&gt;&gt; next next p
+==    ;-- uhhhh, nothing?
+</code></pre>
+<p>That's a glaring problem, but there's many other reasons it makes a bad generic array.  Try putting WORD! variations in it:</p>
+<pre><code>red&gt;&gt; to get-path! [a b]
+== :a/b
+red&gt;&gt; p: to path! [:a b]
+== :a/b
+red&gt;&gt; to get-path! p
+== ::a/b
+</code></pre>
+<p>Worse still, put a PATH! in a PATH!.</p>
+<pre><code>&gt;&gt; left: clear make path! [x x]
+&gt;&gt; append left 'a/b
+&gt;&gt; append left 'c
+
+&gt;&gt; right: clear make path! [x x]
+&gt;&gt; append right 'a
+&gt;&gt; append right 'b/c
+
+&gt;&gt; left
+== a/b/c
+&gt;&gt; first left
+== a/b
+
+&gt;&gt; right
+== a/b/c
+&gt;&gt; first right
+== a
+</code></pre>
+<h2>New Paradigm: PATH! is NOT an ANY-SERIES!</h2>
+<p>I did something that swept away a big pile of these concerns.  I took PATH! out of the ANY-SERIES! category and made them immutable.  Since there's a controlled number of points that can make paths, you can set rules for them (e.g. no fewer than two elements, no paths-in-paths).  And since there are no direct modifiers, they can't be changed to disobey this rule.  Since there is no INDEX OF due to it not being an any series, you can never think of it as being anywhere but "at the head".</p>
+<p>It's not as limiting as it may sound at first.  You can still PICK elements out of a path by index, or use FOR-EACH on them.  If you ever get to a point where you really want to rearrange and restructure a path, you can convert it to a BLOCK! or GROUP! and then back.  And while making operators that remove items from paths might be a little tricky, aggregating them together is not.</p>
+<p>Surprisingly (or perhaps not?), <em>this didn't actually cause that much of a ripple</em>.  Basically nothing was using PATH! as a generic container anyway--because compared to GROUP! and BLOCK!, paths were <em>really bad</em> at being generic containers.  They're never all that long, because they ignore newline handling (embedded blocks/groups can have newlines, but at the level of the slashes in the path itself, there are no newlines).</p>
+<p>It's been great so far, and I think there's no going back.</p>
+<h2>How Many Constraints Should There Be?</h2>
+<p>I mentioned length of at least 2, and no paths-in-paths.  Those are pretty obvious.</p>
+<p>But what else?  We can stop <strong>::a/b</strong> from ever existing.  But historically, the following has been idiomatic and accepted as a common and correct syntax:</p>
+<pre><code> a/:b: c
+</code></pre>
+<p>I've wondered if <strong>a/(b): c</strong> is superior to the point that the path creation rules prohibit embedded get-words.  If you couldn't put any GET-SET-LIT inside path elements, it could stop ambiguities.</p>
+<p>Furthermore, some types (like FILE! or URL!) have slashes in them.  Should inserting them into paths be an error, or at least use those slashes to point out where path segments are and split along them?</p>
+<h2>Why this is in "Philosophy": The Role of PATH!s in Dialects</h2>
+<p>One thing that got me to think about this is that I've got a dialect which lets you define BLOCK! rules or PATH! rules:</p>
+<pre><code> e: 'j/k/l
+ h: [m n/o p]
+ dialect [a/b/c [d e f] g/h/i]
+</code></pre>
+<p>Pathing means "AND these things together".  Blocks mean "OR these things together".  And like PARSE rules, if you look up a word and get to a BLOCK! or PATH! that's just recursed on and used as if you'd written the rule right there.</p>
+<p>Some of the elemental rules were GET-WORD!.  If GET-WORD! weren't legal in paths, that would put a constraint on this dialect regarding its elements that the block wouldn't impose.</p>
+<p>But...you can work around this with a block.</p>
+<pre><code> dialect [[:a]/b/c [d :e f] g/h/[:i]]
+</code></pre>
+<p>That feels very...clean.  Now you have a generic solution where you're using PATH!s as a dialect component that doesn't lose any capability BLOCK! or GROUP! had, without worrying about tapdancing around gibberish paths.</p>
+<p>And we actually are entering an era of what are called <a href="https://forum.rebol.info/t/mirrored-type-bytes-explained/1008">"mirrored types"</a>, which would allow 1-element blocks and 1-element groups that are immutable to <em>fit entirely in a cell</em> with no dynamic allocation or pointer to elsewhere.</p>
+<p>Mirrored types were invented so <strong>/foo</strong> could be a PATH! and cost no more than the old word-class REFINEMENT! did.  But seeing them in action, it suggests applying it for GROUP!s and BLOCK!s too.  Those embedded blocks could cost no more than a plain GET-WORD! today.  With PATH! being immutable, making those blocks and groups immutable makes sense too.  (By default on scanning I mean... if you make a path with a length-1 immutable block <em>under</em> the path level, it can preserve that mutability.)</p>
+<p>When you put all these concepts together, it feels like it ties up loose ends and ambiguities. Will people miss <strong><code>a/:b:</code></strong>...or can the likes of <strong><code>a/(b):</code></strong> and <strong><code>a/[b]:</code></strong> or <strong><code>:(a)/b</code></strong> and <strong><code>:[a]/b</code></strong> cover pretty much everything?</p>
+          <p><a href="https://forum.rebol.info/t/taming-the-pathology-of-path/1006/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taming-the-pathology-of-path/1006/1</link>
+        <pubDate>Fri, 11 Jan 2019 03:00:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1006-1</guid>
+        <source url="https://forum.rebol.info/t/taming-the-pathology-of-path/1006.rss">Taming the Pathology of PATH!</source>
+      </item>
+  </channel>
+</rss>

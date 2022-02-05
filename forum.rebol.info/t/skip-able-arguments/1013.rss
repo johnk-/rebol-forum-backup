@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>&lt;skip&gt;-able Arguments</title>
+    <link>https://forum.rebol.info/t/skip-able-arguments/1013</link>
+    <description>A **`&lt;skip&gt;`** parameter is one where instead of getting a type error on a mismatch, it will set the parameter to null:
+
+     foo: function [a :b [&lt;skip&gt; tag!] c] [
+         dump [a b c]
+     ]
+
+     &gt;&gt; foo 1 2
+     a: 1
+     b: ; null
+     c: 2
+
+     &gt;&gt; foo 1 &lt;hello&gt; 2
+     a: 1
+     b: &lt;hello&gt;
+     c: 2
+
+You can only skip a &quot;hard quoted&quot; parameter.  To understand why, imagine a having an evaluative skippable parameter followed by a quoted argument.  If you evaluate the first argument--see it doesn&#39;t match the type--you can&#39;t really rewind time to then switch into a quoting mode for the second argument on the thing you already evaluated.  It would be incoherent.
+
+Beyond the technical reason you don&#39;t want `&lt;skip&gt;` on evaluated parameters, it also makes it clearer to the user.  For instance, consider [tagged compose](https://forum.rebol.info/t/tag-compose-is-it-tag-specific-composition/979/7):
+
+    &gt;&gt; compose &lt;*&gt; [(1 + 2) (&lt;*&gt; 1 + 2) (1 + 2)]
+    == [(1 + 2) 3 (1 + 2)]
+
+You can tell at the source level that&#39;s tagged.  But what if it said:
+
+    &gt;&gt; compose foo [(1 + 2) (&lt;*&gt; 1 + 2) (1 + 2)]
+    == ???
+
+Does this mean that sometimes the block is taken by the compose and sometimes it&#39;s not?  What if FOO is a block?  The &quot;shape&quot; of the code changes, and that seems bad.
+
+So it&#39;s for quoted arguments only...and that&#39;s probably for the best.
+
+## It&#39;s used by DEFAULT
+
+The use in tagged compose is pretty obvious.  But a trickier usage is DEFAULT, which quotes a SET-WORD! or SET-PATH! on its left to assign to it:
+
+     &gt;&gt; x: null
+
+     &gt;&gt; x: default [print &quot;running&quot; 1 + 2]
+     running
+     == 3  ; didn&#39;t have a value, so ran the body and assigned
+
+     &gt;&gt; x: default [print &quot;not run!&quot; 10 + 20]
+     == 3  ; already had a value, don&#39;t run the block and leave alone
+
+The trick skippability brings to the table is that if there is no SET-WORD! or SET-PATH!, then it just runs the block.  This makes it a nice tool in evaluative switch/case:
+
+     &gt;&gt; case [
+         1 &gt; 2 [print &quot;nope&quot; 10]
+         default [print &quot;yep!&quot; 20]
+     ]
+     yep
+     == 20
+
+CASE and SWITCH are written to just let the last value fall out of them.
+
+     &gt;&gt; switch &quot;not a number&quot; [
+          1 + 2 [...]
+          3 + 4 [...]
+          5 + 6
+     ]
+     == 11
+
+So all DEFAULT does is fall back to acting like DO when it can&#39;t find a SET-WORD! or SET-PATH! to its left.
+
+     &gt;&gt; switch &quot;not a number&quot; [
+          1 + 2 [...]
+          3 + 4 [...]
+          default [5 + 6]
+     ]
+     == 11
+
+It comes off as quite readable.  *(Though if you are lazy, or code golfing, you can just omit it...maybe some people will like that better.)*
+
+## The implementation is now solid, so this feature is sticking around
+
+The initial implementation was a bit creaky, especially when it came to skipping left hand side arguments.  I was worried it might not be able to work efficiently--or maybe it wasn&#39;t able to work in a general way at all!
+
+But things have firmed up very well.  Impressively enough, this works:
+
+    &gt;&gt; foo: function [/a :/b [&lt;skip&gt; integer!]] [
+        reduce [(a else [&lt;null&gt;]) (b else [&lt;null&gt;])]
+    ]
+
+    &gt;&gt; foob: enfix :foo/b
+
+    &gt;&gt; parameters of :foob
+    == [:b /a]
+
+    &gt;&gt; 10 foob
+    == [&lt;null&gt; 10]
+
+    &gt;&gt; &quot;not an integer!&quot; foob
+    == [&lt;null&gt; &lt;null&gt;]
+
+    &gt;&gt; 10 -&gt; foob/a 20
+    == [20 10]  ; (note: broken at last check, looking into it)
+
+And we can discuss what `(&quot;not an integer!&quot; -&gt; foob/a 20)` should do, [if that should be an error or not](https://github.com/metaeducation/ren-c/issues/909).
+
+Anyway, FYI, that&#39;s a pretty wild case.  If it can do that, it can probably work for whatever you want it to do.  So start thinking of creative uses of `&lt;skip&gt;` in your own code...and if you do, post it in the thread here!</description>
+    
+    <lastBuildDate>Tue, 09 Feb 2021 19:54:02 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/skip-able-arguments/1013.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>&lt;skip&gt;-able Arguments</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Skippable parameters have become an important piece of the system, making things like the tight notation for predicates possible:</p>
+<pre><code>&gt;&gt; any [2 4 6 7 10]
+== 2
+
+&gt;&gt; any .not.even? [2 4 6 7 10]  ; detects blank-headed TUPLE! at callsite
+== 7
+</code></pre>
+<p>It was quickly apparent that skippable parameters would have to be hard quoted.  That's the only way they make sense at a callsite.</p>
+<p>But if you supply the predicate via a refinement, you generally don't want it to be hard-quoted:</p>
+<pre><code>&gt;&gt; any/predicate [2 4 5 7 10] func [x] [x &gt; 6]
+== 7
+</code></pre>
+<p>That should be the same parameter, but invoking it with a path should change it.</p>
+<h2>Kill Two Birds With One Stone: Quoted Refinement Means <code>&lt;skip&gt;</code> ?</h2>
+<p>I'm not sure how often it comes up that you need a quoted refinement argument, in the general case.  I've never needed it.</p>
+<p>Parameter quoting for convenient callsite interfaces of common functionality.  That's sort of at odds with what refinements do... they're not the common case, or if they were, they'd be normal arguments.</p>
+<p>It could make some sense to put two and two together to say <strong><code>'/arg</code></strong> being both "quoted at callsite" and "optional" means it has a position in the callsite list.  And then if you use it in a path invocation, the quote does not apply.</p>
+<p>So when I talk about <a href="https://forum.rebol.info/t/representing-everything-about-a-parameter-except-its-name/1459">packing the actual parameter spec (minus name) into a single value</a>, <strong><code>'/[tuple!]</code></strong> could then mean skippable tuple, and you wouldn't need to say <strong><code>'[&lt;skip&gt; tuple!]</code></strong>.</p>
+<p>It sacrifices true quoted refinement arguments...where you invoke an optional parameter through a path and the argument is quoted.  It's one of those "a little less powerful" things that someone, somewhere, would complain about.</p>
+<pre><code>&gt;&gt; do-a-thing [...]
+
+&gt;&gt; do-a-thing/label [...] foo
+** Error: foo not defined
+      ^-- "hey, I wanted label to be quoted!"
+</code></pre>
+<p>But I think my argument sort of holds, in that if you were willing to type out <strong><code>/ l a b e l</code></strong> then what's one more apostrophe to you?</p>
+<pre><code>&gt;&gt; do-a-thing/label [...] 'foo
+</code></pre>
+<p>Callsite quoting is a peculiarity to be used in special cases to get expressive power comparable to other languages.  Once you've gone and made a refinement argument, it seems that's not the case anymore.</p>
+          <p><a href="https://forum.rebol.info/t/skip-able-arguments/1013/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/skip-able-arguments/1013/2</link>
+        <pubDate>Tue, 09 Feb 2021 19:54:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1013-2</guid>
+        <source url="https://forum.rebol.info/t/skip-able-arguments/1013.rss">&lt;skip&gt;-able Arguments</source>
+      </item>
+      <item>
+        <title>&lt;skip&gt;-able Arguments</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>A <strong><code>&lt;skip&gt;</code></strong> parameter is one where instead of getting a type error on a mismatch, it will set the parameter to null:</p>
+<pre><code> foo: function [a :b [&lt;skip&gt; tag!] c] [
+     dump [a b c]
+ ]
+
+ &gt;&gt; foo 1 2
+ a: 1
+ b: ; null
+ c: 2
+
+ &gt;&gt; foo 1 &lt;hello&gt; 2
+ a: 1
+ b: &lt;hello&gt;
+ c: 2
+</code></pre>
+<p>You can only skip a "hard quoted" parameter.  To understand why, imagine a having an evaluative skippable parameter followed by a quoted argument.  If you evaluate the first argument--see it doesn't match the type--you can't really rewind time to then switch into a quoting mode for the second argument on the thing you already evaluated.  It would be incoherent.</p>
+<p>Beyond the technical reason you don't want <code>&lt;skip&gt;</code> on evaluated parameters, it also makes it clearer to the user.  For instance, consider <a href="https://forum.rebol.info/t/tag-compose-is-it-tag-specific-composition/979/7">tagged compose</a>:</p>
+<pre><code>&gt;&gt; compose &lt;*&gt; [(1 + 2) (&lt;*&gt; 1 + 2) (1 + 2)]
+== [(1 + 2) 3 (1 + 2)]
+</code></pre>
+<p>You can tell at the source level that's tagged.  But what if it said:</p>
+<pre><code>&gt;&gt; compose foo [(1 + 2) (&lt;*&gt; 1 + 2) (1 + 2)]
+== ???
+</code></pre>
+<p>Does this mean that sometimes the block is taken by the compose and sometimes it's not?  What if FOO is a block?  The "shape" of the code changes, and that seems bad.</p>
+<p>So it's for quoted arguments only...and that's probably for the best.</p>
+<h2>It's used by DEFAULT</h2>
+<p>The use in tagged compose is pretty obvious.  But a trickier usage is DEFAULT, which quotes a SET-WORD! or SET-PATH! on its left to assign to it:</p>
+<pre><code> &gt;&gt; x: null
+
+ &gt;&gt; x: default [print "running" 1 + 2]
+ running
+ == 3  ; didn't have a value, so ran the body and assigned
+
+ &gt;&gt; x: default [print "not run!" 10 + 20]
+ == 3  ; already had a value, don't run the block and leave alone
+</code></pre>
+<p>The trick skippability brings to the table is that if there is no SET-WORD! or SET-PATH!, then it just runs the block.  This makes it a nice tool in evaluative switch/case:</p>
+<pre><code> &gt;&gt; case [
+     1 &gt; 2 [print "nope" 10]
+     default [print "yep!" 20]
+ ]
+ yep
+ == 20
+</code></pre>
+<p>CASE and SWITCH are written to just let the last value fall out of them.</p>
+<pre><code> &gt;&gt; switch "not a number" [
+      1 + 2 [...]
+      3 + 4 [...]
+      5 + 6
+ ]
+ == 11
+</code></pre>
+<p>So all DEFAULT does is fall back to acting like DO when it can't find a SET-WORD! or SET-PATH! to its left.</p>
+<pre><code> &gt;&gt; switch "not a number" [
+      1 + 2 [...]
+      3 + 4 [...]
+      default [5 + 6]
+ ]
+ == 11
+</code></pre>
+<p>It comes off as quite readable.  <em>(Though if you are lazy, or code golfing, you can just omit it...maybe some people will like that better.)</em></p>
+<h2>The implementation is now solid, so this feature is sticking around</h2>
+<p>The initial implementation was a bit creaky, especially when it came to skipping left hand side arguments.  I was worried it might not be able to work efficiently--or maybe it wasn't able to work in a general way at all!</p>
+<p>But things have firmed up very well.  Impressively enough, this works:</p>
+<pre><code>&gt;&gt; foo: function [/a :/b [&lt;skip&gt; integer!]] [
+    reduce [(a else [&lt;null&gt;]) (b else [&lt;null&gt;])]
+]
+
+&gt;&gt; foob: enfix :foo/b
+
+&gt;&gt; parameters of :foob
+== [:b /a]
+
+&gt;&gt; 10 foob
+== [&lt;null&gt; 10]
+
+&gt;&gt; "not an integer!" foob
+== [&lt;null&gt; &lt;null&gt;]
+
+&gt;&gt; 10 -&gt; foob/a 20
+== [20 10]  ; (note: broken at last check, looking into it)
+</code></pre>
+<p>And we can discuss what <code>("not an integer!" -&gt; foob/a 20)</code> should do, <a href="https://github.com/metaeducation/ren-c/issues/909" rel="nofollow noopener">if that should be an error or not</a>.</p>
+<p>Anyway, FYI, that's a pretty wild case.  If it can do that, it can probably work for whatever you want it to do.  So start thinking of creative uses of <code>&lt;skip&gt;</code> in your own code...and if you do, post it in the thread here!</p>
+          <p><a href="https://forum.rebol.info/t/skip-able-arguments/1013/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/skip-able-arguments/1013/1</link>
+        <pubDate>Mon, 14 Jan 2019 05:34:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1013-1</guid>
+        <source url="https://forum.rebol.info/t/skip-able-arguments/1013.rss">&lt;skip&gt;-able Arguments</source>
+      </item>
+  </channel>
+</rss>

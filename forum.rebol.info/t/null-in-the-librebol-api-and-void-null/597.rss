@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>NULL in the libRebol API...and VOID? =&gt; NULL?</title>
+    <link>https://forum.rebol.info/t/null-in-the-librebol-api-and-void-null/597</link>
+    <description>&gt; **Historical Note:** This post discusses why what was called VOID at one point was ultimately chosen to be renamed as NULL.  To keep the thrust of the point coherent, the terminology has been left as-is.  Just know that for a time, what is known as NULL today was called VOID.
+
+---
+
+Being meticulous about getting &quot;void&quot; right vs. &quot;UNSET!&quot; *has been [paying off tremendously](https://trello.com/c/rmsTJueg)*.  The swampy nature of dealing with such issues in Rebol2/R3-Alpha/Red have given way to clarity...and subsequently, enabled great and solid features.
+
+Now a new bonus:
+
+### If voids are always NULL in the API, there&#39;s a huge win
+
+Check out this libRebol pattern, taking advantage of [OPT and TRY](https://github.com/rebol/rebol-issues/issues/1611#issuecomment-385719133) for conveniently wrangling the void/blank switcheroos:
+
+     REBVAL *var = ...;
+     REBVAL *obj = rebRun(
+          &quot;opt match [object! blank!] try case [&quot;,
+              var, &quot;= some/value [first foo/baz/bar]&quot;,
+              &quot;integer?&quot;, var, &quot;and (mode = &#39;widget) [second mumble]&quot;,
+         &quot;]&quot;, END);
+
+     if (!obj) {
+        // leverages C&#39;s natural &quot;NULL is falsey&quot; property
+        // so testing for success requires no extra API call
+        // nothing to clean up, no handle to rebRelease()
+        //
+        ... code for failure ...
+        return;
+     }
+
+     // Rebol code can do heavy lifting for validation / errors
+     // so we can assume the value is good to go
+     //
+     ... code for success ...
+     rebRelease(obj); // if you&#39;re done with it...
+
+You let the embedded Rebol pick things apart to make sure the result is a type you care about or not.  Then your first reaction to the result can be &quot;did I get something in the set of answers I&#39;m interested in processing or not&quot;, and that reaction can be decided without any API call...you just take advantage of NULL being &quot;falsey&quot; in C.
+
+Since people who aren&#39;t me haven&#39;t really been experimenting all that much with how the &quot;voiding&quot; has been working, you might not be as excited about it as I am.  But that&#39;s just because you haven&#39;t tried it.  :-)  OPT and TRY getting in there with all the new constructs brings a whole new level to &quot;the game&quot;, and this idea of having an easy signal channel back to C from those constructs is really compelling.
+
+### &quot;voids&quot; always become NULL, why not call the test NULL?
+
+Remember: `type of (do [])` is `_`.  It&#39;s a falsey/blank value to say it has no type. There&#39;s no VOID! type, because voids have no unique identity.  You can locate several different unique UNSET! cells in various arrays in R3-Alpha, mutate them to other types like INTEGER!, change them back, etc.  Not so in Ren-C.
+
+No void &quot;type&quot; means that &quot;changing the name of void&quot; is really just &quot;changing the name of the test for void&quot;... from VOID? to NULL?.
+
+This seems like a win to me.  Not only does it reduce the barrier to talking about the C behavior from the Rebol behavior, `null` [can be the JavaScript representation too](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/null).  The word isn&#39;t taken in Rebol to mean anything else, so why not reduce the cognitive load by using what other languages use?
+
+Same number of letters in VOID and NULL.   NULL? vs VALUE? have different first letters, which may be a plus.
+
+### I talked about this before, so why didn&#39;t I do it sooner?
+
+Ren-C eliminated UNSET!-typed cells in ANY-ARRAY!, but the practical mechanics of voids appearing in various places the evaluator see as &quot;incarnated cells&quot; have lingered.  Solutions to the problems come along one piece at a time, like the just-now-reconcieved definition of UNEVAL:
+
+    uneval: func [
+        {Make expression that when evaluated, will produce the input cell}
+        return: [group!]
+            {`()` if void cell, or `(quote ...)` where ... is passed-in cell}
+        cell [&lt;opt&gt; any-value!]
+    ][
+        either void? :cell [quote ()] [reduce quote (&#39;quote cell)]
+    ]
+
+So if you **do compose/only [if void? (uneval :some-unset-var) [print &quot;this prints&quot;]]**.  Necessity is the mother of invention for these kinds of things, and so far they&#39;ve filled in the gaps.  Things are at a technical point where we *can* do it.
+
+&gt; **UPDATE Jan 2019:** UNEVAL--and the reasons it had to be invented--motivated [Generic Quoting](https://forum.rebol.info/t/quoted-arrives-formerly-known-as-lit-bit/995), which has supplanted it.  Interestingly, **`(foo: &#39;)`** uses generic quoting to assign the absence of a value to foo--and hence unsets it.
+
+There&#39;s still going to be the tradeoff I mentioned regarding [the mutability of handles](https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345/2).  If you have a pointer to a `REBVAL*` now which is INTEGER!, might some operation change it to a STRING! later?  Or if it&#39;s a BLOCK!, might its index be changed in place vs. making a new block?
+
+Saves on handle allocations.  But now imagine that you&#39;ve handed a cell out to the user through the API, and offer them an API for doing evaluations into that cell vs. making a new one.  And that evaluation produces void.  That&#39;s a transition they wouldn&#39;t be able to do under this model.  This makes an API handle&#39;s &quot;slot&quot; more like an array cell than it is like a context variable...it can hold blanks, just not voids.
+
+Having had time to work with matters in practice and looking at the big picture, this is a small price to pay.</description>
+    
+    <lastBuildDate>Mon, 30 Jul 2018 16:13:07 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/null-in-the-librebol-api-and-void-null/597.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>NULL in the libRebol API...and VOID? =&gt; NULL?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Here are a couple of counter-arguments to null over.  Er, mull over.</p>
+<blockquote>
+<p><strong>Note:</strong> The various details and hassles involved with this have, over time, given me more empathy for the idea that it took a really long time for humanity to get zero straight.  Assuming we're going to say they ever did.</p>
+</blockquote>
+<h3>Console UI suggests non-"thingness" of voids</h3>
+<p>C programmers are used to NULL being a "thing".  Rebol's treatment of it as a non-thing in the prompt might make it seem "more like a void"</p>
+<pre><code>&gt;&gt; 1000 + 20
+== 1020
+
+&gt;&gt; ()
+
+&gt;&gt; 300 + 4
+== 304
+</code></pre>
+<p>But the void analogy is a false one.  In C you can't say <code>void f() {...}</code> and then <code>some_func(f())</code>.</p>
+<p>Technically as we know from optional parameters, they're much more like a NULL pointer.  Despite the console UI, you are getting back a "thing"...anything you can pass as an argument is a "thing".  That thing just doesn't happen to be a Rebol value.</p>
+<p>To change this perceptually, the "thingness" (or the "signalness") of null might need to be called out in the console:</p>
+<pre><code>&gt;&gt; ()
+\\\ null \\\  ;-- some pattern to convey non-LOAD-ability?
+</code></pre>
+<p>Maybe even the console would output a comment?</p>
+<pre><code>&gt;&gt; ()
+;-- null
+</code></pre>
+<p>This would assist in clarity of transcripts (I frequently have to add this manually to try and show what happened). Though it would contaminate the reading of any printed output, but is that any worse than when an evaluative product shows up?</p>
+<pre><code>&gt;&gt; print "this might be annoying"
+this might be annoying
+;-- null
+
+&gt;&gt; foo: does [print "but is it actually any worse than this? 5]
+&gt;&gt; foo
+but is it actually any worse than this?
+== 5
+</code></pre>
+<p><strong>UPDATE 30-Jul-2018: There is now a distinction between "voids" in the API and nulls.  Nulls provide the feedback of <code>;-- null</code> in the console, which is useful feedback.  Voids are not shown by the console, by design.  It appears to be working reasonably well.</strong></p>
+<p>What the console does is of course configurable, but I'm just wondering if there would need to be a status quo to help people know that yes... <em>something</em> was returned, but that something was a <em>signal</em>, not an ANY-VALUE!</p>
+<h3>Many C implementations define NULL as 0</h3>
+<p>If NULL is defined as 0, then you get a problem with C variadics if you're assuming pointer reads.  Imagine you have a variadic function that prints out C strings until it sees a NULL:</p>
+<pre><code> null_terminated_printer("one", "two", "three", NULL);
+</code></pre>
+<p>The called function cannot process this in a legitimate way.  Because when the <code>null_terminated_printer</code> routine tries to fetch items from the variadic list it will get them as a <code>const char*</code>.  Yet if NULL is 0, and pointers are different sizes from integers on your system, this will crash out...because it will try to read a pointer's worth of data out of an integer's worth of memory.  You have to write:</p>
+<pre><code>null_terminated_printer("one", "two", "three", (const char*)NULL);
+</code></pre>
+<p>So if people get too used to just throwing around lines like <code>REBVAL *val = NULL</code>, they might try passing literal NULLs to <code>rebRun()</code> as well.  That's bad.  If you keep them in a pattern of writing <code>REBVAL *val = rebVoid()</code> then they won't be as likely to make the mistake, because they won't think of them as equivalent.</p>
+<p>This problem could probably be solved just by prescribing the use of <code>nullptr</code>, and then in C builds do <code>#define nullptr (void*)0</code>, and C++98 builds <a href="https://stackoverflow.com/questions/44517556/how-to-define-our-own-nullptr-in-c98" rel="nofollow noopener">use this definition</a>.  If the commitment is being made that voids really are NULLs, it's as easy to prescribe that as it is to get people calling rebVoid()...without making it look like some new object type is popping up.</p>
+<p><a href="https://stackoverflow.com/questions/13816385/what-are-the-advantages-of-using-nullptr" rel="nofollow noopener"><code>https://stackoverflow.com/questions/13816385/what-are-the-advantages-of-using-nullptr</code></a></p>
+<p>And it could be a teachable moment for the average C programmer <em>(e.g. observe <a href="https://doc.red-lang.org/en/libred.html#_redcall" rel="nofollow noopener">libRed's redCall()</a>, where this problem is overlooked)</em>.</p>
+<h3>Still looks best to go with <code>NULL?</code>
+</h3>
+<p>The semantics line up.  At least in C and C++, programmers don't expect in a list of 20 customer objects to be able to insert NULL between objects 10 and 11...you're supposed to come up with a valid object to put there.  You can only put NULLs in <em>arrays of pointers</em>--a fairly specific thing.  The fact that Rebol has a NULL, it is a state a <em>variable</em> can be in but not a state an <em>array element</em> can be in makes sense.</p>
+<p>Shimming in <code>nullptr</code> for non-C++11 users and prescribing that seems the best idea.  People who don't like it don't have to use it.  They just have to watch their step with <code>(REBVAL*)NULL</code> if passing to a va_list.</p>
+<p><em>(If they're in the odd category of C programmers who worry about NULL type safety but would reject nullptr, then THEY can second guess me and make a rebVoid() and rebIsVoid()...I would guess this type of person does not exist.)</em></p>
+          <p><a href="https://forum.rebol.info/t/null-in-the-librebol-api-and-void-null/597/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-in-the-librebol-api-and-void-null/597/2</link>
+        <pubDate>Wed, 02 May 2018 17:48:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-597-2</guid>
+        <source url="https://forum.rebol.info/t/null-in-the-librebol-api-and-void-null/597.rss">NULL in the libRebol API...and VOID? =&gt; NULL?</source>
+      </item>
+      <item>
+        <title>NULL in the libRebol API...and VOID? =&gt; NULL?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><strong>Historical Note:</strong> This post discusses why what was called VOID at one point was ultimately chosen to be renamed as NULL.  To keep the thrust of the point coherent, the terminology has been left as-is.  Just know that for a time, what is known as NULL today was called VOID.</p>
+</blockquote>
+<hr>
+<p>Being meticulous about getting "void" right vs. "UNSET!" <em>has been <a href="https://trello.com/c/rmsTJueg" rel="nofollow noopener">paying off tremendously</a></em>.  The swampy nature of dealing with such issues in Rebol2/R3-Alpha/Red have given way to clarity...and subsequently, enabled great and solid features.</p>
+<p>Now a new bonus:</p>
+<h3>If voids are always NULL in the API, there's a huge win</h3>
+<p>Check out this libRebol pattern, taking advantage of <a href="https://github.com/rebol/rebol-issues/issues/1611#issuecomment-385719133" rel="nofollow noopener">OPT and TRY</a> for conveniently wrangling the void/blank switcheroos:</p>
+<pre><code> REBVAL *var = ...;
+ REBVAL *obj = rebRun(
+      "opt match [object! blank!] try case [",
+          var, "= some/value [first foo/baz/bar]",
+          "integer?", var, "and (mode = 'widget) [second mumble]",
+     "]", END);
+
+ if (!obj) {
+    // leverages C's natural "NULL is falsey" property
+    // so testing for success requires no extra API call
+    // nothing to clean up, no handle to rebRelease()
+    //
+    ... code for failure ...
+    return;
+ }
+
+ // Rebol code can do heavy lifting for validation / errors
+ // so we can assume the value is good to go
+ //
+ ... code for success ...
+ rebRelease(obj); // if you're done with it...
+</code></pre>
+<p>You let the embedded Rebol pick things apart to make sure the result is a type you care about or not.  Then your first reaction to the result can be "did I get something in the set of answers I'm interested in processing or not", and that reaction can be decided without any API call...you just take advantage of NULL being "falsey" in C.</p>
+<p>Since people who aren't me haven't really been experimenting all that much with how the "voiding" has been working, you might not be as excited about it as I am.  But that's just because you haven't tried it.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:">  OPT and TRY getting in there with all the new constructs brings a whole new level to "the game", and this idea of having an easy signal channel back to C from those constructs is really compelling.</p>
+<h3>"voids" always become NULL, why not call the test NULL?</h3>
+<p>Remember: <code>type of (do [])</code> is <code>_</code>.  It's a falsey/blank value to say it has no type. There's no VOID! type, because voids have no unique identity.  You can locate several different unique UNSET! cells in various arrays in R3-Alpha, mutate them to other types like INTEGER!, change them back, etc.  Not so in Ren-C.</p>
+<p>No void "type" means that "changing the name of void" is really just "changing the name of the test for void"... from VOID? to NULL?.</p>
+<p>This seems like a win to me.  Not only does it reduce the barrier to talking about the C behavior from the Rebol behavior, <code>null</code> <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/null" rel="nofollow noopener">can be the JavaScript representation too</a>.  The word isn't taken in Rebol to mean anything else, so why not reduce the cognitive load by using what other languages use?</p>
+<p>Same number of letters in VOID and NULL.   NULL? vs VALUE? have different first letters, which may be a plus.</p>
+<h3>I talked about this before, so why didn't I do it sooner?</h3>
+<p>Ren-C eliminated UNSET!-typed cells in ANY-ARRAY!, but the practical mechanics of voids appearing in various places the evaluator see as "incarnated cells" have lingered.  Solutions to the problems come along one piece at a time, like the just-now-reconcieved definition of UNEVAL:</p>
+<pre><code>uneval: func [
+    {Make expression that when evaluated, will produce the input cell}
+    return: [group!]
+        {`()` if void cell, or `(quote ...)` where ... is passed-in cell}
+    cell [&lt;opt&gt; any-value!]
+][
+    either void? :cell [quote ()] [reduce quote ('quote cell)]
+]
+</code></pre>
+<p>So if you <strong>do compose/only [if void? (uneval :some-unset-var) [print "this prints"]]</strong>.  Necessity is the mother of invention for these kinds of things, and so far they've filled in the gaps.  Things are at a technical point where we <em>can</em> do it.</p>
+<blockquote>
+<p><strong>UPDATE Jan 2019:</strong> UNEVAL--and the reasons it had to be invented--motivated <a href="https://forum.rebol.info/t/quoted-arrives-formerly-known-as-lit-bit/995">Generic Quoting</a>, which has supplanted it.  Interestingly, <strong><code>(foo: ')</code></strong> uses generic quoting to assign the absence of a value to foo--and hence unsets it.</p>
+</blockquote>
+<p>There's still going to be the tradeoff I mentioned regarding <a href="https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345/2">the mutability of handles</a>.  If you have a pointer to a <code>REBVAL*</code> now which is INTEGER!, might some operation change it to a STRING! later?  Or if it's a BLOCK!, might its index be changed in place vs. making a new block?</p>
+<p>Saves on handle allocations.  But now imagine that you've handed a cell out to the user through the API, and offer them an API for doing evaluations into that cell vs. making a new one.  And that evaluation produces void.  That's a transition they wouldn't be able to do under this model.  This makes an API handle's "slot" more like an array cell than it is like a context variable...it can hold blanks, just not voids.</p>
+<p>Having had time to work with matters in practice and looking at the big picture, this is a small price to pay.</p>
+          <p><a href="https://forum.rebol.info/t/null-in-the-librebol-api-and-void-null/597/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-in-the-librebol-api-and-void-null/597/1</link>
+        <pubDate>Wed, 02 May 2018 13:45:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-597-1</guid>
+        <source url="https://forum.rebol.info/t/null-in-the-librebol-api-and-void-null/597.rss">NULL in the libRebol API...and VOID? =&gt; NULL?</source>
+      </item>
+  </channel>
+</rss>

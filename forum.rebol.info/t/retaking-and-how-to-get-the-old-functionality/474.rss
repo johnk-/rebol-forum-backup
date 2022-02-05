@@ -1,0 +1,453 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Retaking ++ and -- : how to get the old functionality?</title>
+    <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474</link>
+    <description>The desire to [turn `--` into a form of comment](https://forum.rebol.info/t/should-followed-by-space-be-used-for-comments/275/14), joins some of the spirit of [wanting to take `==` away from strict equality](https://forum.rebol.info/t/strict-equality-lax-equality-equivalence-sameness-is-and/349).  And we&#39;ve even been discussing if there&#39;s something about `++` that makes its variants seem more like &quot;drawing lines out of symbols&quot; than really what Rebol wants to canonize as a somewhat niche operator.
+
+This leaves us with the question of how to increment or decrement variables without having to mention their name twice:
+
+    number-of-variants: number-of-variants + 1
+
+For historical perspective, Rebol did this with `++ number-of-variants`...though it was a [late and controversial addition, in 2007](http://www.rebol.net/r3blogs/0057.html).  That might make sense to a C programmer, but it doesn&#39;t really have any semiotic basis in Rebol lore.  One thing is that it&#39;s not totally clear that something is getting assigned.  Another problem is that you don&#39;t really get a way to increment by anything besides 1.
+
+Ren-C gained the ability to quote left hand sides, so we tried `number-of-variants: ++ 1`.  It was a step up, and permitted modifications by values other than 1.
+
+But, we now want `number-of-variants: -- 1` to make the 1 a comment.  So another solution is needed.
+
+`number-of-variants: += 1` has seemed sort of even lamer than ++, given that = is not used for assignment at all.  It is familiar, however, and should be mentioned as a *possibility*.  And it might not be so bad:  `x: -= 1` might be read as &quot;alter x such that it is equal to 1 less than it is now&quot; as opposed to seeing the = as being there because it&#39;s an assignment operator...after all, you have the X: to suggest assignment.
+
+In any case, we *could* make an operator that&#39;s generic in this sense.  So `number-of-variants: op + 1`, the OP would quote the SET-WORD! on the left, fetch its value, then quote the right to get a FUNCTION!.  It would make the fetched value the first argument...evaluating afterward to get the second argument.  It&#39;s hard to give this thing a good short English name... I suggested `me`, as in `number-of-variants: me + 1`.  Odd, but a symbolic name would kind of start chipping away at Rebol&#39;s aesthetic.
+
+*(I whimsically suggested a variant to use with prefix functions as being MY, so `block: my append [1 2 3]` would act as `block: append block [1 2 3]`)*
+
+But while a very useful tool, ME and MY are suboptimal names.  We might wonder if we can do better.  One thing that&#39;s not completely out of the question would be just e.g. `number-of-variants: - 1`.  It looks a little bit close to `number-of-variants: -1`, but Rebol is a language of space significance and that&#39;s something people have to live with anyway.  Here&#39;s a sample broken implementation of the + operator that does this:
+
+    +: enfix function [:a [&lt;end&gt; any-value!] b [any-value! &lt;...&gt;]] [
+        case [
+            maybe [set-word! set-path!] :a [ ;-- `x: + 10` =&gt; `x: x + 10`
+                set a add (get a) (take b)
+            ]
+            set? &#39;a [ ;-- `x + y` =&gt; `add x y`
+                add (reduce :a) (take b)
+            ]
+        ] else [ ;-- nothing on left, switch to variadic sum
+            sum: 0
+            while [not tail? b] [
+                sum: add sum (take b)
+            ]
+        ]
+    ]
+
+It looks promising when you try it:
+
+    &gt;&gt; 10 + 20
+    == 30
+
+    &gt;&gt; x: 10
+    &gt;&gt; x: + 20
+    == 30
+
+    &gt;&gt; x
+    == 30
+
+    &gt;&gt; (+ 10 20 30)
+    == 60
+
+The only problem with it is that it has two competing demands on it when interacting with other infix math ops.  When you write `2 * 3 + 4`, Rebol&#39;s rule of precedence is such that the `2 * 3` must be evaluated before the addition.  Yet since we&#39;re accomplishing our trick with quoting the left, it&#39;s not currently possible to defer to decide if we want to quote the SET-WORD! or not.  A left quote can&#39;t be delayed on enfix, so you get the 3... not the evaluative 6.
+
+But due to the state of the evaluator at that moment, it&#39;s not impossible.  It&#39;s just something the evaluator needs to be modified to allow.  Basically, to say that you&#39;re interested in SET-WORD! or SET-PATH! but only if they&#39;re literally there on the left, otherwise acquire the parameter as normal.  We might call these `&lt;set&gt;` annotated parameters, the way you might say `&lt;end&gt;` or `&lt;opt&gt;`.
+
+Is it worth it?  I don&#39;t know.  Every little piece of complexity like this is a tradeoff.  And looking at `x: - 1` meaning &quot;subtract one from x&quot; may not actually be that great.  The average reader would assume that if it meant anything besides an error, it meant &quot;make x negative 1&quot;.
+
+Just putting it all out there to summarize the current state of things and see if anyone has any better ideas.  I might go ahead and write `me` and `my` just so they&#39;re around in case someone comes up with a better name for them.</description>
+    
+    <lastBuildDate>Tue, 16 Feb 2021 00:10:51 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In a <a href="https://forum.rebol.info/t/soliciting-ideas-for-a-bitwise-dialect/1302">dialect like BITWISE</a>, if we figure it out, yes.</p>
+<p>But I do not believe bit fiddly math is relevant across enough domains to make it a great choice as a default.</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/12</link>
+        <pubDate>Tue, 16 Feb 2021 00:10:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-12</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>Does this leave open the potential of <strong>&lt;&lt;</strong>, <strong>&gt;&gt;</strong> and <strong>&gt;&gt;&gt;</strong> being used for shifting?</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/11</link>
+        <pubDate>Mon, 15 Feb 2021 23:12:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-11</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="9" data-topic="474">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>With <strong>&lt;&gt;</strong> the only executable tag-looking thing, this sacrifices something becoming popular in many languages which is <strong><code>&lt;=&gt;</code></strong> . They call it the "spaceship operator"...doing a comparison of two values and returning one of three states (equal, greater, lesser) in a single operation.</p>
+</blockquote>
+</aside>
+<p>The more I look at this, the more I think that tag-looking-things that are only arrow characters being words is not that bad, and likely the only sane way for the mind to accept <strong><code>&lt;&gt;</code></strong> being a WORD!</p>
+<p>This would bring <strong><code>&lt;=&gt;</code></strong>, <strong><code>&lt;+&gt;</code></strong>, <strong><code>&lt;-&gt;</code></strong>, <strong><code>&lt;|&gt;</code></strong> and all of their friends (<code>&lt;+-&gt;</code>, <code>&lt;-=-&gt;</code>) into the arrows-fold.  The spaceship operator could do what it does in other languages:</p>
+<pre><code>switch a &lt;=&gt; b [
+    '= [print "A equal to B""]
+    '&gt; [print "A greater than B"]
+    '&lt; [print "A less tan B"]
+]
+</code></pre>
+<p>Perhaps <strong>&lt;-&gt;</strong> could be SWAP (which I've been thinking could be extended to words.  They'd have to be quoted if so:</p>
+<pre><code>&gt;&gt; a: 10
+&gt;&gt; b: 20
+&gt;&gt; 'a &lt;-&gt; 'b
+== 20  ; !!! or 10, or void?
+&gt;&gt; a
+== 20
+&gt;&gt; b
+== 10
+</code></pre>
+<p>Maybe <code>&lt;+&gt;</code> could be an infix joining operator, maybe for newpath:</p>
+<pre><code>&gt;&gt; filename: 'README
+&gt;&gt; extension: "txt"
+&gt;&gt; %/some/path &lt;+&gt; [/ filename.(extension)]  ; dialected handling of TUPLE and /
+== %/some/path/README.txt
+</code></pre>
+<p>Whatever <code>&lt;|&gt;</code> did, it should probably relate to expression barriers somehow.</p>
+<p>Giving these meaning could help normalize the reflex people have in looking at them, and knowing the rules for arrow-words and not "seeing" a TAG!</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/10</link>
+        <pubDate>Mon, 28 Sep 2020 16:08:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-10</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="8" data-topic="474">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>I am reconciled to a somewhat less greedy tags</p>
+</blockquote>
+</aside>
+<p>Well, in the intervening years with new tech and revelations, I am reconciled to relinquish much of the space of WORD!-ish operators involving <strong>&lt;</strong> and <strong>&gt;</strong>.</p>
+<p>One of the key driving realizations of "the power of TAG!" was motivated by something you did not like...which was <a href="https://forum.rebol.info/t/tag-compose-is-it-tag-specific-composition/979">my usage of <code>&lt;*&gt;</code> in tagged compose</a>.  It's not meant to be anything special, it could just as well have been <code>&lt;substitute-here&gt;</code>.  But being able to have this inert type drawn out of thin air that has no evaluative meaning helped visually call out the places substitutions were happening.</p>
+<p>That contrasts with my experience after clocking some time with Haskell.  I've didn't end up as enamored with using operators like <strong><code>&lt;*&gt;</code></strong> or <strong><code>&lt;$&gt;</code></strong> vs words.  I may still be envious of what the language does with these functions.  But I think it's better when you can use these as structural markers for callouts that are specific to the code you are writing.</p>
+<p>But a linchpin of being ready to lay down the limits was concluding that the only bindable "operators" with <code>/</code> in them are <strong>/</strong>, <strong>//</strong>, <strong>///</strong>, etc.  They present as PATH!s with BLANK!s in them, yet operate with the binding, storage characteristics, and behavior of a single aliased word.  I believe this compromise is <em>The Final Answer</em>...and it will apply to <strong>.</strong>, <strong>..</strong>, <strong>...</strong> etc. as well with a TUPLE! mechanic.</p>
+<p><a href="https://forum.rebol.info/t/squaring-the-circle-diamond-of-tag-and/1337"><strong>That same pattern can be used to solve the &lt;&gt; as TAG! and not-equal at the same time.</strong></a>  Pretty awesome.</p>
+<p>Furthermore...after working on making UTF-8 work well and compactly, it kind of seems a waste if nobody uses it.  There's a bunch of arrows and symbols in there for anyone who has a special domain to attack, and feels stifled by the lack of operators.  Install a keyboard mapping and use all the symbols you want.</p>
+<h2>The WORD!s with <code>&lt;</code> and <code>&gt;</code> Vision Statement</h2>
+<p>Here goes...</p>
+<blockquote>
+<p>A WORD! which contains one or more &gt; or &lt; in it is referred to as an <strong>"arrow"</strong>.</p>
+<ul>
+<li>
+<p>Arrows may start with <code>&lt;</code> or end with <code>&gt;</code>, but cannot do both.</p>
+<ul>
+<li>Anything which does both is a TAG!, including <code>&lt;&gt;</code> (which has special-case mechanics allowing it to be uniquely executable, while tags with content will never execute)</li>
+</ul>
+</li>
+<li>
+<p>All characters in an arrow (besides &lt; and &gt;) must come from a limited set of 4 other choices: <strong>=</strong>, <strong>-</strong>, <strong>+</strong>, and <strong>|</strong>.</p>
+<ul>
+<li>
+<p>These four are chosen for having a "liney" property making them suitable in drawing <em>vertically symmetrical</em> arrow-like things.</p>
+</li>
+<li>
+<p><strong><code>+</code></strong> as a cross is more complex than the "lines", but as a natural partner to <strong><code>-</code></strong> it seems weird to leave it out.  You could more laboriously make a cross with <strong><code>&lt;-|-</code></strong> that looks nicer as <strong><code>&lt;+</code></strong>.</p>
+</li>
+<li>
+<p>Underscore is excluded, despite liney-ness and symmetry, because it's on the baseline and doesn't make anything good.  <strong><code>&lt;__</code></strong></p>
+</li>
+</ul>
+</li>
+<li>
+<p>Only ASCII is considered, as higher codepoint unicode constructions basically can draw whatever they want already.</p>
+</li>
+<li>
+<p><strong><code>~</code></strong> is reserved as a possibility for future use</p>
+<ul>
+<li>
+<p>It has a wave in it and is thus is not vertically symmetrical and a little "unclean", plus a little hard to distinguish between <strong><code>&lt;-</code></strong> and <strong><code>&lt;~</code></strong></p>
+</li>
+<li>
+<p>It's not clear if ~ is necessarily even best used as a WORD! character at all.</p>
+</li>
+</ul>
+</li>
+</ul>
+</blockquote>
+<p>Having a "story" is important for holding things in your mind.  So the realization is that we're looking to draw nice <em>symmetrical arrows</em>, not make symbol soup, and using ASCII only.  We can thus give HTML back its ugly <strong><code>&lt;!--</code></strong> and feel nothing of value was lost.  We don't mourn the loss of <code>&lt;&amp;*</code> or other things of that nature, because that wasn't what we were going for here.</p>
+<p>This gives everything I'd want, including basics non-negotiables like <strong>&gt;&gt;=</strong> and <strong>|&gt;</strong>, as well as <strong>&gt;&lt;</strong> which I've become attached to.  Like I say, I'm considering the loss of things like <code>&lt;$&gt;</code> or <code>&lt;*&gt;</code> a feature and not a bug.  These are fun new labels you can use wherever tags are honored.</p>
+<p>With <strong>&lt;&gt;</strong> the only executable tag-looking thing, this sacrifices something becoming popular in many languages which is <strong><code>&lt;=&gt;</code></strong>.  They call it the "spaceship operator"...doing a comparison of two values and returning one of three states (equal, greater, lesser) in a single operation.</p>
+<p>But no big loss.  Call it <strong>&gt;=&lt;</strong> and problem solved.</p>
+<pre><code>switch a &gt;=&lt; b [
+    '= [print "A equal to B""]
+    '&gt; [print "A greater than B"]
+    '&lt; [print "A less tan B"]
+]
+</code></pre>
+<p>The rules also allow a lot of things I'd probably not use.  But some people like making fish <strong>&gt;&lt;&gt;</strong>, and maybe long arrows have a point for someone <strong>=&gt;=&gt;&gt;-</strong>. It's not contentious with tags, and it seems not worth the time or rule complexity to come up with ways of prohibiting it.  We can't stop people from calling variables <strong>asldj323fjslsdf333ajsd-_-asdfafaa33afj</strong> either.</p>
+<p>On the tag side, this permits a lot of ugliness.  You can make ugly strings too.  I guess I'm not really concerned about that...and just ask not to use <strong><code>&lt;~ tildes ~&gt;</code></strong> in case they wind up being desired in the arrows set.  <em>(My main reluctance to include it now is because I'm a bit reluctant about tildes in WORD! at all, and am wondering if they have some higher application...thinking on it.)</em></p>
+<p><a class="mention" href="/u/rgchris">@rgchris</a> can be the tag czar and cut down on problematic tags. Maybe experience would draw out what those are.  Either way, things taken away from tag won't expand the set of things that are "legal arrow words".</p>
+<h2>What About HTML Comments?</h2>
+<p>The rules means <strong><code>&lt;!--</code></strong> isn't a WORD!, but <strong><code>--&gt;</code></strong> is.  Now when we look at:</p>
+<pre><code>&lt;!--
+     a comment
+     that spans a bunch of lines
+     ...
+ --&gt;   ; what are we looking at on the left, exactly?
+</code></pre>
+<p>I'd be comfortable letting this slide.  Also, I'll mention that if you want to annotate <code>--&gt;</code> as unambiguously a WORD! that you're executing or fetching, there's a new power in the toolbox:</p>
+<pre><code>--&gt;/   ; terminal path means thing on the left is a function, run it
+--&gt;.   ; terminal tuple means thing on the left is not a function, fetch it
+</code></pre>
+<p>I don't think anyone would care, but... it's there.  The main point of "moving on" is just being willing to release <strong><code>&lt;!--</code></strong> from consideration.  A lot of being more comfortable with that is being fully comfortable with <strong><code>&lt;!&gt;</code></strong> as not executable when <strong><code>&lt;&gt;</code></strong> is executable.</p>
+<p>Anyway, this proposal should cover everything, and I'm feeling pretty satisfied with it.</p>
+<h2>What Tags Are Ruled Out?</h2>
+<pre><code>&lt;- This isn't a tag -&gt;
+&lt;-But this is-&gt;
+
+&lt;&amp; This is a tag &amp;&gt;
+&lt;|and so is this|&gt;
+&lt;|this is also a tag |&gt;
+&lt;|&gt;  ; this too
+&lt;&amp; | &gt;  ; and this
+&lt;| But this isn't |&gt;
+
+&lt;&lt;this is a tag&gt;&gt;
+&lt;&lt; but this isn't &gt;&gt;
+
+&lt;++ this isn't a tag &gt;
+&lt;++but this is &gt;
+</code></pre>
+<p>Space rules are really the big issue here, but it's not clear what help you're doing by prohibiting a space before the closing of a tag on the same line if you allow multi-line tags.  But... like I say... not really something I feel compelled to worry about too much.  Just good to have everything in word space basically pinned down.</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/9</link>
+        <pubDate>Tue, 22 Sep 2020 03:13:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-9</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="474">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>While <a class="mention" href="/u/rgchris">@rgchris</a> would prefer TAG! to own much of the space for interesting tricks (dialect [&lt;+foo this is some="tag"+&gt;]) I'm of the mind that we need things like &lt;+ and &lt;- for symbolic operators, and we don't necessarily want to go all in on HTML beyond the standard.</p>
+</blockquote>
+</aside>
+<p>I am reconciled to a somewhat less greedy tags—would advocate for the most common HTML/XML markup constructs:</p>
+<pre><code class="lang-auto">&lt;tag with="stuff"&gt;
+&lt;/tag&gt;
+&lt;tag /&gt;
+&lt;tag
+    over="multiple lines"&gt;
+&lt;!-- Comment Tag --&gt;
+&lt;!--
+    Comment Tag
+--&gt;
+&lt;!DOCTYPE tag&gt;
+&lt;?process tag="1.0"?&gt;
+
+... and perhaps ...
+
+&lt;![CDATA[asfkljasdldkfja;sjf]]&gt;
+</code></pre>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/8</link>
+        <pubDate>Fri, 26 Jan 2018 21:34:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-8</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[BrianOtto]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="6" data-topic="474">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But {+} and {-} are not expected to be anything but STRING!s.  And strings aren't intended to become evaluator-</p>
+</blockquote>
+</aside>
+<p>Ahh right, strings! I knew it looked familiar, but it was getting late and I missed that.</p>
+<p>I do like <code>&lt;+&gt;</code>, if we were to go down that route... and <code>me</code> is starting to grow on me too.</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/7</link>
+        <pubDate>Tue, 23 Jan 2018 15:57:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-7</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="5" data-topic="474">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/letter_avatar_proxy/v3/letter/b/e480ec/40.png" class="avatar"> BrianOtto:</div>
+<blockquote>
+<p>I call it the holy increment / decrement operators.</p>
+</blockquote>
+</aside>
+<p>This might be possible with <strong><code>&lt;+&gt;</code></strong> and <strong><code>&lt;-&gt;</code></strong> if those were to become WORD!s.  It's up for debate...after all, <strong><code>&lt;&gt;</code></strong> isn't the empty TAG! even if it looks like it.  One can imagine fanciful things like <strong><code>&lt;!&gt;: :breakpoint</code></strong>, which could be cool.</p>
+<p><em>(Note: the debugger is broken and needs a bit of patching after a recent console shakeup, don't try to use it right this moment.)</em></p>
+<p>But <strong><code>{+}</code></strong> and <strong><code>{-}</code></strong> are not expected to be anything but STRING!s.  And strings aren't intended to become evaluator-active <em>(even if they are capable of having bindings, as ISSUE!s are at this moment)</em>.  There'd simply be nowhere to dispatch the behavior in that example to do anything other than assign a string to xxx, and then continue evaluating to the 10.</p>
+<p>I'm feeling pretty comfortable personally with <strong>xxx: me + 10</strong> at the moment, the only problem is we don't quite have the means to write that (yet!)  Thinking about how exactly to do it.</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/6</link>
+        <pubDate>Tue, 23 Jan 2018 09:36:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-6</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[BrianOtto]]></dc:creator>
+        <description><![CDATA[
+            <p>How about this idea ...</p>
+<pre><code class="lang-auto">xxx: {+} 10
+xxx: {-} 10
+</code></pre>
+<p>I call it the holy increment / decrement operators. The operator's sign stands in the middle and on each side the curly brackets represents it arms. It points to <code>xxx</code> and asks it to come forward. It points to <code>10</code> and asks it to do the same. They join in communion and become one body, one spirit. <img src="//forum.rebol.info/images/emoji/twitter/wink.png?v=7" title=":wink:" class="emoji" alt=":wink:"></p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/5</link>
+        <pubDate>Tue, 23 Jan 2018 07:59:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-5</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The consideration of using -- for comments is being <a href="https://forum.rebol.info/t/should-followed-by-space-be-used-for-comments/275/16?u=hostilefork">backed down from</a>.  Giving up <code>--</code> for decrementing isn't too big a loss.  But it would be too error-prone and visually dissonant to allow <code>--foo</code> or <code>foo--</code> or <code>--foo--</code> as words if it were pervasive in comments...and that has wider ramifications.</p>
+<p><em>(Not so much because of the usage in <a href="https://github.com/red/red/blob/f61796b4576bcad32c05a071fb0dd4c9ad3dab5a/tests/source/units/path-test.red#L18" rel="nofollow noopener">Red's test suite</a>...which we would like to have a driver for running.  But I mention at least one major Achilles Heel brought about from outside the Rebolverse: the prevalence of <strong>--options</strong> on the command line in shell scripting space, an important domain for Rebol.)</em></p>
+<p>But that said, I think this discussion still stands.  <strong>--</strong> as an operator which doesn't have anything to do with "separation", but carrying over C heritage meaning decrement "runs against the grain of what we feel it looks like".  Same for <strong>++</strong>.  And now we're back to talking about <strong>//</strong> being comment, so if we tried to make this be some kind of pattern, it wouldn't be "divide-by" as part of the family.  (I might say the same for <strong><code>**</code></strong> as well, EXP is pretty decent for exponentiation when it comes up.)</p>
+<p>So I suggest we continue along the line of thinking that these be applied toward their visual line-drawing-ish nature, and find some other way to do things like decrementation.</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/4</link>
+        <pubDate>Mon, 22 Jan 2018 23:35:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-4</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="474">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/giuliolunati/40/203_2.png" class="avatar"> giuliolunati:</div>
+<blockquote>
+<p>Yet another idea: x: &lt;+ 1</p>
+</blockquote>
+</aside>
+<p>While <a class="mention" href="/u/rgchris">@rgchris</a> would prefer TAG! to own much of the space for interesting tricks (<strong>dialect [&lt;+foo this is some="tag"+&gt;]</strong>) I'm of the mind that we need things like <strong><code>&lt;+</code></strong> and <strong><code>&lt;-</code></strong> for symbolic operators, and we don't necessarily want to go all in on HTML beyond the standard.  It's good to have some nice tricks with HTML, but I don't want to <em>bow</em> to it at the cost of the rest of the language.</p>
+<p><em>(The exemption of <code>&lt;!-- comment --&gt;</code> is still on the table, but I would still prefer to avoid it myself, all things being equal.)</em></p>
+<p>But that said, I don't think <code>&lt;- 10</code> would be well used for "subtract 10 from the left."  So <code>&lt;+ 10</code> would also seem odd for that.</p>
+<p>I do think we're thinking about more tag-looking things actually being WORD!s, for operator use.  That's kind of Haskelly.  So <strong><code>&lt;*&gt;</code></strong> and <strong><code>&lt;+&gt;</code></strong> and the like might be better operators than tags... we already have history with <strong><code>&lt;&gt;</code></strong>.  Hence if tags stuck to having a "starts with text" rule, we might go that direction.</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/3</link>
+        <pubDate>Thu, 18 Jan 2018 03:39:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-3</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[giuliolunati]]></dc:creator>
+        <description><![CDATA[
+            <p>The more I think, the more I start feeling well with <strong>x: me + 1</strong>...<br>
+Yet another idea: <strong>x: &lt;+ 1</strong> <img src="//forum.rebol.info/images/emoji/twitter/confused.png?v=7" title=":confused:" class="emoji" alt=":confused:"></p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/2</link>
+        <pubDate>Thu, 18 Jan 2018 00:44:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-2</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+      <item>
+        <title>Retaking ++ and -- : how to get the old functionality?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The desire to <a href="https://forum.rebol.info/t/should-followed-by-space-be-used-for-comments/275/14">turn <code>--</code> into a form of comment</a>, joins some of the spirit of <a href="https://forum.rebol.info/t/strict-equality-lax-equality-equivalence-sameness-is-and/349">wanting to take <code>==</code> away from strict equality</a>.  And we've even been discussing if there's something about <code>++</code> that makes its variants seem more like "drawing lines out of symbols" than really what Rebol wants to canonize as a somewhat niche operator.</p>
+<p>This leaves us with the question of how to increment or decrement variables without having to mention their name twice:</p>
+<pre><code>number-of-variants: number-of-variants + 1
+</code></pre>
+<p>For historical perspective, Rebol did this with <code>++ number-of-variants</code>...though it was a <a href="http://www.rebol.net/r3blogs/0057.html" rel="nofollow noopener">late and controversial addition, in 2007</a>.  That might make sense to a C programmer, but it doesn't really have any semiotic basis in Rebol lore.  One thing is that it's not totally clear that something is getting assigned.  Another problem is that you don't really get a way to increment by anything besides 1.</p>
+<p>Ren-C gained the ability to quote left hand sides, so we tried <code>number-of-variants: ++ 1</code>.  It was a step up, and permitted modifications by values other than 1.</p>
+<p>But, we now want <code>number-of-variants: -- 1</code> to make the 1 a comment.  So another solution is needed.</p>
+<p><code>number-of-variants: += 1</code> has seemed sort of even lamer than ++, given that = is not used for assignment at all.  It is familiar, however, and should be mentioned as a <em>possibility</em>.  And it might not be so bad:  <code>x: -= 1</code> might be read as "alter x such that it is equal to 1 less than it is now" as opposed to seeing the = as being there because it's an assignment operator...after all, you have the X: to suggest assignment.</p>
+<p>In any case, we <em>could</em> make an operator that's generic in this sense.  So <code>number-of-variants: op + 1</code>, the OP would quote the SET-WORD! on the left, fetch its value, then quote the right to get a FUNCTION!.  It would make the fetched value the first argument...evaluating afterward to get the second argument.  It's hard to give this thing a good short English name... I suggested <code>me</code>, as in <code>number-of-variants: me + 1</code>.  Odd, but a symbolic name would kind of start chipping away at Rebol's aesthetic.</p>
+<p><em>(I whimsically suggested a variant to use with prefix functions as being MY, so <code>block: my append [1 2 3]</code> would act as <code>block: append block [1 2 3]</code>)</em></p>
+<p>But while a very useful tool, ME and MY are suboptimal names.  We might wonder if we can do better.  One thing that's not completely out of the question would be just e.g. <code>number-of-variants: - 1</code>.  It looks a little bit close to <code>number-of-variants: -1</code>, but Rebol is a language of space significance and that's something people have to live with anyway.  Here's a sample broken implementation of the + operator that does this:</p>
+<pre><code>+: enfix function [:a [&lt;end&gt; any-value!] b [any-value! &lt;...&gt;]] [
+    case [
+        maybe [set-word! set-path!] :a [ ;-- `x: + 10` =&gt; `x: x + 10`
+            set a add (get a) (take b)
+        ]
+        set? 'a [ ;-- `x + y` =&gt; `add x y`
+            add (reduce :a) (take b)
+        ]
+    ] else [ ;-- nothing on left, switch to variadic sum
+        sum: 0
+        while [not tail? b] [
+            sum: add sum (take b)
+        ]
+    ]
+]
+</code></pre>
+<p>It looks promising when you try it:</p>
+<pre><code>&gt;&gt; 10 + 20
+== 30
+
+&gt;&gt; x: 10
+&gt;&gt; x: + 20
+== 30
+
+&gt;&gt; x
+== 30
+
+&gt;&gt; (+ 10 20 30)
+== 60
+</code></pre>
+<p>The only problem with it is that it has two competing demands on it when interacting with other infix math ops.  When you write <code>2 * 3 + 4</code>, Rebol's rule of precedence is such that the <code>2 * 3</code> must be evaluated before the addition.  Yet since we're accomplishing our trick with quoting the left, it's not currently possible to defer to decide if we want to quote the SET-WORD! or not.  A left quote can't be delayed on enfix, so you get the 3... not the evaluative 6.</p>
+<p>But due to the state of the evaluator at that moment, it's not impossible.  It's just something the evaluator needs to be modified to allow.  Basically, to say that you're interested in SET-WORD! or SET-PATH! but only if they're literally there on the left, otherwise acquire the parameter as normal.  We might call these <code>&lt;set&gt;</code> annotated parameters, the way you might say <code>&lt;end&gt;</code> or <code>&lt;opt&gt;</code>.</p>
+<p>Is it worth it?  I don't know.  Every little piece of complexity like this is a tradeoff.  And looking at <code>x: - 1</code> meaning "subtract one from x" may not actually be that great.  The average reader would assume that if it meant anything besides an error, it meant "make x negative 1".</p>
+<p>Just putting it all out there to summarize the current state of things and see if anyone has any better ideas.  I might go ahead and write <code>me</code> and <code>my</code> just so they're around in case someone comes up with a better name for them.</p>
+          <p><a href="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474/1</link>
+        <pubDate>Wed, 17 Jan 2018 23:42:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-474-1</guid>
+        <source url="https://forum.rebol.info/t/retaking-and-how-to-get-the-old-functionality/474.rss">Retaking ++ and -- : how to get the old functionality?</source>
+      </item>
+  </channel>
+</rss>

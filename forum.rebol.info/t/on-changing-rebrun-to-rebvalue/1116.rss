@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>On changing rebRun() to rebValue()</title>
+    <link>https://forum.rebol.info/t/on-changing-rebrun-to-rebvalue/1116</link>
+    <description>In the early development of the libRebol API, there was a reason that the name **rebRun()** was chosen over **rebDo()**.  Otherwise, you might think that **rebDo(&quot;%script.reb&quot;)** would return the result of executing the script, not the FILE! value `%script.reb`
+
+Hence it was more like **do [%script.reb]** than it was like **do %script.reb**.  The ambiguity suggested the use of another word.  rebRun() was picked for lack of a better idea.
+
+But that was just the first routine that ran code.  The API evolved to have many more, where the idea was that having entry points that returned narrower types made things simpler.  Not going through a moment of ever returning a REBVAL* API handle for the evaluated product saved the expense of making that handle, and the client&#39;s hassle of releasing it with rebRelease().
+
+    REBVAL *value = rebRun(&quot;first&quot;, block);  // pays cost of API handle allocation
+    ...use value...
+    rebRelease(value);  // client must do this (though fail() triggers auto-release)
+
+    int i = rebUnboxInteger(&quot;1 +&quot;, some_number);  // no handle cost, no release hassle!
+
+    if (rebDidQ(&quot;find [a b c]&quot;, word)) { ... }  // no handle cost, no release hassle!
+    if (rebNot(&quot;even?&quot;, some_number) { ... }  // no handle cost, no release hassle!
+
+    rebElide(&quot;print {No result, and introduces the ELIDE language feature}&quot;);
+
+## BUT it&#39;s pretty easy to forget rebRun() returns a value...
+
+I know the issues better than anyone will, for the near future.  Even so, I&#39;ll slip up and say something like:
+
+    rebRun(&quot;print {Whatever}&quot;);  // oops, API handle dropped on floor, leak!
+
+There&#39;s nothing about &quot;running&quot; that directly reminds you a value is going to be returned, nor that reinforces you&#39;d have any particular responsibility for rebRelease()&#39;ing it.
+
+## So what about rebValue()?
+
+It might seem a bit strange, but it works.  And when you look at things like the need to combine promises with the other words, reb.PromiseValue() or comes off more coherently than reb.PromiseRun().
+
+What would you think the argument to rebValue() should be, other than code which produces a value?
+
+    rebValue(&quot;print {Missing assignment seems wrong, doesn&#39;t it?}&quot;)
+
+    REBVAL *v = rebValue(&quot;second [that&#39;s {better} #isn&#39;t &lt;it?&gt;]&quot;);
+
+The only thing I can think of is that in your language, you might think it&#39;s going to take your data type literally.  So rebValue(1) would be an INTEGER! of 1, and  rebValue(&quot;hello&quot;) would be a TEXT! containing hello.  The latter is not going to happen as text literals are interpreted as code...that&#39;s fundamental (unless your language has more than one string literal type).  But the former might still work, as would **rebDid(&quot;integer?&quot;, 10)** in non-C languages with fancier type systems.  C++ can certainly do that.
+
+## Potential conflicts with REBVAL names in various languages
+
+While REBVAL is what&#39;s being used in the API now for the datatype itself, it&#39;s far from final.  Red chose `red_value` as lowercase for the datatype--and that isn&#39;t an uncommon convention in C.  (They hid the pointer, so it&#39;s `red_value v` and not `red_value *v`, which has various implications.)
+
+So there could be some contention when you have a namespace like reb or rebol, and functions in it, that `Value` could be wanted for the datatype.  So in hypothetical language X:
+
+    let rebol:Value_Type $varname = (rebol:Value{&quot;1 + 1&quot;})
+
+It could be clumsy.  But it&#39;s very speculative to worry about these hypothetical situations...I have a feeling that there are going to be more than enough good answers in the languages we know about.  And the higher level languages are likely to have even more options at their disposal in their spin of the API.
+
+For instance, in C++ it could be both the datatype and the function name that builds it, because of constructors...so rebol::Value can do double duty:
+
+     rebol::Value sum (&quot;1 +&quot;, other_value);</description>
+    
+    <lastBuildDate>Fri, 15 Mar 2019 14:29:28 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/on-changing-rebrun-to-rebvalue/1116.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>On changing rebRun() to rebValue()</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In the early development of the libRebol API, there was a reason that the name <strong>rebRun()</strong> was chosen over <strong>rebDo()</strong>.  Otherwise, you might think that <strong>rebDo("%script.reb")</strong> would return the result of executing the script, not the FILE! value <code>%script.reb</code></p>
+<p>Hence it was more like <strong>do [%script.reb]</strong> than it was like <strong>do %script.reb</strong>.  The ambiguity suggested the use of another word.  rebRun() was picked for lack of a better idea.</p>
+<p>But that was just the first routine that ran code.  The API evolved to have many more, where the idea was that having entry points that returned narrower types made things simpler.  Not going through a moment of ever returning a REBVAL* API handle for the evaluated product saved the expense of making that handle, and the client's hassle of releasing it with rebRelease().</p>
+<pre><code>REBVAL *value = rebRun("first", block);  // pays cost of API handle allocation
+...use value...
+rebRelease(value);  // client must do this (though fail() triggers auto-release)
+
+int i = rebUnboxInteger("1 +", some_number);  // no handle cost, no release hassle!
+
+if (rebDidQ("find [a b c]", word)) { ... }  // no handle cost, no release hassle!
+if (rebNot("even?", some_number) { ... }  // no handle cost, no release hassle!
+
+rebElide("print {No result, and introduces the ELIDE language feature}");
+</code></pre>
+<h2>BUT it's pretty easy to forget rebRun() returns a value...</h2>
+<p>I know the issues better than anyone will, for the near future.  Even so, I'll slip up and say something like:</p>
+<pre><code>rebRun("print {Whatever}");  // oops, API handle dropped on floor, leak!
+</code></pre>
+<p>There's nothing about "running" that directly reminds you a value is going to be returned, nor that reinforces you'd have any particular responsibility for rebRelease()'ing it.</p>
+<h2>So what about rebValue()?</h2>
+<p>It might seem a bit strange, but it works.  And when you look at things like the need to combine promises with the other words, reb.PromiseValue() or comes off more coherently than reb.PromiseRun().</p>
+<p>What would you think the argument to rebValue() should be, other than code which produces a value?</p>
+<pre><code>rebValue("print {Missing assignment seems wrong, doesn't it?}")
+
+REBVAL *v = rebValue("second [that's {better} #isn't &lt;it?&gt;]");
+</code></pre>
+<p>The only thing I can think of is that in your language, you might think it's going to take your data type literally.  So rebValue(1) would be an INTEGER! of 1, and  rebValue("hello") would be a TEXT! containing hello.  The latter is not going to happen as text literals are interpreted as code...that's fundamental (unless your language has more than one string literal type).  But the former might still work, as would <strong>rebDid("integer?", 10)</strong> in non-C languages with fancier type systems.  C++ can certainly do that.</p>
+<h2>Potential conflicts with REBVAL names in various languages</h2>
+<p>While REBVAL is what's being used in the API now for the datatype itself, it's far from final.  Red chose <code>red_value</code> as lowercase for the datatype--and that isn't an uncommon convention in C.  (They hid the pointer, so it's <code>red_value v</code> and not <code>red_value *v</code>, which has various implications.)</p>
+<p>So there could be some contention when you have a namespace like reb or rebol, and functions in it, that <code>Value</code> could be wanted for the datatype.  So in hypothetical language X:</p>
+<pre><code>let rebol:Value_Type $varname = (rebol:Value{"1 + 1"})
+</code></pre>
+<p>It could be clumsy.  But it's very speculative to worry about these hypothetical situations...I have a feeling that there are going to be more than enough good answers in the languages we know about.  And the higher level languages are likely to have even more options at their disposal in their spin of the API.</p>
+<p>For instance, in C++ it could be both the datatype and the function name that builds it, because of constructors...so rebol::Value can do double duty:</p>
+<pre><code> rebol::Value sum ("1 +", other_value);</code></pre>
+          <p><a href="https://forum.rebol.info/t/on-changing-rebrun-to-rebvalue/1116/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/on-changing-rebrun-to-rebvalue/1116/1</link>
+        <pubDate>Fri, 15 Mar 2019 05:53:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1116-1</guid>
+        <source url="https://forum.rebol.info/t/on-changing-rebrun-to-rebvalue/1116.rss">On changing rebRun() to rebValue()</source>
+      </item>
+  </channel>
+</rss>

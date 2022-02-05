@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>&quot;HEART BYTES&quot;, Explained</title>
+    <link>https://forum.rebol.info/t/heart-bytes-explained/1008</link>
+    <description>For those who&#39;ve looked at Rebol sources, you know that a Rebol cell is the size of *four platform pointers*.
+
+Ren-C keeps the general gist, with some important adjustments.  It breaks down as:
+
+* **header:** one pointer-sized integer (uintptr_t).  This tells you the cell&#39;s type (e.g. REB_BLOCK, REB_INTEGER), among other things.  Only 32 bits are used of this (operated on through `uint_fast32_t` alias field, in case 32-bit masking operations are faster on 64-bit platforms than a 64-bit `uintptr_t`).  This allows the system to function identically on 32 and 64 bit systems...though the extra 32 bits could be applied to some kind of 64-bit optimization purpose.  *{This post is regarding a proposal about how to use one of the 4 critical bytes in this header, differently from how it has been used so far.}*
+
+* **&quot;extra&quot;**: one pointer or pointer-sized integer.  It&#39;s a union, and which of the union fields is active depends on the type of the cell.  For &quot;bindable&quot; types, this holds a *binding*...and that&#39;s a fairly deep topic.  But if a type isn&#39;t bindable--let&#39;s say a MONEY! or a DATE!, then it can just use this for some spare bits to help put more data in the cell without needing to do a dynamic allocation.
+
+* **&quot;payload&quot;**: Also a union that depends on the type of cell, but this one is the size of *two* platform pointers.  That makes it sufficient to hold something like a 64-bit floating point number on 32-bit platforms.  It comes after the &quot;extra&quot; on purpose--so that as long as the cell is on a 64-bit boundary, then on 32-bit platforms this payload will be on a 64-bit boundary as well.  (That&#39;s important.)
+
+Beyond just alignment, there&#39;s a lot of nuance to cells, and staying on the right side of the standard.  Being able to assign different datatype payloads but still use generic routines on the binding, being able to assign the header in one instruction without breaking strict aliasing.  There&#39;s comments in the code if people want to go down a rabbit hole.
+
+But the main thing to take away is that you&#39;re not paying a catastrophic cost for something like a 64-bit integer in a Rebol array.  It&#39;s 2x the size it would be otherwise.  Fatter than a low-level C type, sure...but all the bits are right there with good locality...you don&#39;t have to go through a dereference to some malloc()&#39;d entity.  Not much of a big deal.
+
+## Despite Optimizations, *Arrays Cost Notably More*
+
+When we try to understand the difference between **[1 2 3]** and **[[1] [2] [3]]**, just how much of cost is that in bytes or processing overhead?  If you&#39;re designing a dialect, should you fear BLOCK!s, GROUP!s, and PATH!s?
+
+Well, when you&#39;ve got that cell and the header says it&#39;s a REB_BLOCK, the &quot;extra&quot; field is used for stuff I&#39;m not going to explain here.  But the Reb_Block_Payload union contains to two things: a *series node* pointer and the index that series value has in the block.
+
+Series nodes are fixed-size tracking entities.  Though they&#39;re pretty small, they&#39;re still *eight platform pointers*.  To get to the node from the cell you have to hop through the pointer to another memory location, and so that&#39;s going to affect caching.
+
+If you have a block of length 1 or 0, then Ren-C has a very neat optimization called &quot;singular arrays&quot;.  The payload for the array lives *directly in the series node*.  Careful mechanics allow this to work, not breaking any alignment or aliasing rules, and even managing to wedge an array terminator into control bits used for other purposes.
+
+So in this case--if you&#39;re lucky--you&#39;ve gone from taking 4 platform pointers for just the REB_INTEGER cell, to a REB_BLOCK cell of 4 platform pointers...and a series node of 8 pointers.  3x the size for **[1]** vs. just **1**.
+
+But let&#39;s say instead of a block, you were doing a PATH!, like the proposed 2-element path for **/refinement** (a BLANK! that&#39;s not rendered, and then the WORD! &quot;refinement&quot;).  What would a 2-element array cost?
+
+You&#39;ve still got the 4 pointer cell and the 8 pointer series node.  But now you need a dynamic allocation to hold the 2 cells, so that would be 8 more platform pointers.
+
+&gt; Note: It would have needed to be 4 cells when a terminator was needed...but [the terminator no longer applies](https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445)!  So arrays of length 2 can really just use 8 cells in their allocation now.  :partying_face:
+
+*Grand Total:* 4 + 8 + 8 =&gt; **20 platform pointers**...for something that took only 4 before!  So **[1 1]** is 5x as big as **1**, and on a 64-bit platform we&#39;re talking 160 bytes.  For a refinement like **[_ refine]** that&#39;s not even counting the storage for the UTF-8 name of the refinement and overhead for that...this is how much it costs just to *point* to it!
+
+I&#39;m neglecting all the overhead that dynamic allocation systems have to keep for their internal bookkeeping.  Plus, remember that locality...spreading this data out is about more than just how many bytes you use, it&#39;s *where* the bytes are.
+
+## My Solution: &quot;Heart Bytes&quot;
+
+There&#39;s clearly no generic way to contain an arbitrary cell-sized thing inside a cell without adding cost.  It would be like zipping a zip file and guaranteeing it would always be smaller.  :-/
+
+But if cells were willing to sacrifice some of their header bits, those bits might hold a key to allowing **a** and **[a]** to both fit into a single cell...as long as that cell wasn&#39;t *also* trying to be a 1-element array (e.g. [[a]]).  The extra and payload bits would line up with the the WORD!, but the same cell bits could be seen in one light as a BLOCK!, and in another light as a WORD!.
+
+This sounds like a paradox.  How can it have an answer to VAL_TYPE(...) which is both REB_BLOCK and REB_WORD (!)  It would seem to have to be one thing or the other.
+
+***Answer: Use the type system.***  If you&#39;re holding the pointer via a plain REBVAL* to the cell, have it say this is a REB_BLOCK.  But if you&#39;re holding another pointer type (call it a REBCEL for now), then a REBCEL* would refuse to answer VAL_TYPE()...you&#39;d get a compiler error if you tried.  Instead you&#39;d have to ask for the HEART_BYTE().  Then the game becomes figuring out how and when to flip your pointers back and forth between REBVAL and REBCEL.
+
+## Stating The Obvious (?): Only Works for Immutable Arrays
+
+You can&#39;t dodge the allocation of a separate entity outside the cell if you want multiple cell references to be able to make shared changes, or see changes made through one reference via another one.
+
+If you try to apply this optimization on plain code, it couldn&#39;t do what you&#39;d expect:
+
+     &gt;&gt; block: [a]  ; one element, right on, optimize it right into that cell!
+     &gt;&gt; ref: block  ; now both referring to the &quot;same block&quot;
+     &gt;&gt; append block &#39;b
+     ** Script Error: series is const ;-- oops, oh yeah, I&#39;ll just use MUTABLE
+
+     &gt;&gt; append mutable block &#39;b
+     ??? ;-- how could ref ever see a change, if only cells are exchanged?
+
+The LOCK process could go through and do some compression, and there could be primitives for making these immutable blocks if you wanted them.  But they shouldn&#39;t be the default.
+
+*Unless...* they are loaded into a PATH!.  If we got people on board with the expectation that not only are paths immutable, but embedded groups and arrays are immutable *at least at the top level*, then this could work.
+
+I discuss how this could really tie down [some of the more egregious ambiguities in PATH!](http://forum.rebol.info/t/taming-the-pathology-of-path/1006), making it a solid and reliable part for dialecting--something it has certainly not been in the past.  If we can kill off things like **`a/:b:`** in favor of **`a/(b):`** and pay no more for it, we very well may should.
+
+&gt; Update: Not only are we on board, but immutable paths and tuples and such are working fine!</description>
+    
+    <lastBuildDate>Fri, 20 Aug 2021 04:56:03 +0000</lastBuildDate>
+    <category>Optimization</category>
+    <atom:link href="https://forum.rebol.info/t/heart-bytes-explained/1008.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>&quot;HEART BYTES&quot;, Explained</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I just wanted to follow up here and mention that indeed, the system is allowing <strong>/foo</strong> and <strong>foo/</strong> to be stored in single cells today... likewise with <strong>.foo</strong> and <strong>foo.</strong>, and <strong>/[foo]</strong> etc.</p>
+<p>This all hinges on immutability of paths and tuples.  It also hinges on the type system in the C++ build being good enough to check all the trickery, because otherwise this trick would crash and burn pretty easily!  But it doesn't.</p>
+<p>We could get fancy and maybe find ways to store <strong>.foo/</strong> and <strong>.foo.</strong> or <strong>//foo</strong> in single cells too.</p>
+<p>Really the main priority was just not to let NewPath wind up coming in and creating a lot of extra overhead for something that already existed.  Recapping:</p>
+<ul>
+<li>
+<p>When REFINEMENT! was an ANY-WORD! class it cost 4 pointers resident in a block</p>
+<ul>
+<li>That's 16 bytes on 32-bit platforms, 32 bytes on 64-bit platforms</li>
+</ul>
+</li>
+<li>
+<p>The initial implementation in NewPath cost those pointers <em>plus</em> 8 pointers for a series node <em>plus</em> a pool element that was 4 units long of 4 pointers each...to be big enough for 2 elements and a terminator.</p>
+<ul>
+<li>That's 112 bytes on 32-bit platforms, 224 bytes on 64-bit platforms</li>
+</ul>
+</li>
+</ul>
+<p>Not only do you get a factor of 7 cost increase, you now have 3 separate locations in memory to jump around at to process what you have (in addition to the locality issue of having to go find the symbol itself, which WORD!s had to do as well).</p>
+<p>So in the "keeping it Amish" spirit, it felt like too much when the difference between <strong>/FOO</strong> and <strong>FOO</strong> jumped like that.  It only takes a few factors of 10 to get to the kinds of software situations we see today.  :-/</p>
+<p>Anyway, as I say it was a few things coming together...and heart bytes are part of it.</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/heart.png?v=9" title=":heart:" class="emoji only-emoji" alt=":heart:"> <img src="https://forum.rebol.info/images/emoji/twitter/heart_eyes.png?v=9" title=":heart_eyes:" class="emoji only-emoji" alt=":heart_eyes:"> <img src="https://forum.rebol.info/images/emoji/twitter/heart_decoration.png?v=9" title=":heart_decoration:" class="emoji only-emoji" alt=":heart_decoration:"></p>
+          <p><a href="https://forum.rebol.info/t/heart-bytes-explained/1008/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/heart-bytes-explained/1008/2</link>
+        <pubDate>Thu, 19 Aug 2021 00:33:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1008-2</guid>
+        <source url="https://forum.rebol.info/t/heart-bytes-explained/1008.rss">&quot;HEART BYTES&quot;, Explained</source>
+      </item>
+      <item>
+        <title>&quot;HEART BYTES&quot;, Explained</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>For those who've looked at Rebol sources, you know that a Rebol cell is the size of <em>four platform pointers</em>.</p>
+<p>Ren-C keeps the general gist, with some important adjustments.  It breaks down as:</p>
+<ul>
+<li>
+<p><strong>header:</strong> one pointer-sized integer (uintptr_t).  This tells you the cell's type (e.g. REB_BLOCK, REB_INTEGER), among other things.  Only 32 bits are used of this (operated on through <code>uint_fast32_t</code> alias field, in case 32-bit masking operations are faster on 64-bit platforms than a 64-bit <code>uintptr_t</code>).  This allows the system to function identically on 32 and 64 bit systems...though the extra 32 bits could be applied to some kind of 64-bit optimization purpose.  <em>{This post is regarding a proposal about how to use one of the 4 critical bytes in this header, differently from how it has been used so far.}</em></p>
+</li>
+<li>
+<p><strong>"extra"</strong>: one pointer or pointer-sized integer.  It's a union, and which of the union fields is active depends on the type of the cell.  For "bindable" types, this holds a <em>binding</em>...and that's a fairly deep topic.  But if a type isn't bindable--let's say a MONEY! or a DATE!, then it can just use this for some spare bits to help put more data in the cell without needing to do a dynamic allocation.</p>
+</li>
+<li>
+<p><strong>"payload"</strong>: Also a union that depends on the type of cell, but this one is the size of <em>two</em> platform pointers.  That makes it sufficient to hold something like a 64-bit floating point number on 32-bit platforms.  It comes after the "extra" on purpose--so that as long as the cell is on a 64-bit boundary, then on 32-bit platforms this payload will be on a 64-bit boundary as well.  (That's important.)</p>
+</li>
+</ul>
+<p>Beyond just alignment, there's a lot of nuance to cells, and staying on the right side of the standard.  Being able to assign different datatype payloads but still use generic routines on the binding, being able to assign the header in one instruction without breaking strict aliasing.  There's comments in the code if people want to go down a rabbit hole.</p>
+<p>But the main thing to take away is that you're not paying a catastrophic cost for something like a 64-bit integer in a Rebol array.  It's 2x the size it would be otherwise.  Fatter than a low-level C type, sure...but all the bits are right there with good locality...you don't have to go through a dereference to some malloc()'d entity.  Not much of a big deal.</p>
+<h2>Despite Optimizations, <em>Arrays Cost Notably More</em>
+</h2>
+<p>When we try to understand the difference between <strong>[1 2 3]</strong> and <strong>[[1] [2] [3]]</strong>, just how much of cost is that in bytes or processing overhead?  If you're designing a dialect, should you fear BLOCK!s, GROUP!s, and PATH!s?</p>
+<p>Well, when you've got that cell and the header says it's a REB_BLOCK, the "extra" field is used for stuff I'm not going to explain here.  But the Reb_Block_Payload union contains to two things: a <em>series node</em> pointer and the index that series value has in the block.</p>
+<p>Series nodes are fixed-size tracking entities.  Though they're pretty small, they're still <em>eight platform pointers</em>.  To get to the node from the cell you have to hop through the pointer to another memory location, and so that's going to affect caching.</p>
+<p>If you have a block of length 1 or 0, then Ren-C has a very neat optimization called "singular arrays".  The payload for the array lives <em>directly in the series node</em>.  Careful mechanics allow this to work, not breaking any alignment or aliasing rules, and even managing to wedge an array terminator into control bits used for other purposes.</p>
+<p>So in this case--if you're lucky--you've gone from taking 4 platform pointers for just the REB_INTEGER cell, to a REB_BLOCK cell of 4 platform pointers...and a series node of 8 pointers.  3x the size for <strong>[1]</strong> vs. just <strong>1</strong>.</p>
+<p>But let's say instead of a block, you were doing a PATH!, like the proposed 2-element path for <strong>/refinement</strong> (a BLANK! that's not rendered, and then the WORD! "refinement").  What would a 2-element array cost?</p>
+<p>You've still got the 4 pointer cell and the 8 pointer series node.  But now you need a dynamic allocation to hold the 2 cells, so that would be 8 more platform pointers.</p>
+<blockquote>
+<p>Note: It would have needed to be 4 cells when a terminator was needed...but <a href="https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445">the terminator no longer applies</a>!  So arrays of length 2 can really just use 8 cells in their allocation now.  <img src="https://forum.rebol.info/images/emoji/twitter/partying_face.png?v=9" title=":partying_face:" class="emoji" alt=":partying_face:"></p>
+</blockquote>
+<p><em>Grand Total:</em> 4 + 8 + 8 =&gt; <strong>20 platform pointers</strong>...for something that took only 4 before!  So <strong>[1 1]</strong> is 5x as big as <strong>1</strong>, and on a 64-bit platform we're talking 160 bytes.  For a refinement like <strong>[_ refine]</strong> that's not even counting the storage for the UTF-8 name of the refinement and overhead for that...this is how much it costs just to <em>point</em> to it!</p>
+<p>I'm neglecting all the overhead that dynamic allocation systems have to keep for their internal bookkeeping.  Plus, remember that locality...spreading this data out is about more than just how many bytes you use, it's <em>where</em> the bytes are.</p>
+<h2>My Solution: "Heart Bytes"</h2>
+<p>There's clearly no generic way to contain an arbitrary cell-sized thing inside a cell without adding cost.  It would be like zipping a zip file and guaranteeing it would always be smaller.  :-/</p>
+<p>But if cells were willing to sacrifice some of their header bits, those bits might hold a key to allowing <strong>a</strong> and <strong>[a]</strong> to both fit into a single cell...as long as that cell wasn't <em>also</em> trying to be a 1-element array (e.g. [[a]]).  The extra and payload bits would line up with the the WORD!, but the same cell bits could be seen in one light as a BLOCK!, and in another light as a WORD!.</p>
+<p>This sounds like a paradox.  How can it have an answer to VAL_TYPE(...) which is both REB_BLOCK and REB_WORD (!)  It would seem to have to be one thing or the other.</p>
+<p><em><strong>Answer: Use the type system.</strong></em>  If you're holding the pointer via a plain REBVAL* to the cell, have it say this is a REB_BLOCK.  But if you're holding another pointer type (call it a REBCEL for now), then a REBCEL* would refuse to answer VAL_TYPE()...you'd get a compiler error if you tried.  Instead you'd have to ask for the HEART_BYTE().  Then the game becomes figuring out how and when to flip your pointers back and forth between REBVAL and REBCEL.</p>
+<h2>Stating The Obvious (?): Only Works for Immutable Arrays</h2>
+<p>You can't dodge the allocation of a separate entity outside the cell if you want multiple cell references to be able to make shared changes, or see changes made through one reference via another one.</p>
+<p>If you try to apply this optimization on plain code, it couldn't do what you'd expect:</p>
+<pre><code> &gt;&gt; block: [a]  ; one element, right on, optimize it right into that cell!
+ &gt;&gt; ref: block  ; now both referring to the "same block"
+ &gt;&gt; append block 'b
+ ** Script Error: series is const ;-- oops, oh yeah, I'll just use MUTABLE
+
+ &gt;&gt; append mutable block 'b
+ ??? ;-- how could ref ever see a change, if only cells are exchanged?
+</code></pre>
+<p>The LOCK process could go through and do some compression, and there could be primitives for making these immutable blocks if you wanted them.  But they shouldn't be the default.</p>
+<p><em>Unless...</em> they are loaded into a PATH!.  If we got people on board with the expectation that not only are paths immutable, but embedded groups and arrays are immutable <em>at least at the top level</em>, then this could work.</p>
+<p>I discuss how this could really tie down <a href="http://forum.rebol.info/t/taming-the-pathology-of-path/1006">some of the more egregious ambiguities in PATH!</a>, making it a solid and reliable part for dialecting--something it has certainly not been in the past.  If we can kill off things like <strong><code>a/:b:</code></strong> in favor of <strong><code>a/(b):</code></strong> and pay no more for it, we very well may should.</p>
+<blockquote>
+<p>Update: Not only are we on board, but immutable paths and tuples and such are working fine!</p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/heart-bytes-explained/1008/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/heart-bytes-explained/1008/1</link>
+        <pubDate>Fri, 11 Jan 2019 05:13:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1008-1</guid>
+        <source url="https://forum.rebol.info/t/heart-bytes-explained/1008.rss">&quot;HEART BYTES&quot;, Explained</source>
+      </item>
+  </channel>
+</rss>

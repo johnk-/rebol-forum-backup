@@ -1,0 +1,527 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+    <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634</link>
+    <description>We&#39;ve fretted a lot about the result of REDUCE when an expression produces something that can&#39;t be put in a block.  At first this was just NULL.  But now it&#39;s all BAD-WORD! isotope forms.
+
+One reason to fret is the historical idiom of setting multiple values in a block.  This has been done with a SET of a REDUCE.  Something along the lines of:
+
+    &gt;&gt; x: 3 + 4
+    == 7
+
+    &gt;&gt; set [a b] reduce [10 + 20 x]
+    == [30 7]
+
+    &gt;&gt; a
+    == 30
+
+    &gt;&gt; b
+    == 7
+
+It&#39;s your choice to reduce the values or not.  If you don&#39;t involve REDUCE then the mechanics would all work out.  But once you get NULLs and isotopes, the reduced block can&#39;t store the values to convey them to the SET...
+
+## But What If A Single Operation Did Both...?
+
+Let&#39;s imagine we have instead something called UNPACK that by default reduces.  Imagine it quotes a SET-BLOCK! on its left.
+
+    &gt;&gt; x: 3 + 4
+    == 7
+
+    &gt;&gt; [a b]: unpack [10 + 20 x]
+    == 30
+
+    &gt;&gt; a
+    == 30
+
+    &gt;&gt; b
+    == 7
+
+UNPACK manages the evaluation one expression at a time, instead of using REDUCE.  So as it goes it can set the variables to NULL or isotopes.  And by following the multi-return convention of returning the first value, you avoid ever needing to synthesize a block aggregating all the results together.
+
+    &gt;&gt; [a b]: unpack case [
+           1 = 1 [
+               print &quot;This is pretty slick...&quot;
+               [select [a 10] &#39;b, 1 + 2]
+           ]
+        ] else [
+            print &quot;This won&#39;t run because the ELSE gets a BLOCK!&quot;
+            print &quot;Which is what you want, because the ELSE should be&quot;
+            print &quot;what runs if no CASE was matched and have the option&quot;
+            print &quot;of providing the block to UNPACK&quot;
+        ]
+     This is pretty slick...
+     ; null
+
+    &gt;&gt; a
+    ; null
+
+    &gt;&gt; b
+    == 3
+
+## @[...] can Even Avoid A REDUCE
+
+If you already have a block in reduced or literal form, how would you tell the UNPACK about that?  It could be a refinement like UNPACK/ONLY.  BUT...what if that were signaled with the @ block type?
+
+    &gt;&gt; [a b]: unpack @[1 +]
+    == 1
+
+    &gt;&gt; a
+    == 1
+ 
+    &gt;&gt; b
+    == +
+ 
+A real aspect of power in this approach is the ability to mix and match.  For instance you could have some branches in a CASE which have already reduced data and others that don&#39;t, and they could all participate with the same UNPACK operation.
+
+    [op1 op2]: unpack case [
+        ... [
+            print &quot;This branch uses values as-is&quot;
+            @[+ -]
+        ]
+        ... [
+           print &quot;This branch needs evaluation&quot;
+           [operators.1, pick [- /] op-num]
+       ]
+    ]
+
+## Cool Dialecting Twists
+
+It seems to me nice to safeguard that you&#39;re not throwing away values:
+
+    &gt;&gt; [a b]: unpack [1 2 3]
+    ** Error: Too many values for vars in UNPACK (use ... if on purpose)
+
+As the error says, though, we could indicate we&#39;re fine with this through a special syntax:
+
+    &gt;&gt; [a b ...]: unpack [1 2 3]
+    == 1
+
+    &gt;&gt; a
+    == 1
+
+    &gt;&gt; b
+    == 2
+
+(It&#39;s not as sketchy when you have too few values, because you can set the extra variables to unset...which will presumably trigger awareness of a problem at some point.)
+
+Borrowing from multi-return: I think the idea of &quot;circling&quot; values to say which is the one you want the overall expression to evaluate to is a neat idea.
+
+    &gt;&gt; [a @b]: unpack [1 2]
+    == 2
+
+## And For Show And Tell...
+
+How hard is it to write such a thing, you ask?  In Ren-C it&#39;s super easy, barely an inconvenience:
+
+    unpack: enfixed func [
+        &#39;vars [set-block!]
+        block [block! quoted!]
+    ][
+        let result&#39;: ~unset~
+        reduce-each val block [
+            if vars.1 = &#39;... [continue]  ; ignore rest, but keep reducing
+            if tail? vars [fail &quot;Too many values in UNPACK (use ...)&quot;]
+            if not blank? vars.1 [
+                set vars.1 unmeta ^val
+                if unset? the result&#39; [result&#39;: ^val]
+            ]
+            vars: my next
+        ]
+        if vars.1 = &#39;... [
+            if not last? vars [fail &quot;... only at the tail of UNPACK vars&quot;]
+        ] else [
+            for-each var vars [  ; if not enough values for variables, unset
+                if not blank? var [unset var]
+            ]
+        ]
+        return unmeta result&#39;
+    ]
+
+If the ^ and UNMETA seem confusing, the only thing you need to think about is that the META protocol helps you out when you&#39;re trying to deal with a situation of storing a value that can be anything...and you need to differentiate a state.  I&#39;m making the result &quot;meta&quot; so that I can use plain unset to signal that it hasn&#39;t been assigned yet.  I could make a separate boolean variable instead, but then I&#39;d have another variable and I&#39;d have to GET/ANY the result...
+
+I&#39;m sure people will start getting the hang of it!  :-)</description>
+    
+    <lastBuildDate>Thu, 09 Sep 2021 01:24:39 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1634">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<pre><code>&gt;&gt; [a b ...]: unpack [1 2 3]
+== 1
+
+&gt;&gt; a
+== 1
+
+&gt;&gt; b
+== 2
+</code></pre>
+</blockquote>
+</aside>
+<p>Thinking of concepts for the dialect, I imagined optionality:</p>
+<pre><code>&gt;&gt; [a b c]: unpack [1 2]
+** Error: Not enough values
+
+&gt;&gt; [a b /c]: unpack [1 2]
+== 1
+
+&gt;&gt; a
+== 1
+
+&gt;&gt; b
+== 2
+
+&gt;&gt; c
+; null
+</code></pre>
+<p>Part of me likes it, but part of me wants to see the refinement style taken more for naming arguments (as in APPLY) and less about optionality.  So we'd see /FOO and think "label"...in a way that FOO: can't do because it's too intimately tied up with assignment.</p>
+<p>Just something to think about.</p>
+<p>Also note that dialect-wise, right now quoting is taken for "variable already exists" when used with a LET.</p>
+<pre><code>let [a 'b c]: ...  ; concept is that `b` exists, reuse it, make new a and c
+</code></pre>
+<p>@ is circling, ^ is meta, (expr) is evaluate expression to get the variable to set.</p>
+<p>But really I think a lot of attention should be paid on these things, because this is the selling point of the language; building things like this, easily.</p>
+          <p><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/8</link>
+        <pubDate>Thu, 09 Sep 2021 01:24:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1634-8</guid>
+        <source url="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss">A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</source>
+      </item>
+      <item>
+        <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>A post was split to a new topic: <a href="/t/generalized-inertness-with/1707">Generalized Inertness with @</a></p>
+          <p><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/7</link>
+        <pubDate>Wed, 08 Sep 2021 05:46:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1634-7</guid>
+        <source url="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss">A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</source>
+      </item>
+      <item>
+        <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I had at first suggested using quoted blocks to ask for no reduction <em>(but have since edited it out of the original post, and will instead discuss it here lower down)</em>.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1634">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If you already have a block in reduced or literal form, how would you tell the UNPACK about that? It could be a refinement like UNPACK/ONLY. BUT...what if we let quoted blocks signal it?</p>
+<pre><code>&gt;&gt; [a b]: unpack the '[1 +]
+== 1
+
+&gt;&gt; a
+== 1
+
+&gt;&gt; b
+== +
+</code></pre>
+</blockquote>
+</aside>
+<p>Now that THE-BLOCK! is in the mix, QUOTED! block no longer seems the best choice here.</p>
+<p>It's technically true that you can get a quoted block via META-BLOCK!:</p>
+<pre><code>&gt;&gt; [a b]: unpack ^[1 +]
+</code></pre>
+<p>But that makes UNPACK's type-signature take QUOTED!.  And a quoted could be anything...so it has to pare that down to see if it's a type it accepts.  Plus the behavior takes a bit for your head to get around:</p>
+<pre><code>^[1 +] =evaluator=&gt; '[1 +]
+</code></pre>
+<p>Whereas if you consider @[1 +], it is dumber and simpler, which makes it better:</p>
+<pre><code>@[1 +] =evaluator=&gt; @[1 +]
+</code></pre>
+<p>UNPACK can simply say it takes BLOCK! and THE-BLOCK! and you're done.  No unquoting and no messing with your head.</p>
+<p>I'm thinking this idea of <strong>"@[...] represents an already reduced block"</strong> is probably something we put in systemically:</p>
+<pre><code>&gt;&gt; any [1 + 1 = 2]
+== #[true]
+
+&gt;&gt; any @[1 + 1 = 2]
+== 1
+</code></pre>
+<p>I think that implies:</p>
+<pre><code>&gt;&gt; reduce @[1 + 1 3 + 3]
+== @[1 + 1 3 + 3]
+</code></pre>
+<p><strong>Anyway, point remains...I think that UNPACK should have its non-reducing case use THE-BLOCK!</strong>.</p>
+<pre><code>[op1 op2]: unpack case [
+     ... [
+        print "This branch uses values as-is"
+        @[+ -]
+    ]
+    ... [
+        print "This branch needs evaluation"
+        [operators.1, pick [- /] op-num]
+   ]
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/6</link>
+        <pubDate>Fri, 03 Sep 2021 07:51:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1634-6</guid>
+        <source url="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss">A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</source>
+      </item>
+      <item>
+        <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="BlackATTR" data-post="4" data-topic="1634">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>Do 'a and 'b refer to the same block or are they copies?</p>
+</blockquote>
+</aside>
+<p>Historically SET would not do a COPY, and I wasn't thinking this would either.</p>
+<p>We might try to find a syntax or refinement in ASSIGN for expressing that.  But my feeling is that may be beyond the scope of this construct.  You might need to just use a FOR-EACH, where it becomes more obvious what you are doing...</p>
+<pre><code>for-each var [a b] [set var copy [&lt;some&gt; &lt;block&gt;]]</code></pre>
+          <p><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/5</link>
+        <pubDate>Thu, 08 Jul 2021 17:22:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1634-5</guid>
+        <source url="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss">A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</source>
+      </item>
+      <item>
+        <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="3" data-topic="1634">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<pre><code class="lang-auto">&gt;&gt; [a b]: assign [&lt;some&gt; &lt;block&gt;]
+== [&lt;some&gt; &lt;block&gt;]
+
+&gt;&gt; a
+== [&lt;some&gt; &lt;block&gt;]
+
+&gt;&gt; b
+== [&lt;some&gt; &lt;block&gt;]
+</code></pre>
+</blockquote>
+</aside>
+<p>Do 'a and 'b refer to the same block or are they copies?<br>
+I am interested in simple ways of creating and managing lists of synonyms, which is why I ask.</p>
+          <p><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/4</link>
+        <pubDate>Thu, 08 Jul 2021 17:16:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1634-4</guid>
+        <source url="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss">A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</source>
+      </item>
+      <item>
+        <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="BlackATTR" data-post="2" data-topic="1634">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>this is a convenient method to create templates to separate the parts of a block you want to keep.</p>
+</blockquote>
+</aside>
+<p>You can also skip out on values you aren't interested in:</p>
+<pre><code>&gt;&gt; [_ b]: unpack [1 + 2 3 + 4]
+== 7
+
+&gt;&gt; b
+== 7
+</code></pre>
+<p><strong>I think this is going to replace SET of a BLOCK! entirely.</strong>  But that means it's going to need to let you provide the block as a variable.</p>
+<pre><code>(block): unpack [...]
+</code></pre>
+<p>And I think we need another function to handle the case of assigning the same value to all items.</p>
+<pre><code>&gt;&gt; [a b]: assign [&lt;some&gt; &lt;block&gt;]
+== [&lt;some&gt; &lt;block&gt;]
+
+&gt;&gt; a
+== [&lt;some&gt; &lt;block&gt;]
+
+&gt;&gt; b
+== [&lt;some&gt; &lt;block&gt;]
+</code></pre>
+<p><em>(Note: this can't just be <strong><code>[a b]: [&lt;some&gt; &lt;block&gt;]</code></strong> because the multiple return convention creates contention with <strong><code>[a b]: function-returning-a-block</code></strong> ... however, we could make ASSIGN the behavior when it so happens that a literal value is used on the right of a SET-BLOCK! and that would be convenient.)</em></p>
+<p>Getting these behaviors out of SET will be great.  Because it tries to put too much into a primitive function.  There's too much behavior...like trying to act more like UNPACK when you set a block to a block, and trying to act like ASSIGN when you set a block to a non-block.  But then it needs an /ONLY or /SINGLE refinement when you're trying to actually set each variable to the same block.</p>
+<p>This makes SET harder to understand when it already has enough concerns.</p>
+          <p><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/3</link>
+        <pubDate>Thu, 08 Jul 2021 15:56:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1634-3</guid>
+        <source url="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss">A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</source>
+      </item>
+      <item>
+        <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1634">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<pre><code class="lang-auto">&gt;&gt; [a b ...]: unpack [1 2 3]
+== 1
+
+&gt;&gt; a
+== 1
+
+&gt;&gt; b
+== 2
+</code></pre>
+</blockquote>
+</aside>
+<p>Very satisfying! I frequently slice and dice values to obtain the parts*, so this is a convenient method to create templates to separate the parts of a block you want to keep.</p>
+<p>*E.g., taking a full filename and path (or url!) and split it into: path, filename, suffix; or a date! value and splitting into its component parts.</p>
+          <p><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/2</link>
+        <pubDate>Thu, 08 Jul 2021 15:21:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1634-2</guid>
+        <source url="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss">A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</source>
+      </item>
+      <item>
+        <title>A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>We've fretted a lot about the result of REDUCE when an expression produces something that can't be put in a block.  At first this was just NULL.  But now it's all BAD-WORD! isotope forms.</p>
+<p>One reason to fret is the historical idiom of setting multiple values in a block.  This has been done with a SET of a REDUCE.  Something along the lines of:</p>
+<pre><code>&gt;&gt; x: 3 + 4
+== 7
+
+&gt;&gt; set [a b] reduce [10 + 20 x]
+== [30 7]
+
+&gt;&gt; a
+== 30
+
+&gt;&gt; b
+== 7
+</code></pre>
+<p>It's your choice to reduce the values or not.  If you don't involve REDUCE then the mechanics would all work out.  But once you get NULLs and isotopes, the reduced block can't store the values to convey them to the SET...</p>
+<h2>But What If A Single Operation Did Both...?</h2>
+<p>Let's imagine we have instead something called UNPACK that by default reduces.  Imagine it quotes a SET-BLOCK! on its left.</p>
+<pre><code>&gt;&gt; x: 3 + 4
+== 7
+
+&gt;&gt; [a b]: unpack [10 + 20 x]
+== 30
+
+&gt;&gt; a
+== 30
+
+&gt;&gt; b
+== 7
+</code></pre>
+<p>UNPACK manages the evaluation one expression at a time, instead of using REDUCE.  So as it goes it can set the variables to NULL or isotopes.  And by following the multi-return convention of returning the first value, you avoid ever needing to synthesize a block aggregating all the results together.</p>
+<pre><code>&gt;&gt; [a b]: unpack case [
+       1 = 1 [
+           print "This is pretty slick..."
+           [select [a 10] 'b, 1 + 2]
+       ]
+    ] else [
+        print "This won't run because the ELSE gets a BLOCK!"
+        print "Which is what you want, because the ELSE should be"
+        print "what runs if no CASE was matched and have the option"
+        print "of providing the block to UNPACK"
+    ]
+ This is pretty slick...
+ ; null
+
+&gt;&gt; a
+; null
+
+&gt;&gt; b
+== 3
+</code></pre>
+<h2>@[...] can Even Avoid A REDUCE</h2>
+<p>If you already have a block in reduced or literal form, how would you tell the UNPACK about that?  It could be a refinement like UNPACK/ONLY.  BUT...what if that were signaled with the @ block type?</p>
+<pre><code>&gt;&gt; [a b]: unpack @[1 +]
+== 1
+
+&gt;&gt; a
+== 1
+
+&gt;&gt; b
+== +
+</code></pre>
+<p>A real aspect of power in this approach is the ability to mix and match.  For instance you could have some branches in a CASE which have already reduced data and others that don't, and they could all participate with the same UNPACK operation.</p>
+<pre><code>[op1 op2]: unpack case [
+    ... [
+        print "This branch uses values as-is"
+        @[+ -]
+    ]
+    ... [
+       print "This branch needs evaluation"
+       [operators.1, pick [- /] op-num]
+   ]
+]
+</code></pre>
+<h2>Cool Dialecting Twists</h2>
+<p>It seems to me nice to safeguard that you're not throwing away values:</p>
+<pre><code>&gt;&gt; [a b]: unpack [1 2 3]
+** Error: Too many values for vars in UNPACK (use ... if on purpose)
+</code></pre>
+<p>As the error says, though, we could indicate we're fine with this through a special syntax:</p>
+<pre><code>&gt;&gt; [a b ...]: unpack [1 2 3]
+== 1
+
+&gt;&gt; a
+== 1
+
+&gt;&gt; b
+== 2
+</code></pre>
+<p>(It's not as sketchy when you have too few values, because you can set the extra variables to unset...which will presumably trigger awareness of a problem at some point.)</p>
+<p>Borrowing from multi-return: I think the idea of "circling" values to say which is the one you want the overall expression to evaluate to is a neat idea.</p>
+<pre><code>&gt;&gt; [a @b]: unpack [1 2]
+== 2
+</code></pre>
+<h2>And For Show And Tell...</h2>
+<p>How hard is it to write such a thing, you ask?  In Ren-C it's super easy, barely an inconvenience:</p>
+<pre><code>unpack: enfixed func [
+    'vars [set-block!]
+    block [block! quoted!]
+][
+    let result': ~unset~
+    reduce-each val block [
+        if vars.1 = '... [continue]  ; ignore rest, but keep reducing
+        if tail? vars [fail "Too many values in UNPACK (use ...)"]
+        if not blank? vars.1 [
+            set vars.1 unmeta ^val
+            if unset? the result' [result': ^val]
+        ]
+        vars: my next
+    ]
+    if vars.1 = '... [
+        if not last? vars [fail "... only at the tail of UNPACK vars"]
+    ] else [
+        for-each var vars [  ; if not enough values for variables, unset
+            if not blank? var [unset var]
+        ]
+    ]
+    return unmeta result'
+]
+</code></pre>
+<p>If the ^ and UNMETA seem confusing, the only thing you need to think about is that the META protocol helps you out when you're trying to deal with a situation of storing a value that can be anything...and you need to differentiate a state.  I'm making the result "meta" so that I can use plain unset to signal that it hasn't been assigned yet.  I could make a separate boolean variable instead, but then I'd have another variable and I'd have to GET/ANY the result...</p>
+<p>I'm sure people will start getting the hang of it!  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634/1</link>
+        <pubDate>Thu, 08 Jul 2021 07:44:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1634-1</guid>
+        <source url="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634.rss">A Lot To UNPACK: (Replacing the SET of REDUCE BLOCK! Idiom)</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,457 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+    <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555</link>
+    <description>So INTO had a proposal on the table for R3-Alpha to become arity-2, and take a datatype.  This simplifies a common pattern of wanting to say what you&#39;re parsing into:
+
+    ahead text! into [some &quot;a&quot;]  ; arity-1 form
+    =&gt;
+    into text! [some &quot;a&quot;]  ; arity-2 form
+
+Neither R3-Alpha nor Red went with this...but Topaz did.  (Perhaps it was Gabriele who made the proposal in the first place?)
+
+On the surface it seems like it has some pros and some cons, but mostly equivalent.  But since UPARSE has *value-bearing rules*, we can take this one step further... **instead of limiting the first argument to a datatype!, we can make it any rule that bears a series as its result!**
+
+Datatype counts for that, but there&#39;s more...
+
+## Parsing INTO a Generated Series
+
+This means you&#39;re not just restricted to going INTO a series that existed at the start of the parse.  You can parse into products.
+
+For example:
+
+    uparse &quot;((aaaa)))&quot; [into [between some &quot;(&quot; some &quot;)&quot;] [some &quot;a&quot;]]
+
+The first rule is a BETWEEN which is somewhat like traditional COPY in that it generates a new series....in this case a series that doesn&#39;t have the leading or trailing parentheses.
+
+If your first rule is complex, this can introduce a somewhat long separation between the parameters.  But a general tool exists now for addressing that, with the SYM-XXX! substitutions:
+
+Here&#39;s why that&#39;s important:
+
+    uparse [| | any any any | | |] [
+        content: between some &#39;| some &#39;|
+        into @content [some &#39;any]
+    ]
+
+The BETWEEN captured a block as **[any any any]**.  You don&#39;t want the INTO to be using that as a rule, you&#39;re trying to use it as-is.
+
+## The Current State of SYM-XXX! In Parse
+
+When I first framed the idea of SYM-WORD! I was thinking of it for matching against a literal item:
+
+     data: [not a rule]
+     parse [[not a rule]] [@data]  ; the previous idea: match input against literal
+
+But what it&#39;s acting like now is not for matching input.  Instead, it is a *value-bearing rule that consumes no input*.
+
+So it&#39;s like this:
+
+     &gt;&gt; uparse &quot;aaa&quot; [x: @(&quot;not for match&quot;), some &quot;a&quot;]
+     == &quot;aaa&quot;
+
+     &gt;&gt; x
+     == &quot;not for match&quot;
+
+I threw in a twist, which is that the @ rule will fail if it gets NULL
+
+    &gt;&gt; x: &lt;before&gt;
+
+    &gt;&gt; uparse &quot;aaa&quot; [x: @(if false [&quot;not for match&quot;]), some &quot;a&quot;]
+    ; null
+
+    &gt;&gt; x
+    == &lt;before&gt;
+
+This still gives you the power to take the null and keep going.  Just combine it with the OPT rule!
+
+    &gt;&gt; x: &lt;before&gt;
+
+    &gt;&gt; uparse &quot;aaa&quot; [x: opt @(if false [&quot;not for match&quot;]), some &quot;a&quot;]
+    == &quot;aaa&quot;
+
+    &gt;&gt; x
+    ; null
+
+That makes for good cooperation with KEEP, when you find that you want to keep some calculated material, and you can frame your rule to opt out.  So check this out, @rgchris:
+
+    &gt;&gt; uparse &quot;aaa&quot; [x: collect [some [
+            keep opt @(if false [&lt;not kept&gt;])
+            keep skip  ; or whatever we wind up calling &quot;consume next series item&quot;
+            keep @(if true [&lt;kept&gt;])
+        ]]]
+
+    &gt;&gt; x
+    == [#a &lt;kept&gt; #a &lt;kept&gt; #a &lt;kept&gt;]
+
+## Contrast of `@(...)` and `(...)`
+
+The (...) form and @(...) form are similar in the sense that they do not advance the input...or look at the input at all.  But (...) is not &quot;value-bearing&quot;
+
+    &gt;&gt; uparse &quot;&quot; [x: (1 + 2)]
+    ** Error: UPARSE can&#39;t use SET-WORD! with non-value bearing rule (1 + 2)
+
+**We don&#39;t *technically* need to distinguish the @(...) and (...) forms, but I think there are good reasons to do so.**  I think the &quot;fail the rule if null&quot; is a rather neat twist--and you wouldn&#39;t want that for a rule that wasn&#39;t intended to have its result used (it might incidentally return null, e.g. be an IF whose branch didn&#39;t run).  But the most obvious justification for differentiation is helping guide the user reading the rules to know what they are looking at.
+
+A value-bearing group risks contaminating aggregate captures:
+
+      x: [integer! (...) | text! (...)]
+
+It would be awkward if you had to explicitly disavow those groups with ELIDE (which may take over the name SKIP):
+
+      x: [integer! elide (...) | text! elide (...)]
+
+It&#39;s nice to get a heads up when you are getting things wrong, when you think you&#39;re producing a used value but it&#39;s getting discarded:
+
+    &gt;&gt; uparse &quot;aaa&quot; [some &quot;a&quot;, @(if true [&lt;what?&gt;])]
+    ** Error: Result of @(...) rule not consumed, use (...) for non-value-bearing
+
+Plus, there&#39;s a natural correlation between the `@word` and `@pa/th` forms.  Seeing all these as a family instead of having (...) be the odd duck is helpful.
+
+I&#39;m on the fence as to whether it&#39;s worth &quot;wasting&quot; **`@[bl oc k]`** as a synonym for **`@([bl oc k])`**.  It has the nice property of not looking at the input like other things in the family, and might help KEEP in particular be lighter in adding material to its collection.
+
+## Contrast with `:(...)`
+
+The :(...) form means &quot;use the product of this group as a match rule&quot;.  That goes along with **:word** which I am suggesting means &quot;fetch word and use as a rule, just like with ordinary words, but with the exception that it means override any keyword with the same name.&quot;
+
+Because this is something like COMPOSE-on-the-fly, the case of returning NULL doesn&#39;t fail here.  It just splices no rule.  You have the option of making a failing rule by evaluating to #[false]...so there&#39;s still an option, and that&#39;s a popular one, e.g. **:(mode = &#39;some-state)**
+
+This overrides the need for IF, or similar constructs.  It leaves GET-BLOCK! up for grabs as what it would mean, since a BLOCK! is already interpreted as a rule...so we can keep thinking about that.
+
+## How To Achieve Meaning of &quot;Match Literally&quot;?
+
+We have what appears to be a bit of a hole here, on how we are supposed to match an item of input literally.  Let&#39;s go back to the example:
+
+     data: [not a rule]
+     parse [[not a rule]] [??? data]  ; how to do this match?
+
+Right now we have at least one option: generate a rule that adds a quote level.
+
+     data: [not a rule]
+     parse [[not a rule]] [:(quote data)]
+
+That acts as if we said:
+
+    parse [[not a rule]] [&#39;[not a rule]]
+
+Using **:(quote ...)** is not super ideal, so the pattern might need a keyword.  But the keyword would need to cooperate with the @ form, because **literally data** would have data turned into a block combinator by the parse engine before LITERALLY  saw it.  You&#39;d have to say **`literally @data`** to get the block itself passed.</description>
+    
+    <lastBuildDate>Tue, 13 Apr 2021 16:58:30 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>As always gradual improvements move in the right direction in the end.</p>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/9</link>
+        <pubDate>Tue, 13 Apr 2021 16:58:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-9</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="IngoHohmann" data-post="4" data-topic="1555">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>I think, this should work, too.</p>
+<pre><code>&gt;&gt; uparse "aaabccc" [into [to "b"] [some "a"] to end]
+</code></pre>
+</blockquote>
+</aside>
+<p>I gave my argument for why I didn't like <strong><code>to "b"</code></strong> being the kind of rule that automatically gave a value back...because if it generated a product, then that product would frequently need to be discarded.</p>
+<p>But with the way the rules are currently working, they can know whether they are supposed to be producing a value or not.  This avoids having to make separate "cheap" rules with skip in their name, distinct from "expensive" ones that don't have skip in the name.  Some parser combinator libraries do this.</p>
+<p>Hence I figured there was no harm in having TO become <em>able</em> to bear a value if it wanted to.  Since INTO was the kind of rule that was asking for a place to look, it would qualify for switching TO into that mode.  Easier to type than <strong>into [across to "b"]</strong>.  So I made TO bear a value if there was potential for its usage.</p>
+<p><strong>But given what I'm looking at with <a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/6">yielding the last result of a PARSE rule by default for <code>var: [your rule here]</code></a>, I think this is the wrong tradeoff.</strong></p>
+<p>That takes away the certainty of "rules knowing when they need to generate a product or not" . We can tell with a rule with no set-word that it won't assign a value, but once you combine a block with a SET-WORD!, no rule in the block a priori knows if it's the last.  If we tried to enforce that it could know when it was the last--by means of lookahead and analysis to check if everything afterward was invisible--would mean we'd have to prohibit rules with side effects during argument gathering <em>(as well as prohibit the phenomenon I call "opportunistic invisibility", which is less critical)</em>.  I think that for the kind of freeform experience this is shooting for, we want to err on the side of imperative freedom...even if it costs us optimality.</p>
+<p>But even so: if casual usages of seeking/matching rules are synthesizing new values when they're thrown away 90% of the time, that's worse than calling out the 10% where you do want it.</p>
+<p>Instead, what I might propose is that <strong>@[...]</strong> become the syntax for ACROSS.  This means instead of writing:</p>
+<pre><code>uparse "aaabccc" [into [across to "b"] [some "a"] to end]
+</code></pre>
+<p>You could say:</p>
+<pre><code>uparse "aaabccc" [into @[to "b"] [some "a"] to end]
+</code></pre>
+<p>This would become a means of converting any rule into a value-bearing rule, even if all of its component rules were "invisibles".</p>
+<p>So I'm going to undo my addition that allowed the <strong>into [to "b"]</strong>, and substitute the ability to say <strong>into @[to "b"]</strong>.  Then see how well things can work with parse rules evaluating to their last value...</p>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/8</link>
+        <pubDate>Sun, 11 Apr 2021 22:19:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-8</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>And I thought:</p>
+<pre><code class="lang-auto">&gt;&gt; uparse "aaabbbccc" [
+     some "a",
+     into here ["bbb" to end (print "yep, Bs")]
+     "bbb" (print "Bs again")
+     "ccc" (print "Here be Cs")
+ ]
+yep, Bs
+Bs again
+Here be Cs
+== "aaabbbccc"
+</code></pre>
+<p>or better yet</p>
+<pre><code class="lang-auto">&gt;&gt; uparse "aaabbbccc" [
+     some "a",
+     into here ["bbb" done (print "yep, Bs")]
+     "bbb" (print "Bs again")
+     "ccc" (print "Here be Cs")
+ ]
+yep, Bs
+Bs again
+Here be Cs
+== "aaabbbccc"
+</code></pre>
+<p>Where done means: If I got this far, I don't care about the rest of the input and call it a match.</p>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/7</link>
+        <pubDate>Mon, 15 Mar 2021 16:07:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-7</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I just thought of another weird possibility... parsing into the same series with <strong><code>into here</code></strong></p>
+<pre><code>&gt;&gt; uparse "aaabbb" [
+     some "a",
+     into here ["bbb" (print "yep, Bs")]
+     "bbb" (print "Bs again")
+ ]
+yep, Bs
+Bs again
+== "aaabbb"
+</code></pre>
+<p>It's like AHEAD in that it doesn't move the parse position, but the subrule has to match to the end.  :-/</p>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/6</link>
+        <pubDate>Mon, 15 Mar 2021 15:21:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-6</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="IngoHohmann" data-post="3" data-topic="1555">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>I think it is, and it is how it works, I just want us to be all on the same page here.</p>
+</blockquote>
+</aside>
+<p>Looks right to me, can be added to the tests.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<aside class="quote no-group" data-username="IngoHohmann" data-post="4" data-topic="1555">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>uparse "aaabccc" [into [to "b"] [some "a"] to end]</p>
+</blockquote>
+</aside>
+<p>Initially I was trying to avoid some of what I thought to be bad behaviors of considering <code>TO X</code> to be a "value-bearing combinator" because I didn't like the value it gave:</p>
+<pre><code>red&gt;&gt; parse "aaab" [set x to "b", to end]
+== true
+
+red&gt;&gt; x
+== #"a"
+</code></pre>
+<p>So I made that an error, instead:</p>
+<pre><code> &gt;&gt; uparse "aaab" [x: to "b", to end]
+ ** Error: SET-WORD! in UPARSE needs result-bearing combinator
+</code></pre>
+<p>e.g. I wanted to force you to use something like COPY (now ACROSS)</p>
+<pre><code> &gt;&gt; uparse "aaab" [x: across to "b", to end]
+ == "aaab"
+
+ &gt;&gt; x
+ == "aaa"
+</code></pre>
+<p>However, we could consider the ACROSS to be implicit with TO and THRU.  I don't know quite what all the ramifications of that would be offhand.</p>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/5</link>
+        <pubDate>Mon, 15 Mar 2021 14:38:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-5</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>I think, this should work, too.</p>
+<pre><code>&gt;&gt; uparse "aaabccc" [into [to "b"] [some "a"] to end]
+** Error: BLOCK! combinator did not yield any results</code></pre>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/4</link>
+        <pubDate>Mon, 15 Mar 2021 14:24:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-4</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>Is this the correct behaviour?</p>
+<pre><code>&gt;&gt; uparse "baaabccc" [into [between "b" "b"] [some "a" end] to end]
+== "baaabccc"
+
+&gt;&gt; uparse "baaabccc" [into [between "b" "b"] ["a" end] to end]
+; null
+
+&gt;&gt; uparse "baaabccc" [into [between "b" "b"] ["a"] to end]
+; null
+
+&gt;&gt; uparse "baaabccc" [into [between "b" "b"] ["a" to end] "c" to end]
+== "baaabccc"
+</code></pre>
+<p>I think it is, and it is how it works, I just want us to be all on the same page here.</p>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/3</link>
+        <pubDate>Mon, 15 Mar 2021 14:22:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-3</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p><img src="https://forum.rebol.info/uploads/default/original/1X/c05a319beb104e071ae5724b8c66eeee551c004a.gif" alt="8k1C" data-base62-sha1="rrCUDXgBR4vfTl2yW3Wc4Gvowk2" width="400" height="224"></p>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/2</link>
+        <pubDate>Sat, 13 Mar 2021 16:59:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-2</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+      <item>
+        <title>New, More Powerful Arity-2 INTO in UPARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So INTO had a proposal on the table for R3-Alpha to become arity-2, and take a datatype.  This simplifies a common pattern of wanting to say what you're parsing into:</p>
+<pre><code>ahead text! into [some "a"]  ; arity-1 form
+=&gt;
+into text! [some "a"]  ; arity-2 form
+</code></pre>
+<p>Neither R3-Alpha nor Red went with this...but Topaz did.  (Perhaps it was Gabriele who made the proposal in the first place?)</p>
+<p>On the surface it seems like it has some pros and some cons, but mostly equivalent.  But since UPARSE has <em>value-bearing rules</em>, we can take this one step further... <strong>instead of limiting the first argument to a datatype!, we can make it any rule that bears a series as its result!</strong></p>
+<p>Datatype counts for that, but there's more...</p>
+<h2>Parsing INTO a Generated Series</h2>
+<p>This means you're not just restricted to going INTO a series that existed at the start of the parse.  You can parse into products.</p>
+<p>For example:</p>
+<pre><code>uparse "((aaaa)))" [into [between some "(" some ")"] [some "a"]]
+</code></pre>
+<p>The first rule is a BETWEEN which is somewhat like traditional COPY in that it generates a new series....in this case a series that doesn't have the leading or trailing parentheses.</p>
+<p>If your first rule is complex, this can introduce a somewhat long separation between the parameters.  But a general tool exists now for addressing that, with the SYM-XXX! substitutions:</p>
+<p>Here's why that's important:</p>
+<pre><code>uparse [| | any any any | | |] [
+    content: between some '| some '|
+    into @content [some 'any]
+]
+</code></pre>
+<p>The BETWEEN captured a block as <strong>[any any any]</strong>.  You don't want the INTO to be using that as a rule, you're trying to use it as-is.</p>
+<h2>The Current State of SYM-XXX! In Parse</h2>
+<p>When I first framed the idea of SYM-WORD! I was thinking of it for matching against a literal item:</p>
+<pre><code> data: [not a rule]
+ parse [[not a rule]] [@data]  ; the previous idea: match input against literal
+</code></pre>
+<p>But what it's acting like now is not for matching input.  Instead, it is a <em>value-bearing rule that consumes no input</em>.</p>
+<p>So it's like this:</p>
+<pre><code> &gt;&gt; uparse "aaa" [x: @("not for match"), some "a"]
+ == "aaa"
+
+ &gt;&gt; x
+ == "not for match"
+</code></pre>
+<p>I threw in a twist, which is that the @ rule will fail if it gets NULL</p>
+<pre><code>&gt;&gt; x: &lt;before&gt;
+
+&gt;&gt; uparse "aaa" [x: @(if false ["not for match"]), some "a"]
+; null
+
+&gt;&gt; x
+== &lt;before&gt;
+</code></pre>
+<p>This still gives you the power to take the null and keep going.  Just combine it with the OPT rule!</p>
+<pre><code>&gt;&gt; x: &lt;before&gt;
+
+&gt;&gt; uparse "aaa" [x: opt @(if false ["not for match"]), some "a"]
+== "aaa"
+
+&gt;&gt; x
+; null
+</code></pre>
+<p>That makes for good cooperation with KEEP, when you find that you want to keep some calculated material, and you can frame your rule to opt out.  So check this out, <a class="mention" href="/u/rgchris">@rgchris</a>:</p>
+<pre><code>&gt;&gt; uparse "aaa" [x: collect [some [
+        keep opt @(if false [&lt;not kept&gt;])
+        keep skip  ; or whatever we wind up calling "consume next series item"
+        keep @(if true [&lt;kept&gt;])
+    ]]]
+
+&gt;&gt; x
+== [#a &lt;kept&gt; #a &lt;kept&gt; #a &lt;kept&gt;]
+</code></pre>
+<h2>Contrast of <code>@(...)</code> and <code>(...)</code>
+</h2>
+<p>The (...) form and @(...) form are similar in the sense that they do not advance the input...or look at the input at all.  But (...) is not "value-bearing"</p>
+<pre><code>&gt;&gt; uparse "" [x: (1 + 2)]
+** Error: UPARSE can't use SET-WORD! with non-value bearing rule (1 + 2)
+</code></pre>
+<p><strong>We don't <em>technically</em> need to distinguish the @(...) and (...) forms, but I think there are good reasons to do so.</strong>  I think the "fail the rule if null" is a rather neat twist--and you wouldn't want that for a rule that wasn't intended to have its result used (it might incidentally return null, e.g. be an IF whose branch didn't run).  But the most obvious justification for differentiation is helping guide the user reading the rules to know what they are looking at.</p>
+<p>A value-bearing group risks contaminating aggregate captures:</p>
+<pre><code>  x: [integer! (...) | text! (...)]
+</code></pre>
+<p>It would be awkward if you had to explicitly disavow those groups with ELIDE (which may take over the name SKIP):</p>
+<pre><code>  x: [integer! elide (...) | text! elide (...)]
+</code></pre>
+<p>It's nice to get a heads up when you are getting things wrong, when you think you're producing a used value but it's getting discarded:</p>
+<pre><code>&gt;&gt; uparse "aaa" [some "a", @(if true [&lt;what?&gt;])]
+** Error: Result of @(...) rule not consumed, use (...) for non-value-bearing
+</code></pre>
+<p>Plus, there's a natural correlation between the <code>@word</code> and <code>@pa/th</code> forms.  Seeing all these as a family instead of having (...) be the odd duck is helpful.</p>
+<p>I'm on the fence as to whether it's worth "wasting" <strong><code>@[bl oc k]</code></strong> as a synonym for <strong><code>@([bl oc k])</code></strong>.  It has the nice property of not looking at the input like other things in the family, and might help KEEP in particular be lighter in adding material to its collection.</p>
+<h2>Contrast with <code>:(...)</code>
+</h2>
+<p>The :(...) form means "use the product of this group as a match rule".  That goes along with <strong>:word</strong> which I am suggesting means "fetch word and use as a rule, just like with ordinary words, but with the exception that it means override any keyword with the same name."</p>
+<p>Because this is something like COMPOSE-on-the-fly, the case of returning NULL doesn't fail here.  It just splices no rule.  You have the option of making a failing rule by evaluating to #[false]...so there's still an option, and that's a popular one, e.g. <strong>:(mode = 'some-state)</strong></p>
+<p>This overrides the need for IF, or similar constructs.  It leaves GET-BLOCK! up for grabs as what it would mean, since a BLOCK! is already interpreted as a rule...so we can keep thinking about that.</p>
+<h2>How To Achieve Meaning of "Match Literally"?</h2>
+<p>We have what appears to be a bit of a hole here, on how we are supposed to match an item of input literally.  Let's go back to the example:</p>
+<pre><code> data: [not a rule]
+ parse [[not a rule]] [??? data]  ; how to do this match?
+</code></pre>
+<p>Right now we have at least one option: generate a rule that adds a quote level.</p>
+<pre><code> data: [not a rule]
+ parse [[not a rule]] [:(quote data)]
+</code></pre>
+<p>That acts as if we said:</p>
+<pre><code>parse [[not a rule]] ['[not a rule]]
+</code></pre>
+<p>Using <strong>:(quote ...)</strong> is not super ideal, so the pattern might need a keyword.  But the keyword would need to cooperate with the @ form, because <strong>literally data</strong> would have data turned into a block combinator by the parse engine before LITERALLY  saw it.  You'd have to say <strong><code>literally @data</code></strong> to get the block itself passed.</p>
+          <p><a href="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555/1</link>
+        <pubDate>Sat, 13 Mar 2021 15:27:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1555-1</guid>
+        <source url="https://forum.rebol.info/t/new-more-powerful-arity-2-into-in-uparse/1555.rss">New, More Powerful Arity-2 INTO in UPARSE</source>
+      </item>
+  </channel>
+</rss>

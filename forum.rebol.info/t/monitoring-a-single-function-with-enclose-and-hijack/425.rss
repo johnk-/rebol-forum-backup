@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Monitoring a single function with ENCLOSE and HIJACK</title>
+    <link>https://forum.rebol.info/t/monitoring-a-single-function-with-enclose-and-hijack/425</link>
+    <description>Have you ever wanted to follow the life and times of a single function, to see its input and output in action?  With ENCLOSE and HIJACK, you can...
+
+There&#39;s [some C code](https://github.com/metaeducation/ren-c/blob/fa96060342ee320d0e25019545a57ff1a7b523cf/src/core/l-types.c#L1277) that implements a native called SCAN-NET-HEADER, which I&#39;d like to see ported to usermode.  But I wanted some examples of what it did.
+
+First let&#39;s make a copy of scan-net-header:
+
+    snh-copy: copy :scan-net-header
+
+The reason we want to make a copy is because we plan to hijack existing instances of the function...and we want to tunnel that back into the implementation.  But if we don&#39;t have a copy, our attempt to pass the information through would just get hijacked again...and there&#39;d be an infinite recursion.
+
+*(Note: making copies of a function is a relatively lightweight process, the bodies of non-natives are not deep-copied, for instance.)*
+
+Now let&#39;s make a function that takes the same parameters as our copy of SCAN-NET-HEADER, but can run some code before and after it.  That&#39;s what [ENCLOSE](https://trello.com/c/hhGEl0rW) is for:
+
+    snh-traced: enclose &#39;snh-copy function [f [frame!]] [
+        print &quot;==Input to SCAN-NET-HEADER==&quot;
+        probe f
+
+        print &quot;==Calling SCAN-NET-HEADER==&quot;
+        result: do f
+
+        print &quot;==Result of SCAN-NET-HEADER==&quot;
+        probe result
+
+        return result
+    ]
+
+Now, let&#39;s [HIJACK](https://trello.com/c/eaumDXoG) the SCAN-NET-HEADER function with our new, compatible function (itself not dependent on calling SCAN-NET-HEADER, just a copy).  All existing calls will be routed through our tracer:
+
+    hijack &#39;scan-net-header &#39;snh-traced
+
+One place this gets called is in HTTP requests, so why not the forum?  Since you&#39;re probably typing this in a console prompt where there&#39;s no previous value, you can [use the new ELIDE](https://trello.com/c/snnG8xwW) to say you&#39;re not interested in the giant BINARY! return result...
+
+    &gt;&gt; elide read https://forum.rebol.info
+
+The argument is revealed to be a really huge blob of binary data.  But the result comes out as:
+
+&gt; ==Result of SCAN-NET-HEADER==
+&gt; [Server: &quot;nginx&quot; Date: &quot;Tue, 19 Dec 2017 01:59:58 GMT&quot; Content-Type: &quot;text/html; charset=utf-8&quot; Connection: &quot;close&quot; Vary: &quot;Accept-Encoding&quot; X-Frame-Options: &quot;SAMEORIGIN&quot; X-XSS-Protection: &quot;1; mode=block&quot; X-Content-Type-Options: &quot;nosniff&quot; X-Discourse-Route: &quot;categories/index&quot; Cache-Control: &quot;no-store, must-revalidate, no-cache, private&quot; X-Request-Id: &quot;e504ca54-5429-4427-a744-4c9ce20d51e7&quot; X-Runtime: &quot;0.088665&quot; X-Discourse-TrackView: &quot;1&quot; Strict-Transport-Security: &quot;max-age=63072000&quot;]
+
+We can change our instrumentation of the calling parameters slightly, from **probe f** to **probe to-string f/header**, and see what that was.  It turns out to be the entire source of the page:
+
+    ==Input to SCAN-NET-HEADER==
+    {^M
+    Server: nginx^M
+    Date: Tue, 19 Dec 2017 02:04:51 GMT^M
+    Content-Type: text/html; charset=utf-8^M
+    Connection: close^M
+    Vary: Accept-Encoding^M
+    X-Frame-Options: SAMEORIGIN^M
+    X-XSS-Protection: 1; mode=block^M
+    X-Content-Type-Options: nosniff^M
+    X-Discourse-Route: categories/index^M
+    Cache-Control: no-store, must-revalidate, no-cache, private^M
+    X-Request-Id: 230f30b1-c04b-404c-9bb2-85cec586f573^M
+    X-Runtime: 0.067961^M
+    X-Discourse-TrackView: 1^M
+    Strict-Transport-Security: max-age=63072000^M
+    ^M
+    &lt;!DOCTYPE html&gt;
+    &lt;html lang=&quot;en&quot; class=&quot;desktop-view not-mobile-device  anon&quot;&gt;
+        &lt;head&gt;
+        &lt;meta charset=&quot;utf-8&quot;&gt;
+        &lt;title&gt;AltRebol&lt;/title&gt;
+        ...
+
+So clearly it was making a decision to go up through the lone carriage return to stop processing the key and value pairs.
+
+How about that?  In only a few minutes I was able to instrument and inspect a function.  I could have put in arbitrary processing to limit the range of function calls in which I was interested, or logged and filtered the data instead of dumping it in-band in my program.
+
+Does anyone want to reward all this hard work by writing a usermode SCAN-NET-HEADER for me, so that UTF-8 Everywhere can be finished faster?  :-)</description>
+    
+    <lastBuildDate>Mon, 26 Nov 2018 15:10:33 +0000</lastBuildDate>
+    <category>Feature Discover</category>
+    <atom:link href="https://forum.rebol.info/t/monitoring-a-single-function-with-enclose-and-hijack/425.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Monitoring a single function with ENCLOSE and HIJACK</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Have you ever wanted to follow the life and times of a single function, to see its input and output in action?  With ENCLOSE and HIJACK, you can...</p>
+<p>There's <a href="https://github.com/metaeducation/ren-c/blob/fa96060342ee320d0e25019545a57ff1a7b523cf/src/core/l-types.c#L1277" rel="nofollow noopener">some C code</a> that implements a native called SCAN-NET-HEADER, which I'd like to see ported to usermode.  But I wanted some examples of what it did.</p>
+<p>First let's make a copy of scan-net-header:</p>
+<pre><code>snh-copy: copy :scan-net-header
+</code></pre>
+<p>The reason we want to make a copy is because we plan to hijack existing instances of the function...and we want to tunnel that back into the implementation.  But if we don't have a copy, our attempt to pass the information through would just get hijacked again...and there'd be an infinite recursion.</p>
+<p><em>(Note: making copies of a function is a relatively lightweight process, the bodies of non-natives are not deep-copied, for instance.)</em></p>
+<p>Now let's make a function that takes the same parameters as our copy of SCAN-NET-HEADER, but can run some code before and after it.  That's what <a href="https://trello.com/c/hhGEl0rW" rel="nofollow noopener">ENCLOSE</a> is for:</p>
+<pre><code>snh-traced: enclose 'snh-copy function [f [frame!]] [
+    print "==Input to SCAN-NET-HEADER=="
+    probe f
+
+    print "==Calling SCAN-NET-HEADER=="
+    result: do f
+
+    print "==Result of SCAN-NET-HEADER=="
+    probe result
+
+    return result
+]
+</code></pre>
+<p>Now, let's <a href="https://trello.com/c/eaumDXoG" rel="nofollow noopener">HIJACK</a> the SCAN-NET-HEADER function with our new, compatible function (itself not dependent on calling SCAN-NET-HEADER, just a copy).  All existing calls will be routed through our tracer:</p>
+<pre><code>hijack 'scan-net-header 'snh-traced
+</code></pre>
+<p>One place this gets called is in HTTP requests, so why not the forum?  Since you're probably typing this in a console prompt where there's no previous value, you can <a href="https://trello.com/c/snnG8xwW" rel="nofollow noopener">use the new ELIDE</a> to say you're not interested in the giant BINARY! return result...</p>
+<pre><code>&gt;&gt; elide read https://forum.rebol.info
+</code></pre>
+<p>The argument is revealed to be a really huge blob of binary data.  But the result comes out as:</p>
+<blockquote>
+<p>==Result of SCAN-NET-HEADER==<br>
+[Server: "nginx" Date: "Tue, 19 Dec 2017 01:59:58 GMT" Content-Type: "text/html; charset=utf-8" Connection: "close" Vary: "Accept-Encoding" X-Frame-Options: "SAMEORIGIN" X-XSS-Protection: "1; mode=block" X-Content-Type-Options: "nosniff" X-Discourse-Route: "categories/index" Cache-Control: "no-store, must-revalidate, no-cache, private" X-Request-Id: "e504ca54-5429-4427-a744-4c9ce20d51e7" X-Runtime: "0.088665" X-Discourse-TrackView: "1" Strict-Transport-Security: "max-age=63072000"]</p>
+</blockquote>
+<p>We can change our instrumentation of the calling parameters slightly, from <strong>probe f</strong> to <strong>probe to-string f/header</strong>, and see what that was.  It turns out to be the entire source of the page:</p>
+<pre><code>==Input to SCAN-NET-HEADER==
+{^M
+Server: nginx^M
+Date: Tue, 19 Dec 2017 02:04:51 GMT^M
+Content-Type: text/html; charset=utf-8^M
+Connection: close^M
+Vary: Accept-Encoding^M
+X-Frame-Options: SAMEORIGIN^M
+X-XSS-Protection: 1; mode=block^M
+X-Content-Type-Options: nosniff^M
+X-Discourse-Route: categories/index^M
+Cache-Control: no-store, must-revalidate, no-cache, private^M
+X-Request-Id: 230f30b1-c04b-404c-9bb2-85cec586f573^M
+X-Runtime: 0.067961^M
+X-Discourse-TrackView: 1^M
+Strict-Transport-Security: max-age=63072000^M
+^M
+&lt;!DOCTYPE html&gt;
+&lt;html lang="en" class="desktop-view not-mobile-device  anon"&gt;
+    &lt;head&gt;
+    &lt;meta charset="utf-8"&gt;
+    &lt;title&gt;AltRebol&lt;/title&gt;
+    ...
+</code></pre>
+<p>So clearly it was making a decision to go up through the lone carriage return to stop processing the key and value pairs.</p>
+<p>How about that?  In only a few minutes I was able to instrument and inspect a function.  I could have put in arbitrary processing to limit the range of function calls in which I was interested, or logged and filtered the data instead of dumping it in-band in my program.</p>
+<p>Does anyone want to reward all this hard work by writing a usermode SCAN-NET-HEADER for me, so that UTF-8 Everywhere can be finished faster?  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/monitoring-a-single-function-with-enclose-and-hijack/425/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/monitoring-a-single-function-with-enclose-and-hijack/425/1</link>
+        <pubDate>Tue, 19 Dec 2017 02:09:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-425-1</guid>
+        <source url="https://forum.rebol.info/t/monitoring-a-single-function-with-enclose-and-hijack/425.rss">Monitoring a single function with ENCLOSE and HIJACK</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Effect of Abstracting Functions on Naming/Binding</title>
+    <link>https://forum.rebol.info/t/effect-of-abstracting-functions-on-naming-binding/1487</link>
+    <description>Among the many good fundamental questions tackled in the Whitespace interpreter example is &quot;how do you make your own generator that makes *a function, and some other stuff*&quot;.
+
+So examine [the case of OPERATION](https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L191):
+
+    push: operation [
+        {Push the number onto the stack}
+        space [value: Number]
+    ][
+        insert stack value
+    ]
+
+It looks a bit like FUNC... the description is in a string at the start of the spec block, and the body is the second block.  But while VALUE is a parameter definition, SPACE is just a description of the sequence of characters that are recognized as the pattern for requesting a PUSH instruction.  *(The full &quot;opcode&quot; is actually **space space**, because everything in the Stack-Manipulation category starts with the [&quot;IMP&quot; of space](https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L184))*
+
+Something has to process this operation definition.  It could be an OPERATION function...or something that&#39;s actively looking for the word OPERATION and processing it...e.g. CATEGORY.  I chose to make OPERATION a function that acts as something of a &quot;smart macro&quot;, teasing this out into component parts.
+
+One of those components is a parse rule, `[space space Number]`.  Another is just a function:
+
+    func [value [integer!]] [
+        insert stack value
+    ]
+
+We could put the description into the FUNC, but that&#39;s broken out into its own variable too.  Imagine that OPERATION returns this bundle as an object:
+
+    push: make object! [
+        description: {Push the number onto the stack}
+        opcode: [space space Number]
+        action: func [value [integer!]] [
+            insert stack value
+        ]
+    ]
+
+*(Important Note: If we were forced to write the source like this expansion, it starts looking kind of like a run-of-the-mill JavaScript definition...minus the commas.  A JS specification would also have a harder time using undecorated &quot;words&quot; as [space space Number]... because there&#39;s a requirement of words looking up to variables in a scope.  Even if you get scope sorted out you&#39;ll only get what the words look up to.  So they&#39;d be more likely to say [&quot;space&quot;, &quot;space&quot;, &quot;Number&quot;] in a data-oriented situation.)*
+
+But there&#39;s a weakness to this approach.  If PUSH holds an object, then the way you call it would be PUSH/ACTION.  If you looked on the stack, then the way Rebol would reflect the name of that stack level would be simply as &quot;ACTION&quot;.  That&#39;s not much better than no name at all.
+
+But also, what&#39;s getting built by the interpretation process is an instruction, e.g. **[push 1]**.  Then the instruction is processed with ordinary DO.  That means PUSH has to be a function, but there&#39;s no way to bind PUSH to PUSH/ACTION.  A binding for a word has to go through a word with the same name.
+
+You don&#39;t want the instruction representation to turn into **[push/action 1]**.  You also don&#39;t want to do **compose [(:push/action) 1]** and have the unfriendly literal action in the block...you lose all the niceness.  :-/
+
+So this puts you in the situation of either scrapping the concept that you use DO on the instruction BLOCK! to run the action... or you come up with some word named &quot;push&quot; that you can bind to.
+
+This means the object that gets returned winds up being like:
+
+    push: make object! [
+        description: {Push the number onto the stack}
+        opcode: [space space Number]
+        push: func [value [integer!]] [  ; renamed from ACTION to match PUSH
+            insert stack value
+        ]
+    ]
+
+So now you have two PUSH words to bind to...either the outer or the inner.  But the inner function is now living in an object you wouldn&#39;t want to use as a bind target for anything generic (you don&#39;t want your instruction to see OPCODE, or DESCRIPTION)...so you have to bind *just* the word PUSH inside of PUSH.  This feels rather hackish and unpleasant.
+
+One feature JavaScript has that would be helpful here would be if functions could act as objects.  In JavaScript:
+
+      &gt; foo = function (x) { return x + this.y }
+      &gt; foo.y = 20
+      &gt; foo = foo.bind(foo)  // so it has access to its own fields
+      &gt; foo(10)
+      &lt;- 30
+
+If we could say that things like description and opcode were properties of the function, that could make it so OPERATION actually returned an ACTION!.  It could be bound to its name, yet have these additional fields available.
+
+Since we have the **foo.bar** format as well as **foo/bar**, we could treat the former case as accessing fields out of FOO while the latter case would invoke it with a refinement.
+
+This could fold in with the notion that **foo.** would give you foo inertly.  In fact, **foo.** may be a more aesthetic way of handling GET-WORD! behavior, possibly freeing up GET-WORD! for the more general &quot;give it to me even if it&#39;s unset&quot; idea. (?)  Just a thought.
+
+*(Note: Looking at some Red code today, it really does seem like an uphill battle to convince people that **(obj1/coordinate/x / obj2/coordinate/x)** is somehow an improvement on every other language that uses dots for field selection.)*
+
+I think the idea of being able to treat a function as an object is a good one.  JavaScript certainly gets mileage out of it.
+
+The foundations are already laid with the META information.  So we could say these fields live in the same place the HELP information does.  That makes it potentially crowded, so maybe HELP should put its information under a HELP sub-object... instead of taking top-level words like DESCRIPTION.
+
+## Still...Just a Band-Aid On The Core Problem
+
+We have to ask: **What happens when your abstraction makes TWO functions.**  Now you&#39;re back to the same question about how to bind to these functions through words.
+
+One answer is that you just don&#39;t reuse the evaluator to run the instructions.  Instead you have your own evaluator hooked in that gets in PUSH and goes doing its own lookup...maybe even having a way of running an action under a custom label.
+
+    &gt;&gt; apply/label :obj/action [...] &quot;name-shown-in-debug-trace&quot;
+
+It&#39;s worth remembering that the evaluator can&#39;t be all things to all people.  So trying to give life to all your data structures through it ultimately will fall down.  But this usage in Whitespace is not contrived...it&#39;s trying to get that supposed leverage from having homoiconicity and access to binding and the evaluator.  So we should be clear on what&#39;s unreasonable about its usage if it&#39;s going to be branded as unreasonable...
+
+## Further... Maybe BLOCK! Isn&#39;t The Right Abstraction...
+
+This doesn&#39;t make the naming issue any better... but...since the instructions are built to be run, maybe they should be FRAME!s from the start, instead of BLOCK!s?
+
+Frames render in a less friendly and less loggable way than blocks today.  So it&#39;s a harder problem to think about how to make that work.  But it is a thinking point as to what the right tool to use is.</description>
+    
+    <lastBuildDate>Tue, 02 Feb 2021 14:31:16 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/effect-of-abstracting-functions-on-naming-binding/1487.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Effect of Abstracting Functions on Naming/Binding</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Among the many good fundamental questions tackled in the Whitespace interpreter example is "how do you make your own generator that makes <em>a function, and some other stuff</em>".</p>
+<p>So examine <a href="https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L191">the case of OPERATION</a>:</p>
+<pre><code>push: operation [
+    {Push the number onto the stack}
+    space [value: Number]
+][
+    insert stack value
+]
+</code></pre>
+<p>It looks a bit like FUNC... the description is in a string at the start of the spec block, and the body is the second block.  But while VALUE is a parameter definition, SPACE is just a description of the sequence of characters that are recognized as the pattern for requesting a PUSH instruction.  <em>(The full "opcode" is actually <strong>space space</strong>, because everything in the Stack-Manipulation category starts with the <a href="https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L184">"IMP" of space</a>)</em></p>
+<p>Something has to process this operation definition.  It could be an OPERATION function...or something that's actively looking for the word OPERATION and processing it...e.g. CATEGORY.  I chose to make OPERATION a function that acts as something of a "smart macro", teasing this out into component parts.</p>
+<p>One of those components is a parse rule, <code>[space space Number]</code>.  Another is just a function:</p>
+<pre><code>func [value [integer!]] [
+    insert stack value
+]
+</code></pre>
+<p>We could put the description into the FUNC, but that's broken out into its own variable too.  Imagine that OPERATION returns this bundle as an object:</p>
+<pre><code>push: make object! [
+    description: {Push the number onto the stack}
+    opcode: [space space Number]
+    action: func [value [integer!]] [
+        insert stack value
+    ]
+]
+</code></pre>
+<p><em>(Important Note: If we were forced to write the source like this expansion, it starts looking kind of like a run-of-the-mill JavaScript definition...minus the commas.  A JS specification would also have a harder time using undecorated "words" as [space space Number]... because there's a requirement of words looking up to variables in a scope.  Even if you get scope sorted out you'll only get what the words look up to.  So they'd be more likely to say ["space", "space", "Number"] in a data-oriented situation.)</em></p>
+<p>But there's a weakness to this approach.  If PUSH holds an object, then the way you call it would be PUSH/ACTION.  If you looked on the stack, then the way Rebol would reflect the name of that stack level would be simply as "ACTION".  That's not much better than no name at all.</p>
+<p>But also, what's getting built by the interpretation process is an instruction, e.g. <strong>[push 1]</strong>.  Then the instruction is processed with ordinary DO.  That means PUSH has to be a function, but there's no way to bind PUSH to PUSH/ACTION.  A binding for a word has to go through a word with the same name.</p>
+<p>You don't want the instruction representation to turn into <strong>[push/action 1]</strong>.  You also don't want to do <strong>compose [(:push/action) 1]</strong> and have the unfriendly literal action in the block...you lose all the niceness.  :-/</p>
+<p>So this puts you in the situation of either scrapping the concept that you use DO on the instruction BLOCK! to run the action... or you come up with some word named "push" that you can bind to.</p>
+<p>This means the object that gets returned winds up being like:</p>
+<pre><code>push: make object! [
+    description: {Push the number onto the stack}
+    opcode: [space space Number]
+    push: func [value [integer!]] [  ; renamed from ACTION to match PUSH
+        insert stack value
+    ]
+]
+</code></pre>
+<p>So now you have two PUSH words to bind to...either the outer or the inner.  But the inner function is now living in an object you wouldn't want to use as a bind target for anything generic (you don't want your instruction to see OPCODE, or DESCRIPTION)...so you have to bind <em>just</em> the word PUSH inside of PUSH.  This feels rather hackish and unpleasant.</p>
+<p>One feature JavaScript has that would be helpful here would be if functions could act as objects.  In JavaScript:</p>
+<pre><code>  &gt; foo = function (x) { return x + this.y }
+  &gt; foo.y = 20
+  &gt; foo = foo.bind(foo)  // so it has access to its own fields
+  &gt; foo(10)
+  &lt;- 30
+</code></pre>
+<p>If we could say that things like description and opcode were properties of the function, that could make it so OPERATION actually returned an ACTION!.  It could be bound to its name, yet have these additional fields available.</p>
+<p>Since we have the <strong>foo.bar</strong> format as well as <strong>foo/bar</strong>, we could treat the former case as accessing fields out of FOO while the latter case would invoke it with a refinement.</p>
+<p>This could fold in with the notion that <strong>foo.</strong> would give you foo inertly.  In fact, <strong>foo.</strong> may be a more aesthetic way of handling GET-WORD! behavior, possibly freeing up GET-WORD! for the more general "give it to me even if it's unset" idea. (?)  Just a thought.</p>
+<p><em>(Note: Looking at some Red code today, it really does seem like an uphill battle to convince people that <strong>(obj1/coordinate/x / obj2/coordinate/x)</strong> is somehow an improvement on every other language that uses dots for field selection.)</em></p>
+<p>I think the idea of being able to treat a function as an object is a good one.  JavaScript certainly gets mileage out of it.</p>
+<p>The foundations are already laid with the META information.  So we could say these fields live in the same place the HELP information does.  That makes it potentially crowded, so maybe HELP should put its information under a HELP sub-object... instead of taking top-level words like DESCRIPTION.</p>
+<h2>Still...Just a Band-Aid On The Core Problem</h2>
+<p>We have to ask: <strong>What happens when your abstraction makes TWO functions.</strong>  Now you're back to the same question about how to bind to these functions through words.</p>
+<p>One answer is that you just don't reuse the evaluator to run the instructions.  Instead you have your own evaluator hooked in that gets in PUSH and goes doing its own lookup...maybe even having a way of running an action under a custom label.</p>
+<pre><code>&gt;&gt; apply/label :obj/action [...] "name-shown-in-debug-trace"
+</code></pre>
+<p>It's worth remembering that the evaluator can't be all things to all people.  So trying to give life to all your data structures through it ultimately will fall down.  But this usage in Whitespace is not contrived...it's trying to get that supposed leverage from having homoiconicity and access to binding and the evaluator.  So we should be clear on what's unreasonable about its usage if it's going to be branded as unreasonable...</p>
+<h2>Further... Maybe BLOCK! Isn't The Right Abstraction...</h2>
+<p>This doesn't make the naming issue any better... but...since the instructions are built to be run, maybe they should be FRAME!s from the start, instead of BLOCK!s?</p>
+<p>Frames render in a less friendly and less loggable way than blocks today.  So it's a harder problem to think about how to make that work.  But it is a thinking point as to what the right tool to use is.</p>
+          <p><a href="https://forum.rebol.info/t/effect-of-abstracting-functions-on-naming-binding/1487/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/effect-of-abstracting-functions-on-naming-binding/1487/1</link>
+        <pubDate>Tue, 02 Feb 2021 10:11:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1487-1</guid>
+        <source url="https://forum.rebol.info/t/effect-of-abstracting-functions-on-naming-binding/1487.rss">Effect of Abstracting Functions on Naming/Binding</source>
+      </item>
+  </channel>
+</rss>

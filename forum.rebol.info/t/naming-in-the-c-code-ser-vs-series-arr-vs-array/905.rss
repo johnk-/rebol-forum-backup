@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Naming in the C code: SER vs. SERIES, ARR vs. ARRAY</title>
+    <link>https://forum.rebol.info/t/naming-in-the-c-code-ser-vs-series-arr-vs-array/905</link>
+    <description>### First, a question untrained eyes can help me with...
+
+I&#39;d like you to tell me if this random C code snippet:
+
+    REBARR *paramlist = Make_Array_Core(
+        2,
+        SERIES_MASK_ACTION | NODE_FLAG_MANAGED
+    );
+
+    REBVAL *archetype = RESET_CELL(Alloc_Tail_Array(paramlist), REB_ACTION);
+    archetype-&gt;payload.action.paramlist = paramlist;
+    INIT_BINDING(archetype, UNBOUND);
+
+    REBVAL *param = Init_Typeset(
+        Alloc_Tail_Array(paramlist),
+        TS_OPT_VALUE, // Allow null (e.g. &lt;opt&gt;), returns false
+        Canon(SYM_VALUE)
+    );
+
+...is measurably/importantly clearer than this code:
+
+    REBARR *paramlist = Make_Arr_Core(
+        2,
+        SERIES_MASK_ACTION | NODE_FLAG_MANAGED
+    );
+
+    REBVAL *archetype = RESET_CELL(Alloc_Tail_Arr(paramlist), REB_ACTION);
+    archetype-&gt;payload.action.paramlist = paramlist;
+    INIT_BINDING(archetype, UNBOUND);
+
+    REBVAL *param = Init_Typeset(
+        Alloc_Tail_Arr(paramlist),
+        TS_OPT_VALUE, // Allow null (e.g. &lt;opt&gt;), returns false
+        Canon(SYM_VALUE)
+    );
+
+The abbreviation of `_Array` to `_Arr` isn&#39;t just in the service of lazy typing and being able to fit more code into 80 columns (though it does help there...)
+
+### This actually ties into a classic Rebol terminology problem
+
+&gt; An ANY-SERIES! value has not only an underlying &quot;blob&quot; of data it points into, but also an index into that data.  We often use the term &quot;series&quot; to refer to the value including the index.  But we might also say that *&quot;`block1` and `block2` both point at the same series&quot;*...using the word &quot;series&quot; for the blob of data without an index involved.  How should we discern these two things when talking about them?
+
+It&#39;s a somewhat problematic ambiguity in conversation or technical writeups, so it would be nice to have a good answer.  But when it comes to the C implementation itself--these *must* be distinguished, because it won&#39;t compile unless you use the right types!
+
+So inside the C code, the distinction is that the **REBSER** (or a subclass like REBARR and REBSTR) holds the underlying data, while it is **REBVAL** value cells which hold the instances that point to that REBSER and add in an index *(plus various other bits including the specific series type, plus a binding or whatever is relevant)*.
+
+The most verbose discernments in use today use a trick I came up with where an &quot;any_&quot; prefix is used to distinguish the value:
+
+    void Operation_On_Any_Series(REBVAL *any_series) {
+        REBSER *series = VAL_SERIES(any_series);
+        int index = VAL_INDEX(any_series);
+        FAIL_IF_READ_ONLY_SERIES(series);
+        ...
+    }
+
+But in practice, a lot of code is much lazier because the names are too verbose, and cause the actual interesting code to be eclipsed by repetitions of super long names.  So shorthands show up:
+
+    void Operation_On_Series(REBVAL *v) {
+        REBSER *s = VAL_SERIES(v);
+        int i = VAL_INDEX(v);
+        FAIL_IF_READ_ONLY_SERIES(s);
+        ...
+    }
+
+...and you just sort of trust that datatype checking will make sure you don&#39;t get confused by the ambiguous &quot;_Series(...)&quot;, because it won&#39;t let you pass a REBSER* where a REBVAL* was intended.
+
+### But what if we just called the underlying data &quot;Ser&quot;?
+
+There&#39;s a lot of code which has to deal with both &quot;any_series&quot; values and their &quot;series&quot; blobs, and I&#39;m not 100% satisfied with it.  So I&#39;ve started to wonder about switching it around like this:
+
+    void Operation_On_Series(REBVAL *series) {
+        REBSER *ser = VAL_SER(series); // could use `s` vs. `ser` if you prefer
+        int i = VAL_INDEX(series); // Note: type checking won&#39;t let you pass ser here
+        FAIL_IF_READ_ONLY_SER(ser); // &quot;stitled&quot; name *but* you know what type it takes
+        ...
+    }
+
+So if you see a full word in the name like &quot;Series&quot; you know it&#39;s expecting a series value, index and all.  But if you see SER you know it&#39;s referring just to the REBSER blob.
+
+### What would this do to the code&#39;s accessibility?
+
+There are certainly some preconceptions about this, just because some of these things have been around so long.  While there&#39;s been no shortage of large scale renamings in Ren-C, [`VAL_SERIES()` is what R3-Alpha called the extractor](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/include/reb-value.h#L78).
+
+However, [R3-Alpha used `SERIES_SET_FLAG()`](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/include/sys-value.h#L407) where Ren-C uses [`SET_SER_FLAG`](https://github.com/metaeducation/ren-c/blob/29f168e28ccad742968bfacacbeabe27759ec646/src/include/sys-rebser.h#L1087), but then gave the flags themselves longer names:
+
+    SERIES_SET_FLAG(s, SER_MARK); /* R3-Alpha */
+    SET_SER_FLAG(s, SERIES_FLAG_MARKED); // Ren-C
+
+Somewhere in the process I got the idea that if you didn&#39;t put the word &quot;Series&quot; in lines of code somewhere, that it would make the code seem &quot;inaccessible&quot;.  Also, when you have accessors like SER_WIDE() used everywhere, it seemed that SERIES_FLAG_XX helped you realize it wasn&#39;t an extractor, while SER_FLAG_XXX might seem to fit the pattern of SER_XXX that extract properties from series.
+
+But back to the two code samples I showed in the beginning.  You have to learn that ARR is an array node sometime.  And once you do, might you appreciate it if the names of routines distinguished clearly whether you were passing an &quot;array value&quot; or &quot;just an arr&quot;?
+
+**What I think is that I may be deluding myself in thinking that people are going to have some grand leg up on understanding the C codebase when they see `REBARR *a = Make_Array(...);` instead of `REBARR *a = Make_Arr(...)`.**
+
+While clearly it does serve as a kind of documentation *on that line* which reminds you or tells you what ARR stands for, this tiny assist will serve as no significant aid.  Your editor needs to have a &quot;Jump to Declaration&quot; so you can click on REBARR and go look if you want to find out, anyway!  So the value of that commentary note of writing out the whole word &quot;Array&quot; may pale in comparison to the systemic benefit of knowing the whole word `array` is saved for values with indexes/bindings/types, while `arr` is for raw data nodes.
+
+It seems a smarter tradeoff, especially since it makes a lot of code shorter (!)
+
+### Could SER, ARR, etc. get adopted into userspace terminology?
+
+What if you said things like: *&quot;`block1` and `block2` point to the same `SER` data&quot;* or something like that?  `SERDATA` could be the public face of the internal &quot;REBSER&quot; type.
+
+There&#39;s never been a great term for this...and taking the word &quot;series&quot; out of it and just using SER could bridge understanding to anyone who started looking at the C code.
+
+(Other names have come along ranging from STORE/STORAGE to TAPE to a lot of other things I don&#39;t remember.)</description>
+    
+    <lastBuildDate>Sat, 26 Jan 2019 05:50:52 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/naming-in-the-c-code-ser-vs-series-arr-vs-array/905.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Naming in the C code: SER vs. SERIES, ARR vs. ARRAY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="905">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>REBARR *paramlist = Make_Array_Core( 2, SERIES_MASK_ACTION | NODE_FLAG_MANAGED );</p>
+</blockquote>
+</aside>
+<aside class="quote no-group" data-post="1" data-topic="905">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>REBARR *paramlist = Make_Arr_Core( 2, SERIES_MASK_ACTION | NODE_FLAG_MANAGED );</p>
+</blockquote>
+</aside>
+<p>Having made this small change to try it out, I think I'm going to say this should change back.</p>
+<p>There's a big psychological barrier to people reading code, that using full words when you can helps with.  While it may be true that there's a more "rigorous" notation, I think that if people open a file and see "Make_Arr()" vs. "Make_Array()" they carry away a different impression.</p>
+<p>I'd rather live with ambiguities and let the type system catch problems, than have any additional barriers to people feeling like it's source they can't edit.  I really do want to work harder on making sure that people can get in and contribute quickly, when C programmers show up.  And anything that helps not scare them away is a good thing.</p>
+          <p><a href="https://forum.rebol.info/t/naming-in-the-c-code-ser-vs-series-arr-vs-array/905/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/naming-in-the-c-code-ser-vs-series-arr-vs-array/905/2</link>
+        <pubDate>Sat, 26 Jan 2019 05:50:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-905-2</guid>
+        <source url="https://forum.rebol.info/t/naming-in-the-c-code-ser-vs-series-arr-vs-array/905.rss">Naming in the C code: SER vs. SERIES, ARR vs. ARRAY</source>
+      </item>
+      <item>
+        <title>Naming in the C code: SER vs. SERIES, ARR vs. ARRAY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h3>First, a question untrained eyes can help me with...</h3>
+<p>I'd like you to tell me if this random C code snippet:</p>
+<pre><code>REBARR *paramlist = Make_Array_Core(
+    2,
+    SERIES_MASK_ACTION | NODE_FLAG_MANAGED
+);
+
+REBVAL *archetype = RESET_CELL(Alloc_Tail_Array(paramlist), REB_ACTION);
+archetype-&gt;payload.action.paramlist = paramlist;
+INIT_BINDING(archetype, UNBOUND);
+
+REBVAL *param = Init_Typeset(
+    Alloc_Tail_Array(paramlist),
+    TS_OPT_VALUE, // Allow null (e.g. &lt;opt&gt;), returns false
+    Canon(SYM_VALUE)
+);
+</code></pre>
+<p>...is measurably/importantly clearer than this code:</p>
+<pre><code>REBARR *paramlist = Make_Arr_Core(
+    2,
+    SERIES_MASK_ACTION | NODE_FLAG_MANAGED
+);
+
+REBVAL *archetype = RESET_CELL(Alloc_Tail_Arr(paramlist), REB_ACTION);
+archetype-&gt;payload.action.paramlist = paramlist;
+INIT_BINDING(archetype, UNBOUND);
+
+REBVAL *param = Init_Typeset(
+    Alloc_Tail_Arr(paramlist),
+    TS_OPT_VALUE, // Allow null (e.g. &lt;opt&gt;), returns false
+    Canon(SYM_VALUE)
+);
+</code></pre>
+<p>The abbreviation of <code>_Array</code> to <code>_Arr</code> isn't just in the service of lazy typing and being able to fit more code into 80 columns (though it does help there...)</p>
+<h3>This actually ties into a classic Rebol terminology problem</h3>
+<blockquote>
+<p>An ANY-SERIES! value has not only an underlying "blob" of data it points into, but also an index into that data.  We often use the term "series" to refer to the value including the index.  But we might also say that <em>"<code>block1</code> and <code>block2</code> both point at the same series"</em>...using the word "series" for the blob of data without an index involved.  How should we discern these two things when talking about them?</p>
+</blockquote>
+<p>It's a somewhat problematic ambiguity in conversation or technical writeups, so it would be nice to have a good answer.  But when it comes to the C implementation itself--these <em>must</em> be distinguished, because it won't compile unless you use the right types!</p>
+<p>So inside the C code, the distinction is that the <strong>REBSER</strong> (or a subclass like REBARR and REBSTR) holds the underlying data, while it is <strong>REBVAL</strong> value cells which hold the instances that point to that REBSER and add in an index <em>(plus various other bits including the specific series type, plus a binding or whatever is relevant)</em>.</p>
+<p>The most verbose discernments in use today use a trick I came up with where an "any_" prefix is used to distinguish the value:</p>
+<pre><code>void Operation_On_Any_Series(REBVAL *any_series) {
+    REBSER *series = VAL_SERIES(any_series);
+    int index = VAL_INDEX(any_series);
+    FAIL_IF_READ_ONLY_SERIES(series);
+    ...
+}
+</code></pre>
+<p>But in practice, a lot of code is much lazier because the names are too verbose, and cause the actual interesting code to be eclipsed by repetitions of super long names.  So shorthands show up:</p>
+<pre><code>void Operation_On_Series(REBVAL *v) {
+    REBSER *s = VAL_SERIES(v);
+    int i = VAL_INDEX(v);
+    FAIL_IF_READ_ONLY_SERIES(s);
+    ...
+}
+</code></pre>
+<p>...and you just sort of trust that datatype checking will make sure you don't get confused by the ambiguous "_Series(...)", because it won't let you pass a REBSER* where a REBVAL* was intended.</p>
+<h3>But what if we just called the underlying data "Ser"?</h3>
+<p>There's a lot of code which has to deal with both "any_series" values and their "series" blobs, and I'm not 100% satisfied with it.  So I've started to wonder about switching it around like this:</p>
+<pre><code>void Operation_On_Series(REBVAL *series) {
+    REBSER *ser = VAL_SER(series); // could use `s` vs. `ser` if you prefer
+    int i = VAL_INDEX(series); // Note: type checking won't let you pass ser here
+    FAIL_IF_READ_ONLY_SER(ser); // "stitled" name *but* you know what type it takes
+    ...
+}
+</code></pre>
+<p>So if you see a full word in the name like "Series" you know it's expecting a series value, index and all.  But if you see SER you know it's referring just to the REBSER blob.</p>
+<h3>What would this do to the code's accessibility?</h3>
+<p>There are certainly some preconceptions about this, just because some of these things have been around so long.  While there's been no shortage of large scale renamings in Ren-C, <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/include/reb-value.h#L78" rel="nofollow noopener"><code>VAL_SERIES()</code> is what R3-Alpha called the extractor</a>.</p>
+<p>However, <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/include/sys-value.h#L407" rel="nofollow noopener">R3-Alpha used <code>SERIES_SET_FLAG()</code></a> where Ren-C uses <a href="https://github.com/metaeducation/ren-c/blob/29f168e28ccad742968bfacacbeabe27759ec646/src/include/sys-rebser.h#L1087" rel="nofollow noopener"><code>SET_SER_FLAG</code></a>, but then gave the flags themselves longer names:</p>
+<pre><code>SERIES_SET_FLAG(s, SER_MARK); /* R3-Alpha */
+SET_SER_FLAG(s, SERIES_FLAG_MARKED); // Ren-C
+</code></pre>
+<p>Somewhere in the process I got the idea that if you didn't put the word "Series" in lines of code somewhere, that it would make the code seem "inaccessible".  Also, when you have accessors like SER_WIDE() used everywhere, it seemed that SERIES_FLAG_XX helped you realize it wasn't an extractor, while SER_FLAG_XXX might seem to fit the pattern of SER_XXX that extract properties from series.</p>
+<p>But back to the two code samples I showed in the beginning.  You have to learn that ARR is an array node sometime.  And once you do, might you appreciate it if the names of routines distinguished clearly whether you were passing an "array value" or "just an arr"?</p>
+<p><strong>What I think is that I may be deluding myself in thinking that people are going to have some grand leg up on understanding the C codebase when they see <code>REBARR *a = Make_Array(...);</code> instead of <code>REBARR *a = Make_Arr(...)</code>.</strong></p>
+<p>While clearly it does serve as a kind of documentation <em>on that line</em> which reminds you or tells you what ARR stands for, this tiny assist will serve as no significant aid.  Your editor needs to have a "Jump to Declaration" so you can click on REBARR and go look if you want to find out, anyway!  So the value of that commentary note of writing out the whole word "Array" may pale in comparison to the systemic benefit of knowing the whole word <code>array</code> is saved for values with indexes/bindings/types, while <code>arr</code> is for raw data nodes.</p>
+<p>It seems a smarter tradeoff, especially since it makes a lot of code shorter (!)</p>
+<h3>Could SER, ARR, etc. get adopted into userspace terminology?</h3>
+<p>What if you said things like: <em>"<code>block1</code> and <code>block2</code> point to the same <code>SER</code> data"</em> or something like that?  <code>SERDATA</code> could be the public face of the internal "REBSER" type.</p>
+<p>There's never been a great term for this...and taking the word "series" out of it and just using SER could bridge understanding to anyone who started looking at the C code.</p>
+<p>(Other names have come along ranging from STORE/STORAGE to TAPE to a lot of other things I don't remember.)</p>
+          <p><a href="https://forum.rebol.info/t/naming-in-the-c-code-ser-vs-series-arr-vs-array/905/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/naming-in-the-c-code-ser-vs-series-arr-vs-array/905/1</link>
+        <pubDate>Wed, 14 Nov 2018 21:55:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-905-1</guid>
+        <source url="https://forum.rebol.info/t/naming-in-the-c-code-ser-vs-series-arr-vs-array/905.rss">Naming in the C code: SER vs. SERIES, ARR vs. ARRAY</source>
+      </item>
+  </channel>
+</rss>

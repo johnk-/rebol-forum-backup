@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Holy Grail of Hello World and PRINT...Solved?</title>
+    <link>https://forum.rebol.info/t/the-holy-grail-of-hello-world-and-print-solved/1197</link>
+    <description>When I first used Rebol, I thought it was great how clean a PRINT statement could look.  Between the curly-brace delimited strings allowing for quotes and apostrophes (and nested braces), there was a pleasing and natural implicit spacing between the parts:
+
+     &gt;&gt; score: 1020
+     &gt;&gt; print [{This &quot;score&quot; isn&#39;t real, player:} score]
+     This &quot;score&quot; isn&#39;t real, player: 1020
+
+But when finer-grained control was needed, things started to break down.  I won&#39;t go into all the problems with REJOIN, but just looking at a simple tweak:
+
+    &gt;&gt; user: &quot;Bob&quot;
+    &gt;&gt; score: 1020
+    &gt;&gt; print rejoin [
+        {This &quot;score&quot; isn&#39;t real, } user {:} space score
+    ]
+    This &quot;score&quot; isn&#39;t real, Bob: 1020
+
+I also don&#39;t like spaces on the ends of strings like that...it makes it harder to see the pattern in them and factor them better.  And when using double quotes:
+
+    [&quot;it&#39;s hard to &quot; scan for &quot; what&#39;s a string &quot; or not]
+
+Without syntax highlighting (which I think is a design goal, here) you look at the middle of such things and don&#39;t know what you&#39;re looking at.
+
+So this means I always wanted to use BLANK! to mean space, so it could be used more freely and would look nicer.  So compare:
+
+    rebol2&gt;&gt; print rejoin [
+        {This &quot;score&quot; isn&#39;t real,} space user {:} space score
+    ]
+    This &quot;score&quot; isn&#39;t real, Bob: 1020
+
+    &gt;&gt; print unspaced [
+        {This &quot;score&quot; isn&#39;t real,} _ user {:} _ score
+    ]
+    This &quot;score&quot; isn&#39;t real, Bob: 1020
+
+&gt; **Note:** The frequent need for this level of control even provoked a period of reflection about whether this was clean enough to be the default means of getting spaces in PRINT statements, e.g. that it would be based on UNSPACED instead of SPACED when passed a plain block.  However, while the underscores for explicit space look good when you&#39;re *forced* into being explicit, it was still no match for the cleanliness of not having any underscores when implicit spacing would work...which is rather often:
+&gt;
+&gt;     print [{This &quot;score&quot; isn&#39;t real, player:} _ score]  ; not bad
+&gt;     print [{This &quot;score&quot; isn&#39;t real, player:} score]  ; ...better
+&gt;
+&gt; Thus the historical behavior was deemed the best default.  Though it should be emphasized that UNSPACED and SPACED are based on DELIMIT, which has a number of general improvements over history...and that building PRINT on top of WRITE STDOUT and these constructs offers great flexibility to use the behaviors independently, and there&#39;s a lot of cleverness in Ren-C&#39;s working for this that wasn&#39;t there before.
+
+## Are Blanks : Block as Space : String (???)
+
+Beyond thinking this is a clean visual way to see your data, I&#39;ve wondered if there&#39;s a conceptual parity between spaces and blanks.
+
+The counter-argument to that would be that you might imagine blanks to take on a sort of &quot;placeholder&quot; status that actually corresponds to *nothing* in a string.  For instance, a set of operations like this:
+
+    &gt;&gt; b: to block! [&quot;abc&quot;]
+    == [#&quot;a&quot; #&quot;b&quot; #&quot;c&quot;]
+
+    &gt;&gt; b/3: &quot;def&quot;
+    &gt;&gt; b/2: _
+    &gt;&gt; b
+    == [#&quot;a&quot; _ &quot;def&quot;]
+
+    &gt;&gt; t: to text! b
+    == &quot;adef&quot;
+
+But of course, if that was your intention you could do it with a REMOVE-EACH step that took out the blanks.  Or just remove the spots as you went if you weren&#39;t dealing with a situation that was too inefficient.
+
+## Historical problem: Use of Blanks as non-noisy NULL
+
+I&#39;ve already written about the [dual responsibility of BLANK!](https://forum.rebol.info/t/should-append-null-fail-append-blank-add-nothing-unless-only/635/4?u=hostilefork).  Consider:
+
+    &gt;&gt; description: third [&quot;Cruel&quot; &quot;Brave New&quot;]
+    ; null
+
+    &gt;&gt; print [&quot;Hello&quot; description &quot;World&quot;]
+    ** Error: description is unset
+
+You *could* have said `:description`, but that doesn&#39;t look as good...and using unset variables when you don&#39;t *need* to is kind of a sketchy practice.  So instead, the idea was that you&#39;d be able to say the likes of:
+
+    &gt;&gt; description: try third [&quot;Cruel&quot; &quot;Brave New&quot;]
+    == _
+
+    &gt;&gt; print [&quot;Hello&quot; description &quot;World&quot;]  ; look ma, no GET-WORD!
+    Hello World  ; ...and no error!
+
+This seemed like a logical behavior--compared to getting a seemingly &quot;random&quot; behavior of the blank as a space.  So early experiments in DELIMIT (the code behind SPACED and UNSPACED) which turned BLANK!s into spaces were backed out.
+
+## But...Can a Crazy Idea Save This (and other) Wishes?
+
+I proposed an idea that a [plain WORD! or PATH! variable lookup that finds a BLANK! value evaluate to null](https://forum.rebol.info/t/should-append-null-fail-append-blank-add-nothing-unless-only/635/5?u=hostilefork).  This would mean that if `description` above looked up to a BLANK!, `[&quot;Hello&quot; description &quot;World&quot;]` would act like `[&quot;Hello&quot; null &quot;World&quot;]` and not `[&quot;Hello&quot; _ &quot;World&quot;]`.
+
+If you combine this with the idea that PRINT has an /UNSPACED mode controlled by a modal parameter, things get really nice:
+
+    &gt;&gt; print @[{This &quot;score&quot; isn&#39;t real,} _ user {:} _ score]
+    This &quot;score&quot; isn&#39;t real, Bob: 1020
+
+And the train of thought which led to the idea was to address a completely different issue.
+
+I&#39;ve managed to get the system to boot with this rule enough to try it.  And it looks pretty darn good.  The main thing that happened is that a lot of code that used to say:
+
+    if find var-that-might-be-block-or-blank item [...]
+
+Becomes:
+
+    if find try var-that-might-be-block-or-blank item [...]
+
+Because FIND follows the blank-in-null-out convention, which purposefully errors on nulls, which that blank variable now evaluates to.  But bear in mind, the variables aren&#39;t called that, so what&#39;s actually happening is you&#39;re changing:
+
+    if find black-box item [...]
+    if find try black-box item [...]
+
+So having to change the source to this doesn&#39;t feel like a bad thing.  It feels like now the callsite is telling the reader &quot;oh, hey, blank-box might be blank&quot;.  You *know* it&#39;s not unset, otherwise the TRY wouldn&#39;t help.  You&#39;ll only be getting a null back in the case that it&#39;s blank, and that&#39;s the only case the TRY will give you back a blank.
+
+And again, the problem this was originally trying to solve was the question of how routines like APPEND and COMPOSE should handle blanks by default.  What this does is pushes the responsibility off of them, and onto the caller to say what they meant by either saying TRY or not.
+
+## It&#39;s Looking Rather Promising...
+
+One thing I&#39;ll say by looking at the code in the system itself is that a lot of times it seems more clear to say SPACE explicitly.  But I don&#39;t think the code for the interpreter and its extensions are very representative of scripts people tend to write.
+
+Anyone care to throw in thoughts?</description>
+    
+    <lastBuildDate>Mon, 26 Aug 2019 15:11:47 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/the-holy-grail-of-hello-world-and-print-solved/1197.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Holy Grail of Hello World and PRINT...Solved?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When I first used Rebol, I thought it was great how clean a PRINT statement could look.  Between the curly-brace delimited strings allowing for quotes and apostrophes (and nested braces), there was a pleasing and natural implicit spacing between the parts:</p>
+<pre><code> &gt;&gt; score: 1020
+ &gt;&gt; print [{This "score" isn't real, player:} score]
+ This "score" isn't real, player: 1020
+</code></pre>
+<p>But when finer-grained control was needed, things started to break down.  I won't go into all the problems with REJOIN, but just looking at a simple tweak:</p>
+<pre><code>&gt;&gt; user: "Bob"
+&gt;&gt; score: 1020
+&gt;&gt; print rejoin [
+    {This "score" isn't real, } user {:} space score
+]
+This "score" isn't real, Bob: 1020
+</code></pre>
+<p>I also don't like spaces on the ends of strings like that...it makes it harder to see the pattern in them and factor them better.  And when using double quotes:</p>
+<pre><code>["it's hard to " scan for " what's a string " or not]
+</code></pre>
+<p>Without syntax highlighting (which I think is a design goal, here) you look at the middle of such things and don't know what you're looking at.</p>
+<p>So this means I always wanted to use BLANK! to mean space, so it could be used more freely and would look nicer.  So compare:</p>
+<pre><code>rebol2&gt;&gt; print rejoin [
+    {This "score" isn't real,} space user {:} space score
+]
+This "score" isn't real, Bob: 1020
+
+&gt;&gt; print unspaced [
+    {This "score" isn't real,} _ user {:} _ score
+]
+This "score" isn't real, Bob: 1020
+</code></pre>
+<blockquote>
+<p><strong>Note:</strong> The frequent need for this level of control even provoked a period of reflection about whether this was clean enough to be the default means of getting spaces in PRINT statements, e.g. that it would be based on UNSPACED instead of SPACED when passed a plain block.  However, while the underscores for explicit space look good when you're <em>forced</em> into being explicit, it was still no match for the cleanliness of not having any underscores when implicit spacing would work...which is rather often:</p>
+<pre><code>print [{This "score" isn't real, player:} _ score]  ; not bad
+print [{This "score" isn't real, player:} score]  ; ...better
+</code></pre>
+<p>Thus the historical behavior was deemed the best default.  Though it should be emphasized that UNSPACED and SPACED are based on DELIMIT, which has a number of general improvements over history...and that building PRINT on top of WRITE STDOUT and these constructs offers great flexibility to use the behaviors independently, and there's a lot of cleverness in Ren-C's working for this that wasn't there before.</p>
+</blockquote>
+<h2>Are Blanks : Block as Space : String (???)</h2>
+<p>Beyond thinking this is a clean visual way to see your data, I've wondered if there's a conceptual parity between spaces and blanks.</p>
+<p>The counter-argument to that would be that you might imagine blanks to take on a sort of "placeholder" status that actually corresponds to <em>nothing</em> in a string.  For instance, a set of operations like this:</p>
+<pre><code>&gt;&gt; b: to block! ["abc"]
+== [#"a" #"b" #"c"]
+
+&gt;&gt; b/3: "def"
+&gt;&gt; b/2: _
+&gt;&gt; b
+== [#"a" _ "def"]
+
+&gt;&gt; t: to text! b
+== "adef"
+</code></pre>
+<p>But of course, if that was your intention you could do it with a REMOVE-EACH step that took out the blanks.  Or just remove the spots as you went if you weren't dealing with a situation that was too inefficient.</p>
+<h2>Historical problem: Use of Blanks as non-noisy NULL</h2>
+<p>I've already written about the <a href="https://forum.rebol.info/t/should-append-null-fail-append-blank-add-nothing-unless-only/635/4">dual responsibility of BLANK!</a>.  Consider:</p>
+<pre><code>&gt;&gt; description: third ["Cruel" "Brave New"]
+; null
+
+&gt;&gt; print ["Hello" description "World"]
+** Error: description is unset
+</code></pre>
+<p>You <em>could</em> have said <code>:description</code>, but that doesn't look as good...and using unset variables when you don't <em>need</em> to is kind of a sketchy practice.  So instead, the idea was that you'd be able to say the likes of:</p>
+<pre><code>&gt;&gt; description: try third ["Cruel" "Brave New"]
+== _
+
+&gt;&gt; print ["Hello" description "World"]  ; look ma, no GET-WORD!
+Hello World  ; ...and no error!
+</code></pre>
+<p>This seemed like a logical behavior--compared to getting a seemingly "random" behavior of the blank as a space.  So early experiments in DELIMIT (the code behind SPACED and UNSPACED) which turned BLANK!s into spaces were backed out.</p>
+<h2>But...Can a Crazy Idea Save This (and other) Wishes?</h2>
+<p>I proposed an idea that a <a href="https://forum.rebol.info/t/should-append-null-fail-append-blank-add-nothing-unless-only/635/5">plain WORD! or PATH! variable lookup that finds a BLANK! value evaluate to null</a>.  This would mean that if <code>description</code> above looked up to a BLANK!, <code>["Hello" description "World"]</code> would act like <code>["Hello" null "World"]</code> and not <code>["Hello" _ "World"]</code>.</p>
+<p>If you combine this with the idea that PRINT has an /UNSPACED mode controlled by a modal parameter, things get really nice:</p>
+<pre><code>&gt;&gt; print @[{This "score" isn't real,} _ user {:} _ score]
+This "score" isn't real, Bob: 1020
+</code></pre>
+<p>And the train of thought which led to the idea was to address a completely different issue.</p>
+<p>I've managed to get the system to boot with this rule enough to try it.  And it looks pretty darn good.  The main thing that happened is that a lot of code that used to say:</p>
+<pre><code>if find var-that-might-be-block-or-blank item [...]
+</code></pre>
+<p>Becomes:</p>
+<pre><code>if find try var-that-might-be-block-or-blank item [...]
+</code></pre>
+<p>Because FIND follows the blank-in-null-out convention, which purposefully errors on nulls, which that blank variable now evaluates to.  But bear in mind, the variables aren't called that, so what's actually happening is you're changing:</p>
+<pre><code>if find black-box item [...]
+if find try black-box item [...]
+</code></pre>
+<p>So having to change the source to this doesn't feel like a bad thing.  It feels like now the callsite is telling the reader "oh, hey, blank-box might be blank".  You <em>know</em> it's not unset, otherwise the TRY wouldn't help.  You'll only be getting a null back in the case that it's blank, and that's the only case the TRY will give you back a blank.</p>
+<p>And again, the problem this was originally trying to solve was the question of how routines like APPEND and COMPOSE should handle blanks by default.  What this does is pushes the responsibility off of them, and onto the caller to say what they meant by either saying TRY or not.</p>
+<h2>It's Looking Rather Promising...</h2>
+<p>One thing I'll say by looking at the code in the system itself is that a lot of times it seems more clear to say SPACE explicitly.  But I don't think the code for the interpreter and its extensions are very representative of scripts people tend to write.</p>
+<p>Anyone care to throw in thoughts?</p>
+          <p><a href="https://forum.rebol.info/t/the-holy-grail-of-hello-world-and-print-solved/1197/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-holy-grail-of-hello-world-and-print-solved/1197/1</link>
+        <pubDate>Mon, 26 Aug 2019 08:50:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1197-1</guid>
+        <source url="https://forum.rebol.info/t/the-holy-grail-of-hello-world-and-print-solved/1197.rss">The Holy Grail of Hello World and PRINT...Solved?</source>
+      </item>
+  </channel>
+</rss>

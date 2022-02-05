@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should modifying variables during iteration affect it?</title>
+    <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938</link>
+    <description>Here is the behavior of changing a REPEAT variable in Rebol2 and R3-Alpha:
+
+    rebol2&gt;&gt; repeat n 3 [print &quot;What happens?&quot; n: 3]
+    What happens?
+    == 3
+
+Here&#39;s that same behavior in Red:
+
+    red&gt;&gt; repeat n 3 [print &quot;What happens?&quot; n: 3]
+    What happens?
+    What happens?
+    What happens?
+    == 3
+
+One might then ask what happens if you set the loop variable to something not even an integer.  In Rebol2, it just exits the loop.  In R3-Alpha, it errors:
+
+    r3-alpha&gt;&gt; repeat n 3 [print &quot;What happens?&quot; n: &lt;boo&gt;]
+    What happens?
+    ** Script error: tag! type is not allowed here
+
+## Is there always a clear meaning?
+
+Not necessarily.  What about FOR-EACH?
+
+    foreach x [1 2 3] [x: &quot;what should this do?&quot;]
+
+If you put on your imagination hat, you might imagine this as a way to mutate the series being iterated.  In that world, changing X would actually change the element in the array.  But Rebol&#39;s model isn&#39;t completely geared for this...though it *could* be done (by marking the variable with a bit, observing if that bit is cleared in an overwrite, and doing a write-back if clear).
+
+That&#39;s not necessarily a *bad* imagination-hat to have on--though I&#39;d worry about implementing a feature exploiting bit-level knowledge that a user couldn&#39;t do themselves.  (So it would have to rely on equality, and write back non-equal things--just having an optimization that avoided the test if the bit hadn&#39;t been mucked with.)
+
+*(Note: C++ can do this through &quot;references&quot;, and it is the difference between **for (auto x : collection) {...}** and **for (auto &amp;x : collection)**.)*
+
+But even if you could stretch and come up with a meaning in FOR-EACH, the broader point is it&#39;s not always possible.  Some iterations that put values in a variable may not be able to sensibly understand a change made to the iteration variable, and interpret it in a way that affects the next iteration.
+
+## What about performance?
+
+Red&#39;s decision on REPEAT gives it a certain freedom from trying to figure out the meaning of any changes to the variable.  The iteration holds internal state--images that into a variable for you---and if you change it that&#39;s just for your temporary purposes in the loop.  There&#39;s no fetch of the loop variable on each iteration, only a write.
+
+But Red clearly thinks it&#39;s important enough in FORALL to pay attention to changes to the iterated variable, because that works:
+
+    red&gt;&gt; forall data [probe data data: next data]
+    [1 2 3 4]
+    [3 4]
+    == [4]
+
+In fact, in a fairly rare case of Red not repeating [a bug in R3-Alpha](https://github.com/rebol/rebol-issues/issues/2307), they fully [fetch the variable each time through the FORALL](https://github.com/red/red/blob/1e0d5ec2360b336ef8111546e3221024dc28e31f/runtime/natives.reds#L350).
+
+Paying attention to changes to the variable is not going to be the most *performant* choice.  By avoiding the fetch of a potentially modified N in the REPEAT loop above, Red doesn&#39;t have to re-fetch the variable on each loop iteration to make sure you didn&#39;t change it into a TAG!, or whatever.
+
+But I think it is worth noting that it is now 6 years since R3-Alpha was open sourced, and 7 years since Red&#39;s announcement.  When you think about making decisions based on &quot;performance&quot;, e.g. the speed of a REPEAT loop, choosing something less flexible for purposes of marginal efficiency *makes less sense than ever*.
+
+## Solutions?
+
+Being able to change loop variables allows more patterns of solution.  The FORALL case is a good one (Ren-C calls this category FOR-NEXT because you can change the series to whatever you like, and it runs a NEXT on it at each iteration).  I think it would be less expressive to not be able to see response from the iteration to a change, and by extension one would argue that changing the index in a REPEAT (or plain FOR) should also have an effect.
+
+Yet I&#39;ve pointed out it doesn&#39;t always make sense--such as in FOR-EACH.
+
+One idea that comes to mind could be to PROTECT any loop variables whose modification cannot semantically be mapped back into meaning for the next iteration.  If you find you can&#39;t change a variable, then that means that the loop wouldn&#39;t be able to react if you did.
+
+I like that because it feels like it&#39;s giving feedback to the user about the contract of the loop.  Though it might appear to &quot;waste&quot; a variable slot you could otherwise use as a temporary.
+
+What do you think?  Should loops lock any variables from modification if they can&#39;t meaningfully interpret a modification to affect the next iteration?</description>
+    
+    <lastBuildDate>Sun, 09 Dec 2018 01:14:28 +0000</lastBuildDate>
+    <category>Philosophy</category>
+    <atom:link href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should modifying variables during iteration affect it?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="7" data-topic="938">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>And why would you want to reclaim loop by repeat? To make LOOP the more complex one?</p>
+</blockquote>
+</aside>
+<p>Yes.  LOOP is a short word and there is precedent of a "loop dialect" in Lisp, which I'd like to see tackled in Rebol:</p>
+<p><a href="http://www.gigamonkeys.com/book/loop-for-black-belts.html" class="onebox" target="_blank" rel="nofollow noopener">http://www.gigamonkeys.com/book/loop-for-black-belts.html</a></p>
+<p>Imagine something designed to be tailor-made to the domain of looping, much like PARSE is for parsing.  Doesn't it make sense that would get the most generic and short name?</p>
+<p>I don't know exactly what Rebol's take on this would look like.  A good start might just be to copy Lisp as verbatim as possible for starters.  It would be like making a query language...start from something that has proven itself successful like SQL, and then improve.</p>
+          <p><a href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/8</link>
+        <pubDate>Sun, 09 Dec 2018 01:14:28 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-938-8</guid>
+        <source url="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss">Should modifying variables during iteration affect it?</source>
+      </item>
+      <item>
+        <title>Should modifying variables during iteration affect it?</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>The strength of the REPEAT over LOOP has always been the availability of the index variable that LOOP goes by without.<br>
+COUNT-UP and COUNT-DOWN should stop when/after the limit value has been reached. Use cases can reveal more about how to implement the functions.<br>
+COUNT-UP and COUNT-DOWN could have start and end values and a stepsize (always &gt; 0) and those can have internal references to keep track to be used by the developer to manipulate the status in the loop .. but I think I prefer a keep it simple approach. What would kids do when using COUNT-UP and COUNT-DOWN.</p>
+<p>And why would you want to reclaim loop by repeat? To make LOOP the more complex one?</p>
+          <p><a href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/7</link>
+        <pubDate>Tue, 04 Dec 2018 11:32:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-938-7</guid>
+        <source url="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss">Should modifying variables during iteration affect it?</source>
+      </item>
+      <item>
+        <title>Should modifying variables during iteration affect it?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="5" data-topic="938">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>If REPEAT and COUNT-UP get different behaviour with respect to protection of the running index/counter,</p>
+</blockquote>
+</aside>
+<p>It is a good point I guess that COUNT-UP does say specifically the variable is being <em>counted up</em> to 3...a nuance the word REPEAT does not have.  But that makes it all the more sensible that the current plan is for REPEAT to not offer a counter (hence reclaiming "LOOP"):</p>
+<pre><code>&gt;&gt; repeat 3 [print "repeating"]
+repeating
+repeating
+repeating
+</code></pre>
+<p>This seems consistent with the use of the word in lists of directions. ("repeat the process 3 times" is rarely coupled with "and on the 2nd time, do something different".  That's the exception that proves the rule.)</p>
+<p>So by that definition, the counter would be protected in REPEAT and internal to the implementation, because you couldn't access it at all!  It could be counting up, or down, or using whatever mechanism it liked (0-based instead of 1-based, for instance).</p>
+<p>Then COUNT-UP can be disrupted and still have a mission to fulfill: <em>it was counting up</em>.  So if you change the variable out from under it, it can still keep adding one and measure if it's gotten to 3 or not.  But COUNT-DOWN is a little more confusing, though I guess it could just seek towards 1.</p>
+<p>The question would be what to do when you go out of range.  If you COUNT-DOWN from 3 to 1, but interrupt it to set the variable to 0, does it consider itself finished...or infinite loop since it never counts down to 1...does it error...or does it suddenly start counting up to try to get to 1 again?</p>
+          <p><a href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/6</link>
+        <pubDate>Tue, 04 Dec 2018 10:12:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-938-6</guid>
+        <source url="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss">Should modifying variables during iteration affect it?</source>
+      </item>
+      <item>
+        <title>Should modifying variables during iteration affect it?</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>If REPEAT and COUNT-UP get different behaviour with respect to protection of the running index/counter, then I imagine REPEAT to have the protective mode and COUNT-UP just continues counting up even if the counter was set back, making it perfect for simulating <strong>Game of the Goose</strong></p>
+          <p><a href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/5</link>
+        <pubDate>Tue, 04 Dec 2018 09:57:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-938-5</guid>
+        <source url="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss">Should modifying variables during iteration affect it?</source>
+      </item>
+      <item>
+        <title>Should modifying variables during iteration affect it?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="938" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>I’m in favor of the PROTECT approach.</p>
+</blockquote>
+</aside>
+<p>The next question comes down to which loops should allow the mutations, and how they should react.</p>
+<p>I don't know if REPEAT specifically (now COUNT-UP in Ren-C) can make a clear decision, such as if you set the number to a negative value...should that start it over?</p>
+<p>If you run the following in R3-Alpha:</p>
+<pre><code>flag: true
+repeat n 3 [
+    if flag [n: -3 flag: false]
+    print ["n is" n]
+]
+</code></pre>
+<p>You'll get:</p>
+<pre><code>n is -3
+n is -2
+n is -1
+n is 0
+n is 1
+n is 2
+n is 3
+</code></pre>
+<p>This kind of exposes the guts of the implementation in a way that seems to break the contract.  REPEAT doesn't naturally have a definition for what to do with a negative count.</p>
+<p>But FOR is talking more specifically about a "bump" and a range, so perhaps it is different.</p>
+<p>So...should REPEAT (COUNT-UP) not allow modifications?  Or should it allow them, and treat anything outside the range as an error, otherwise proceeding in step?  Or should it just be a specialization of a FOR loop, and inherit whatever FOR does...exposing this aspect of its implementation?</p>
+          <p><a href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/4</link>
+        <pubDate>Mon, 03 Dec 2018 15:11:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-938-4</guid>
+        <source url="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss">Should modifying variables during iteration affect it?</source>
+      </item>
+      <item>
+        <title>Should modifying variables during iteration affect it?</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>Me too, if it's not too costly.</p>
+          <p><a href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/3</link>
+        <pubDate>Mon, 03 Dec 2018 14:15:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-938-3</guid>
+        <source url="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss">Should modifying variables during iteration affect it?</source>
+      </item>
+      <item>
+        <title>Should modifying variables during iteration affect it?</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I’m in favor of the PROTECT approach.</p>
+          <p><a href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/2</link>
+        <pubDate>Sun, 02 Dec 2018 16:56:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-938-2</guid>
+        <source url="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss">Should modifying variables during iteration affect it?</source>
+      </item>
+      <item>
+        <title>Should modifying variables during iteration affect it?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Here is the behavior of changing a REPEAT variable in Rebol2 and R3-Alpha:</p>
+<pre><code>rebol2&gt;&gt; repeat n 3 [print "What happens?" n: 3]
+What happens?
+== 3
+</code></pre>
+<p>Here's that same behavior in Red:</p>
+<pre><code>red&gt;&gt; repeat n 3 [print "What happens?" n: 3]
+What happens?
+What happens?
+What happens?
+== 3
+</code></pre>
+<p>One might then ask what happens if you set the loop variable to something not even an integer.  In Rebol2, it just exits the loop.  In R3-Alpha, it errors:</p>
+<pre><code>r3-alpha&gt;&gt; repeat n 3 [print "What happens?" n: &lt;boo&gt;]
+What happens?
+** Script error: tag! type is not allowed here
+</code></pre>
+<h2>Is there always a clear meaning?</h2>
+<p>Not necessarily.  What about FOR-EACH?</p>
+<pre><code>foreach x [1 2 3] [x: "what should this do?"]
+</code></pre>
+<p>If you put on your imagination hat, you might imagine this as a way to mutate the series being iterated.  In that world, changing X would actually change the element in the array.  But Rebol's model isn't completely geared for this...though it <em>could</em> be done (by marking the variable with a bit, observing if that bit is cleared in an overwrite, and doing a write-back if clear).</p>
+<p>That's not necessarily a <em>bad</em> imagination-hat to have on--though I'd worry about implementing a feature exploiting bit-level knowledge that a user couldn't do themselves.  (So it would have to rely on equality, and write back non-equal things--just having an optimization that avoided the test if the bit hadn't been mucked with.)</p>
+<p><em>(Note: C++ can do this through "references", and it is the difference between <strong>for (auto x : collection) {...}</strong> and <strong>for (auto &amp;x : collection)</strong>.)</em></p>
+<p>But even if you could stretch and come up with a meaning in FOR-EACH, the broader point is it's not always possible.  Some iterations that put values in a variable may not be able to sensibly understand a change made to the iteration variable, and interpret it in a way that affects the next iteration.</p>
+<h2>What about performance?</h2>
+<p>Red's decision on REPEAT gives it a certain freedom from trying to figure out the meaning of any changes to the variable.  The iteration holds internal state--images that into a variable for you---and if you change it that's just for your temporary purposes in the loop.  There's no fetch of the loop variable on each iteration, only a write.</p>
+<p>But Red clearly thinks it's important enough in FORALL to pay attention to changes to the iterated variable, because that works:</p>
+<pre><code>red&gt;&gt; forall data [probe data data: next data]
+[1 2 3 4]
+[3 4]
+== [4]
+</code></pre>
+<p>In fact, in a fairly rare case of Red not repeating <a href="https://github.com/rebol/rebol-issues/issues/2307" rel="nofollow noopener">a bug in R3-Alpha</a>, they fully <a href="https://github.com/red/red/blob/1e0d5ec2360b336ef8111546e3221024dc28e31f/runtime/natives.reds#L350" rel="nofollow noopener">fetch the variable each time through the FORALL</a>.</p>
+<p>Paying attention to changes to the variable is not going to be the most <em>performant</em> choice.  By avoiding the fetch of a potentially modified N in the REPEAT loop above, Red doesn't have to re-fetch the variable on each loop iteration to make sure you didn't change it into a TAG!, or whatever.</p>
+<p>But I think it is worth noting that it is now 6 years since R3-Alpha was open sourced, and 7 years since Red's announcement.  When you think about making decisions based on "performance", e.g. the speed of a REPEAT loop, choosing something less flexible for purposes of marginal efficiency <em>makes less sense than ever</em>.</p>
+<h2>Solutions?</h2>
+<p>Being able to change loop variables allows more patterns of solution.  The FORALL case is a good one (Ren-C calls this category FOR-NEXT because you can change the series to whatever you like, and it runs a NEXT on it at each iteration).  I think it would be less expressive to not be able to see response from the iteration to a change, and by extension one would argue that changing the index in a REPEAT (or plain FOR) should also have an effect.</p>
+<p>Yet I've pointed out it doesn't always make sense--such as in FOR-EACH.</p>
+<p>One idea that comes to mind could be to PROTECT any loop variables whose modification cannot semantically be mapped back into meaning for the next iteration.  If you find you can't change a variable, then that means that the loop wouldn't be able to react if you did.</p>
+<p>I like that because it feels like it's giving feedback to the user about the contract of the loop.  Though it might appear to "waste" a variable slot you could otherwise use as a temporary.</p>
+<p>What do you think?  Should loops lock any variables from modification if they can't meaningfully interpret a modification to affect the next iteration?</p>
+          <p><a href="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938/1</link>
+        <pubDate>Sun, 02 Dec 2018 11:18:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-938-1</guid>
+        <source url="https://forum.rebol.info/t/should-modifying-variables-during-iteration-affect-it/938.rss">Should modifying variables during iteration affect it?</source>
+      </item>
+  </channel>
+</rss>

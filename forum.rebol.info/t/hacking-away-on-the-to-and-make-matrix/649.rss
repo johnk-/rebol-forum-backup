@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Hacking away on the TO and MAKE Matrix</title>
+    <link>https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649</link>
+    <description>The expanded behavior of AS is unambiguous and reassuring.  All you have to remember is that no new series is allocated.  What you&#39;ll get is what you had:
+
+    &gt;&gt; first &lt;abc&gt;
+    == #&quot;a&quot;
+ 
+    &gt;&gt; t: as text! &lt;abc&gt;
+    == &quot;abc&quot;
+
+    &gt;&gt; first t
+    == #&quot;a&quot; ;-- same answer, more bindingly due to no allocation
+
+AS BINARY! of an ANY-STRING! will be a little weird since you&#39;ll get a byte position in UTF-8, so the index may be different than you had...and AS to ANY-STRING! of a BINARY! will not work on non-UTF-8 binaries.  Different, but understandable.
+
+Since AS never allocates new memory, you have to copy if you need to.
+
+    as binary! copy x ;-- doesn&#39;t matter which way you write it...
+    copy as binary! x ;-- ...but I like this a little more
+
+*(Note: if AS were infix then `copy x as binary!` would act as ((copy x) as binary!), which seems like a non-obvious evaluation order.)*
+
+**It makes little sense to have MAKE or TO just act like COPY AS.**  Rather, having AS pinned down opens up possibilities for reshaping those operators, that have been [historically &quot;unkempt&quot; in Rebol2/R3-Alpha/Red](https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630).
+
+### TO TEXT! of ANY-VALUE! and TO ANY-VALUE! of TEXT!
+
+`to text! 10 =&gt; &quot;10&quot;` and `to integer! &quot;10&quot; =&gt; 10` *seem* like two obvious points that TO conversion needs to pass through.
+
+If we try to naively generalize that, it looks like using TO to convert *from* text to an arbitrary ANY-VALUE! is acting as something like LOAD.  Then trying to convert TO TEXT! is either doing a MOLD or FORM of what we give it.  But...which is it?
+
+1. When you APPEND something that is not a string to a string, an automatic conversion has historically been done.  There might seem to be a fairly strong argument that if such an operation is to be legal, then the refinement-less and parameter-less TO should share behavior.   e.g. **`append string non-string`** should give the same behavior as some variant of **`append string TO any-string! non-string`**  *That intent has usually been more FORM-like.*
+
+2. On the other hand, TO doesn&#39;t have refinements.  If someone has a wide range of potential formatting options, they&#39;ll need something else.  One thing about MOLD is that since it is a Rebol format with the obligation to be re-loadable back, it makes a pretty good fit.  And MOLD is a terrible name.  So if there&#39;s no options, and if the reverse is choosing to act very &quot;LOAD-like&quot;, *there seems to be a good case for acting like MOLD*.
+
+Wanting see the MOLD name die out--along with the lack of formatting options for TO (which MOLD &quot;doesn&#39;t need&quot;)--makes me more moved by the second argument.  Sounds good, but... let&#39;s keep delving. :-/
+
+### Automatically adding quotes on TEXT! has problems
+
+Going with option 2 has some friction on option 1.  On the surface, the following might seem more or less reasonable:
+
+     &gt;&gt; txt: copy &quot;abc&quot;
+     &gt;&gt; append txt [def: &lt;ghi&gt;]
+     == {abcdef:&lt;ghi&gt;}
+
+But is the following &quot;reasonable&quot;?
+
+     &gt;&gt; txt: copy &quot;abc&quot;
+     &gt;&gt; append txt [&quot;def&quot; &quot;ghi&quot;]
+     == {abc[&quot;def&quot; &quot;ghi&quot;]}
+
+It&#39;s probably not that useful.  If there were a special rule for BLOCK!s besides the &quot;moldy&quot; TO TEXT! of it, then maybe it wouldn&#39;t try to TO TEXT! the block, but each individual item...even still, that&#39;s a bit of an unlikely intent:
+
+     &gt;&gt; txt: copy &quot;abc&quot;
+     &gt;&gt; append txt [&quot;def&quot; &quot;ghi&quot;]
+     == {abc&quot;def&quot;&quot;ghi&quot;}
+
+If it were deemed that no TO conversion would be done if the types matched, this example might clean up but others would vary weirdly:
+
+     &gt;&gt; tag: copy &lt;abc&gt;
+     &gt;&gt; append tag [&quot;def&quot; &quot;ghi&quot;]
+     == &lt;abc&quot;def&quot;&quot;ghi&quot;&gt;
+
+     &gt;&gt; tag: copy &lt;abc&gt;
+     &gt;&gt; append tag &quot;def&quot;
+     == &lt;abc&quot;def&quot;&gt;
+
+Basically: though WORD! is the &quot;string type&quot; with no delimiters in its representation, one tends to expect that TEXT! (a.k.a. STRING!) won&#39;t be systemically splicing its delimiters around.  There are fewer preconceptions about what other types do, which is why R3-Alpha changed some of it...e.g. such that TO STRING! of a SET-WORD! would have a colon in the generated data.
+
+### Also, a paradox...
+
+Earlier it was suggested that TO ANY-VALUE! of a text would be LOAD-like.  That&#39;s because TO INTEGER! &quot;10&quot; is 10.  But what about **to text! &quot;{abc}&quot;**?  It can&#39;t be *both* LOAD *and* MOLD (nor FORM) at the same time!  When it reaches this point...should it be &quot;removing the delimiters&quot; in the series it makes, or adding more?
+
+Or what if it would just COPY it?
+
+### Should TO SOME-TYPE if already SOME-TYPE just COPY?
+
+While AS never performs series allocations, it seems reasonable if TO *always* does a new allocation when the target is a series.
+
+Given that seems fair enough, pinning down the idea that *the system itself* enforces the idea that a TO conversion of a type to itself does the same thing as a copy seems reasonable.  This is done by C++ casting; you can&#39;t write an overloaded cast operator for your data type that casts to its own type.  *(Well, you can write one, but clang will warn you it will never get used--gcc does not currently do so.)*
+
+Making a TO of a type to itself copy itself *feels intuitively* correct, to the point one can even imagine defining COPY that way.
+
+### Should appending blocks to strings fail?
+
+In the argument for explicit over implicit, one has to wonder just how realistic it is to be &quot;automatically&quot; making good decisions about converting things is.  Do you evaluate or not?  Do you space or not?  Do you put in delimiters or not?  *Are operations like APPEND and INSERT doing too much guesswork?*
+
+At minimum, I mention above is that it seems a TO without *any parameters* should probably be connected somehow to what the system does automatically.  If we think about an invariant like &quot;what happens when you do **append copy [a b] &quot;c&quot;**, it is pleasing if we can say something like &quot;the types do not match, a TEXT! is not a BLOCK!, so it is first converted to a BLOCK!... and acts the same as **append copy [a b] [&quot;c&quot;]**.
+
+*(Maybe that&#39;s not a useful invariant, I&#39;m just re-iterating that they can be comforting, and we should be looking for them--at least the invariants that pass through specific examples you want to work.)*
+
+I feel like that invariant has to be articulated.  And it seems like it prevents TO TEXT! from being a general-purpose replacement for MOLD.
+
+### Conclusions?
+
+This is really just a bit of a brainstorm as TO gets remapped.  It&#39;s always been a problem area, and I note people in Red are bringing it up again and looking for wikis to talk about it.
+
+Pushing against the boundaries I&#39;m starting to feel the TO of a type to itself is a synonym for COPY.  But...deep copy?  Shallow copy?  There&#39;s always been this question of if TO BLOCK! of something would wrap an existing block or just &quot;blockify&quot; things that weren&#39;t blocks.
+
+I&#39;m curious if anyone wants to put any pins in the map.  What TO conversion *has* to work to make &quot;TO&quot; a reasonable/good operation?  What&#39;s a dealbreaker if it doesn&#39;t?
+
+How will this generalize to user defined types?  One thing I thought is that a TO conversion is a method of the source type parameterized with the target type (like &quot;casting&quot; overloads in C++), while a MAKE construction is a business of the target type (like a &quot;constructor&quot; in C++).  That is to say if you do TO INTEGER! on a value of type FOO!, it&#39;s FOO! making the decision of how to do it...not INTEGER!... and if you say MAKE FOO! with some spec (perhaps an integer), that&#39;s code that FOO! provides.</description>
+    
+    <lastBuildDate>Sun, 20 Sep 2020 20:53:49 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Hacking away on the TO and MAKE Matrix</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="649">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I'm curious if anyone wants to put any pins in the map. What TO conversion <em>has</em> to work to make "TO" a reasonable/good operation? What's a dealbreaker if it doesn't?</p>
+</blockquote>
+</aside>
+<p>I came up with one new rule that sounds good on paper:</p>
+<pre><code>to-block: func [x] [
+    collect [for-each item x [keep x]]
+]
+</code></pre>
+<p>The suggestion is that this behavior should be the same as TO BLOCK!.  If it doesn't work, then the conversion should error.</p>
+<p>One notable historical behavior would go away:</p>
+<pre><code>&gt;&gt; to block! "abc def"
+== [ab cd]
+</code></pre>
+<p>This would now be done with TRANSCODE:</p>
+<pre><code>&gt;&gt; transcode "abc def"
+== [ab cd]
+
+&gt;&gt; to block! "abc def"
+== [#"a" #"b" #" " #"c" #"d"]
+</code></pre>
+<p>I'm thus proposing there be no TO BLOCK! conversion on things like DATE!, vs. returning a lame answer like just putting the date in a block.</p>
+<p>These rules don't come easy :-/ but the hope is that if enough of them are in place, then decisions should flow easily and people can take some invariants for granted.</p>
+          <p><a href="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649/3</link>
+        <pubDate>Sun, 20 Sep 2020 20:53:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-649-3</guid>
+        <source url="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649.rss">Hacking away on the TO and MAKE Matrix</source>
+      </item>
+      <item>
+        <title>Hacking away on the TO and MAKE Matrix</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm reminded of another thing I thought about which might help distinguish a TO from a MAKE.  That could be that you are assured that TO won't evaluate anything you pass in.  So if you said <strong>x: does [print "hi" 10] | to text! [x + 20]</strong>, whatever did happen, it would <strong>not</strong> print out "hi" and come back as the text string "30".</p>
+<p>That would limit what <strong>to text!</strong> of a BLOCK! would be allowed to do, e.g. to things like MOLD or FORM (but not "REMOLD" <code>&lt;gack!&gt;</code> or "REFORM" <code>&lt;gaaack!&gt;</code>)</p>
+<p>As far as I know, there aren't any TOs today that break this rule.  e.g. TO STRING! doesn't evaluate:</p>
+<pre><code>&gt;&gt; x: 10
+&gt;&gt; to string! [x + 20]
+== "x+20"
+</code></pre>
+<p>And even though some TOs and MAKEs fall through to each other willy-nilly, TO OBJECT! of a BLOCK! isn't one of the things that acts like the evaluating MAKE OBJECT! of a BLOCK!:</p>
+<pre><code>&gt;&gt; to object! [x: 10 + 20]
+** Script Error: Cannot use to on object! value
+</code></pre>
+<p><strong>Not being able to evaluate might help narrow down what a TO conversion still <em>could</em> do that's useful.</strong>  For instance, <strong>to object! [...]</strong> might be like R3-Alpha's CONSTRUCT, used in loading script headers without risking doing any evaluation.</p>
+<p>It also might suggest that so-called "construction syntax" should be sharing code with TO... not with MAKE.  Consider what you get in Rebol2/R3-Alpha/Red today:</p>
+<pre><code>&gt;&gt; obj: make object! [x: quote 'foo]
+== make object! [
+    x: 'foo
+]
+
+&gt;&gt; type? obj/x
+== lit-word!
+</code></pre>
+<p>If you actually ran the <code>make object!</code> that came back in the "molding" of the first result, you wouldn't get the same data pattern...because <code>make object! [x: 'foo]</code> would evaluate to putting a WORD! in foo.  <code>to object! [x: 'foo]</code> could be work "as-is", and perhaps <strong>to object! [x: y:]</strong> could put the SET-WORD! of y: into the x key.</p>
+<p>Really just a continuation of the brainstorming.  Summary so far of potentially known things:</p>
+<ol>
+<li>
+<strong>A TO conversion won't run arbitrary code that you pass to it</strong>, or possibly <strong>A TO conversion won't even GET any variables, much less evaluate</strong>
+</li>
+<li><strong>Every TO conversion targeting a series type performs a new allocation</strong></li>
+<li>
+<strong>TO TEXT! 10</strong> is "10" and <strong>TO INTEGER! "10"</strong> is 10</li>
+<li><strong>A TO conversion of a value to its own datatype will do the same thing as COPY</strong></li>
+</ol>
+<p>One sort of sad-seeming part of accepting this so far is <span class="hashtag">#4</span>, which means TO TEXT! of something that is already a TEXT! would <em>not</em> be a mold, since COPY would not add delimiters.  That sways the purpose of TO as being the mechanic the system uses for any "automatic" conversion.</p>
+<hr>
+<p>I mentioned a potential invariant that APPEND of two non-matching types should be equivalent to converting and then appending.  This would mean that TO BLOCK! of any atomic item would wrap it in a single element block, while TO BLOCK! of something that was already a block would just copy it and not add another outer layer.  This would be different from history, which is</p>
+<pre><code> rebol2/r3-alpha/red&gt; to block! "foo 10"
+ == [foo 10] ;-- acts as load
+
+ rebol2&gt; to block! #foo
+ == [foo] ;-- hm, loading again?
+
+ rebol2&gt; to block! &lt;foo 10&gt;
+ == [foo 10] ;-- yup, that was a good guess
+
+ red/r3-alpha&gt; to block! #foo
+ == [#foo]
+
+ red/r3-alpha&gt; to block! &lt;foo 10&gt;
+ == [&lt;foo 10&gt;] ;-- no LOAD here
+
+ red/r3-alpha&gt; to block! "foo 10"
+ == [foo 10] ;-- okay, only loads if STRING!
+</code></pre>
+<p>This makes TO BLOCK! not too useful for one of its imagined purposes...to get a block out of something if it wasn't one already (e.g. for enumeration).  So I'd suggest the TO BLOCK! of a TEXT! fall in line with putting the single element in a block.  This gets that invariant that <strong>append [a b] "c"</strong> can act compatibly with <strong>append [a b] to block! "c"</strong>.</p>
+<p>Scanning strings to blocks would then be done with another operation.</p>
+          <p><a href="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649/2</link>
+        <pubDate>Tue, 29 May 2018 21:33:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-649-2</guid>
+        <source url="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649.rss">Hacking away on the TO and MAKE Matrix</source>
+      </item>
+      <item>
+        <title>Hacking away on the TO and MAKE Matrix</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The expanded behavior of AS is unambiguous and reassuring.  All you have to remember is that no new series is allocated.  What you'll get is what you had:</p>
+<pre><code>&gt;&gt; first &lt;abc&gt;
+== #"a"
+
+&gt;&gt; t: as text! &lt;abc&gt;
+== "abc"
+
+&gt;&gt; first t
+== #"a" ;-- same answer, more bindingly due to no allocation
+</code></pre>
+<p>AS BINARY! of an ANY-STRING! will be a little weird since you'll get a byte position in UTF-8, so the index may be different than you had...and AS to ANY-STRING! of a BINARY! will not work on non-UTF-8 binaries.  Different, but understandable.</p>
+<p>Since AS never allocates new memory, you have to copy if you need to.</p>
+<pre><code>as binary! copy x ;-- doesn't matter which way you write it...
+copy as binary! x ;-- ...but I like this a little more
+</code></pre>
+<p><em>(Note: if AS were infix then <code>copy x as binary!</code> would act as ((copy x) as binary!), which seems like a non-obvious evaluation order.)</em></p>
+<p><strong>It makes little sense to have MAKE or TO just act like COPY AS.</strong>  Rather, having AS pinned down opens up possibilities for reshaping those operators, that have been <a href="https://forum.rebol.info/t/behavior-of-to-string-as-string-mold/630">historically "unkempt" in Rebol2/R3-Alpha/Red</a>.</p>
+<h3>TO TEXT! of ANY-VALUE! and TO ANY-VALUE! of TEXT!</h3>
+<p><code>to text! 10 =&gt; "10"</code> and <code>to integer! "10" =&gt; 10</code> <em>seem</em> like two obvious points that TO conversion needs to pass through.</p>
+<p>If we try to naively generalize that, it looks like using TO to convert <em>from</em> text to an arbitrary ANY-VALUE! is acting as something like LOAD.  Then trying to convert TO TEXT! is either doing a MOLD or FORM of what we give it.  But...which is it?</p>
+<ol>
+<li>
+<p>When you APPEND something that is not a string to a string, an automatic conversion has historically been done.  There might seem to be a fairly strong argument that if such an operation is to be legal, then the refinement-less and parameter-less TO should share behavior.   e.g. <strong><code>append string non-string</code></strong> should give the same behavior as some variant of <strong><code>append string TO any-string! non-string</code></strong>  <em>That intent has usually been more FORM-like.</em></p>
+</li>
+<li>
+<p>On the other hand, TO doesn't have refinements.  If someone has a wide range of potential formatting options, they'll need something else.  One thing about MOLD is that since it is a Rebol format with the obligation to be re-loadable back, it makes a pretty good fit.  And MOLD is a terrible name.  So if there's no options, and if the reverse is choosing to act very "LOAD-like", <em>there seems to be a good case for acting like MOLD</em>.</p>
+</li>
+</ol>
+<p>Wanting see the MOLD name die out--along with the lack of formatting options for TO (which MOLD "doesn't need")--makes me more moved by the second argument.  Sounds good, but... let's keep delving. :-/</p>
+<h3>Automatically adding quotes on TEXT! has problems</h3>
+<p>Going with option 2 has some friction on option 1.  On the surface, the following might seem more or less reasonable:</p>
+<pre><code> &gt;&gt; txt: copy "abc"
+ &gt;&gt; append txt [def: &lt;ghi&gt;]
+ == {abcdef:&lt;ghi&gt;}
+</code></pre>
+<p>But is the following "reasonable"?</p>
+<pre><code> &gt;&gt; txt: copy "abc"
+ &gt;&gt; append txt ["def" "ghi"]
+ == {abc["def" "ghi"]}
+</code></pre>
+<p>It's probably not that useful.  If there were a special rule for BLOCK!s besides the "moldy" TO TEXT! of it, then maybe it wouldn't try to TO TEXT! the block, but each individual item...even still, that's a bit of an unlikely intent:</p>
+<pre><code> &gt;&gt; txt: copy "abc"
+ &gt;&gt; append txt ["def" "ghi"]
+ == {abc"def""ghi"}
+</code></pre>
+<p>If it were deemed that no TO conversion would be done if the types matched, this example might clean up but others would vary weirdly:</p>
+<pre><code> &gt;&gt; tag: copy &lt;abc&gt;
+ &gt;&gt; append tag ["def" "ghi"]
+ == &lt;abc"def""ghi"&gt;
+
+ &gt;&gt; tag: copy &lt;abc&gt;
+ &gt;&gt; append tag "def"
+ == &lt;abc"def"&gt;
+</code></pre>
+<p>Basically: though WORD! is the "string type" with no delimiters in its representation, one tends to expect that TEXT! (a.k.a. STRING!) won't be systemically splicing its delimiters around.  There are fewer preconceptions about what other types do, which is why R3-Alpha changed some of it...e.g. such that TO STRING! of a SET-WORD! would have a colon in the generated data.</p>
+<h3>Also, a paradox...</h3>
+<p>Earlier it was suggested that TO ANY-VALUE! of a text would be LOAD-like.  That's because TO INTEGER! "10" is 10.  But what about <strong>to text! "{abc}"</strong>?  It can't be <em>both</em> LOAD <em>and</em> MOLD (nor FORM) at the same time!  When it reaches this point...should it be "removing the delimiters" in the series it makes, or adding more?</p>
+<p>Or what if it would just COPY it?</p>
+<h3>Should TO SOME-TYPE if already SOME-TYPE just COPY?</h3>
+<p>While AS never performs series allocations, it seems reasonable if TO <em>always</em> does a new allocation when the target is a series.</p>
+<p>Given that seems fair enough, pinning down the idea that <em>the system itself</em> enforces the idea that a TO conversion of a type to itself does the same thing as a copy seems reasonable.  This is done by C++ casting; you can't write an overloaded cast operator for your data type that casts to its own type.  <em>(Well, you can write one, but clang will warn you it will never get used--gcc does not currently do so.)</em></p>
+<p>Making a TO of a type to itself copy itself <em>feels intuitively</em> correct, to the point one can even imagine defining COPY that way.</p>
+<h3>Should appending blocks to strings fail?</h3>
+<p>In the argument for explicit over implicit, one has to wonder just how realistic it is to be "automatically" making good decisions about converting things is.  Do you evaluate or not?  Do you space or not?  Do you put in delimiters or not?  <em>Are operations like APPEND and INSERT doing too much guesswork?</em></p>
+<p>At minimum, I mention above is that it seems a TO without <em>any parameters</em> should probably be connected somehow to what the system does automatically.  If we think about an invariant like "what happens when you do <strong>append copy [a b] "c"</strong>, it is pleasing if we can say something like "the types do not match, a TEXT! is not a BLOCK!, so it is first converted to a BLOCK!... and acts the same as <strong>append copy [a b] ["c"]</strong>.</p>
+<p><em>(Maybe that's not a useful invariant, I'm just re-iterating that they can be comforting, and we should be looking for them--at least the invariants that pass through specific examples you want to work.)</em></p>
+<p>I feel like that invariant has to be articulated.  And it seems like it prevents TO TEXT! from being a general-purpose replacement for MOLD.</p>
+<h3>Conclusions?</h3>
+<p>This is really just a bit of a brainstorm as TO gets remapped.  It's always been a problem area, and I note people in Red are bringing it up again and looking for wikis to talk about it.</p>
+<p>Pushing against the boundaries I'm starting to feel the TO of a type to itself is a synonym for COPY.  But...deep copy?  Shallow copy?  There's always been this question of if TO BLOCK! of something would wrap an existing block or just "blockify" things that weren't blocks.</p>
+<p>I'm curious if anyone wants to put any pins in the map.  What TO conversion <em>has</em> to work to make "TO" a reasonable/good operation?  What's a dealbreaker if it doesn't?</p>
+<p>How will this generalize to user defined types?  One thing I thought is that a TO conversion is a method of the source type parameterized with the target type (like "casting" overloads in C++), while a MAKE construction is a business of the target type (like a "constructor" in C++).  That is to say if you do TO INTEGER! on a value of type FOO!, it's FOO! making the decision of how to do it...not INTEGER!... and if you say MAKE FOO! with some spec (perhaps an integer), that's code that FOO! provides.</p>
+          <p><a href="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649/1</link>
+        <pubDate>Tue, 29 May 2018 02:24:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-649-1</guid>
+        <source url="https://forum.rebol.info/t/hacking-away-on-the-to-and-make-matrix/649.rss">Hacking away on the TO and MAKE Matrix</source>
+      </item>
+  </channel>
+</rss>

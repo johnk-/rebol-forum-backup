@@ -1,0 +1,411 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The RETURN of NONE (?)</title>
+    <link>https://forum.rebol.info/t/the-return-of-none/1467</link>
+    <description>@rgchris has convinced me, and I am now committed to the idea that &quot;VOID&quot; is not a datatype, but the characterization of what were previously called &quot;invisible&quot; functions.
+
+There is a nice sense in which this lines up with traditional &quot;void&quot; functions in C (and related languages).  Because *absolutely no value*--not even some dummy or placeholder--is returned.  It means the libRebol C API function signature **`void rebElide(...)`** is consistent with the ELIDE construct signature...they both specify their voidness in their return spec.
+
+But I&#39;ve written up in a separate post why I don&#39;t believe things should too casually be void functions: 
+
+[**The go-to for creating a function without a meaningful return result should be a reified meaningless result...because full-on vaporization is a contract which is difficult to turn back, and is not easy to sense from a callsite (e.g. inside an ALL [])**](https://forum.rebol.info/t/why-isnt-print-invisible-void/1466)
+
+Relying on a generic tool like ELIDE gives you clarity at callsites of what you&#39;re doing, and means you don&#39;t have to work &quot;I elide my result&quot; into the name of your function somehow.  Returning a meaningless value also permits interop with ELSE and THEN if you decide you want NULL-reactivity.
+
+Maybe PRINT is one of those things that should be an exception (along with **assert** and **--** and **breakpoint**)...but it would be a rare case.
+
+## What Should We Call The Meaningless Result?
+
+The BAD-WORD! of **~void~** is now ruled out as &quot;the meaningless ornery result&quot;.  Because we are saying void functions don&#39;t return any value, not even meaningless ones.  Void is retaken for the new and more familiar term for characterizing invisibles.
+
+I have been going with **~none~** as the brief choice.  I&#39;d think that ~nothing~ might be a bit better--and not have the confusion with legacy.  But it was taken for a reason: it&#39;s short.  Considering it off-limits would sacrifice an easy thing to type.  It would appear a lot of places, e.g. functions that want to automatically discard results of their bodies would wind up as **`return: &lt;nothing&gt;`** or similar, etc.  It&#39;s verbose for arguably little gain.
+
+What it has in common with historical Rebol&#39;s NONE is that it is a reified concept of nothing.  What it does not have in common is that it is neither true nor false, and errors in conditional logic...like all the other BAD-WORD!s.  So it&#39;s just another kind of unset.
+
+Type signatures with BAD-WORD! in them are a bit weird:
+
+    print: func [
+        return: [&lt;opt&gt; bad-word!]
+        ...
+     ][...]
+
+So having a type constraint for just the **`~none~`** as **`none!`** may be worth it.  This doesn&#39;t make it a distinct data type, it just narrows down the specifics of it.
+
+    print: func [
+        return: [&lt;opt&gt; none!]
+        ...
+     ][...]
+
+## Alternatives: ~trash~, ~bad~ ...?
+
+Outside of its collisions with Rebol2, the word NONE is a bit close to NULL.  (And you&#39;d have people asking what the difference was between &quot;null&quot; and &quot;nothing&quot;, if that was chosen, the longer name probably wouldn&#39;t help other than being more obviously distinct.)
+
+We&#39;re looking for a short word here that walks the line between &quot;alarming&quot; and &quot;nothing to see here&quot;, that&#39;s still short.  This is why I&#39;d thought **~void~** was that word...it ticked the boxes, but I&#39;ve been convinced the usage was confusing.
+
+For a little while we had the lone **~** which was nameless (which made it a good candidate for being something the console didn&#39;t display).  But its temptingness as an operator and hard-to-see nature made it too short for something that should trip your awareness in a block the way a BAD-WORD! should.
+
+The problem I see with things like **~bad~** is that they make the interface of the function look more alarming than it needs to (**`return: &lt;bad&gt;`**), and it also doesn&#39;t seem very appropriate for the console to be hiding something called &quot;bad&quot; from you.
+
+## Retraining Usage Of Arity-0 RETURN
+
+I&#39;m warming up to the idea of **func [] [return]** being invisible.  One aspect of warming up to it is the idea that if we are going all the way and calling them &quot;void functions&quot; then this kind of lines up with being that.
+
+So I&#39;m also potentially warming up to the idea that **func [x] [comment x]** could act like COMMENT.  If we said that **func [x] []** returned NULL that wouldn&#39;t work, because we&#39;d be pre-seeding with a NULL and hence **func [x] [comment x]** would also be NULL, since the comment wouldn&#39;t change the output.
+
+(I don&#39;t know if we say that&#39;s just life, since **if true [comment &quot;hi&quot;]** is not invisible, and hence we chalk up the invisibility magic to something only RETURN can do, due to its special relationship with FUNC.  Which seems a legitimate philosophy to have.  Why worry if `func [x] [comment x]` is NULL if you can get what you intend with `func [x] [return comment x]` ?)
+
+&gt; **UPDATE:** Thinking this through further I realized that it&#39;s not just multiple returns that would get problems caused with this, but also null isotopes.  We really do need a way to say &quot;return as-is&quot;, so we might just be stuck with the **return @(comment &quot;hi&quot;)** form if you want to get a verbatim chain that includes invisibility and isotope status.
+
+This brings us to the point: *If we embrace the idea of RETURN with no argument as the &quot;weird edge case for facilitating void functions&quot; then we have to drive in the non-weird way to handle the basic case of returning a meaningless result*.  People have to look at RETURN with no argument and go &quot;hey, wait, why doesn&#39;t that return have an argument&quot; and have it pop off the page as an oddity, worthy of a potentially surprising behavior.
+
+**return &#39;~none~** is a pain to type.  I&#39;d been wanting to avoid functions that returned BAD-WORD!s to avoid the sorta confusion situation of **:action = type of none** ... but if making it an action is what we have to do in order to get the syntax of **return none** then that is what it is.
+
+## Sidenote: Inheriting Return Types
+
+I&#39;m talking about finessing the question of how to do a chained RETURN on a function that you don&#39;t know if it&#39;s going to vaporize completely or return a value.  That&#39;s something that bothers me about C, because it doesn&#39;t let you write chaining void returns:
+
+    void my_function() {
+        return some_void_function(...);  /* this is not legal! */
+    }
+
+That annoys me, because it makes it hard to write generic code that doesn&#39;t want the bad properties of a macro (repeating evaluation of arguments if used multiple times, etc.)...but throws a wrench in being able to abstract across return values.
+
+Yet then there&#39;s that other question of how to label your return type.  In Ren-C we have the option of just not putting a type signature on it, but what you often want is the signature of what you&#39;re wrapping.  I guess we could do this via COMPOSE on the spec:
+
+    my-function: func compose [
+        return: (return-of :some-other-function)
+        ...
+    ][
+        ...
+        return some-other-function ...
+    ]
+
+Anyway, I just wanted to mention that we&#39;re still pretty far from utopia in this medium, even if we get the chaining part itself right!</description>
+    
+    <lastBuildDate>Sun, 20 Jun 2021 02:56:43 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/the-return-of-none/1467.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The RETURN of NONE (?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>I THINK I HAVE A COMPLETE PLAN.</h2>
+<p>Central to the plan is the idea of <em>bad-word! isotopes</em>...that they come in friendly and unfriendly forms.</p>
+<p>So <strong><code>return ~xxx~</code></strong> would return the "Unfriendly Form" and <strong><code>return '~xxx~</code></strong> would return the "Friendly Form".  There are so many things falling into place once I started doing this that I can't explain all of it in one post.  I'll just summarize relevance to return value protocols here:</p>
+<h2>Executive Summary</h2>
+<ul>
+<li>
+<p>Function prototypes that say <strong>return: []</strong> can't return any "friendly" datatypes, but it leaves all the unfriendly returns on the table.</p>
+<pre><code>emptyspec: func [return: [], friendly [logic!]] [
+    if friendly [return '~foo~] else [return ~foo~]
+]
+
+&gt;&gt; x: emptyspec true  ; try to be friendly
+** Error: emptyspec does not have BAD-WORD! enabled as a return type
+
+&gt;&gt; y: emptyspec false  ; be unfriendly
+&gt;&gt; y
+** Error: y is the unfriendly form of ~foo~
+</code></pre>
+</li>
+<li>
+<p>If the function prototype says <strong>return: [bad-word!]</strong> then that gives it permission to return the <em>friendly</em> form.  You can still return all the unfriendly values you want...giving a type check error inside the function is not going to be that much more valuable than the errors at the callsites.</p>
+<pre><code>filledspec: func [return: [bad-word!], friendly [logic!]] [
+    if friendly [return '~foo~] else [return ~foo~]
+]
+
+&gt;&gt; x: filledspec true  ; be friendly
+&gt;&gt; x
+== ~foo~
+
+&gt;&gt; y: filledspec false  ; be unfriendly
+&gt;&gt; y
+** Error: y is the unfriendly form of ~foo~
+</code></pre>
+</li>
+<li>
+<p>When a void evaluation is done by something like <strong>do [comment "hi"]</strong> the result will be the unfriendly version of <strong>~void~</strong>.  The evaluator will do some magic to make sure only chains of evaluations that are fully either invisibles and unfriendly voids, or else it will transition the unfriendly void to <strong>~stale~</strong>:</p>
+<pre><code>&gt;&gt; comment "foo" do [comment "bar"]
+; == ~void~  ; unfriendly
+
+&gt;&gt; 1 + 2 comment "foo" do [comment "bar"]
+== ~stale~  ; also unfriendly   
+</code></pre>
+</li>
+<li>
+<p><strong>BONUS TWIST</strong> - The meaning of <strong><code>return: (...)</code></strong> is that when you say <strong><code>return</code></strong> with no arguments, then instead of getting the unfriendly version of <code>~void~</code> you get actual invisibility.  So a function like COMMENT or ELIDE says just <strong>return: ()</strong>.</p>
+<pre><code>&gt;&gt; reified-voiding: func [] [return]  ; default is `return: []`
+
+&gt;&gt; reified-voiding
+; == ~void~ (mean) ... but console won't display it in default handler
+
+&gt;&gt; 1020 reified-voiding
+== ~stale~ (mean)  ; console shows ~stale~
+
+&gt;&gt; truly-invisible: func [return: ()] [return]
+
+&gt;&gt; truly-invisible
+; == ~void~ (mean)  ; because it's like console ran `do []`
+
+&gt;&gt; 1020 truly-invisible
+== 1020
+</code></pre>
+</li>
+<li>
+<p>Since by default <strong>return</strong> with no arguments is the unfriendly ~void~, we don't worry about that being dangerous.  If your intent is truly no value, then you should say <strong>return ~none~</strong> or (<strong>return none</strong> which does the same thing).  We thus reserve <code>RETURN</code> and no arguments for invisible intent.</p>
+</li>
+<li>
+<p><strong>You can therefore get true passthrough of a function with <strong><code>return: ()</code></strong>, whether it is invisible or not!</strong></p>
+<pre><code>&gt;&gt; reified-wrapper: func [return: ()] [reified-voiding]
+
+&gt;&gt; reified-wrapper
+; == ~void~  (console suppresses)
+
+&gt;&gt; 304 wrapper
+== ~stale~
+
+&gt;&gt;  invisible-wrapper: func [return: ()] [truly-invisible]
+
+&gt;&gt; invisible-wrapper
+; == ~void~  (console suppresses)
+
+&gt;&gt; 304 invisible-wrapper
+== 304
+</code></pre>
+</li>
+<li>
+<p>This shows how we square the circle (<strong>return: [] &lt;=&gt; return: ()</strong>) of voidness.  What we're referring to when we talk about void functions is pure invisibility, in the spirit of how to use the term "void" as suggested by <a class="mention" href="/u/rgchris">@rgchris</a>, which I became convinced is the right answer and dovetails nicely with the meaning of "void" in C meaning "absolutely nothing".  <em>HOWEVER</em> we have the reified BAD-WORD! of <strong>~void~</strong> jumping in to bridge through some situations where it's better to have a mean value with a label.</p>
+</li>
+<li>
+<p><strong><code>return: &lt;void&gt;</code></strong> means no matter what falls out of the bottom of your function, it will be invisible.  VOID is an arity-0 invisible so if you say <strong>return void</strong> you get the same thing as saying <strong>(return)</strong>, if that is something that feels more explicit.</p>
+</li>
+<li>
+<p>NONE is set up to mean ~none~ isotope, so you can easily say <strong>return none</strong>.  If you write <strong>return: []</strong> then you will be caught if you drop out another value.  We just say that's the price of doing business...return consistent with your claimed type.  It's not that much harder to end your function with <strong>none</strong> than to put at the top of it <strong><code>return: &lt;none&gt;</code></strong> and I'd argue clearer.</p>
+</li>
+<li>
+<p>The default console implementation will not show unfriendly ~none~ as evaluation results.</p>
+</li>
+</ul>
+<h2>It's Practically Working As We Speak</h2>
+<p>There's actually a rather fascinating set of compositional behaviors that fall out from this.  It ticks every box we were looking for, and more.</p>
+<p>I'll explain the mechanics of this "friendliness" and "unfriendliness" and why it is our savior in another post.  <img src="https://forum.rebol.info/images/emoji/twitter/ghost.png?v=9" title=":ghost:" class="emoji" alt=":ghost:"></p>
+          <p><a href="https://forum.rebol.info/t/the-return-of-none/1467/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-return-of-none/1467/6</link>
+        <pubDate>Sun, 09 May 2021 20:14:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1467-6</guid>
+        <source url="https://forum.rebol.info/t/the-return-of-none/1467.rss">The RETURN of NONE (?)</source>
+      </item>
+      <item>
+        <title>The RETURN of NONE (?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="3" data-topic="1467">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>VOID is the realm of emptiness—a place with no beginning or end, or indeed no definition (<em>void</em> as in <em>voided checks</em> is not the first meaning that comes to mind)</p>
+</blockquote>
+</aside>
+<p>All right, like I said...I can go along with this.</p>
+<p>But there are still some of the aesthetic issues surrounding BAD-WORD! and how to get function interfaces to not look too... bad.</p>
+<p><strong><code>return: &lt;void&gt;</code></strong> felt pretty communicative and bland (as "no interesting result").  But I <em>really</em> don't think it's a good idea to be making all functions with "no interesting result" behave like ELIDE, for reasons I've outlined.</p>
+<p>I also do not think NULL is good either.  It has too much meaning to serve a meaningless role.</p>
+<p>So we need a new <strong><code>return: &lt;...&gt;</code></strong> and an associated <strong>~...~</strong> it gives back.  I feel a distinct BAD-WORD! from that used for an unset variable is fitting, given the ability to give these different labels.</p>
+<p>But, like I say, maybe we give up and it's <strong><code>return: &lt;unset&gt;</code></strong> with <strong>~unset~</strong>.  It kind of feels like it makes more sense now than it did before.</p>
+<p>I still am reluctant to call the data type itself UNSET!.  I prefer <strong>type of first [~unset~]</strong> to come back with something that is more concretely representative of what you're dealing with.  And I also think the ability to change these labels to be more communicative...to any symbol a word could hold...is good.  This makes BAD-WORD! seem fitting.  It's just a bit jarring to see it in typesets.</p>
+<hr>
+<p>The issue of where return of ~unset~ for meaninglessness breaks down is that we're talking about that particular label having meaning of "unspecialized".  So if you say:</p>
+<pre><code>&gt;&gt; f: make frame! :append
+== make frame! [
+    return: '~unset~
+    series: '~unset~
+    value: '~unset~
+    part: '~unset~
+    only: '~unset~
+    dup: '~unset~
+    line: '~unset~
+]
+
+&gt;&gt; f/series: [a b c]
+&gt;&gt; f/value: 'd
+&gt;&gt; f/dup: duplicator-method x y z
+</code></pre>
+<p>What if <strong>duplicator-method</strong> thinks of itself as having a "meaningless" result, and says <strong><code>return: &lt;unset&gt;</code></strong>  If the goal was to receive errors in such cases you wouldn't get one.  (I'm proposing that any BAD-WORD! besides ~unset~ would be an error in this situation, unless you explicitly HIDE the field, in which case it is presumed specialized)</p>
+<p>I think the general intent is to <em>poison</em> variables with a "you didn't mean to save this value", as opposed to mimic the illusion of unsetness.  And that's one of the big opportunities of having labeled bad words.  So I think we'd waste that by using unset here.</p>
+<p>I also think that <code>return: &lt;unset&gt;</code> looks kind of confusing, and people would prefer to see <code>return: &lt;void&gt;</code> in these cases.  But that's not good under the elide-definition of void to be running to as a default.</p>
+<p>And as I've already mentioned, I don't know that having the <code>~unset~</code> disappear in the console is good for learnability.</p>
+<p>So, this leads back to my <strong><code>return: &lt;none&gt;</code></strong> and <strong>~none~</strong> suggestion.  But while that looks nice, it's only one step away from <strong><code>return: [bad-word! integer!]</code></strong> or <strong><code>return: [&lt;opt&gt; bad-word!]</code></strong> which feels a bit more alarming than is intended...while at the same time, being pretty accurate.</p>
+<p>A more benign type name like <strong>none!</strong> would gloss over that.  Saying that <strong>~unset~</strong> and <strong>~none~</strong> are both instances of type NONE! is a bit weird.  It would make more sense if NONE! was a type constraint... e.g. a BAD-WORD! whose spelling is ~none~.</p>
+<p>Anyway, I'm repeating myself.  But this is the important part to pin down.</p>
+          <p><a href="https://forum.rebol.info/t/the-return-of-none/1467/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-return-of-none/1467/5</link>
+        <pubDate>Sun, 24 Jan 2021 17:42:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1467-5</guid>
+        <source url="https://forum.rebol.info/t/the-return-of-none/1467.rss">The RETURN of NONE (?)</source>
+      </item>
+      <item>
+        <title>The RETURN of NONE (?)</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="3" data-topic="1467">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>VOID is the realm of emptiness</p>
+</blockquote>
+</aside>
+<p>I think this is why the idea of VOID as replacing UNSET was key—there's an infinite array of words out there and until they are defined, they are just points in an endless vacuous universe. Language can be fluid and  subjective, this is where my mind went.</p>
+          <p><a href="https://forum.rebol.info/t/the-return-of-none/1467/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-return-of-none/1467/4</link>
+        <pubDate>Sun, 24 Jan 2021 17:34:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1467-4</guid>
+        <source url="https://forum.rebol.info/t/the-return-of-none/1467.rss">The RETURN of NONE (?)</source>
+      </item>
+      <item>
+        <title>The RETURN of NONE (?)</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>I'd still lean toward my own sense of what I'd consider (or feel) my primary definitions of NULL and VOID—where NULL is the product of nothing and VOID is the realm of emptiness—a place with no beginning or end, or indeed no definition (<em>void</em> as in <em>voided checks</em> is not the first meaning that comes to mind).</p>
+<p>If I were to expand on that, I'd say that NULL is negative nothingness and BLANK is positive nothingness where we must affirm across the wire that nothingness is the intent.</p>
+<p>If I were to indulge a little further and incorporate bad words, then VOID becomes more like outer space and the various defined bad words are stars within distant constellations.</p>
+          <p><a href="https://forum.rebol.info/t/the-return-of-none/1467/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-return-of-none/1467/3</link>
+        <pubDate>Sun, 24 Jan 2021 17:19:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1467-3</guid>
+        <source url="https://forum.rebol.info/t/the-return-of-none/1467.rss">The RETURN of NONE (?)</source>
+      </item>
+      <item>
+        <title>The RETURN of NONE (?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1467">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Outside of its collisions with Rebol2, the word NONE is a bit close to NULL.</p>
+</blockquote>
+</aside>
+<p>There's one twist that could make it more palatable to use NULL as the "meaningless" result, e.g. <strong><code>return: &lt;null&gt;</code></strong>.</p>
+<p>That twist is null isotopes.  Because it means a function like PRINT could even discern the "I printed something" case from the "I didn't" and still have that be null-based.</p>
+<p>A plus side of this is that if you want the console to hide things from you, then NULL seems the obvious choice as it has no representation.  :-/</p>
+<p>But I think it's bad to lose the noisier errors at callsites.  Your intent is meaninglessness, and unfortunately NULL just carries too much meaning in the system.  That meaning ranges from opting out of refinements to silently opting out from appends, ceasing chains of ALL [...], etc.</p>
+<p>This is a hard slot to find a word for.  We want something with overtones of "ok" and "invisible"... almost more like <strong>return '~done~</strong>... to say, "yes I ran and I finished, and that's all you need to know".</p>
+<pre><code>foo: func [return: &lt;done&gt;, ...] [
+    return done
+]
+</code></pre>
+<p>I guess then if the console suppresses showing <strong>~done~</strong> it could be justified as "well it was done, no need to show you that, you got back to a console prompt with no error raised".</p>
+<p>Or we could just give up and say it's <strong>~unset~</strong>, make <code>unset</code> an ACTION! that returns ~unset~, and say it's unsets that don't print:</p>
+<pre><code>foo: func [return: &lt;unset&gt;, ...] [
+    return unset
+]
+</code></pre>
+<p>For fans of history, this might be the most palatable option.  We need a clean way to unset variables anyhow:</p>
+<pre><code>unset 'x  ; never liked this, puts thing you're assigning on the right
+
+x: '~unset~  ; hard to type
+
+x: unset  ; that's not so bad
+</code></pre>
+<p>But while I've embraced the "BAD-WORD! that is labeled ~unset~", this puts us right up against having a datatype constraint for that which under present schemes would look like UNSET!, e.g. <strong><code>print: func [return: [&lt;opt&gt; unset!]] [...]</code></strong>.  I'd been trying to get away from that.</p>
+<p>That's bad thing <span class="hashtag">#1</span>, maybe it's not that bad.</p>
+<p>But bad thing <span class="hashtag">#2</span> is that I don't think it's very instructive in the console to have ~unset~ be invisible in the output:</p>
+<pre><code>&gt;&gt; get/any 'asdfdadsfasdf
+
+&gt;&gt;   ; hey, wait a minute.  Why no output?
+</code></pre>
+<p>It's better in my view to see it:</p>
+<pre><code>&gt;&gt; get/any 'asdfdadsfasdf
+== ~unset~
+</code></pre>
+<p>I can see why you wouldn't want to see this:</p>
+<pre><code>&gt;&gt; print "We tried this, and it was annoying"
+We tried this, and it was annoying
+== ~whatever~
+</code></pre>
+<p>But I don't feel the same argument applies to suppressing the visibility of things that are unset.</p>
+<p>Of course, one way or another, you're declaring some value as being such that the console doesn't show it to you.  Brilliant ideas welcome on how to keep improving this.</p>
+<h2>That's the Long Story Long...Any Better Ideas Than ~none~ ?</h2>
+<p>The only candidate I see that seems to be viable would be <strong>~done~</strong>... or maybe going back to the ~unset~ concept if we just want to say screw it and it's not worse than Rebol2.</p>
+<p>The other question--and maybe one only <a class="mention" href="/u/rgchris">@rgchris</a> can answer--is if the VOID! and ~void~ term actually is more palatable than he thought... that BAD-WORD! and other choices are more distracting... and I was right the first time around (or if he has a better systemic solution).</p>
+          <p><a href="https://forum.rebol.info/t/the-return-of-none/1467/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-return-of-none/1467/2</link>
+        <pubDate>Mon, 18 Jan 2021 03:23:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1467-2</guid>
+        <source url="https://forum.rebol.info/t/the-return-of-none/1467.rss">The RETURN of NONE (?)</source>
+      </item>
+      <item>
+        <title>The RETURN of NONE (?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><a class="mention" href="/u/rgchris">@rgchris</a> has convinced me, and I am now committed to the idea that "VOID" is not a datatype, but the characterization of what were previously called "invisible" functions.</p>
+<p>There is a nice sense in which this lines up with traditional "void" functions in C (and related languages).  Because <em>absolutely no value</em>--not even some dummy or placeholder--is returned.  It means the libRebol C API function signature <strong><code>void rebElide(...)</code></strong> is consistent with the ELIDE construct signature...they both specify their voidness in their return spec.</p>
+<p>But I've written up in a separate post why I don't believe things should too casually be void functions:</p>
+<p><a href="https://forum.rebol.info/t/why-isnt-print-invisible-void/1466"><strong>The go-to for creating a function without a meaningful return result should be a reified meaningless result...because full-on vaporization is a contract which is difficult to turn back, and is not easy to sense from a callsite (e.g. inside an ALL [])</strong></a></p>
+<p>Relying on a generic tool like ELIDE gives you clarity at callsites of what you're doing, and means you don't have to work "I elide my result" into the name of your function somehow.  Returning a meaningless value also permits interop with ELSE and THEN if you decide you want NULL-reactivity.</p>
+<p>Maybe PRINT is one of those things that should be an exception (along with <strong>assert</strong> and <strong>--</strong> and <strong>breakpoint</strong>)...but it would be a rare case.</p>
+<h2>What Should We Call The Meaningless Result?</h2>
+<p>The BAD-WORD! of <strong>~void~</strong> is now ruled out as "the meaningless ornery result".  Because we are saying void functions don't return any value, not even meaningless ones.  Void is retaken for the new and more familiar term for characterizing invisibles.</p>
+<p>I have been going with <strong>~none~</strong> as the brief choice.  I'd think that ~nothing~ might be a bit better--and not have the confusion with legacy.  But it was taken for a reason: it's short.  Considering it off-limits would sacrifice an easy thing to type.  It would appear a lot of places, e.g. functions that want to automatically discard results of their bodies would wind up as <strong><code>return: &lt;nothing&gt;</code></strong> or similar, etc.  It's verbose for arguably little gain.</p>
+<p>What it has in common with historical Rebol's NONE is that it is a reified concept of nothing.  What it does not have in common is that it is neither true nor false, and errors in conditional logic...like all the other BAD-WORD!s.  So it's just another kind of unset.</p>
+<p>Type signatures with BAD-WORD! in them are a bit weird:</p>
+<pre><code>print: func [
+    return: [&lt;opt&gt; bad-word!]
+    ...
+ ][...]
+</code></pre>
+<p>So having a type constraint for just the <strong><code>~none~</code></strong> as <strong><code>none!</code></strong> may be worth it.  This doesn't make it a distinct data type, it just narrows down the specifics of it.</p>
+<pre><code>print: func [
+    return: [&lt;opt&gt; none!]
+    ...
+ ][...]
+</code></pre>
+<h2>Alternatives: ~trash~, ~bad~ ...?</h2>
+<p>Outside of its collisions with Rebol2, the word NONE is a bit close to NULL.  (And you'd have people asking what the difference was between "null" and "nothing", if that was chosen, the longer name probably wouldn't help other than being more obviously distinct.)</p>
+<p>We're looking for a short word here that walks the line between "alarming" and "nothing to see here", that's still short.  This is why I'd thought <strong>~void~</strong> was that word...it ticked the boxes, but I've been convinced the usage was confusing.</p>
+<p>For a little while we had the lone <strong>~</strong> which was nameless (which made it a good candidate for being something the console didn't display).  But its temptingness as an operator and hard-to-see nature made it too short for something that should trip your awareness in a block the way a BAD-WORD! should.</p>
+<p>The problem I see with things like <strong>~bad~</strong> is that they make the interface of the function look more alarming than it needs to (<strong><code>return: &lt;bad&gt;</code></strong>), and it also doesn't seem very appropriate for the console to be hiding something called "bad" from you.</p>
+<h2>Retraining Usage Of Arity-0 RETURN</h2>
+<p>I'm warming up to the idea of <strong>func [] [return]</strong> being invisible.  One aspect of warming up to it is the idea that if we are going all the way and calling them "void functions" then this kind of lines up with being that.</p>
+<p>So I'm also potentially warming up to the idea that <strong>func [x] [comment x]</strong> could act like COMMENT.  If we said that <strong>func [x] []</strong> returned NULL that wouldn't work, because we'd be pre-seeding with a NULL and hence <strong>func [x] [comment x]</strong> would also be NULL, since the comment wouldn't change the output.</p>
+<p>(I don't know if we say that's just life, since <strong>if true [comment "hi"]</strong> is not invisible, and hence we chalk up the invisibility magic to something only RETURN can do, due to its special relationship with FUNC.  Which seems a legitimate philosophy to have.  Why worry if <code>func [x] [comment x]</code> is NULL if you can get what you intend with <code>func [x] [return comment x]</code> ?)</p>
+<blockquote>
+<p><strong>UPDATE:</strong> Thinking this through further I realized that it's not just multiple returns that would get problems caused with this, but also null isotopes.  We really do need a way to say "return as-is", so we might just be stuck with the <strong>return @(comment "hi")</strong> form if you want to get a verbatim chain that includes invisibility and isotope status.</p>
+</blockquote>
+<p>This brings us to the point: <em>If we embrace the idea of RETURN with no argument as the "weird edge case for facilitating void functions" then we have to drive in the non-weird way to handle the basic case of returning a meaningless result</em>.  People have to look at RETURN with no argument and go "hey, wait, why doesn't that return have an argument" and have it pop off the page as an oddity, worthy of a potentially surprising behavior.</p>
+<p><strong>return '~none~</strong> is a pain to type.  I'd been wanting to avoid functions that returned BAD-WORD!s to avoid the sorta confusion situation of <strong>:action = type of none</strong> ... but if making it an action is what we have to do in order to get the syntax of <strong>return none</strong> then that is what it is.</p>
+<h2>Sidenote: Inheriting Return Types</h2>
+<p>I'm talking about finessing the question of how to do a chained RETURN on a function that you don't know if it's going to vaporize completely or return a value.  That's something that bothers me about C, because it doesn't let you write chaining void returns:</p>
+<pre><code>void my_function() {
+    return some_void_function(...);  /* this is not legal! */
+}
+</code></pre>
+<p>That annoys me, because it makes it hard to write generic code that doesn't want the bad properties of a macro (repeating evaluation of arguments if used multiple times, etc.)...but throws a wrench in being able to abstract across return values.</p>
+<p>Yet then there's that other question of how to label your return type.  In Ren-C we have the option of just not putting a type signature on it, but what you often want is the signature of what you're wrapping.  I guess we could do this via COMPOSE on the spec:</p>
+<pre><code>my-function: func compose [
+    return: (return-of :some-other-function)
+    ...
+][
+    ...
+    return some-other-function ...
+]
+</code></pre>
+<p>Anyway, I just wanted to mention that we're still pretty far from utopia in this medium, even if we get the chaining part itself right!</p>
+          <p><a href="https://forum.rebol.info/t/the-return-of-none/1467/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-return-of-none/1467/1</link>
+        <pubDate>Mon, 18 Jan 2021 02:04:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1467-1</guid>
+        <source url="https://forum.rebol.info/t/the-return-of-none/1467.rss">The RETURN of NONE (?)</source>
+      </item>
+  </channel>
+</rss>

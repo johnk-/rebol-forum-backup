@@ -1,0 +1,728 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+    <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125</link>
+    <description>Much of Rebol&#39;s appeal lies in its diverse collection of parts.  One of the parts that has been coveted for a while is **@foo**.
+
+Questions have arisen on what to call this.  AT! has been suggested, though this can get a bit confused with the AT operation in the language.  (TO-AT also looks kind of strange).
+
+Other concepts have been to retake HANDLE!, call it IDENTITY! or simply merge it with EMAIL!...which is what Red has done:
+
+    &gt;&gt; type? @foo
+    == email!
+
+    &gt;&gt; any-string? @foo
+    == true
+
+While simply seeing it as an extension of EMAIL! has come up as *an* option, other questions have been asked about whether it should be an ANY-WORD! and have binding.  I liked the idea of it having binding, because I like it being able to be thought of as &quot;pointing&quot; at something.  For instance, being used to [implicate a parameter in a FAIL](https://forum.rebol.info/t/fail-ing-with-grace/1027):
+
+    foo: func [bar [integer!]] [
+        if bar &gt;= 1020 [fail @bar &quot;Must be less than 1020&quot;]
+    ]
+
+But now I think that @ may be able to serve a greater purpose for us as a modifier that is like GET-XXX! and SET-XXX!, in that you can apply it to WORD!, PATH!, GROUP!, and BLOCK!.  It would fulfill some of the motivation of having another ANY-WORD! type without being mixed up with the things that made ISSUE! a bad ANY-WORD! (e.g. we knew **#123-45** should be an ISSUE, while **:123-45** wouldn&#39;t be a valid GET-WORD!)
+
+And it can provide an otherwise missing ability: *Irreducibility*.
+
+## Irreduciblity: the missing link for enumerated types
+
+There&#39;s a problem I have pointed out that shows up when you try and use a WORD! in an enumeration.
+
+    which: pick [foo baz bar] n
+    do compose [
+         select data (which)
+         ...
+    ]
+
+The words look nice, but they&#39;re just one evaluative step away from being looked up as variables.  You can quote things--now anything you want.  But that only delays the problem...once you evaluate the apostrophe vanishes, and now you&#39;re back to the same problem again.  You&#39;re always trying to compensate for how many evaluations you are doing to line up the quoting levels.
+
+If you imagine the AT-XXX! types not evaluating, they do something you couldn&#39;t do before, unless you used an ISSUE!.  But as I say, the applications of ISSUE! don&#39;t really fit with WORD!s and symbol comparisons.  And # is already overtaxed in the language for so many things, that if we suddenly became prescriptive about using it for symbolic enumerations then that would be a whole lot of #&#39;s.
+
+This would not only soften the blow of losing bindings in ISSUE!, but it would open doors to questions like what @(...) or @[...] could mean in dialects.  The @ could be the instruction for PARSE to match things literally:
+
+    &gt;&gt; block: [some &quot;a&quot;]
+
+    &gt;&gt; parse [[some &quot;a&quot;] [some &quot;a&quot;]] [some @block]
+
+In the main evaluator, AT-BLOCK! is a bit redundant, given that blocks don&#39;t evaluate in the first place.  But who knows what uses they might have.
+
+AT-PATH! could play a pivotal part in NewPath, because plain PATH!s are too &quot;lively&quot;, and if you compose them places they will evaluate.  Quoting is not enough.  You need full-on-dead, and this does it.
+
+It looks to be ticking several design boxes for this long-desired feature.  Think I&#39;m liking it.  Anyone have thoughts?</description>
+    
+    <lastBuildDate>Fri, 13 Aug 2021 02:52:09 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-username="hostilefork" data-post="20" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Next I'll be bringing back functionality, e.g. for @ branches not doing the null isotope stuff:</p>
+<pre><code>&gt;&gt; if true @[null] else [print "Else"]
+Else
+</code></pre>
+<p>So you have control to say if you actually <em>do</em> want a true NULL back even though a branch ran.</p>
+</blockquote>
+</aside>
+<p>I noticed something about this that made me a bit bummed, which is that I kind of feel the @ notation is a good shorthand for getting variables.  But just because you use that shorthand you don't want to avoid isotopification:</p>
+<pre><code>&gt;&gt; x: 10, y: null
+
+&gt;&gt; if true @x else [print  "else"]
+== 10
+
+&gt;&gt; if true @y else [print "else"]
+else  ; d'oh...
+</code></pre>
+<p>That made me wonder if for this rare and BLOCK!-specific case, /[...] might be a better choice for "don't isotopify a branch":</p>
+<pre><code> &gt;&gt; if true [null]
+ == ~null~  ; isotope
+
+ &gt;&gt; if true /[null]
+ ; null
+</code></pre>
+<p>The idea of "leading slash means optionally NULL" is kind of congruent with refinements--which are NULL if not specified.</p>
+<p>It's a feature that very few people are going to need to be using, whereas I think people might become partial to the <span class="mention">@var</span> notation...because it has the nice property of combining the BLOCK! with the GET-WORD!, e.g. a stand-in for the longer and dottier <strong>[:var]</strong></p>
+<pre><code>if true @var1 else @var2
+
+if true [:var1] else [:var2]
+</code></pre>
+<p>I'm not sure what the implication would be for @(...) and @[...] as branches at that point, however.</p>
+<p>We should remember that @(...) is non-evaluative; it won't evaluate unless someone asks it to:</p>
+<pre><code>&gt;&gt; @(1 + 2)
+== @(1 + 2)
+</code></pre>
+<p>Which means maybe this could be a cleaner resolution to the weirder "get-group escaping" stuff:</p>
+<pre><code>&gt;&gt; either true (print "A1", [print "A2"]) (print "B1", [print "B2"])
+A1
+B1
+A2
+
+&gt;&gt; either true @(print "A1" [print "A2"]) @(print "B1", [print "B2"])
+A1
+A2
+</code></pre>
+<p>With more datatypes in the mix and an ever-evolving set of precedent, I think maybe we can start getting some closure on the issues I've brought up, like saying that a <a href="https://forum.rebol.info/t/special-syntax-for-for-each-etc-to-receive-action-s/955">FOR-EACH will not give you back an ACTION! value unless you use a GET-WORD!</a>...because things can get screwed up so easily when code is not written to be ready to take actions.</p>
+<p>The landscape really has changed with <code>^META-XXX</code> and <code>@THE-XXX</code>, so old difficult questions might start to look like they have easier answers now.  It's nice when that happens!</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/21">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/21</link>
+        <pubDate>Fri, 13 Aug 2021 02:43:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-21</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="19" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>There's a new option, which would be THE-WORD!, THE-BLOCK!, THE-GROUP!, THE-PATH!, THE-TUPLE!, and perhaps even @ as plain old THE!</p>
+</blockquote>
+</aside>
+<p>So I've wired things around such that parameter bits are shuffled around to new places that had opened up...and we can now use all 64 type slots for datatypes.</p>
+<p>Hence the <code>@word</code>, <code>@pa.th</code>, <code>@tu.p.le</code>, <code>@[bl o ck]</code>, and <code>@(gr o up)</code> are back...and I've given them names of THE-XXX!.</p>
+<pre><code>&gt;&gt; @ word
+== word
+
+&gt;&gt; @word
+== @word
+
+&gt;&gt; @pa/th
+== @pa/th
+
+&gt;&gt; @tu.p.le
+== @tu.p.le
+
+&gt;&gt; @[bl o ck]
+== @[bl o ck]
+
+&gt;&gt; @(gr o up)
+== @(gr o up)
+</code></pre>
+<p>So that's back and working, and these types exist alongside the META-XXX! types.  Next I'll be bringing back functionality, e.g. for @ branches not doing the null isotope stuff:</p>
+<pre><code>&gt;&gt; if true [null]
+== ~null~  ; isotope
+
+&gt;&gt; if true [null] else [print "Else"]
+== ~null~  ; isotope
+
+&gt;&gt; if true @[null]
+; null
+
+&gt;&gt; if true @[null] else [print "Else"]
+Else
+</code></pre>
+<p>So you have control to say if you actually <em>do</em> want a true NULL back even though a branch ran.  Then there is the case I mention about how you can match things literally in PARSE instead of using them as rules:</p>
+<pre><code>&gt;&gt; block: [some "a"]
+
+&gt;&gt; uparse [[some "a"] [some "a"]] [some @block]
+== [some "a"]
+</code></pre>
+<p>(had you written just <code>some block</code> it would have been trying to match some number of "a", not the block [some "a"])</p>
+<p>As I've argued in this thread, a truly inert and bound value types fills in gaps in the parts box.  So it's good to have them back.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/20">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/20</link>
+        <pubDate>Mon, 02 Aug 2021 10:58:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-20</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="IngoHohmann" data-post="4" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>Namingwise I like symbol-foo best so far.</p>
+</blockquote>
+</aside>
+<p>There's a new option, which would be THE-WORD!, THE-BLOCK!, THE-GROUP!, THE-PATH!, THE-TUPLE!, and perhaps even @ as plain old THE!</p>
+<p>This would go along with the idea that THE is the operation which means "as is"</p>
+<pre><code>&gt;&gt; the x
+== x
+
+&gt;&gt; @ x
+== x
+
+&gt;&gt; @x
+== @x
+
+&gt;&gt; type of @x
+== the-word!
+
+&gt;&gt; type of @
+== the!
+</code></pre>
+<p>It's three letters and a complete word.  It fits into the overall idea of inertness.</p>
+<p>There is also DATA-WORD!, DATA-BLOCK!, etc. but then we don't want to call <code>@</code> a DATA!... and it's kind of a puzzle as to what you mean by DATA (isn't everything data?)</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/19">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/19</link>
+        <pubDate>Sun, 16 May 2021 15:23:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-19</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Irreduciblity: the missing link for enumerated types</p>
+</blockquote>
+</aside>
+<p><a href="https://forum.rebol.info/t/should-we-repurpose-to-what-is-now-doing/1605">With ^ looking like it's going to take over for "literalization"</a>, this idea is back in the game.</p>
+<p>Given how ^ is a standalone value type and operator, I would think @ could be the same.  In the evaluator at large, lone @ itself could mean "give me a value literally", e.g. <strike>JUST</strike> <a href="https://forum.rebol.info/t/just-vs-lit-literal-literally/1453/5">THE</a></p>
+<pre><code>&gt;&gt; @ foo
+== foo
+
+&gt;&gt; @ (1 + 2)
+== (1 + 2)
+</code></pre>
+<p>Which seems pretty coherent with its "just give me that back" behavior for its attached types.</p>
+<pre><code>&gt;&gt; @word
+== @word
+
+&gt;&gt; @(gr o up)
+== @(gr o up)
+</code></pre>
+<p><em>This inert nature is ideal for DATATYPE! purposes.</em>  Whether they are expressed as functions that match types as a predicate or as a literal type name, you don't want datatypes to evaluate to anything.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>For instance following the line of thinking with PARSE, <strong>keep @[...]</strong> could be used to mean keep literally that block's contents with no evaluations.</p>
+</blockquote>
+</aside>
+<p>I'll just point out that with value synthesis working how it does in UPARSE now, <strong>([...])</strong> takes care of this, e.g.</p>
+<pre><code>&gt;&gt; uparse "aa" [collect some ["a" keep ([found an a])]]
+== [found an a found an a]
+</code></pre>
+<p>You'd only save one character.  So that would mean more creative ideas might come into play for how these types would be used.</p>
+<p>Clearly datatypes are a more pressing need.</p>
+<p><em>There needs to be some juggling of the designs before we have room for the 5 types in the list, given the scarcity of bits in cell layouts</em>.  It's doable without breaking the world, though...</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/18">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/18</link>
+        <pubDate>Fri, 14 May 2021 22:07:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-18</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>On the Unisys mainframe the AT symbol  @ was called 'masterspace'. Could call something like <span class="mention">@block</span> thus 'masterblock'.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/17">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/17</link>
+        <pubDate>Sun, 06 Dec 2020 20:00:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-17</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="15" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>LIT really still feels like it was the right word for the wrong datatype.</p>
+</blockquote>
+</aside>
+<p><strong>Usages seem to strongly favor LIT, though not necessarily in the way originally conceived.</strong></p>
+<p>Originally I thought the important thing about <code>@word</code> was that it was inert in the evaluator.</p>
+<pre><code>&gt;&gt; @foo
+== @foo
+</code></pre>
+<p>But a lot of the time, that isn't what's happening with it.  Enough so to question if having it <em>ever</em> act like that is a good idea.</p>
+<p>Instead, it's being used many places to mean <em>do an evaluation (or lookup), where the product of the evaluation (or lookup) should be taken more literally</em>.</p>
+<p>This concept originated with "modal parameters"</p>
+<pre><code>&gt;&gt; data: [d e f]
+
+&gt;&gt; append [a b c] data
+== [a b c d e f]
+
+&gt;&gt; append [a b c] @data
+== [a b c [d e f]]
+</code></pre>
+<p>But the concept is broadening into dialects like PARSE:</p>
+<pre><code>&gt;&gt; block: [some "a"]
+
+&gt;&gt; parse [[some "a"] [some "a"]] [2 block]
+; null   (tried to apply block as a rule)
+
+&gt;&gt; parse [[some "a"] [some "a"]] [2 @block]
+== [[some "a"] [some "a"]]  ; matched literally
+</code></pre>
+<p>And it's giving an escape mechanism to things like being able to RETURN an expression, even one that evaporates:</p>
+<pre><code>&gt;&gt; foo: func [] [return (comment "hi")]  ; same as `func [] [return]`
+&gt;&gt; bar: func [] [return @(comment "hi")]  ; different mechanics
+
+&gt;&gt; 10 foo
+== ~void~
+
+&gt;&gt; 10 bar
+== 10
+</code></pre>
+<p>For a time it was used to also subvert voidification of branches.  But once voidification was deemed to put too much of a burden onto cases that weren't using ELSE/THEN, it shifted further into the margins as avoiding "null isotopification":</p>
+<pre><code>&gt;&gt; if true [null] else [print "This else clause mutually excluded"]
+; null-2
+
+&gt;&gt; if true @[null] else [print "No mutual exclusion"]
+No mutual exclusion
+</code></pre>
+<h2>If Inertness Isn't The Game, Should It Ever Be?</h2>
+<p>If it's not INERT-WORD! or INERT-GROUP! in behavior, we might ask what the value of this is:</p>
+<pre><code>&gt;&gt; @foo
+== @foo
+</code></pre>
+<p>Originally the value was that you could pass it to a non-quoted parameter and get it inertly for processing.</p>
+<pre><code>foo: func [x] [
+   switch type of x [
+        sym-word! [print ["Got a sym-word for processing:" mold x]]
+        integer! [print ["Got an integer for processing:" x]]
+   ]
+]
+
+&gt;&gt; foo 10 + 20
+Got an integer for processing: 30
+
+&gt;&gt; foo @append
+Got a sym-word for processing: @append
+</code></pre>
+<p>If non-modal-parameter usages were errors, you wouldn't be able to do that.  And if you ask for that to be a modal parameter, you won't see the argument "as is".</p>
+<p>Another lens for looking at this question would be to ask how modal behaviors work when specialized:</p>
+<pre><code>&gt;&gt; apo: :append/only
+
+&gt;&gt; block: [d e]
+&gt;&gt; apo [a b c] @block
+; == ???
+</code></pre>
+<p>There's no longer a switch for using the modal parameter to flip.  So is it now going to just add <code>@block</code>?  Should it be an error?  (I lean to saying that a modal parameter that's had its modal control specialized out should likely error, or at <em>least</em> error if the mode is inconsistent with the refinement it controls)</p>
+<p>One may disagree about the necessity of this particular modal parameter use for APPEND.  But I've given more examples that show where it's helpful.  <strong>And I feel like maybe the stakes are that if you don't use it in the evaluator to control a mode, you have to quote it or it errors.</strong></p>
+<p>This kills of the idea of thinking of this as an inert type, which seems like where the evolution has landed.  Of course, you always have <strong><code>'@foo</code></strong> with a tick mark if the function you're calling doesn't quote.  It's important to remember that generalized quoting is there to pick up the slack, and maybe you should stick with <code>#foo</code> and <code>%foo</code> and <code>&lt;foo&gt;</code> and <code>"foo"</code> for inertness.</p>
+<p><em>(I haven't decided if <code>.foo</code> for predicates warrants a similar "it's probably better to error vs. be inert" treatment, considering how widespread they may be; you'd like to know if you used a predicate where one wasn't expected... maybe <code>/foo</code> should go with this strategy as well, forcing you to <strong><code>'.foo</code></strong> and <strong><code>'/foo</code></strong> with generalized quoting if the thing you're calling wasn't looking for them.)</em></p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/16">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/16</link>
+        <pubDate>Wed, 02 Dec 2020 03:42:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-16</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="IngoHohmann" data-post="4" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>Sounds good. Namingwise I like symbol-foo best so far. (or sym-...)</p>
+</blockquote>
+</aside>
+<p>So...a year later...the SYM has never quite settled for me.  I still have an aversion to the SET/SYM both being S, and beyond it... I just... don't like it.</p>
+<p>I notice that Red has chosen to call <span class="mention">@foo</span> a REF!</p>
+<pre><code>red&gt;&gt; type? @foo
+== ref!
+</code></pre>
+<p>So another possibility would be to say that these are REF-WORD!, REF-PATH!, REF-GROUP!, and REF-BLOCK!.</p>
+<p>The GET, SET, REF have a rhythm (shared E) that is comparable in pleasing-ness to GET SET LIT (shared T).</p>
+<p><strong>but</strong> REF has an unfortunate overlap with REFINEMENT which is still a word in play (though as a type constraint on paths, not as an independent type).</p>
+<p>I dunno.  LIT really still feels like it was the right word for the wrong datatype.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/15">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/15</link>
+        <pubDate>Tue, 27 Oct 2020 06:48:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-15</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="1125" data-full="true">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>Sounds good. Namingwise I like symbol-foo best so far. (or sym-...)</p>
+</blockquote>
+</aside>
+<p>After looking at this a while, I think my heart is set on LIT-WORD!, LIT-PATH!, LIT-GROUP!, and LIT-BLOCK!... even with the confusion it might cause for historical code.</p>
+<p>The GET/SET/LIT has a good rhythm to it and helps explain the behavior of the type in the default evaluator.</p>
+<p>I like the spread across letters (no SET/SYM)...and that each is a related operation in its own right in the language (LIT is a basic function, SYM is not).</p>
+<p>So this is where I'm leaning toward right now...</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/14</link>
+        <pubDate>Tue, 04 Jun 2019 20:46:20 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-14</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="12" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>just the notation primarily referencing the <code>@123abc</code> user name convention.</p>
+</blockquote>
+</aside>
+<p>If then you mean it not being an ANY-STRING! thus limiting the range of legal names to valid formations of ANY-WORD!...you'd have some workarounds e.g. <strong>@["123abc"]</strong></p>
+<p>This points the way toward saying that <strong>to text! @["123abc"]</strong> needs to be <code>123abc</code>, perhaps FORM-ing as <code>@123abc</code> I think we can push the shape around a bit to make this stuff easier for real-world scenarios.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/13">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/13</link>
+        <pubDate>Wed, 08 May 2019 19:38:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-13</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="11" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>It's not clear what this is in reference to...</p>
+</blockquote>
+</aside>
+<p>Not the name 'HANDLE!' for sure, just the notation primarily referencing the <code>@123abc</code> user name convention.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/12</link>
+        <pubDate>Wed, 08 May 2019 19:29:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-12</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="10" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>I'm admittedly partial to the <em>'HANDLE!'</em> usage of <code>@</code> , so I'd mourn that as a loss.</p>
+</blockquote>
+</aside>
+<p>It's not clear what this is in reference to...you mean you are partial to the <em>name</em> HANDLE! ?</p>
+<blockquote>
+<p>My initial superficial reaction is a little queasiness at an additional symbol kicking around and adding that cognitive load</p>
+</blockquote>
+<p>I'd be more worried if it weren't providing a clear mechanical purpose.</p>
+<p>Having them be LIT-WORD!, LIT-PATH!, LIT-GROUP!, LIT-BLOCK! feels right.  We're still keeping the type load about the same, with one QUOTED! datatype as a kind of "container".  All in all I think the load is actually going <em>down</em>.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/11</link>
+        <pubDate>Wed, 08 May 2019 17:07:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-11</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm admittedly partial to the <em>'HANDLE!'</em> usage of <code>@</code>, so I'd mourn that as a loss. My initial superficial reaction is a little queasiness at an additional symbol kicking around and adding that cognitive load, <em>but</em> I would need to think about what it adds to the language and where it'd produce some wins before settling on that as a judgement.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/10</link>
+        <pubDate>Wed, 08 May 2019 15:06:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-10</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>Namingwise I like symbol-foo best so far. (or sym-...)</p>
+</blockquote>
+</aside>
+<p>At the risk of causing mass hysteria...I actually kind of like the names LIT-WORD!, LIT-BLOCK!, LIT-PATH!, and LIT-GROUP!.  It's not just that I want a different letter than S (SYM/SET).  But it's also that.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>I've laid out what the difference is between <em>quoting</em> and <em>literalness</em>.  And what's being described here for these items, having them be evaluator-inert, suggests you'd never need to say <strong>lit <span class="mention">@foo</span></strong>.  <em>Because it's already as literal as it can get.</em></p>
+<p>The challenging bit of this would be that:</p>
+<pre><code>&gt;&gt; lit foo
+== foo  ; literally the word foo...not the LIT-WORD! @foo
+
+&gt;&gt; to lit-word! 'foo
+== @foo  ; you'd have to do something like this
+</code></pre>
+<p>But then again, we don't expect <strong>set foo</strong> to give back <strong>foo:</strong>, that's not what the operator does.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/9</link>
+        <pubDate>Thu, 28 Mar 2019 00:34:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-9</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="7" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>I think having @ domain could be a frequent wish, e.g. <span class="mention">@hostilefork.com</span> .</p>
+</blockquote>
+</aside>
+<p>That would suggest that TUPLE! is in the class with PATH! in offering the SET-, GET-, and @ variants.</p>
+<pre><code> hostilefork.com:
+ :hostilefork.com
+ @hostilefork.com
+</code></pre>
+<p>Just in terms of how things work it would be difficult to offer SET-, GET-, @ versions of everything.  We run out of bits.  It also creates a zoo of types that may do more harm than good, and ambiguities in scanning (PATH! and TUPLE! will be limited in what types they can store).  But I think the similarity to PATH! as a kind of container makes it sensible to offer this, and you raise a good point that people would want such a form.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/8</link>
+        <pubDate>Tue, 26 Mar 2019 16:06:25 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-8</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>IIRC you thought about removing "." from valid word characters. I think having @ domain could be a frequent wish, e.g. <span class="mention">@hostilefork.com</span> .</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/7</link>
+        <pubDate>Tue, 26 Mar 2019 15:57:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-7</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="4" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/ingohohmann/40/195_2.png" class="avatar"> IngoHohmann:</div>
+<blockquote>
+<p>Namingwise I like symbol-foo best so far.</p>
+</blockquote>
+</aside>
+<p>I had another wacky half-baked fleeting thought that I thought I'd write down.</p>
+<p>We've been looking for a way to represent datatypes symbolically.  Today it's an ugly problem:</p>
+<pre><code>&gt;&gt; stuff: compose [(integer!) integer!]
+== [integer! integer!]
+
+&gt;&gt; type of first stuff
+== datatype!
+
+&gt;&gt; type of second stuff
+== word!
+</code></pre>
+<p>Because we don't know what all people might want to use @ for, I haven't thought this entirely through, but what if...</p>
+<pre><code>&gt;&gt; stuff: compose [(integer!) integer!]
+== [@integer integer!]
+</code></pre>
+<p>And what if it were a TYPE-WORD!</p>
+<p>It's only a little step toward thinking of it as also being able to be an "enumerated type word", which makes its name have a bit of a double-meaning...</p>
+<p>How does this apply to TYPE-BLOCK!, and TYPE-GROUP!, and TYPE-PATH!?  Don't know, but we need some sort of notation for compound types that can't be summarized by a symbol.  It could be a language:  <strong>@[matrix integer [32 32]]</strong> coming back as the TYPE OF a 32x32 matrix?  :-/</p>
+<p>Just brainstorming here, I'm completely making things up.  But if conflating WORD!s and enums was a thing people did before.  How bad is conflating datatypes with enumerations?  They'd collide sometimes, but there's only so many types...applications collide.</p>
+<p>Does interfere with some creative uses of them, though.  e.g.</p>
+<pre><code> &gt;&gt; parse [1 1 1] [copy x some @integer]
+ &gt;&gt; x
+ == 1 1 1
+</code></pre>
+<p>PARSE would basically be surrendering creative uses.  Because if <code>copy x some integer!</code> needs to work, and <code>integer!: @integer</code>, then so do literal things.</p>
+<p>Anyway, just saying that TYPE- is a short prefix, starts with a different letter than SET- and GET-, and could maybe give a reason this inert non-reducing type exists.  You could do what you wanted with it, unless it would break you by conflating with datatypes.</p>
+<p><em>(Mentioning these things--even if they're bad ideas--can sometimes lead to good ones...)</em></p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/6</link>
+        <pubDate>Sat, 23 Mar 2019 03:23:23 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-6</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>Sounds good. Namingwise I like symbol-foo best so far. (or sym-...)</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/4</link>
+        <pubDate>Thu, 21 Mar 2019 12:21:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-4</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="2" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>I’ll be curious to see what <a class="mention" href="/u/rgchris">@rgchris</a> thinks.</p>
+</blockquote>
+</aside>
+<p>Probably likes ISSUE!s coming back as ANY-STRING!, probably likes the concept, may not like the name.</p>
+<p>AT doesn't sound very meaningful.  And <strong>:foo</strong> and <strong>foo:</strong> are not COLON-WORD! and WORD-COLON! respectively.  Putting AT in the name might be too much in the vein of PAREN!.</p>
+<p>Having <span class="mention">@foo</span> be "SYMBOL!" or something like that would be a more appealing name, but it needs to connote its membership in its family.  Needs to be short.  SYM- for "symbolic"?  (SYM-WORD! SYM-BLOCK!...)  LINK, to be that it's pointing to something?  LINK-WORD!, LINK-BLOCK!...</p>
+<p>Weirder: DEAD-WORD!, DEAD-BLOCK!  :-/</p>
+<p>I feel kind of like maybe going long and calling them SYMBOL-WORD!, SYMBOL-BLOCK!, ... might be all right.  It's not that long in the scheme of things, remember REFINEMENT?  Just one more character for symbol, zero more for inert:</p>
+<pre><code>SYMBOL-WORD!
+REFINEMENT!
+INERT-WORD!
+</code></pre>
+<p>What I don't like about INERT is that it says too much about what the thing does, and that's really up to the dialect.  SYMBOL-WORD! doesn't really say anything about behavior.</p>
+<p>We should have ways to define shorthands, so if people wanted to in their own code abbreivate it they could, perhaps to just SYMBOL!.  But I'd like the official name to keep it squarely in the WORD! class (or whatever class it's attached to).</p>
+<aside class="quote no-group" data-post="2" data-topic="1125">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>I like it too.</p>
+</blockquote>
+</aside>
+<p>For visibility, I wonder if <strong><code>@(...)</code></strong> makes more sense for PARSE rule splicing than the more slight **<code>:(...)</code></p>
+<pre><code>parse ["a" @(either mode = &lt;bmode&gt; '[some "b"] '[any "c"]) "d"]
+
+parse ["a" :(either mode = &lt;bmode&gt; '[some "b"] '[any "c"]) "d"]
+</code></pre>
+<p>Especially when things are broken up across multiple lines, I think the colon could be easy to overlook.</p>
+<p>Also: since @(...) would have no meaning other than "inert group" in the evaluator, this isn't competing with an existing definition the way a GET-GROUP! would be, as being associated directly with a GET operation.</p>
+<p>As with most such things, probably best to just make it and see what happens.  Shouldn't be too hard, slight variation on code that already exists for GET-GROUP! and GET-BLOCK!</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/3</link>
+        <pubDate>Wed, 20 Mar 2019 18:05:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-3</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I like it too. I'll be curious to see what <a class="mention" href="/u/rgchris">@rgchris</a> thinks.</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/2</link>
+        <pubDate>Wed, 20 Mar 2019 17:46:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-2</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+      <item>
+        <title>@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Much of Rebol's appeal lies in its diverse collection of parts.  One of the parts that has been coveted for a while is <strong><span class="mention">@foo</span></strong>.</p>
+<p>Questions have arisen on what to call this.  AT! has been suggested, though this can get a bit confused with the AT operation in the language.  (TO-AT also looks kind of strange).</p>
+<p>Other concepts have been to retake HANDLE!, call it IDENTITY! or simply merge it with EMAIL!...which is what Red has done:</p>
+<pre><code>&gt;&gt; type? @foo
+== email!
+
+&gt;&gt; any-string? @foo
+== true
+</code></pre>
+<p>While simply seeing it as an extension of EMAIL! has come up as <em>an</em> option, other questions have been asked about whether it should be an ANY-WORD! and have binding.  I liked the idea of it having binding, because I like it being able to be thought of as "pointing" at something.  For instance, being used to <a href="https://forum.rebol.info/t/fail-ing-with-grace/1027">implicate a parameter in a FAIL</a>:</p>
+<pre><code>foo: func [bar [integer!]] [
+    if bar &gt;= 1020 [fail @bar "Must be less than 1020"]
+]
+</code></pre>
+<p>But now I think that @ may be able to serve a greater purpose for us as a modifier that is like GET-XXX! and SET-XXX!, in that you can apply it to WORD!, PATH!, GROUP!, and BLOCK!.  It would fulfill some of the motivation of having another ANY-WORD! type without being mixed up with the things that made ISSUE! a bad ANY-WORD! (e.g. we knew <strong><span class="hashtag">#123-45</span></strong> should be an ISSUE, while <strong>:123-45</strong> wouldn't be a valid GET-WORD!)</p>
+<p>And it can provide an otherwise missing ability: <em>Irreducibility</em>.</p>
+<h2>Irreduciblity: the missing link for enumerated types</h2>
+<p>There's a problem I have pointed out that shows up when you try and use a WORD! in an enumeration.</p>
+<pre><code>which: pick [foo baz bar] n
+do compose [
+     select data (which)
+     ...
+]
+</code></pre>
+<p>The words look nice, but they're just one evaluative step away from being looked up as variables.  You can quote things--now anything you want.  But that only delays the problem...once you evaluate the apostrophe vanishes, and now you're back to the same problem again.  You're always trying to compensate for how many evaluations you are doing to line up the quoting levels.</p>
+<p>If you imagine the AT-XXX! types not evaluating, they do something you couldn't do before, unless you used an ISSUE!.  But as I say, the applications of ISSUE! don't really fit with WORD!s and symbol comparisons.  And # is already overtaxed in the language for so many things, that if we suddenly became prescriptive about using it for symbolic enumerations then that would be a whole lot of #'s.</p>
+<p>This would not only soften the blow of losing bindings in ISSUE!, but it would open doors to questions like what @(...) or @[...] could mean in dialects.  The @ could be the instruction for PARSE to match things literally:</p>
+<pre><code>&gt;&gt; block: [some "a"]
+
+&gt;&gt; parse [[some "a"] [some "a"]] [some @block]
+</code></pre>
+<p>In the main evaluator, AT-BLOCK! is a bit redundant, given that blocks don't evaluate in the first place.  But who knows what uses they might have.</p>
+<p>AT-PATH! could play a pivotal part in NewPath, because plain PATH!s are too "lively", and if you compose them places they will evaluate.  Quoting is not enough.  You need full-on-dead, and this does it.</p>
+<p>It looks to be ticking several design boxes for this long-desired feature.  Think I'm liking it.  Anyone have thoughts?</p>
+          <p><a href="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125/1</link>
+        <pubDate>Wed, 20 Mar 2019 08:26:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1125-1</guid>
+        <source url="https://forum.rebol.info/t/word-some-path-some-group-and-some-block/1125.rss">@WORD, @SOME/PATH, @(SOME GROUP), and @[SOME BLOCK]</source>
+      </item>
+  </channel>
+</rss>

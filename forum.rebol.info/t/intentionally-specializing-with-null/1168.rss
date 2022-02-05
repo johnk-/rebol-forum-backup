@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Intentionally Specializing With NULL</title>
+    <link>https://forum.rebol.info/t/intentionally-specializing-with-null/1168</link>
+    <description>When you make a new FRAME! for a function, it has all of its fields unset.
+
+     foo: function [x [integer!] /y [integer!] /z] [...]
+
+     &gt;&gt; f: make frame! :foo
+     == make frame! [
+          x: &#39;
+          y: &#39;
+          z: &#39;
+     ]
+
+*(Note: While the molding communicating that those fields are null may be imperfect, it&#39;s at least an improvement on history.  The lone apostrophe means that if the frame were evaluated, you&#39;d get a null field.  See [Generic Quoting Makes Headway on MAKE OBJECT!](https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997) for more details on how problematic history was with this.)*
+
+If you were to try and **do f** on that frame without setting x to something, you would get an error.  You would also get an error if you said **f/x: &quot;not an integer&quot;** and tried **do f**.
+
+A nice property of the [unused-refinements-are-always-null](https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140) is that you can just leave y and z alone.  If you DO F it will just mean they&#39;re taken as unused.  That&#39;s pretty elegant...
+
+...but what if you want to SPECIALIZE and create a variant of FOO that doesn&#39;t offer /Y or /Z on its interface, *but still wants them to be unspecified*?
+
+Previously this was accomplished by setting the refinement to a BLANK!.  But the price of the elegance of unused-refinements-are-always-null is that it runs up against unspecialized-values-are-null.  Can&#39;t mean both.
+
+This actually isn&#39;t new--the problem existed before with `&lt;opt&gt;` arguments.  You couldn&#39;t make a specialization of REPLACE that would use NULL as the replacement pattern (a non-refinement argument).  But it hadn&#39;t come up.  However, removing refinements and keeping them &quot;turned off&quot; comes up a lot.
+
+## Custom Escape Value?
+
+A first thought I had was we could do something along the lines of just telling SPECIALIZE a value you want to use as the escape:
+
+     foo-no-y: specialize/null &#39;foo [y: &lt;nullescape&gt;] &lt;nullescape&gt;
+
+With skippable parameters, we could even do this in the style of labeled compose:
+
+     foo-no-y: specialize &lt;nullescape&gt; &#39;foo [y: &lt;nullescape&gt;]
+
+It sounds plausible, until you think about scenarios where some of your data is being passed in from outside:
+
+     make-specialfoo: function [data-from-elsewhere] [
+         return specialize &lt;nullescape&gt; &#39;foo [
+             x: data-from-elsewhere
+             y: &lt;nullescape&gt;
+         ]
+     ]
+
+What if the passed in `data-from-elsewhere` just coincidentally used the same magic escape value you did?  :-(  I&#39;m not saying such a construct shouldn&#39;t or couldn&#39;t exist and be useful somewhere.  But it&#39;s a pretty big weakness for &quot;the&quot; SPECIALIZE to have.
+
+## Assume only user-assigned nulls are specialized
+
+The current implementation of SPECIALIZE doesn&#39;t keep track of whether you assigned a field or not.   
+ It just starts with frame fields as null, runs your code bound into the frame, and when the code is done it assumes anything that&#39;s still null is unspecialized.  So these act the same:
+
+     specialize &#39;foo [x: 10 y: null]
+     specialize &#39;foo [x: 10]
+
+Technically speaking, it&#39;s actually possible for the system to write a bit on the value cell in the frame... and notice whether that bit is still set at the end.  So it could tell a &quot;stale&quot; null from a user-written null.
+
+Leveraging such internals makes me a bit uncomfortable, in the sense of being something the user can&#39;t do.  **I&#39;d like to see basic mechanics exported so that users could write their own variations of SPECIALIZE.**
+
+One alternative could be that all the unspecialized fields could be set to VOID! instead of NULL by the specialization process...so it would be a check for VOID! and not null.  That&#39;s something users could do with their own variations.  Though saying that people can&#39;t specialize functions to take void is another version of the same limitation that someone would presumably complain about someday--and have a legitimate reason for doing so.
+
+## Make removing args a separate refinement
+
+In the lazy/obvious department, just have a list of the arguments you want to remove, passed as a block or something:
+
+    specialize/remove &#39;foo [x: 10] [y]
+ 
+Not very imaginative.
+
+## Likely Winner: Expose A New Meta Bit
+
+A more imaginative concept might actually let the user programmatically request the field be removed from the frame&#39;s interface.  It might even reuse the mechanics for PROTECT/HIDE:
+
+    specialize &#39;foo [
+        x: 10
+        protect/hide &#39;y:
+    ]
+
+A backwards-quoting operator might even do that with a nicer syntax...perhaps a function that is bound to work in concert with SPECIALIZE (the way KEEP works with COLLECT):
+
+    specialize &#39;foo [
+        x: 10
+        y: hidden  ; or SPECIALIZED-OUT/etc...it would quote left and fiddle bit
+    ]
+
+I think I like this direction, even if it introduces a new bit to mess with.  It may be able to just build on the PROTECT/HIDE feature, and if so it might bring more justification to its existence.  Or maybe just the plain old PROTECT bit...if you&#39;re saying the field is protected, it&#39;s NULL and can&#39;t be changed, what else could you mean by that than &quot;it&#39;s in its final form, so remove it from the interface&quot;?
+
+The idea is that I want to be able to flip back and forth between MAKE ACTION! from a FRAME! and MAKE FRAME! from an ACTION!.  This is the long game of writing your own specialization operators.  It can&#39;t be done completely in-band with values and nulls...since they represent valid states for a function&#39;s arguments.  So as long as the function call itself can&#39;t read this hidden bit controlling frame creation and derive meaning from it, it should work.</description>
+    
+    <lastBuildDate>Thu, 23 May 2019 23:23:01 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/intentionally-specializing-with-null/1168.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Intentionally Specializing With NULL</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>When you make a new FRAME! for a function, it has all of its fields unset.</p>
+<pre><code> foo: function [x [integer!] /y [integer!] /z] [...]
+
+ &gt;&gt; f: make frame! :foo
+ == make frame! [
+      x: '
+      y: '
+      z: '
+ ]
+</code></pre>
+<p><em>(Note: While the molding communicating that those fields are null may be imperfect, it's at least an improvement on history.  The lone apostrophe means that if the frame were evaluated, you'd get a null field.  See <a href="https://forum.rebol.info/t/generic-quoting-makes-headway-on-make-object/997">Generic Quoting Makes Headway on MAKE OBJECT!</a> for more details on how problematic history was with this.)</em></p>
+<p>If you were to try and <strong>do f</strong> on that frame without setting x to something, you would get an error.  You would also get an error if you said <strong>f/x: "not an integer"</strong> and tried <strong>do f</strong>.</p>
+<p>A nice property of the <a href="https://forum.rebol.info/t/are-nulls-the-best-representation-for-unused-refinements/1140">unused-refinements-are-always-null</a> is that you can just leave y and z alone.  If you DO F it will just mean they're taken as unused.  That's pretty elegant...</p>
+<p>...but what if you want to SPECIALIZE and create a variant of FOO that doesn't offer /Y or /Z on its interface, <em>but still wants them to be unspecified</em>?</p>
+<p>Previously this was accomplished by setting the refinement to a BLANK!.  But the price of the elegance of unused-refinements-are-always-null is that it runs up against unspecialized-values-are-null.  Can't mean both.</p>
+<p>This actually isn't new--the problem existed before with <code>&lt;opt&gt;</code> arguments.  You couldn't make a specialization of REPLACE that would use NULL as the replacement pattern (a non-refinement argument).  But it hadn't come up.  However, removing refinements and keeping them "turned off" comes up a lot.</p>
+<h2>Custom Escape Value?</h2>
+<p>A first thought I had was we could do something along the lines of just telling SPECIALIZE a value you want to use as the escape:</p>
+<pre><code> foo-no-y: specialize/null 'foo [y: &lt;nullescape&gt;] &lt;nullescape&gt;
+</code></pre>
+<p>With skippable parameters, we could even do this in the style of labeled compose:</p>
+<pre><code> foo-no-y: specialize &lt;nullescape&gt; 'foo [y: &lt;nullescape&gt;]
+</code></pre>
+<p>It sounds plausible, until you think about scenarios where some of your data is being passed in from outside:</p>
+<pre><code> make-specialfoo: function [data-from-elsewhere] [
+     return specialize &lt;nullescape&gt; 'foo [
+         x: data-from-elsewhere
+         y: &lt;nullescape&gt;
+     ]
+ ]
+</code></pre>
+<p>What if the passed in <code>data-from-elsewhere</code> just coincidentally used the same magic escape value you did?  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  I'm not saying such a construct shouldn't or couldn't exist and be useful somewhere.  But it's a pretty big weakness for "the" SPECIALIZE to have.</p>
+<h2>Assume only user-assigned nulls are specialized</h2>
+<p>The current implementation of SPECIALIZE doesn't keep track of whether you assigned a field or not.<br>
+It just starts with frame fields as null, runs your code bound into the frame, and when the code is done it assumes anything that's still null is unspecialized.  So these act the same:</p>
+<pre><code> specialize 'foo [x: 10 y: null]
+ specialize 'foo [x: 10]
+</code></pre>
+<p>Technically speaking, it's actually possible for the system to write a bit on the value cell in the frame... and notice whether that bit is still set at the end.  So it could tell a "stale" null from a user-written null.</p>
+<p>Leveraging such internals makes me a bit uncomfortable, in the sense of being something the user can't do.  <strong>I'd like to see basic mechanics exported so that users could write their own variations of SPECIALIZE.</strong></p>
+<p>One alternative could be that all the unspecialized fields could be set to VOID! instead of NULL by the specialization process...so it would be a check for VOID! and not null.  That's something users could do with their own variations.  Though saying that people can't specialize functions to take void is another version of the same limitation that someone would presumably complain about someday--and have a legitimate reason for doing so.</p>
+<h2>Make removing args a separate refinement</h2>
+<p>In the lazy/obvious department, just have a list of the arguments you want to remove, passed as a block or something:</p>
+<pre><code>specialize/remove 'foo [x: 10] [y]
+</code></pre>
+<p>Not very imaginative.</p>
+<h2>Likely Winner: Expose A New Meta Bit</h2>
+<p>A more imaginative concept might actually let the user programmatically request the field be removed from the frame's interface.  It might even reuse the mechanics for PROTECT/HIDE:</p>
+<pre><code>specialize 'foo [
+    x: 10
+    protect/hide 'y:
+]
+</code></pre>
+<p>A backwards-quoting operator might even do that with a nicer syntax...perhaps a function that is bound to work in concert with SPECIALIZE (the way KEEP works with COLLECT):</p>
+<pre><code>specialize 'foo [
+    x: 10
+    y: hidden  ; or SPECIALIZED-OUT/etc...it would quote left and fiddle bit
+]
+</code></pre>
+<p>I think I like this direction, even if it introduces a new bit to mess with.  It may be able to just build on the PROTECT/HIDE feature, and if so it might bring more justification to its existence.  Or maybe just the plain old PROTECT bit...if you're saying the field is protected, it's NULL and can't be changed, what else could you mean by that than "it's in its final form, so remove it from the interface"?</p>
+<p>The idea is that I want to be able to flip back and forth between MAKE ACTION! from a FRAME! and MAKE FRAME! from an ACTION!.  This is the long game of writing your own specialization operators.  It can't be done completely in-band with values and nulls...since they represent valid states for a function's arguments.  So as long as the function call itself can't read this hidden bit controlling frame creation and derive meaning from it, it should work.</p>
+          <p><a href="https://forum.rebol.info/t/intentionally-specializing-with-null/1168/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/intentionally-specializing-with-null/1168/1</link>
+        <pubDate>Thu, 23 May 2019 23:23:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1168-1</guid>
+        <source url="https://forum.rebol.info/t/intentionally-specializing-with-null/1168.rss">Intentionally Specializing With NULL</source>
+      </item>
+  </channel>
+</rss>

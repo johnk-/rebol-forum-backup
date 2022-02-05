@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Toward Reusable Rules: SET of a BLOCK! in PARSE</title>
+    <link>https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579</link>
+    <description>I&#39;ve noticed patterns come up like:
+
+     parse data [
+         [some-rule (variable: xxx)
+         | variable: integer!
+         | some-other-rule (variable: yyy)
+         | ... (variable: ...)
+         ]
+     ]
+
+It&#39;s a little bit like a SWITCH.  But you wind up repeating the same variable name several times.
+
+**There&#39;s tremendous general value in having more ways to push the name of the assigned value outside of the rule.**  This makes it easier to write reusable rules.
+
+One thing we might consider would be some kind of CATCH parallel to COLLECT, which lets you get single values instead of a block of them:
+
+     parse data [
+         variable: catch [
+             some-rule, throw @(xxx)
+             | throw integer! 
+             | some-other-rule, throw @(yyy)
+             | ... throw @(...)
+         ]
+     ]
+
+That&#39;s a bit verbose.  It also ties together the moment of deciding your capturing of the variable with the moment you return it.  You might not want that (think of BETWEEN-like things where you still have some stuff to match after you&#39;ve found your value).
+
+**So maybe we should put more practical thought into the question of *&quot;what does it mean to SET a variable to a BLOCK! rule in the first place&quot;*.**
+
+Capturing *everything* matched in the block seems like such a rare intent...your TOs and THRUs and matches of string bits seem like they&#39;re often not part of the capture.  You might argue it should only capture things inside @... where if what you&#39;re capturing is actually a parse rule then you put it in an @[block]:
+
+     parse data [
+         variable: [
+             some-rule, @(xxx)
+             | @[integer!] 
+             | some-other-rule, @(yyy)
+             | ... @(...)
+         ]
+     ]
+
+It&#39;s more succinct.  And then this gives you the option of capturing single values via parse rule in the traditional way with an @ rule:
+
+     parse [1 ...] [variable: @[integer! | text!] ...]
+
+So imagine that doing a capture of an integer or taking a default:
+
+     parse [&quot;foo&quot; ...] [variable: [@[integer!] | @(0)] ...]
+
+## Should @integer! should be treated as @[integer!] or @(integer!)
+
+I feel like the bias should probably be toward variables.  Because **keep @var** is already an added burden for keeping a variable instead of a rule as **keep rule**.
+
+Hence `@integer!` would act like `@(integer!)`.  I think I can live with the idea that a &quot;capturing rule&quot; is always in @[...]
+
+## What if You Say `var: [@(1) @(2)]`
+
+As previously mentioned, because this isn&#39;t a CATCH/THROW situation, the idea here is that the &quot;@-capturing&quot; wouldn&#39;t interrupt the rule:
+
+     rule: [
+         [some &quot;(&quot;, @[to &quot;)&quot;], some &quot;)&quot;]
+         | @(&#39;unmatched)
+     ]
+
+     parse &quot;((1))&quot; [x: rule]  ; gives you `&quot;1&quot;`, still ran the `some &quot;)&quot;`
+     parse &quot;[[1]]&quot; [x: rule]  ; gives you `unmatched`
+
+Notice how we&#39;re ducking the need to ELIDE those SOMEs with this &quot;@ capture&quot; rule.
+
+So what happens if you have more than one capture group?  What about zero?
+
+## How Do You Get Parameters?
+
+We might say if you want parameters, there&#39;s no shortcut...you need to write a new combinator.
+
+But you could also use GET-GROUP! to invoke a function that builds a block:
+
+    make-rule: func [delimit] [
+        compose [
+            some (delimit), x: to (delimit), some (delimit)
+        ]
+    ]
+
+    parse &quot;**1**&quot; [x: :(make-rule &quot;*&quot;)]
+
+**I think it should be clear that the system compares poorly against other parser combinator libraries if you don&#39;t have a way to do this without the `:(...)`**.
+
+But it may be wise to say that if what you are using isn&#39;t an actual bona-fide &quot;combinator&quot; (as recognized by some aspect of its signature)...and just a &quot;function that makes a BLOCK!&quot;, that you run it this way.
+
+## Big Picture Conclusion: I Like This Direction for Block Capturing
+
+While people have gotten used to writing things like:
+
+    parse [1] [set x [integer! | text!]]
+
+I think that the semantics of &quot;whatever you write as a rule in the block is part of the capture&quot; is an uncommon desire *outside of that narrow case*.  The longer the block rule, the less likely you meant to capture every fragment of rule material in it.
+
+So I&#39;m proposing making the &quot;capture everything&quot; the special case:
+
+    parse [1] [x: @[integer! | text!]]
+
+This would leave plain BLOCK! available for a schematic that is more useful more of the time, where the things you want to capture have to be called out explicitly.
+
+Does anyone have strong counter-arguments?</description>
+    
+    <lastBuildDate>Wed, 07 Apr 2021 03:27:58 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Toward Reusable Rules: SET of a BLOCK! in PARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="3" data-topic="1579">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>As usual, it's a theory...so if I go write it I may figure out problems with it.</p>
+</blockquote>
+</aside>
+<p>Something I already don't like about it is the readability problem of not being able to tell which <span class="mention">@xxx</span> are standalone and which are parameters.  If I say <strong>[..., keep @(xxx), ...]</strong> in a rule, that's not a result or the block, that's an argument to a keep.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>So should there just be a keyword that comes into being as an implicit "block result" whenever you are assigning a block to a SET-WORD!?</p>
+<pre><code>parse ... [var: [... blockresult @(1) ... | ... blockresult integer! ...]
+</code></pre>
+<p>That's obviously a long keyword, and any keyword is going to mean typing more.  But one must remember that a key benefit here is getting the name outside the block, so that it becomes reusable.</p>
+<h2>What if it made the last result in the rule the value?</h2>
+<p>This is a bit like what happens with <strong>x: (1 2)</strong> or <strong>x: do [1 2]</strong> being 2 in regular DO code.  What if rule assignments worked the same way?</p>
+<p>There's problems with this idea, but it does mean that you can say:</p>
+<pre><code>parse [1] [x: [integer! | text!]]
+</code></pre>
+<p>...and get X as 1.  However it means that if you said:</p>
+<pre><code>parse [1 2] [x: [integer! integer! | text! text!]]
+</code></pre>
+<p>You would get X as 2.</p>
+<p>You'd have to stylize your rules somewhat so the result was the last thing.  With LET that's not so difficult:</p>
+<pre><code>parse [1 2] [x: [let i: integer!, integer!, @(i) | let t: text!, text!, @(t)]]
+</code></pre>
+<p>So there you could get 1 as the result, instead of 2.</p>
+<p>But with invisibles you have other options:</p>
+<pre><code>parse [1 2] [x: [integer!, elide integer! | text!, elide text!]]
+</code></pre>
+<h2>Invisibility giveth, and Invisibility taketh away</h2>
+<p>What if you put in debug messages or something of the sort?</p>
+<pre><code>parse [1 2] [x: [integer! integer! (print "Hey!") | text! text!]]
+</code></pre>
+<p>Plain GROUP! is another invisible.  So it doesn't count.  Another win for invisibility.</p>
+<p>That might seem good, but it means as the parse engine proceeded it wouldn't know when it was on the "last rule" just by looking at source.  This inability to predict would mean every rule would be generating content which we might have to throw away.  <a class="mention" href="/u/ingohohmann">@IngoHohmann</a> may recall my reluctance to make TO "A" produce a value without a modifier (like ACROSS TO "A"), and this kind of thing was part of why.</p>
+<h2>Still...something about this concept appeals to me</h2>
+<p>An obvious likeable thing about it is that the <strong>x: [integer! | text!]</strong> would still work.</p>
+<p>But taking advantage of the "last expression" position, when bolstered by invisibles, has some unifying-seeming strength with the evaluator people already have to know to use.  It feels synergistic.</p>
+<p>It might warrant serious consideration as the way to get a result out of a block rule, but the need to ask every step for a result just to throw it away could end up being cost prohibitive.</p>
+          <p><a href="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579/4</link>
+        <pubDate>Wed, 07 Apr 2021 03:27:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1579-4</guid>
+        <source url="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579.rss">Toward Reusable Rules: SET of a BLOCK! in PARSE</source>
+      </item>
+      <item>
+        <title>Toward Reusable Rules: SET of a BLOCK! in PARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="BlackATTR" data-post="2" data-topic="1579">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>I like all of the above,</p>
+</blockquote>
+</aside>
+<p>The real question here is if there's some indisputable need to be able to write:</p>
+<pre><code>parse [1] [x: [integer! | text!]]
+</code></pre>
+<p>If that is not negotiable, then it means there has to be compromise in other areas to facilitate it.</p>
+<p>But I feel like the balance here is that having to say <strong>x: @[integer! | text!]</strong> is better than needing to decorate the block in some way for other capture scenarios...which in total would likely out-number and out-prioritize needing to do this undecorated.</p>
+<p>As usual, it's a theory...so if I go write it I may figure out problems with it.  I already see one, which is that the @ capture would have to be in the immediate top-level of the block...so if you have a sub-block doing a capture you'd need to note that:</p>
+<pre><code> x: [... | to ... @[... @(1) ...] to ... | ...] 
+</code></pre>
+<p>not:</p>
+<pre><code> x: [... | to ... [... @(1) ...] to ... | ...] 
+</code></pre>
+<p>So you can't skip out on it, the capture must be singularly pointed out at every level of depth.  This is different from how COLLECT/GATHER work, where the KEEP and EMIT can be nested and you don't annotate things in intervening layers.  But then that doesn't blend with my argument for what <strong><code>@[integer! | text!]</code></strong> migh mean <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  Maybe that would need to be <strong><code>:[integer! | text!]</code></strong> ?</p>
+<p>Anyway, as I say: ongoing thought...</p>
+<aside class="quote no-group" data-username="BlackATTR" data-post="2" data-topic="1579">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>I have it in my mind that the traditional PARSE is deprecated.</p>
+</blockquote>
+</aside>
+<p>UPARSE is a prototype for an architecture for PARSE.  Features in UPARSE will just begin migrating into PARSE as they are adopted.</p>
+          <p><a href="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579/3</link>
+        <pubDate>Tue, 06 Apr 2021 20:57:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1579-3</guid>
+        <source url="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579.rss">Toward Reusable Rules: SET of a BLOCK! in PARSE</source>
+      </item>
+      <item>
+        <title>Toward Reusable Rules: SET of a BLOCK! in PARSE</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>I like all of the above, it definitely helps with stuff I'm currently working on. I've recently taken to using PARSE as a more versatile kind of SWITCH (i.e., leveraging the matching power of PARSE rules against a directed graph of input).</p>
+<p>And just to be clear, are your comments focused on UPARSE here? I have it in my mind that the traditional PARSE is deprecated.</p>
+          <p><a href="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579/2</link>
+        <pubDate>Tue, 06 Apr 2021 20:55:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1579-2</guid>
+        <source url="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579.rss">Toward Reusable Rules: SET of a BLOCK! in PARSE</source>
+      </item>
+      <item>
+        <title>Toward Reusable Rules: SET of a BLOCK! in PARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've noticed patterns come up like:</p>
+<pre><code> parse data [
+     [some-rule (variable: xxx)
+     | variable: integer!
+     | some-other-rule (variable: yyy)
+     | ... (variable: ...)
+     ]
+ ]
+</code></pre>
+<p>It's a little bit like a SWITCH.  But you wind up repeating the same variable name several times.</p>
+<p><strong>There's tremendous general value in having more ways to push the name of the assigned value outside of the rule.</strong>  This makes it easier to write reusable rules.</p>
+<p>One thing we might consider would be some kind of CATCH parallel to COLLECT, which lets you get single values instead of a block of them:</p>
+<pre><code> parse data [
+     variable: catch [
+         some-rule, throw @(xxx)
+         | throw integer! 
+         | some-other-rule, throw @(yyy)
+         | ... throw @(...)
+     ]
+ ]
+</code></pre>
+<p>That's a bit verbose.  It also ties together the moment of deciding your capturing of the variable with the moment you return it.  You might not want that (think of BETWEEN-like things where you still have some stuff to match after you've found your value).</p>
+<p><strong>So maybe we should put more practical thought into the question of <em>"what does it mean to SET a variable to a BLOCK! rule in the first place"</em>.</strong></p>
+<p>Capturing <em>everything</em> matched in the block seems like such a rare intent...your TOs and THRUs and matches of string bits seem like they're often not part of the capture.  You might argue it should only capture things inside @... where if what you're capturing is actually a parse rule then you put it in an @[block]:</p>
+<pre><code> parse data [
+     variable: [
+         some-rule, @(xxx)
+         | @[integer!] 
+         | some-other-rule, @(yyy)
+         | ... @(...)
+     ]
+ ]
+</code></pre>
+<p>It's more succinct.  And then this gives you the option of capturing single values via parse rule in the traditional way with an @ rule:</p>
+<pre><code> parse [1 ...] [variable: @[integer! | text!] ...]
+</code></pre>
+<p>So imagine that doing a capture of an integer or taking a default:</p>
+<pre><code> parse ["foo" ...] [variable: [@[integer!] | @(0)] ...]
+</code></pre>
+<h2>Should <span class="mention">@integer</span>! should be treated as @[integer!] or @(integer!)</h2>
+<p>I feel like the bias should probably be toward variables.  Because <strong>keep <span class="mention">@var</span></strong> is already an added burden for keeping a variable instead of a rule as <strong>keep rule</strong>.</p>
+<p>Hence <code>@integer!</code> would act like <code>@(integer!)</code>.  I think I can live with the idea that a "capturing rule" is always in @[...]</p>
+<h2>What if You Say <code>var: [@(1) @(2)]</code>
+</h2>
+<p>As previously mentioned, because this isn't a CATCH/THROW situation, the idea here is that the "@-capturing" wouldn't interrupt the rule:</p>
+<pre><code> rule: [
+     [some "(", @[to ")"], some ")"]
+     | @('unmatched)
+ ]
+
+ parse "((1))" [x: rule]  ; gives you `"1"`, still ran the `some ")"`
+ parse "[[1]]" [x: rule]  ; gives you `unmatched`
+</code></pre>
+<p>Notice how we're ducking the need to ELIDE those SOMEs with this "@ capture" rule.</p>
+<p>So what happens if you have more than one capture group?  What about zero?</p>
+<h2>How Do You Get Parameters?</h2>
+<p>We might say if you want parameters, there's no shortcut...you need to write a new combinator.</p>
+<p>But you could also use GET-GROUP! to invoke a function that builds a block:</p>
+<pre><code>make-rule: func [delimit] [
+    compose [
+        some (delimit), x: to (delimit), some (delimit)
+    ]
+]
+
+parse "**1**" [x: :(make-rule "*")]
+</code></pre>
+<p><strong>I think it should be clear that the system compares poorly against other parser combinator libraries if you don't have a way to do this without the <code>:(...)</code></strong>.</p>
+<p>But it may be wise to say that if what you are using isn't an actual bona-fide "combinator" (as recognized by some aspect of its signature)...and just a "function that makes a BLOCK!", that you run it this way.</p>
+<h2>Big Picture Conclusion: I Like This Direction for Block Capturing</h2>
+<p>While people have gotten used to writing things like:</p>
+<pre><code>parse [1] [set x [integer! | text!]]
+</code></pre>
+<p>I think that the semantics of "whatever you write as a rule in the block is part of the capture" is an uncommon desire <em>outside of that narrow case</em>.  The longer the block rule, the less likely you meant to capture every fragment of rule material in it.</p>
+<p>So I'm proposing making the "capture everything" the special case:</p>
+<pre><code>parse [1] [x: @[integer! | text!]]
+</code></pre>
+<p>This would leave plain BLOCK! available for a schematic that is more useful more of the time, where the things you want to capture have to be called out explicitly.</p>
+<p>Does anyone have strong counter-arguments?</p>
+          <p><a href="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579/1</link>
+        <pubDate>Tue, 06 Apr 2021 20:25:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1579-1</guid>
+        <source url="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579.rss">Toward Reusable Rules: SET of a BLOCK! in PARSE</source>
+      </item>
+  </channel>
+</rss>

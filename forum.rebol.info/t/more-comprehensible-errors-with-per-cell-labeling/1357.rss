@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>More Comprehensible Errors With per-Cell Labeling!</title>
+    <link>https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357</link>
+    <description>There&#39;s been a long-running complaint in the Redbol world that if you don&#39;t run a function directly from a WORD! or PATH!, it doesn&#39;t know a name for it:
+
+    r3-alpha&gt;&gt; append 1 &lt;d&gt;  ; dispatched as WORD!
+    ** Script error: append does not allow integer! for its series argument
+
+    r3-alpha&gt;&gt; do compose [(:append) 1 &lt;d&gt;]  ; dispatched as ACTION!
+    ** Script error: -unnamed- does not allow integer! for its series argument
+
+To try and improve on this, Red climbs the stack a bit to find something with a name...but the resulting error is gibberish:
+
+    red&gt;&gt; do compose [(:append) 1 &lt;d&gt;]
+    *** Script Error: do does not allow integer for its series argument
+
+The problem this is showing is that ACTION!s are things that can be known by many names, and when they get &quot;extracted&quot; from a WORD! they lose the label.
+
+Today I did something that&#39;s kind of obvious-seeming: *to make it so that GET-WORD! and GET-PATH! evaluations cache the name in the action cell instance*.  This isn&#39;t doing anything to the shared data for the action, just poking a pointer to the word&#39;s spelling data in the cell.
+
+It&#39;s a welcome improvement:
+
+    &gt;&gt; do compose [(:append) 1 &lt;d&gt;]
+    ** Script Error: append does not allow #[datatype! integer!]
+         for its series argument
+
+    &gt;&gt; do compose [(:append/only) 1 &lt;d&gt;]
+    ** Script Error: append does not allow #[datatype! integer!]
+        for its series argument
+
+The details of why this would be tricky just relate to the fact that bits don&#39;t grow on trees...and the &quot;rules of the game&quot; limit cells to 4 platform pointers in size.  To make a long-story-short: while ACTION! &quot;archetypes&quot; can&#39;t spare a pointer at this time, ACTION! *instances* can...and the distinction of whether an action is an archetype or not is made by detecting the properties of the pointed-to-series being a WORD-spelling or action-descriptor-array.
+
+If you write a function that processes a function to create a derived one, you&#39;ll need some tools for working with this cached symbol...otherwise you&#39;d lose it just by storing actions in temporary variables.  Expect to see a few cases of that.  I&#39;ll look into it when time permits.  But this is already a *lot* better.</description>
+    
+    <lastBuildDate>Tue, 06 Oct 2020 20:50:31 +0000</lastBuildDate>
+    <category>Errors</category>
+    <atom:link href="https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>More Comprehensible Errors With per-Cell Labeling!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1357">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I'll look into it when time permits.</p>
+</blockquote>
+</aside>
+<p>When I saw more room for the trickery I couldn't help myself... <em>frame instances</em> have room even though frame "archetypes" don't.  This means a FRAME! cell can remember what action it was for, and with some effort tunnel that back to ACTION!s created from said frame:</p>
+<pre><code>&gt;&gt; f: make frame! :append
+&gt;&gt; f/series: 1
+&gt;&gt; f/value: &lt;d&gt;
+
+&gt;&gt; do f
+** Script Error: append does not allow #[datatype! integer!]
+    for its series argument
+</code></pre>
+<p>...but wait, there's more...</p>
+<aside class="quote no-group" data-post="1" data-topic="1357">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If you write a function that processes a function to create a derived one, you'll need some tools for working with this cached symbol...otherwise you'd lose it just by storing actions in temporary variables.</p>
+</blockquote>
+</aside>
+<p>The best tricks are often the simplest.  So what about if GET doesn't update the cached label (at least, not without a refinement)?</p>
+<pre><code>&gt;&gt; foo: get 'append
+
+&gt;&gt; do compose [(get 'foo) 1 &lt;d&gt;]
+** Script Error: append does not allow #[datatype! integer!]
+    for its series argument
+</code></pre>
+<p>This gives you an option.  And by having the derived function generators operate in terms of GET when doing machinations on the functions they're working with, the name tunnels through:</p>
+<pre><code>&gt;&gt; do compose [(specialize 'append [value: &lt;d&gt;]) 1]
+** Script Error: append does not allow #[datatype! integer!]
+    for its series argument
+</code></pre>
+<p>And fancy things like POINTFREE <em>(<a href="https://forum.rebol.info/t/looking-into-a-usermode-pointfree/1236/5">under its new alias</a>)</em> can keep the name:</p>
+<pre><code>&gt;&gt; do compose [(&lt;- append _ &lt;d&gt;) 1]
+** Script Error: append does not allow #[datatype! integer!]
+    for its series argument
+</code></pre>
+<p>This simple-seeming feature is going to make coding with the derived function generators much easier.  Pretty awesome, if you ask me.</p>
+          <p><a href="https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357/2</link>
+        <pubDate>Tue, 06 Oct 2020 20:23:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1357-2</guid>
+        <source url="https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357.rss">More Comprehensible Errors With per-Cell Labeling!</source>
+      </item>
+      <item>
+        <title>More Comprehensible Errors With per-Cell Labeling!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>There's been a long-running complaint in the Redbol world that if you don't run a function directly from a WORD! or PATH!, it doesn't know a name for it:</p>
+<pre><code>r3-alpha&gt;&gt; append 1 &lt;d&gt;  ; dispatched as WORD!
+** Script error: append does not allow integer! for its series argument
+
+r3-alpha&gt;&gt; do compose [(:append) 1 &lt;d&gt;]  ; dispatched as ACTION!
+** Script error: -unnamed- does not allow integer! for its series argument
+</code></pre>
+<p>To try and improve on this, Red climbs the stack a bit to find something with a name...but the resulting error is gibberish:</p>
+<pre><code>red&gt;&gt; do compose [(:append) 1 &lt;d&gt;]
+*** Script Error: do does not allow integer for its series argument
+</code></pre>
+<p>The problem this is showing is that ACTION!s are things that can be known by many names, and when they get "extracted" from a WORD! they lose the label.</p>
+<p>Today I did something that's kind of obvious-seeming: <em>to make it so that GET-WORD! and GET-PATH! evaluations cache the name in the action cell instance</em>.  This isn't doing anything to the shared data for the action, just poking a pointer to the word's spelling data in the cell.</p>
+<p>It's a welcome improvement:</p>
+<pre><code>&gt;&gt; do compose [(:append) 1 &lt;d&gt;]
+** Script Error: append does not allow #[datatype! integer!]
+     for its series argument
+
+&gt;&gt; do compose [(:append/only) 1 &lt;d&gt;]
+** Script Error: append does not allow #[datatype! integer!]
+    for its series argument
+</code></pre>
+<p>The details of why this would be tricky just relate to the fact that bits don't grow on trees...and the "rules of the game" limit cells to 4 platform pointers in size.  To make a long-story-short: while ACTION! "archetypes" can't spare a pointer at this time, ACTION! <em>instances</em> can...and the distinction of whether an action is an archetype or not is made by detecting the properties of the pointed-to-series being a WORD-spelling or action-descriptor-array.</p>
+<p>If you write a function that processes a function to create a derived one, you'll need some tools for working with this cached symbol...otherwise you'd lose it just by storing actions in temporary variables.  Expect to see a few cases of that.  I'll look into it when time permits.  But this is already a <em>lot</em> better.</p>
+          <p><a href="https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357/1</link>
+        <pubDate>Mon, 05 Oct 2020 22:53:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1357-1</guid>
+        <source url="https://forum.rebol.info/t/more-comprehensible-errors-with-per-cell-labeling/1357.rss">More Comprehensible Errors With per-Cell Labeling!</source>
+      </item>
+  </channel>
+</rss>

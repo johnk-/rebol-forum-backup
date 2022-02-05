@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Binding Composition Paradox</title>
+    <link>https://forum.rebol.info/t/the-binding-composition-paradox/1574</link>
+    <description>Sometimes, Redbol has made it seem like the bindings on things are &quot;sticky&quot;...once you bind a word, it stays bound there, even when mixed in with the same word that is bound elsewhere.
+
+**Here is a familiar example in Rebol2, for how to make a BLOCK! that has two meanings for a WORD! `X` at the same time:**
+
+    rebol2&gt; x: 10  ; sets user context X to 10
+
+    rebol2&gt; block: [x +]  ; this block refers to the user context X
+
+    rebol2&gt; obj: make object! [x: 20]
+
+    rebol2&gt; append block bind &#39;x obj
+    == [x + x]  ; first X is bound to user context, second to obj
+
+    rebol2&gt; do block
+    == 30  ; e.g. 10 + 20
+
+But *some* constructs overrule this.  That same block--if used in the body of a function--would have the function argument out-prioritize the existing binding.
+
+**Here is that same block being used as the body of a function, where both meanings of X are overridden...both now refer to the argument X:**
+
+    rebol2&gt; add-x-to-x: func [x] block  ; passing in the [x + x] from before
+
+    rebol2&gt; add-x-to-x 100
+    == 200  ; e.g. 100 + 100
+
+*There is historically no choice in this matter.*  If a word is reachable through a deep walk of the body block...and it is named in the arguments/locals, then it will be overridden.
+
+But notably: bindings to words that are not function parameters are not disturbed:
+
+    rebol2&gt; x: 100  ; this X is in the user context
+
+    rebol2&gt; obj: make object! [y: 20]
+
+    rebol2&gt; block: [x +]
+
+    rebol2&gt; append block bind &#39;y obj
+    == [x + y]  ; the Y is inside OBJ
+
+    rebol2&gt; y: 2000  ; this Y is in the user context
+
+    rebol2&gt; add-x-to-y: func [x] block
+
+    rebol2&gt; add-x-to-y 10
+    == 30  ; preserved binding of Y: 20, though X was overridden to argument of 10
+
+It may seem there&#39;s no other choice for what could have happened here...
+
+...but with other designs, we could have other choices.  There could have been a decision by FUNC to make an observation about the visibility of what it could see at the site of its invocation...e.g. where **func [x] block** was called.  It could have said that the block inherits the visibility of Y in the user context...since that&#39;s what **func [x] [x + y]** would have seen.
+
+## A New Potential Ability To Exploit
+
+Historically, FUNC could not know any difference between being called by **func [x] block** vs. **do compose/only [func [x] (block)]**.  It would get the same block data.
+
+A new nuance exists now, where fetching through a variable could shield the referenced thing from a wave of binding.  The COMPOSE case would not have that shield.  For example:
+
+    &gt;&gt; add-x-to-y: func [x] block
+
+    &gt;&gt; add-x-to-y 10
+    == 120  ; argument X ignored completely, block binding used as is
+
+    &gt;&gt; add-x-to-y: do compose/only [func [x] (block)]
+
+    &gt;&gt; add-x-to-y 10
+    == 2010  ; uses arg X and user context Y
+
+I&#39;ve also been wondering if **`:(...)`** should be a way of saying &quot;pretend this were written here&quot; (as it is in UPARSE and Ren-C PARSE), which would be cleaner than the COMPOSE
+
+    &gt;&gt; add-x-to-y: func [x] :(block)
+
+    &gt;&gt; add-x-to-y 10
+    == 2010
+
+So notice gives you the same outcome as if you&#39;d just written [x + y] to start with:
+
+    rebol2&gt; y: 2000
+
+    rebol2&gt; add-x-to-y: func [x] [x + y]
+
+    rebol2&gt; add-x-to-y 10
+    == 2010
+
+And also the &quot;leave it completely alone&quot; version acts like you had made the function body DO through the variable instead of using it directly:
+
+    rebol2&gt; x: 100  ; this X is in the user context
+
+    rebol2&gt; obj: make object! [y: 20]
+
+    rebol2&gt; block: [x +]
+
+    rebol2&gt; append block bind &#39;y obj
+    == [x + y]  ; the Y is inside OBJ
+
+    rebol2&gt; add-x-to-y: func [x] [do block]  ; not using block as body directly
+
+    rebol2&gt; add-x-to-y 10
+    == 120
+
+**It&#39;s interesting to point out these options are disjoint.**  You don&#39;t get the historical behavior out of either &quot;extreme&quot;.  But neither of the &quot;extremes&quot; are available in the historical model.
+
+Desirable or not, the extremes are at least easy to articulate:
+
+* *&quot;pretend I&#39;d written it here to start with&quot;*
+* *&quot;leave the binding completely alone&quot;*
+
+It&#39;s &quot;Pretend I&#39;d Written It Here&quot; that&#39;s a new possibility.  Due to some mechanical changes, we can make composed source act like you&#39;d written it in the place it&#39;s being composed.
+
+This couldn&#39;t be done before, because binding didn&#39;t act as a &quot;wave&quot; which propagated through evaluation.  It was something that happened at a moment in time--e.g. when you&#39;d LOAD something there&#39;d be a deep walk of it gluing bindings onto things, and anything that missed that moment would have missed the boat.
+
+## When To Override, And When To Leave Alone?
+
+&quot;Pretend Like I Wrote It Here&quot; is much like what people would think that &quot;macros&quot; do in traditional languages.  It&#39;s like your COMPOSE was run by a preprocessor, and then the source acts just like it had been written there all along.
+
+But this doesn&#39;t *seem* to mesh well with the &quot;value proposition&quot; of binding that is pitched in the language.
+
+If you are using COMPOSE to put together a PARSE rule or a FUNC which consists of some material that was passed in from a dialect, it&#39;s rare that the local variables involved in your code doing the composing should be picked up by the code being composed.  But if the dialect fragment at the callsite referred to variables visible at the callsite, those were likely the intended variables.
+
+**Important to remember is that there&#39;s no magic answer to arbitrary semantic composability.**  If you aren&#39;t pleased by DO BLOCK where the block is basically being run as a function with no arguments, and you aren&#39;t pleased by a form of &quot;do as if I wrote it here&quot;, then everything else is a sort of strange middle shade of gray, where some things will be overridden and others won&#39;t.
+
+I&#39;ve been sort of staring at the canvas of what&#39;s possible on this, and technically things are in the best position they have been to try new things.  Sea of Words is a big step forward, but I&#39;m having trouble pushing it much further.
+
+**It would help to have some more ambitious demos.  I&#39;d like to look at cases where a dialect implementation lives in one file...and the dialect usage lives in another file...with the expectation that the dialect implementation be able to compose and remix the data passed in from the usage site as running code which preserved relationships established in the usage file.**
+
+UPARSE isn&#39;t the most challenging example of such a remix.  The GROUP!s in a parse block are basically left completely alone; they&#39;re never composed with anything else.  The challenging feature is if there are going to be LET statements in UPARSE and how they would work, to cross that boundary of being visible during the rule part as well as in the GROUP! part.  (Also, do they stop at **`|`** boundaries?  If so, how would they do that?)
+
+Anyway, it&#39;s slow going to think about this.  But it is *the* central point IMO, so it&#39;s worth the time.</description>
+    
+    <lastBuildDate>Sat, 27 Mar 2021 22:11:15 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/the-binding-composition-paradox/1574.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Binding Composition Paradox</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Sometimes, Redbol has made it seem like the bindings on things are "sticky"...once you bind a word, it stays bound there, even when mixed in with the same word that is bound elsewhere.</p>
+<p><strong>Here is a familiar example in Rebol2, for how to make a BLOCK! that has two meanings for a WORD! <code>X</code> at the same time:</strong></p>
+<pre><code>rebol2&gt; x: 10  ; sets user context X to 10
+
+rebol2&gt; block: [x +]  ; this block refers to the user context X
+
+rebol2&gt; obj: make object! [x: 20]
+
+rebol2&gt; append block bind 'x obj
+== [x + x]  ; first X is bound to user context, second to obj
+
+rebol2&gt; do block
+== 30  ; e.g. 10 + 20
+</code></pre>
+<p>But <em>some</em> constructs overrule this.  That same block--if used in the body of a function--would have the function argument out-prioritize the existing binding.</p>
+<p><strong>Here is that same block being used as the body of a function, where both meanings of X are overridden...both now refer to the argument X:</strong></p>
+<pre><code>rebol2&gt; add-x-to-x: func [x] block  ; passing in the [x + x] from before
+
+rebol2&gt; add-x-to-x 100
+== 200  ; e.g. 100 + 100
+</code></pre>
+<p><em>There is historically no choice in this matter.</em>  If a word is reachable through a deep walk of the body block...and it is named in the arguments/locals, then it will be overridden.</p>
+<p>But notably: bindings to words that are not function parameters are not disturbed:</p>
+<pre><code>rebol2&gt; x: 100  ; this X is in the user context
+
+rebol2&gt; obj: make object! [y: 20]
+
+rebol2&gt; block: [x +]
+
+rebol2&gt; append block bind 'y obj
+== [x + y]  ; the Y is inside OBJ
+
+rebol2&gt; y: 2000  ; this Y is in the user context
+
+rebol2&gt; add-x-to-y: func [x] block
+
+rebol2&gt; add-x-to-y 10
+== 30  ; preserved binding of Y: 20, though X was overridden to argument of 10
+</code></pre>
+<p>It may seem there's no other choice for what could have happened here...</p>
+<p>...but with other designs, we could have other choices.  There could have been a decision by FUNC to make an observation about the visibility of what it could see at the site of its invocation...e.g. where <strong>func [x] block</strong> was called.  It could have said that the block inherits the visibility of Y in the user context...since that's what <strong>func [x] [x + y]</strong> would have seen.</p>
+<h2>A New Potential Ability To Exploit</h2>
+<p>Historically, FUNC could not know any difference between being called by <strong>func [x] block</strong> vs. <strong>do compose/only [func [x] (block)]</strong>.  It would get the same block data.</p>
+<p>A new nuance exists now, where fetching through a variable could shield the referenced thing from a wave of binding.  The COMPOSE case would not have that shield.  For example:</p>
+<pre><code>&gt;&gt; add-x-to-y: func [x] block
+
+&gt;&gt; add-x-to-y 10
+== 120  ; argument X ignored completely, block binding used as is
+
+&gt;&gt; add-x-to-y: do compose/only [func [x] (block)]
+
+&gt;&gt; add-x-to-y 10
+== 2010  ; uses arg X and user context Y
+</code></pre>
+<p>I've also been wondering if <strong><code>:(...)</code></strong> should be a way of saying "pretend this were written here" (as it is in UPARSE and Ren-C PARSE), which would be cleaner than the COMPOSE</p>
+<pre><code>&gt;&gt; add-x-to-y: func [x] :(block)
+
+&gt;&gt; add-x-to-y 10
+== 2010
+</code></pre>
+<p>So notice gives you the same outcome as if you'd just written [x + y] to start with:</p>
+<pre><code>rebol2&gt; y: 2000
+
+rebol2&gt; add-x-to-y: func [x] [x + y]
+
+rebol2&gt; add-x-to-y 10
+== 2010
+</code></pre>
+<p>And also the "leave it completely alone" version acts like you had made the function body DO through the variable instead of using it directly:</p>
+<pre><code>rebol2&gt; x: 100  ; this X is in the user context
+
+rebol2&gt; obj: make object! [y: 20]
+
+rebol2&gt; block: [x +]
+
+rebol2&gt; append block bind 'y obj
+== [x + y]  ; the Y is inside OBJ
+
+rebol2&gt; add-x-to-y: func [x] [do block]  ; not using block as body directly
+
+rebol2&gt; add-x-to-y 10
+== 120
+</code></pre>
+<p><strong>It's interesting to point out these options are disjoint.</strong>  You don't get the historical behavior out of either "extreme".  But neither of the "extremes" are available in the historical model.</p>
+<p>Desirable or not, the extremes are at least easy to articulate:</p>
+<ul>
+<li><em>"pretend I'd written it here to start with"</em></li>
+<li><em>"leave the binding completely alone"</em></li>
+</ul>
+<p>It's "Pretend I'd Written It Here" that's a new possibility.  Due to some mechanical changes, we can make composed source act like you'd written it in the place it's being composed.</p>
+<p>This couldn't be done before, because binding didn't act as a "wave" which propagated through evaluation.  It was something that happened at a moment in time--e.g. when you'd LOAD something there'd be a deep walk of it gluing bindings onto things, and anything that missed that moment would have missed the boat.</p>
+<h2>When To Override, And When To Leave Alone?</h2>
+<p>"Pretend Like I Wrote It Here" is much like what people would think that "macros" do in traditional languages.  It's like your COMPOSE was run by a preprocessor, and then the source acts just like it had been written there all along.</p>
+<p>But this doesn't <em>seem</em> to mesh well with the "value proposition" of binding that is pitched in the language.</p>
+<p>If you are using COMPOSE to put together a PARSE rule or a FUNC which consists of some material that was passed in from a dialect, it's rare that the local variables involved in your code doing the composing should be picked up by the code being composed.  But if the dialect fragment at the callsite referred to variables visible at the callsite, those were likely the intended variables.</p>
+<p><strong>Important to remember is that there's no magic answer to arbitrary semantic composability.</strong>  If you aren't pleased by DO BLOCK where the block is basically being run as a function with no arguments, and you aren't pleased by a form of "do as if I wrote it here", then everything else is a sort of strange middle shade of gray, where some things will be overridden and others won't.</p>
+<p>I've been sort of staring at the canvas of what's possible on this, and technically things are in the best position they have been to try new things.  Sea of Words is a big step forward, but I'm having trouble pushing it much further.</p>
+<p><strong>It would help to have some more ambitious demos.  I'd like to look at cases where a dialect implementation lives in one file...and the dialect usage lives in another file...with the expectation that the dialect implementation be able to compose and remix the data passed in from the usage site as running code which preserved relationships established in the usage file.</strong></p>
+<p>UPARSE isn't the most challenging example of such a remix.  The GROUP!s in a parse block are basically left completely alone; they're never composed with anything else.  The challenging feature is if there are going to be LET statements in UPARSE and how they would work, to cross that boundary of being visible during the rule part as well as in the GROUP! part.  (Also, do they stop at <strong><code>|</code></strong> boundaries?  If so, how would they do that?)</p>
+<p>Anyway, it's slow going to think about this.  But it is <em>the</em> central point IMO, so it's worth the time.</p>
+          <p><a href="https://forum.rebol.info/t/the-binding-composition-paradox/1574/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-binding-composition-paradox/1574/1</link>
+        <pubDate>Sat, 27 Mar 2021 22:11:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1574-1</guid>
+        <source url="https://forum.rebol.info/t/the-binding-composition-paradox/1574.rss">The Binding Composition Paradox</source>
+      </item>
+  </channel>
+</rss>

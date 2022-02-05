@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Node.js Hello Rebol (and caveats)</title>
+    <link>https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072</link>
+    <description>Node.js comes up from time to time...and whether or not Rebol could run on something like a commodity Node.js server.
+
+One of the selling points of Emscripten as a toolchain is that it can do the necessary things so WASM will run in Node.  I hadn&#39;t tried it.  But my impression was that if you had something working in the browser...it should be able to get working in Node also.
+
+## After Some Hours of Fiddling...
+
+...I managed to get a test to work.  I&#39;m looking at the fundamental issues of [what might be done to make it less ugly](https://stackoverflow.com/questions/54713336/synchronous-require-so-entire-node-js-script-isnt-in-callback), but...here is Node calling into Rebol:
+
+    var express = require(&#39;express&#39;)
+    var app = express();
+
+    var reb = require(&#39;rebol&#39;)
+
+    reb.onRuntimeInitialized = function() {
+        reb.Startup()
+
+        app.get(&#39;/&#39;, function (req, res) {
+            let three = reb.Spell(&quot;to text! 1 + 2&quot;);
+            res.send(&#39;One plus Two is &#39; + three)
+        });
+
+        app.listen(3000, function () {
+            console.log(&#39;Example app listening on port 3000!&#39;)
+        });
+    }
+
+So it adds 1 and 2, turns the sum into a string, extracts that string as a JavaScript string, and serves you a page saying **One plus Two is 3**.
+
+## Okay that&#39;s *something*... BUT...
+
+I think the more interesting story is Rebol-calling-JavaScript...as opposed to JavaScript-calling-Rebol.  But Node kind of sits as the gatekeeper at a top level.  I have a hard time seeing how to graft a Node program into an `app.reb` that &quot;occasionally asks Node to do things&quot;.  But it seems a lot more clear with the browser.
+
+There are some other points on why not to push on this too much right now:
+
+* Though Node.js has caught up with V8 features over time, Emscripten hasn&#39;t yet taken advantage of their workers or shared memory.  That means that if you want rebPromise() and the other magic that makes libRebol cool, you&#39;ll have to use the emterpreter.  The above program needs over 1.5mb of build products, well more than twice the size of a pure webassembly build...and as I&#39;ve said, it&#39;s about 30x slower.
+
+* There&#39;s a way to package cross-platform native C code and build it as part of a node package--sidestepping webassembly and emscripten altogether.  This would be the fastest option.  It wouldn&#39;t be impossible to do, but it would be a lot of work on a new codebase that there aren&#39;t resources to allocate to.  Waiting for emscripten to support WASM+pthreads on Node is probably a better bet, because it would mean being able to leverage common binding code with the browser--vs. a new project.
+
+* NPM modules deploy via GitHub.  I don&#39;t see a turnkey way to get a static resource of a large webassembly file to go along with that installation, other than putting it in the GitHub repository itself.  Strangely, if one ships native C code with a C++ binding to V8 (as described in the previous point), Node is set up to make *that* more turnkey.  :-/
+
+## It is worth scoping out and understanding, though
+
+It brings questions up, and they are good to think about:
+
+* Should we aim for modules and call like `reb.Spell()` instead of `rebSpell()`, even in the web version where we don&#39;t have to?  (People talk about browsers getting a module model like Node&#39;s, so it would probably be forward-looking.)
+
+* Should `var reb = require(&#39;rebol&#39;)` give you back an interpreter instance, or should that get an &quot;engine&quot;, so you say `var rebol = require(&#39;rebol&#39;)`, `var reb = new rebol.Interpreter(...)`, and you could make several of these as independent?
+
+* Should rebStartup() be a Promise, if we can&#39;t generically hide the WebAssembly load?  Will users of libRebol be expected to put all of their code in a callback?
+
+It&#39;s definitely forward-thinking to be working on answers to these questions.  But I think we should be looking more to Rebol-based %httpd.reb and other things like that for the server side.  Worth pointing out is that Node.js&#39;s creator has [decided it&#39;s too flawed, and has gone off to promote another project](https://thenewstack.io/node-js-creator-blasts-node-js-offers-a-secure-typescript-based-alternative/)...</description>
+    
+    <lastBuildDate>Sat, 16 Feb 2019 09:14:55 +0000</lastBuildDate>
+    <category>Emscripten</category>
+    <atom:link href="https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Node.js Hello Rebol (and caveats)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><a href="https://github.com/metaeducation/ren-c/commit/ce6f4d1703a81a114f9d61b95cb71a9b8f99d279" rel="nofollow noopener">I've committed a primordial version of Node support, minimally tested.</a>  It allows you to do things like the code snippet above.</p>
+<aside class="quote no-group quote-modified" data-post="2" data-topic="1072">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>My interest in Node.js was solely as an output target to AWS Lambdas, i.e., individual functions which can be executed natively in Amazon’s cloud platform.</p>
+</blockquote>
+</aside>
+<p>It's good to make sure choices in libRebol aren't making it fundamentally impossible to do.  So it should be kept working and improved as time permits.  If you can come up with an example scenario for a proof of concept--then it would be useful to make sure all the pieces are there to do it.</p>
+<p>But it does not look viable to think of building a solution and saying "here, we made it, set it as a npm package dependency and use it!".  It's a complex new target.  And if debugging all the magic in a browser is difficult, dealing with bug reports from someone's server you can't access is going to be worse.  Making a turnkey deployment for people to install doesn't look easy.</p>
+<p>So I think focus for now should stay on the browser...packaging the library so that people can use it easily.  Instead of there just being the one REPL demo,  I'd like to see a bunch of little demos showing Rebol-driven sites.  And if that story can build excitement and awareness of the language, maybe that can be leveraged into having some Node-experts get involved...</p>
+          <p><a href="https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072/3</link>
+        <pubDate>Sat, 16 Feb 2019 09:14:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1072-3</guid>
+        <source url="https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072.rss">Node.js Hello Rebol (and caveats)</source>
+      </item>
+      <item>
+        <title>Node.js Hello Rebol (and caveats)</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>My interest in Node.js was solely as an output target to AWS Lambdas, i.e., individual functions which can be executed natively in Amazon's cloud platform. I wanted a more scalable infrastructure to "rent" computing power from, as opposed to owning or managing a limited LAMP/Rails style stack at a hosting provider.</p>
+          <p><a href="https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072/2</link>
+        <pubDate>Fri, 15 Feb 2019 20:05:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1072-2</guid>
+        <source url="https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072.rss">Node.js Hello Rebol (and caveats)</source>
+      </item>
+      <item>
+        <title>Node.js Hello Rebol (and caveats)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Node.js comes up from time to time...and whether or not Rebol could run on something like a commodity Node.js server.</p>
+<p>One of the selling points of Emscripten as a toolchain is that it can do the necessary things so WASM will run in Node.  I hadn't tried it.  But my impression was that if you had something working in the browser...it should be able to get working in Node also.</p>
+<h2>After Some Hours of Fiddling...</h2>
+<p>...I managed to get a test to work.  I'm looking at the fundamental issues of <a href="https://stackoverflow.com/questions/54713336/synchronous-require-so-entire-node-js-script-isnt-in-callback" rel="nofollow noopener">what might be done to make it less ugly</a>, but...here is Node calling into Rebol:</p>
+<pre><code>var express = require('express')
+var app = express();
+
+var reb = require('rebol')
+
+reb.onRuntimeInitialized = function() {
+    reb.Startup()
+
+    app.get('/', function (req, res) {
+        let three = reb.Spell("to text! 1 + 2");
+        res.send('One plus Two is ' + three)
+    });
+
+    app.listen(3000, function () {
+        console.log('Example app listening on port 3000!')
+    });
+}
+</code></pre>
+<p>So it adds 1 and 2, turns the sum into a string, extracts that string as a JavaScript string, and serves you a page saying <strong>One plus Two is 3</strong>.</p>
+<h2>Okay that's <em>something</em>... BUT...</h2>
+<p>I think the more interesting story is Rebol-calling-JavaScript...as opposed to JavaScript-calling-Rebol.  But Node kind of sits as the gatekeeper at a top level.  I have a hard time seeing how to graft a Node program into an <code>app.reb</code> that "occasionally asks Node to do things".  But it seems a lot more clear with the browser.</p>
+<p>There are some other points on why not to push on this too much right now:</p>
+<ul>
+<li>
+<p>Though Node.js has caught up with V8 features over time, Emscripten hasn't yet taken advantage of their workers or shared memory.  That means that if you want rebPromise() and the other magic that makes libRebol cool, you'll have to use the emterpreter.  The above program needs over 1.5mb of build products, well more than twice the size of a pure webassembly build...and as I've said, it's about 30x slower.</p>
+</li>
+<li>
+<p>There's a way to package cross-platform native C code and build it as part of a node package--sidestepping webassembly and emscripten altogether.  This would be the fastest option.  It wouldn't be impossible to do, but it would be a lot of work on a new codebase that there aren't resources to allocate to.  Waiting for emscripten to support WASM+pthreads on Node is probably a better bet, because it would mean being able to leverage common binding code with the browser--vs. a new project.</p>
+</li>
+<li>
+<p>NPM modules deploy via GitHub.  I don't see a turnkey way to get a static resource of a large webassembly file to go along with that installation, other than putting it in the GitHub repository itself.  Strangely, if one ships native C code with a C++ binding to V8 (as described in the previous point), Node is set up to make <em>that</em> more turnkey.  :-/</p>
+</li>
+</ul>
+<h2>It is worth scoping out and understanding, though</h2>
+<p>It brings questions up, and they are good to think about:</p>
+<ul>
+<li>
+<p>Should we aim for modules and call like <code>reb.Spell()</code> instead of <code>rebSpell()</code>, even in the web version where we don't have to?  (People talk about browsers getting a module model like Node's, so it would probably be forward-looking.)</p>
+</li>
+<li>
+<p>Should <code>var reb = require('rebol')</code> give you back an interpreter instance, or should that get an "engine", so you say <code>var rebol = require('rebol')</code>, <code>var reb = new rebol.Interpreter(...)</code>, and you could make several of these as independent?</p>
+</li>
+<li>
+<p>Should rebStartup() be a Promise, if we can't generically hide the WebAssembly load?  Will users of libRebol be expected to put all of their code in a callback?</p>
+</li>
+</ul>
+<p>It's definitely forward-thinking to be working on answers to these questions.  But I think we should be looking more to Rebol-based %httpd.reb and other things like that for the server side.  Worth pointing out is that Node.js's creator has <a href="https://thenewstack.io/node-js-creator-blasts-node-js-offers-a-secure-typescript-based-alternative/" rel="nofollow noopener">decided it's too flawed, and has gone off to promote another project</a>...</p>
+          <p><a href="https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072/1</link>
+        <pubDate>Fri, 15 Feb 2019 16:54:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1072-1</guid>
+        <source url="https://forum.rebol.info/t/node-js-hello-rebol-and-caveats/1072.rss">Node.js Hello Rebol (and caveats)</source>
+      </item>
+  </channel>
+</rss>

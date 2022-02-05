@@ -1,0 +1,347 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How to bridge arguments to user natives / JS natives</title>
+    <link>https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817</link>
+    <description>The current plan for calling JavaScript from Rebol involves the creation of &quot;JavaScript natives&quot;.  These would have specs that are BLOCK!s, which would be familiar as in functions.  Then they would have bodies that were TEXT! strings of JavaScript code.
+
+A seemingly unambitious example which used JavaScript to perform addition might look like:
+
+    jadd: js-native [a [integer!] b [integer!]] {
+        var a = reb.UnboxInteger(&quot;a&quot;);
+        var b = reb.UnboxInteger(&quot;b&quot;);
+        return reb.Integer(a + b);
+    }
+
+So that would mean from Rebol you could say `jadd 10 20` and it would actually perform that addition in JavaScript.
+
+Let&#39;s talk about some axes of potential improvement.
+
+## Generic Unboxing
+
+Because C lacks dynamic typing, we need separate routines for unboxing integers and strings.  But JavaScript could conceivably do it automatically, calling rebUnbox() instead of rebUnboxInteger()...and then know if it was an integer type, to give back a JavaScript &quot;Number&quot;:
+
+    jadd: js-native [a [integer!] b [integer!]] {
+        var a = reb.Unbox(&quot;a&quot;);
+        var b = reb.Unbox(&quot;b&quot;);
+        return reb.Integer(a + b);
+    }
+
+On the downside of this, you don&#39;t get an assertion or check that the thing you extracted is an integer...so you might get back a string or other object, if the type isn&#39;t what you expect.  It&#39;s probably best to offer both and let people decide which they want.
+
+## Auto-conversion of JS Number *non*-Objects
+
+It might seem cool if the API could automatically convert JavaScript numbers into Rebol values, and not have to use rebInteger(n) or rebI(n).  For instance, this seems good:
+
+     var n = 5;
+     var s = reb.Text(&quot;Hello World&quot;);
+     reb.Elide(&quot;loop&quot;, n, &quot;[print&quot;, s, &quot;]&quot;);
+
+But right now, the problem with this is that `s` is a pointer to a Rebol value on the webassembly heap.  And that&#39;s some big random-looking Number.  There&#39;s no way to tell that 5 isn&#39;t meant to be a pointer too.
+
+One trick I thought of, though, involves realizing that JavaScript has both primitives and *primitive objects*.  For reference, see this article on [JavaScript&#39;s Primitive Wrapper Objects](http://adripofjavascript.com/blog/drips/javascripts-primitive-wrapper-objects.html).  These lightweight objects come into existence as a means of being able to call methods, e.g. `n.toString()`.
+
+Hence--what if Rebol handles were passed back not as JavaScript numbers, but as number objects?  These would presumably be more lightweight than an ordinary object, so not very costly.  That way, when plain JavaScript numbers were used it could be assumed that they should be automatically treated as if they were numbers.
+
+Our adding example could then simplify to:
+
+    jadd: js-native [a [integer!] b [integer!]] {
+        var a = reb.Unbox(&quot;a&quot;);
+        var b = reb.Unbox(&quot;b&quot;);
+        return a + b;
+    }
+
+## Auto-conversion of JS String objects
+
+Strings might benefit from the distinction of primitives vs. primitive objects as well.  Today, plain non-object strings are LOAD-ed and executed as code:
+
+    REBVAL *v = reb.Value(&quot;Hello World&quot;);
+
+What happens there is that it treats that as two WORD!s.  But if you said:
+
+    REBVAL *v = reb.Value(&quot;{Hello World}&quot;);
+
+That would be a TEXT! string.  You could also use rebText() or rebT() if your string is in a variable.
+
+But string *objects* could be handled differently, and assumed to be string literals.  So you couldn&#39;t say `return &quot;hello&quot;` from a user native, but you could say `return new String(&quot;hello&quot;);`
+
+That&#39;s more typing than just `return reb.Text(&quot;hello&quot;)`.  But where it might come in handy in that you could write a generic JavaScript routine that could return a string to be passed unmodified to either JS or Rebol.
+
+    function genericName(...) { ... return new String(...); }
+    console.log(&quot;used direct from JS: &quot; + genericName(...));
+    reb.Elide(&quot;print [{used direct from Rebol:}&quot;, genericName(...), &quot;]&quot;);
+
+## Parameter Unpacking as JavaScript
+
+What I have in mind for both C user natives and JavaScript natives is not to try and give the generated JavaScript function any actual arguments.  So back to the example:
+
+    jadd: js-native [a [integer!] b [integer!]] {
+        var a = reb.Unbox(&quot;a&quot;);
+        var b = reb.Unbox(&quot;b&quot;);
+        return a + b;
+    }
+
+We&#39;re generating and running a JavaScript function with no arguments, so if it wants to get the values of `a` and `b` it has to go through Rebol code (automatically bound into the function frame) to access them.
+
+It is *possible* to give that function arguments.  These arguments could be the raw Rebol values, or they could be pre-rebUnbox&#39;d.  At the extreme of pre-unboxing, you could write just:
+
+    jadd: js-native [a [integer!] b [integer!]] {
+        return a + b;
+    }
+
+**I think it&#39;s better to not have arguments to the function.**  
+
+* The TCC-based C natives don&#39;t have the luxury of being able to do things like this in a platform-independent fashion.  Feeding arguments to a C function varies from platform-to-platform based on the Application Binary Interface (ABI).   It&#39;s more consistent between C and JavaScript extensions to not do it.
+
+* There&#39;s no support in [the EM_ASM() bridge](https://kripken.github.io/emscripten-site/docs/porting/connecting_cpp_and_javascript/Interacting-with-code.html#interacting-with-code-call-javascript-from-native) for variadic calls.  Doing it in JavaScript and calling from C involves jumping through a lot of hoops, possibly using eval() when it wouldn&#39;t otherwise be necessary, and is less performant.  If the function took zero parameters and returned an integer heap address it would be a lot cleaner.
+
+* JavaScript variable naming is more limited than Rebol parameter naming.  So there&#39;d have to be some invented mapping between what name you used for the parameters in your spec and the JavaScript names.
+
+* You don&#39;t really know what properties the JavaScript code wants from its parameters, and pre-extracting would be presumptuous.
+
+So I think JavaScript natives should be running 0-arity functions, and have to go through libRebol APIs to get at their arguments.  That will require some new mechanics.</description>
+    
+    <lastBuildDate>Wed, 27 Oct 2021 07:17:07 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How to bridge arguments to user natives / JS natives</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="817">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>What I have in mind for both C user natives and JavaScript natives is not to try and give the generated JavaScript function any actual arguments. So back to the example:</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var a = reb.Unbox("a");
+    var b = reb.Unbox("b");
+    return a + b;
+}
+</code></pre>
+</blockquote>
+</aside>
+<p>This ideal concept has been tried in various forms, with a problem that if you use the native for context you run up against problems that if it calls service routines, there's no way for the system to know that such calls have occurred.  This means your "a" and "b" resolution won't just be from within the JS-NATIVE body, but also any other JavaScript service function that uses the API you call.</p>
+<p>So reb.Arg() and reb.ArgR() have stuck around as a somewhat ugly solution.</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var a = reb.Unbox(reb.ArgR("a"));  // arg with auto-Release
+    var b = reb.Unbox(reb.ArgR("b"));
+    return a + b;
+}
+</code></pre>
+<p><strong>But if strings had binding, we could do better...</strong></p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var a = reb.Unbox(@a);
+    var b = reb.Unbox(@b);
+    return a + b;
+}
+</code></pre>
+<p>Since @ isn't legal in JavaScript, the JS-NATIVE could scan for them and then hook them up to substitute handles appropriate to the parameters (effectively automatic reb.ArgR() calls).  Though it would have to do so with an awareness of JavaScript string syntax, so it didn't try to do such substitutions inside of strings!</p>
+<p>This could also allow access to other variables in visibility of the string that weren't function parameters.</p>
+<p><strong>But what happens when you append strings to each other or otherwise mutate them?</strong>  :-/  This is another epicycle of the question of how "scopes" get composed.  But unlike when structured operations are performed, there's nowhere to define these merges.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>So big questions arise, but still a promising-seeming concept.</p>
+          <p><a href="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/5</link>
+        <pubDate>Wed, 27 Oct 2021 07:17:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-817-5</guid>
+        <source url="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817.rss">How to bridge arguments to user natives / JS natives</source>
+      </item>
+      <item>
+        <title>How to bridge arguments to user natives / JS natives</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="817">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>It also seems like it's probably better to error on <code>undefined</code> when given as an argument:</p>
+<pre><code>function foo() { }
+reb.Elide("append data", foo())
+</code></pre>
+<p>Would you rather that run without error, appending a BAD-WORD! to data, or have reb.Elide() complain that an argument is undefined?</p>
+</blockquote>
+</aside>
+<hr>
+<p>Two years after asking the question, the model has changed.  <em>(Though note that I retroactively update posts to reflect modern terminology if it helps make the points easier to understand.)</em></p>
+<hr>
+<p>One thing isn't an option at the moment: <strong>passing isotopes unquoted to APIs</strong>.</p>
+<pre><code>REBVAL *isotope = rebValue("~baddie~");  // evaluates to ~baddie~ isotope
+rebElide("print mold type of", isotope);  // rebElide will error on this
+</code></pre>
+<p>You have to use rebQ() to quote (actually meta) an isotope to a plain BAD-WORD! for it to be legal in the instruction stream.  Because what functions like rebElide() get are conceptually blocks.</p>
+<p><strong>They have to be conceptually blocks...</strong> because imagine you are a debugger and you want to break between the PRINT and the MOLD in the code passed to rebElide.  Then you want to show the user the code state, as a block.  <em>you can't</em></p>
+<pre><code>[print mold type of ~baddie~]  ; !!! Plain BAD-WORD!, where's the isotope?
+</code></pre>
+<p>There's no way to capture a block and give it back to represent the isotope state, because isotopes can't live in blocks.</p>
+<p><em>(Note: Though NULL can't be represented in a block either, API functions like rebElide make a special exception...NULL will be spliced in as the plain ~null~ BAD-WORD!.  Then <strong><code>(@ ~null~)</code></strong> becomes pure NULL.  It's all very clever, I assure you.  <img src="https://forum.rebol.info/images/emoji/twitter/crazy_face.png?v=9" title=":crazy_face:" class="emoji" alt=":crazy_face:">  But we don't want all bad words to do this...it's only because of null isotopes special behavior to become null on assignment that this compromise is plausible.)</em></p>
+<h2>So At Least We Know What The Answer Isn't...</h2>
+<p>Passing an isotope is off the table, so what's left?</p>
+<p>One fairly straightforward option is that we could make reb.Q(undefined) in JavaScript produce the non-isotope BAD-WORD! <strong>~undefined~</strong></p>
+<p>This means that:</p>
+<pre><code>function foo() { }
+reb.Elide("print type of", foo())  // rebElide() error, "~undefined~ isotope"
+
+function foo() { }
+reb.Elide("print type of", reb.Q(foo()))  // BAD-WORD!, e.g. ~undefined~
+</code></pre>
+<p>That doesn't editorialize the JavaScript undefined concept into being anything it's not.</p>
+<p>It's a conservative choice, so I think I'll go with it.  It's easier to search and replace ~undefined~ later than to tease out which ~unset~ are which...</p>
+          <p><a href="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/4</link>
+        <pubDate>Sun, 15 Aug 2021 23:38:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-817-4</guid>
+        <source url="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817.rss">How to bridge arguments to user natives / JS natives</source>
+      </item>
+      <item>
+        <title>How to bridge arguments to user natives / JS natives</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="817">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>A seemingly unambitious example which used JavaScript to perform addition might look like:</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var a = reb.UnboxInteger("a");
+    var b = reb.UnboxInteger("b");
+    return reb.Integer(a + b);
+}
+</code></pre>
+</blockquote>
+</aside>
+<p>This was the initial concept for how JavaScript natives would be able to access arguments...just by name.  It means you could have just as easily written:</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var sum = reb.UnboxInteger("a + b");
+    return reb.Integer(sum);
+}
+</code></pre>
+<p><em>(That would be a bit of a waste for why  you didn't do anything with the JavaScript, but, point is that there's nothing special about arguments...they're visible to code execution.)</em></p>
+<p>Binding didn't really offer any answers for how to do this.  So we ended up with the ugly <strong><code>reb.Arg()</code></strong> and <strong><code>reb.ArgR()</code></strong> functions.  It was a compromise that had to be made because binding was weak.</p>
+<p>The problems have gotten even bigger now...as the JS-NATIVEs are being declared in modules.  Those modules will presumably want to have visibility of plain FUNCs that you declare in that same module (or that you import) to call.</p>
+<p><em>On both points, we should not compromise.</em>  So I've worked up a prototype that does both.</p>
+<p><strong>So hopefully it means the end of reb.ArgR() and reb.Arg() are coming soon!</strong></p>
+<p>I think that will also solidify the case for eliminating the Q() forms of the APIs (like reb.ValueQ(), reb.DidQ()).</p>
+          <p><a href="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/3</link>
+        <pubDate>Tue, 23 Mar 2021 18:30:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-817-3</guid>
+        <source url="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817.rss">How to bridge arguments to user natives / JS natives</source>
+      </item>
+      <item>
+        <title>How to bridge arguments to user natives / JS natives</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Another thing that has been kind of on my mind is the relationship between JavaScript's <code>undefined</code> and Rebol's unset or bad states.</p>
+<p>I've set it up so that if you have a JS-NATIVE that doesn't have a return statement, that returns a BAD-WORD!...also if you say just <code>return;</code> ... this makes it consistent with the behavior of Rebol now (you can say <code>if true [return]</code> and the absence of an argument causes it to return a ~void~ isotope)</p>
+<p>However, it seems to me that <strong>reb.Value("print {Hello}");</strong> should not return <code>undefined</code> the way that <strong>reb.Value("select [a 10 b 20] 'c");</strong> returns <code>null</code>.  One reason is because JavaScript is bad about conflating falsey things, and it considers undefined to be falsey.  So it is probably good to have only one falsey result that can come back from running arbitrary code.</p>
+<p>It also seems like it's probably better to error on <code>undefined</code> when given as an argument:</p>
+<pre><code>function foo() { }
+reb.Elide("append data", foo())
+</code></pre>
+<p>Would you rather that run without error, appending a BAD-WORD! to data, or have reb.Elide() complain that an argument is undefined?</p>
+<p>Guess my point is that it seems like an area where noticing the parallel is useful, but care should be taken in where to make the mapping apply...</p>
+          <p><a href="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/2</link>
+        <pubDate>Fri, 12 Oct 2018 05:24:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-817-2</guid>
+        <source url="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817.rss">How to bridge arguments to user natives / JS natives</source>
+      </item>
+      <item>
+        <title>How to bridge arguments to user natives / JS natives</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The current plan for calling JavaScript from Rebol involves the creation of "JavaScript natives".  These would have specs that are BLOCK!s, which would be familiar as in functions.  Then they would have bodies that were TEXT! strings of JavaScript code.</p>
+<p>A seemingly unambitious example which used JavaScript to perform addition might look like:</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var a = reb.UnboxInteger("a");
+    var b = reb.UnboxInteger("b");
+    return reb.Integer(a + b);
+}
+</code></pre>
+<p>So that would mean from Rebol you could say <code>jadd 10 20</code> and it would actually perform that addition in JavaScript.</p>
+<p>Let's talk about some axes of potential improvement.</p>
+<h2>Generic Unboxing</h2>
+<p>Because C lacks dynamic typing, we need separate routines for unboxing integers and strings.  But JavaScript could conceivably do it automatically, calling rebUnbox() instead of rebUnboxInteger()...and then know if it was an integer type, to give back a JavaScript "Number":</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var a = reb.Unbox("a");
+    var b = reb.Unbox("b");
+    return reb.Integer(a + b);
+}
+</code></pre>
+<p>On the downside of this, you don't get an assertion or check that the thing you extracted is an integer...so you might get back a string or other object, if the type isn't what you expect.  It's probably best to offer both and let people decide which they want.</p>
+<h2>Auto-conversion of JS Number <em>non</em>-Objects</h2>
+<p>It might seem cool if the API could automatically convert JavaScript numbers into Rebol values, and not have to use rebInteger(n) or rebI(n).  For instance, this seems good:</p>
+<pre><code> var n = 5;
+ var s = reb.Text("Hello World");
+ reb.Elide("loop", n, "[print", s, "]");
+</code></pre>
+<p>But right now, the problem with this is that <code>s</code> is a pointer to a Rebol value on the webassembly heap.  And that's some big random-looking Number.  There's no way to tell that 5 isn't meant to be a pointer too.</p>
+<p>One trick I thought of, though, involves realizing that JavaScript has both primitives and <em>primitive objects</em>.  For reference, see this article on <a href="http://adripofjavascript.com/blog/drips/javascripts-primitive-wrapper-objects.html">JavaScript's Primitive Wrapper Objects</a>.  These lightweight objects come into existence as a means of being able to call methods, e.g. <code>n.toString()</code>.</p>
+<p>Hence--what if Rebol handles were passed back not as JavaScript numbers, but as number objects?  These would presumably be more lightweight than an ordinary object, so not very costly.  That way, when plain JavaScript numbers were used it could be assumed that they should be automatically treated as if they were numbers.</p>
+<p>Our adding example could then simplify to:</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var a = reb.Unbox("a");
+    var b = reb.Unbox("b");
+    return a + b;
+}
+</code></pre>
+<h2>Auto-conversion of JS String objects</h2>
+<p>Strings might benefit from the distinction of primitives vs. primitive objects as well.  Today, plain non-object strings are LOAD-ed and executed as code:</p>
+<pre><code>REBVAL *v = reb.Value("Hello World");
+</code></pre>
+<p>What happens there is that it treats that as two WORD!s.  But if you said:</p>
+<pre><code>REBVAL *v = reb.Value("{Hello World}");
+</code></pre>
+<p>That would be a TEXT! string.  You could also use rebText() or rebT() if your string is in a variable.</p>
+<p>But string <em>objects</em> could be handled differently, and assumed to be string literals.  So you couldn't say <code>return "hello"</code> from a user native, but you could say <code>return new String("hello");</code></p>
+<p>That's more typing than just <code>return reb.Text("hello")</code>.  But where it might come in handy in that you could write a generic JavaScript routine that could return a string to be passed unmodified to either JS or Rebol.</p>
+<pre><code>function genericName(...) { ... return new String(...); }
+console.log("used direct from JS: " + genericName(...));
+reb.Elide("print [{used direct from Rebol:}", genericName(...), "]");
+</code></pre>
+<h2>Parameter Unpacking as JavaScript</h2>
+<p>What I have in mind for both C user natives and JavaScript natives is not to try and give the generated JavaScript function any actual arguments.  So back to the example:</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    var a = reb.Unbox("a");
+    var b = reb.Unbox("b");
+    return a + b;
+}
+</code></pre>
+<p>We're generating and running a JavaScript function with no arguments, so if it wants to get the values of <code>a</code> and <code>b</code> it has to go through Rebol code (automatically bound into the function frame) to access them.</p>
+<p>It is <em>possible</em> to give that function arguments.  These arguments could be the raw Rebol values, or they could be pre-rebUnbox'd.  At the extreme of pre-unboxing, you could write just:</p>
+<pre><code>jadd: js-native [a [integer!] b [integer!]] {
+    return a + b;
+}
+</code></pre>
+<p><strong>I think it's better to not have arguments to the function.</strong></p>
+<ul>
+<li>
+<p>The TCC-based C natives don't have the luxury of being able to do things like this in a platform-independent fashion.  Feeding arguments to a C function varies from platform-to-platform based on the Application Binary Interface (ABI).   It's more consistent between C and JavaScript extensions to not do it.</p>
+</li>
+<li>
+<p>There's no support in <a href="https://kripken.github.io/emscripten-site/docs/porting/connecting_cpp_and_javascript/Interacting-with-code.html#interacting-with-code-call-javascript-from-native">the EM_ASM() bridge</a> for variadic calls.  Doing it in JavaScript and calling from C involves jumping through a lot of hoops, possibly using eval() when it wouldn't otherwise be necessary, and is less performant.  If the function took zero parameters and returned an integer heap address it would be a lot cleaner.</p>
+</li>
+<li>
+<p>JavaScript variable naming is more limited than Rebol parameter naming.  So there'd have to be some invented mapping between what name you used for the parameters in your spec and the JavaScript names.</p>
+</li>
+<li>
+<p>You don't really know what properties the JavaScript code wants from its parameters, and pre-extracting would be presumptuous.</p>
+</li>
+</ul>
+<p>So I think JavaScript natives should be running 0-arity functions, and have to go through libRebol APIs to get at their arguments.  That will require some new mechanics.</p>
+          <p><a href="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817/1</link>
+        <pubDate>Sat, 15 Sep 2018 11:04:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-817-1</guid>
+        <source url="https://forum.rebol.info/t/how-to-bridge-arguments-to-user-natives-js-natives/817.rss">How to bridge arguments to user natives / JS natives</source>
+      </item>
+  </channel>
+</rss>

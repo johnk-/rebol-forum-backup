@@ -1,0 +1,1653 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:discourse="http://www.discourse.org/" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Modules - AltRebol</title>
+    <link>https://forum.rebol.info/c/development/modules/21</link>
+    <description>Topics in the &#39;Modules&#39; category Module Development Focus</description>
+    
+      <lastBuildDate>Sat, 04 Dec 2021 20:38:32 +0000</lastBuildDate>
+      <atom:link href="https://forum.rebol.info/c/development/modules/21.rss" rel="self" type="application/rss+xml" />
+        <item>
+          <title>Reconsidering Return Values From IMPORT vs. DO</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>The state of things <strong>right now</strong> is:</p>
+<ul>
+<li>
+<p>DO returns the evaluative result of running a script, which can be any datatype.  It can return an INTEGER!, an ACTION!, an OBJECT!, or nothing at all <em>(e.g. a ~none~/~unset~/~void~ isotope)</em>.  If it wanted, it could also return a MODULE!...but this module could be unrelated to the context the script you are DO-ing is running in.</p>
+</li>
+<li>
+<p>IMPORT will return the MODULE! of the script, <em>if you use an assignment form on its left</em>.</p>
+<pre><code>module: import %some-library.r
+</code></pre>
+<p>This module is a way of accessing any of the EXPORTed things from the module, as <strong>module.exportedthing</strong> ... but you can't access definitions inside the module that are not exported in this way.  <em>(Or at least you shouldn't be able to.)</em></p>
+<p>If you don't have a SET-WORD! on the left, it assumes you want to make all the exports of that module available in your current...uh, let's say "binding environment"...</p>
+<pre><code>import %some-library.r
+</code></pre>
+</li>
+</ul>
+<p>I'm deliberately vague about what this is actually doing, because historical Rebol doesn't have answers to binding that demonstrate reasonable composability...and I'm dabbling in trying to make solutions that will work for bigger projects.</p>
+<h2>IMPORT's SET-WORD! Lookback Is Probably A Bad Idea</h2>
+<p>What if you wanted:</p>
+<pre><code>func-that-takes-module (import %some-library.r)
+</code></pre>
+<p>You don't want to have to write:</p>
+<pre><code>func-that-takes-module (dummy: import %some-library.r)
+</code></pre>
+<p>Or:</p>
+<pre><code>func-that-takes-module ([@]: import %some-library.r)
+</code></pre>
+<p>The thing I've been leaning toward is a generalized operator which lets you pull an object's fields into the ensuing scope.  A prototype exists right now, it's called USING:</p>
+<pre><code>obj: make object! [x: 10 y: 20]
+using obj
+print [x + y]  ; would print 30
+</code></pre>
+<p>So if you didn't want to get a module as a value but rather "use" that, you could say something more like:</p>
+<pre><code>using import %some-library.r
+</code></pre>
+<p>And then we could offer a shorthand when USING received a file, like:</p>
+<pre><code>using %some-library.r
+</code></pre>
+<p>In fact, I think this could be popular enough to warrant overtaking the name USE.</p>
+<pre><code>use parse [10 "twenty"] [
+    emit x: integer!
+    emit y: text!
+] else [
+    fail "Expected integer followed by text"
+]
+
+print ["Integer was" x "and text was" mold y]
+</code></pre>
+<p>Though from an overloading standpoint, it's a bit shaky when you leverage the same name for both running already loaded code in your environment as pulling something off a network.    (Today's DO has this problem, that someone can wedge in a little bit of code to trick you into running arbitrary code off a network instead of a local BLOCK!)  So maybe having the FILE!-and-HTTP capable USING be distinct from USE would be a smart distinction.</p>
+<p>That would mean that:</p>
+<pre><code>using %some-library.r  &lt;=&gt;  use import %some-library.r
+</code></pre>
+<h2>How To Get More Granularity?</h2>
+<p>I've pointed out the <a href="https://forum.rebol.info/t/design-for-import/1570">variations of import syntaxes in JavaScript before</a> when talking about a design for IMPORT:</p>
+<pre><code>import defaultExport from "module-name";
+import * as name from "module-name";
+import { export1 } from "module-name";
+import { export1 as alias1 } from "module-name";
+import { export1 , export2 } from "module-name";
+import { foo , bar } from "module-name/path/to/specific/un-exported/file";
+import { export1 , export2 as alias2 , [...] } from "module-name";
+import defaultExport, { export1 [ , [...] ] } from "module-name";
+import defaultExport, * as name from "module-name";
+import "module-name";
+var promise = import("module-name");
+</code></pre>
+<p>Their <strong>import defaultExport from "module-name";</strong> case acts like what I'm proposing for <strong>using %module-name.r</strong> above.</p>
+<p>In my other post I bring up these issues.  It seems like USE would want this too.  But as my other post argues, the dialecting is difficult to make look good.</p>
+<h2>Extra Return Results</h2>
+<p>The core routine that is behind both IMPORT and DO actually has two return results... it gives back both the context the code was run in and the final by-product of evaluating the script.  IMPORT only returns the module, and DO only returns the product.</p>
+<p>It doesn't make a lot of sense to ask IMPORT for the evaluation product, because import caches the module.  So it may not run the code in response to the IMPORT, and wouldn't have the result available (unless it saved it somewhere?)  Right now you can ask it, but it might just give you back the BAD-WORD! of ~cached~ to tell you that no script code ran.  This indicates to me that you probably shouldn't be able to ask.</p>
+<p>Perhaps there are more instances where asking DO for the module would make sense.  I don't know--and there is some friction with the question of this separation.  Should all DO be guaranteed to not contaminate the environment they are called from...forcing you to use an IMPORT if you want the contamination?  (This would mean Redbol's DO would have to be rigged up to actually be an IMPORT underneath.)</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767</link>
+          <pubDate>Sat, 04 Dec 2021 20:38:32 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1767</guid>
+          <source url="https://forum.rebol.info/t/reconsidering-return-values-from-import-vs-do/1767.rss">Reconsidering Return Values From IMPORT vs. DO</source>
+        </item>
+        <item>
+          <title>Extensions as DLLs / Shared Libraries: Resurrected</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>The initial concept Shixin and I talked about with extensions was essentially giving you three choices for each extension:</p>
+<p><strong><code>[+]</code></strong> : Build the extension into the interpreter executable<br>
+<strong><code>[-]</code></strong> : Don't build the extension at all.<br>
+<strong><code>[*]</code></strong> : Build the extension as a separately loadable .dll or .so file</p>
+<p>And supposedly it was at some point able to do that.  <strong>But I'd never seen it work.</strong>  Because it was a mixture of Rebmake and the R3 Historical Extension model and loading code.  Since it wasn't part of any testing regimen--and I never understood it to begin with--it probably only worked the day Shixin wrote it (if it would have worked for me at all, on another machine).</p>
+<p>The mysterious feature atrophied, but I kept things related to it around.  Because we need this ability to load bits of "native" code dynamically...most especially on the web (where native=wasm).</p>
+<p>I decided to spend some time attacking the desktop versions.  By no means was this fun, but, I did get it to work on Windows, Mac and Linux.</p>
+<p>As a demonstration of it working, I made the UUID extension a DLL on all the platforms, and call it in a test:</p>
+<ul>
+<li>
+<a href="https://github.com/metaeducation/ren-c/runs/4412834535?check_suite_focus=true#step:23:46">Windows</a> (<code>.DLL</code> file)</li>
+<li>
+<a href="https://github.com/metaeducation/ren-c/runs/4412352346?check_suite_focus=true#step:22:23">Linux</a> (<code>.so</code> file)</li>
+<li>
+<a href="https://github.com/metaeducation/ren-c/runs/4412835593?check_suite_focus=true#step:16:23">Mac</a> (<code>.dylib</code> file)</li>
+</ul>
+<p><em>(I'm fairly sure that the Mac version could not have worked prior to the development of the libRebol API and extension mechanics in their modern form.  So it probably was in an "almost working since it's a lot like the linux version--except for link errors" state at the time of Shixin's writing.)</em></p>
+<h2>How Do You Use It?</h2>
+<p>Right now you do LOAD-EXTENSION and pass it a path.  It gives you back a module, which you could then IMPORT or use directly as an object.</p>
+<p>The UUID module was not designed to be IMPORT-friendly.  It calls its method "generate" which is generic, so it only makes sense as <code>mod-uuid.generate</code>.  So I just did:</p>
+<pre><code> mod-uuid: load-extension %/path/to/r3-uuid.dll
+ uuid: mod-uuid.generate
+</code></pre>
+<p>The way I've set up to think about extensions is that from a user's point of view, you can't tell the difference really from ordinary modules.  So really this should be folded into IMPORT.  You should be able to use a URL just as easily as you can use a FILE!.</p>
+<p>Shorthand lookups present a bit of a problem, because since these contain native code there's not a single location that would work for all platforms.  We could perhaps adopt a standard naming strategy so that if you put all the extensions in the same directory alongside each other it would know how to pick the right one...</p>
+<p>It is kind of neat to see the single file encapsulating script code and native code together.  But what would be really neat to see beyond this is having a form that works in the web browser.  But this was not fun and so I'm going to need to do something else for a bit.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/extensions-as-dlls-shared-libraries-resurrected/1766">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/extensions-as-dlls-shared-libraries-resurrected/1766</link>
+          <pubDate>Fri, 03 Dec 2021 20:52:16 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1766</guid>
+          <source url="https://forum.rebol.info/t/extensions-as-dlls-shared-libraries-resurrected/1766.rss">Extensions as DLLs / Shared Libraries: Resurrected</source>
+        </item>
+        <item>
+          <title>DO or IMPORT of GitHub/GitLab Decorated URLs on Desktop</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>The "decorated" URL for a GitHub file looks like this:</p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/master/scripts/unzip.reb"><code>https://github.com/metaeducation/ren-c/blob/master/scripts/unzip.reb</code></a></p>
+<p>And on GitLab, the "decorated" URLs looks like this:</p>
+<p><a href="https://gitlab.com/Zhaoshirong/rebol-chess/-/blob/master/create-board.reb"><code>https://gitlab.com/Zhaoshirong/rebol-chess/-/blob/master/create-board.reb</code></a></p>
+<p>I don't particularly like syntax highlighting (or at least not the kind done on Rebol files by these sites, which also happens to be buggy...so I turn it off on my repos).  But there are other good reasons to like using these links:</p>
+<ul>
+<li>
+<p>It gives you context to see what project the file is in and to navigate around that project to see other related files.</p>
+</li>
+<li>
+<p>You can click on a line number or line number range and then give that link to someone to point to a specific line you're talking to.</p>
+</li>
+<li>
+<p>You have buttons for viewing the file history and "git blame" to see where changed lines came from.</p>
+</li>
+<li>
+<p>If you're an owner on the repo, you can edit it right there in the browser and commit it.</p>
+</li>
+</ul>
+<p><strong>But the HTML decorations mean these URLs give back code that the intepreter will choke on.</strong>  So historically, if you were going to DO or IMPORT them, you would have to translate them to raw links...which lack these conveniences:</p>
+<p><a href="https://raw.githubusercontent.com/metaeducation/ren-c/master/scripts/unzip.reb"><code>https://raw.githubusercontent.com/metaeducation/ren-c/master/scripts/unzip.reb</code></a></p>
+<p><a href="https://gitlab.com/Zhaoshirong/rebol-chess/-/raw/master/create-board.reb"><code>https://gitlab.com/Zhaoshirong/rebol-chess/-/raw/master/create-board.reb</code></a></p>
+<p><em>(Interestingly the GitLab raw link is actually a character shorter than the decorated one, but the GitHub raw link is longer.)</em></p>
+<p><strong>The web build has been willing to assume that when you say DO or IMPORT of the decorated link, what you want is the raw link.</strong></p>
+<p>It wouldn't be good to redirect these URLs generally.  e.g. a READ might actually want to scrape the decorated HTML for something.  But since DO and IMPORT would just choke on the decorated URL, it's just helpful to automatically redirect them.</p>
+<h2>Now This Feature is in the Desktop Builds Too</h2>
+<p>By request from <a class="mention" href="/u/gchiu">@gchiu</a>, I moved the function that does this to <strong><code>sys.adjust-url-for-raw</code></strong> and it is run by the core DO and IMPORT functions on URLs.</p>
+<p>It's a generic utility that can be used by similar functions.  So CSS-DO and JS-DO use the functions as well.</p>
+<p>If a URL is adjusted it returns it, otherwise it returns NULL.  So this is used with MAYBE:</p>
+<pre><code> url: maybe sys.adjust-url-for-raw url
+</code></pre>
+<p>As a reminder of what MAYBE does...it leaves the SET-WORD! on the left unchanged if the result on the right is NULL, otherwise sets it to the new value.</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/do-or-import-of-github-gitlab-decorated-urls-on-desktop/1761">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/do-or-import-of-github-gitlab-decorated-urls-on-desktop/1761</link>
+          <pubDate>Mon, 29 Nov 2021 09:33:08 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1761</guid>
+          <source url="https://forum.rebol.info/t/do-or-import-of-github-gitlab-decorated-urls-on-desktop/1761.rss">DO or IMPORT of GitHub/GitLab Decorated URLs on Desktop</source>
+        </item>
+        <item>
+          <title>LOAD Fever Dreams: Code Embedded In Images?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>I found this comment in LOAD:</p>
+<pre><code>; Note that code or data can be embedded in other datatypes, including
+; not just text, but any binary data, including images, etc. The type
+; argument can be used to control how the raw source is converted.
+; Pass a /TYPE of blank or 'UNBOUND if you want embedded code or data.
+</code></pre>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/crazy_face.png?v=9" title=":crazy_face:" class="emoji only-emoji" alt=":crazy_face:"></p>
+<p>I don't know what this means, so I'm taking it out to help keep focus on important features.</p>
+<p>But the polymorphism of LOAD is something that needs to be addressed in general. It aims to be the means by which you'd get a BLOCK! of Rebol-formatted data out of a file, as well as to load a PNG file into an IMAGE!.</p>
+<p>Also, it's currently the way you would load an extension--which is a module that happens to have some associated native code.  But wouldn't that make more sense to be part of IMPORT?</p>
+<p>Or is LOAD the way that you get a module or extension without actually bringing its definitions into scope, e.g.</p>
+<pre><code>m: load &lt;some-module.r&gt;
+
+vs.
+
+import &lt;some-module.r&gt;
+</code></pre>
+<p>This might mean that <strong><code>import &lt;some-module.r&gt;</code></strong> is really a shorthand for:</p>
+<pre><code>import load &lt;some-module.r&gt;
+</code></pre>
+<p>But how comfortable are we with a LOAD that's so polymorphic that if you remember to put <code>Type: module</code> in the header you get a module, but if you don't then you just get a BLOCK! of code?</p>
+<p>If LOAD will load any file with any extension and do <em>something</em> with it, how safe is that?</p>
+<p>Big questions, but the small thing was moving that crazy comment out of the source...</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/load-fever-dreams-code-embedded-in-images/1701">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/load-fever-dreams-code-embedded-in-images/1701</link>
+          <pubDate>Fri, 03 Sep 2021 06:33:58 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1701</guid>
+          <source url="https://forum.rebol.info/t/load-fever-dreams-code-embedded-in-images/1701.rss">LOAD Fever Dreams: Code Embedded In Images?</source>
+        </item>
+        <item>
+          <title>We Need A Syntax For &quot;IMPORT Relative To System.Script.Path&quot;</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>I'm moving ahead with <strong><a href="https://github.com/metaeducation/rebol-issues/issues/2374#issuecomment-912266377">DO of a script (or running on the command line) not changing the current working directory</a></strong>.  It's an important and overdue change.</p>
+<p>So if you run:</p>
+<pre><code>/home/me$ r3 /usr/local/scripts/something.r ./foo.txt
+</code></pre>
+<p>Then when <code>something.r</code> is called it will still be in <code>/home/me</code>, and it will resolve foo.txt to <code>/home/me/foo.txt</code> by default.  That's good.</p>
+<p>But if you then have:</p>
+<pre><code>Rebol [File: %something.r]
+
+import %utilities.r
+</code></pre>
+<p>Then this will look for utilities.r in <code>/home/me</code> as well.</p>
+<p><strong>I think that is the correct behavior for a relative %file path.  So the real issue is just that there needs to be another syntax to tell IMPORT to look relative to SYSTEM.SCRIPT.PATH.</strong></p>
+<h2>TL;DR: I Think This Should Be TAG!</h2>
+<p>This will be very common, and unlike the library lookup it will tend to be more than one word long.  I think being enclosed in angle brackets has a nice look.</p>
+<pre><code>Rebol [Title: "My Big Script"]
+
+import &lt;common.r&gt;
+import 'altxml
+import 'json/1.2.1
+import &lt;subsystems/gui-manager.r&gt;
+import &lt;subsystems/icon-manager.r&gt;
+
+do/args &lt;utils/something.r&gt; :[1 + 2 3 + 4]
+</code></pre>
+<p>Here I'm suggesting bumping just to WORD! for loading libraries from the index, since TAG! would have this new meaning.</p>
+<h2>I'm Avoiding Types That Are Valid Branches</h2>
+<p>One of the rules I made a while ago was that if a type is accepted by a branch in a control structure, that DO should have the same behavior for that datatype.</p>
+<p>Of course we know blocks are legal branches and do the same thing:</p>
+<pre><code>&gt;&gt; if true [1 + 2]
+== 3
+
+&gt;&gt; do [1 + 2]
+== 3
+</code></pre>
+<p>But I want the rule to extend to all the other types.  So in a world where <strong><code>if true @json</code></strong> has meaning as a branch, I wouldn't want <strong><code>do @json</code></strong> to do anything different.</p>
+<p>So that limits the choices a bit here for this feature.  Because I want you to be able to DO or LOAD things from the library of named utilities, just as you can IMPORT them.</p>
+<p>And now with this feature of DO and LOAD relative to system.script.args, I'd like that to work as well.</p>
+<h2>Refinements Are Not Going To Be Palatable</h2>
+<p>Firstly, I'd challenge you to come up with a good name for it:</p>
+<pre><code>import/here %foo.r
+</code></pre>
+<p>But for how common the desire is, this just doesn't look good.</p>
+<h2>Filenames Should Be Unconstrained By WORD! Rules</h2>
+<p>One might suggest reversing the suggestion I made, where you use WORD!/PATH! for the local files and keep the TAG! for the name lookups:</p>
+<pre><code>Rebol [Title: "My Big Script"]
+
+import 'common.r
+import &lt;altxml&gt;
+import &lt;json&gt;/v.1.2
+import 'subsystems/gui-manager.r
+import 'subsystems/icon-manager.r
+
+do/args 'utils/something.r :[1 + 2 3 + 4]
+</code></pre>
+<p>But this gets you involved with issues about file paths not having full coverage in the domain of WORD!s.  What if you want to load something and it's relative to the script directory?</p>
+<pre><code>smiley: load &lt;icons/png/smiley 32x32.png&gt;
+</code></pre>
+<p>Using TAG! for this helps avoid problems here.  Whereas the name lookup service is entirely something we invent, and so constraining it to legal words makes perfect sense.</p>
+<h2>Why Not Use ISSUE! Instead of TAG! ?</h2>
+<p>This could also let TAG! stay used how it is:</p>
+<pre><code>Rebol [Title: "My Big Script"]
+
+import #common.r
+import &lt;altxml&gt;
+import &lt;json&gt;/v.1.2
+import #subsystems/gui-manager.r
+import #subsystems/icon-manager.r
+
+do/args #utils/something.r :[1 + 2 3 + 4]
+</code></pre>
+<p>But I don't care for it, and I've suggested ISSUE! will be used in the import dialect for hashes.</p>
+<p>Thoughts welcome.  I know this is going to create some compatibility problems, but we can have a grace period where scripts will fall back on tags to look them up... so there will be time to fix things while still moving on with the new rules.</p>
+            <p><small>5 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/we-need-a-syntax-for-import-relative-to-system-script-path/1700">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/we-need-a-syntax-for-import-relative-to-system-script-path/1700</link>
+          <pubDate>Thu, 02 Sep 2021 18:55:35 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1700</guid>
+          <source url="https://forum.rebol.info/t/we-need-a-syntax-for-import-relative-to-system-script-path/1700.rss">We Need A Syntax For &quot;IMPORT Relative To System.Script.Path&quot;</source>
+        </item>
+        <item>
+          <title>&quot;System Object&quot; vs. &quot;Sys Context&quot;</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>Let's say I asked you to explain the difference between the system context (<strong>sys</strong>) and the system object (<strong>system</strong>)--and why they are two different things.</p>
+<p>I'm betting you'd probably not be able to explain it.  Because I get them mixed up all the time.  <img src="https://forum.rebol.info/images/emoji/twitter/yawning_face.png?v=9" title=":yawning_face:" class="emoji" alt=":yawning_face:"></p>
+<p>TL; DR: - <strong>Having something called SYSTEM that is distinct from SYS isn't doing anyone any cognitive favors, and it should be changed.</strong>  I propose SYS and SYSTEM be synonyms for the system context, and what is currently known as SYS become SYS.UTIL.</p>
+<h2>
+<strong>sys</strong> System Context: Usermode Helpers for the Core</h2>
+<p>There's a lot of support code behind things like booting, or LOAD or DO, or registration of codecs or whatever... that the average user is probably not going to want to call on a day-to-day basis.  An example is <strong><code>make-scheme</code></strong>.</p>
+<p>These routines don't necessarily compete for names with things in LIB.  But putting them in SYS helps to call out that most users probably don't need to be concerned with them.</p>
+<ul>
+<li>
+<p>Pretty much every function in LIB routines is supposed to be something you could imagine a user being interested in calling in their scripts.</p>
+</li>
+<li>
+<p>SYS functions are things that would generally only be called from extensions, or internally as a support function for natives or LIB functions.</p>
+</li>
+</ul>
+<h2>
+<strong>system</strong> System Object: Global Variables and Template Objects</h2>
+<p>The system object is specified by a file called <strong>%sysobj.r</strong>.</p>
+<p>As most people know, this is where you go to look for global state like the arguments that were passed to the interpreter when it ran...or the list of modules that have been loaded.  But it also contains a large number of empty objects.</p>
+<p>The <strong>make prep</strong> process creates a header file of constants of the integer indices of the fields in these objects.  That makes it fast and easy for the core C code to directly address those fields, instead of having to linear search for them by key name.</p>
+<p>Using these template objects has the effect that no matter how you create a derived object, it will get the fields named in them in that particular order.  So the precalculated indexes will always be able to find the fields where they are looking... <em>as long as that object <strong>was</strong> used as the base object</em>.</p>
+<p>But these template objects aren't just about interfacing quickly between C and the structures.  Using common objects as keys helps save on allocations of lists of the keys...as the objects will share that list (as long as the object isn't expanded or created with more keys than specified in the base.</p>
+<p><em>(I actually think it is a mistake to be doing objects this way, and that we should adopt JavaScript's model of <a href="https://richardartoul.github.io/jekyll/update/2015/04/26/hidden-classes.html">"hidden classes"</a> to get a more systemic optimization.)</em></p>
+<h2>Proposal: SYS =&gt; SYS.UTIL, SYSTEM &lt;=&gt; SYS</h2>
+<p>Having to type <strong>sys.util</strong> when you want something like <strong>sys.util.make-scheme</strong> isn't that oppressive.</p>
+<p>UTIL is abbreviated, but so is SYS.  We could make UTIL just an alias for UTILITIES, so the verbose-minded could write <strong>system.utilities.make-scheme</strong> if it pleased them.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/system-object-vs-sys-context/1687">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/system-object-vs-sys-context/1687</link>
+          <pubDate>Fri, 27 Aug 2021 00:07:04 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1687</guid>
+          <source url="https://forum.rebol.info/t/system-object-vs-sys-context/1687.rss">&quot;System Object&quot; vs. &quot;Sys Context&quot;</source>
+        </item>
+        <item>
+          <title>Modularizing The Whitespace Interpreter: Experience Report</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <h2>The Whitespace Interpreter Project Has Now Been Modulariz'd...</h2>
+<p><strong>...and is running in the <strong><a href="https://forum.rebol.info/t/the-sea-of-words/1564">"Sea of Words"</a></strong>.</strong></p>
+<p>It is <a href="https://github.com/hostilefork/rebol-whitespacers/actions/runs/1161591653">passing the tests on Windows, Mac, and Linux</a>, in both debug and release builds.</p>
+<p>While the project may seem "modest", I'd argue it actually is a pretty deep dive into the core premise of why the methodology of the language is interesting.</p>
+<p>And I'm using it as a testbed for new ideas.  I brought up the idea of using <strong>===</strong> as a section divider that acts like a comment, but could be shown at higher verbosity levels.  That's exactly the way the whitespace interpreter is using it.  It's just using the lexical parts of the language freeform...not creating variables, thanks to Sea of Words!</p>
+<p>So when I write a section divider like:</p>
+<pre><code>=== LOAD THE SOURCE INTO PROGRAM VARIABLE ===
+</code></pre>
+<p>There's a bit in the command line processing that ticks over the variadic <strong>===</strong> into a mode where it stops being purely commentary/invisible, and prints the line in the program output:</p>
+<pre><code>if vm.verbose &gt; 0 [
+    ===/visibility true  ; show the `=== xxxx ===` lines
+]
+</code></pre>
+<p>As with all things...there's some glitches to sort out.  Like that the console uses these dividers too, so if you are running from the console these get all mixed up.  It means you'd have to declare a common instance of this <strong>===</strong> from some generic one, and make that common across your program.</p>
+<p>Either way, it let me avoid redundancy and focus on the program.  And it might seem a small detail to not have a string:</p>
+<pre><code>=== {LOAD THE SOURCE INTO PROGRAM VARIABLE} ===
+</code></pre>
+<p>But every character counts when it comes to being happy with how your program looks.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:">  Also, that doesn't provide any way for us to escape things...whereas we can put things like @(...) in there...</p>
+<pre><code>=== LOAD SCRIPT FILE: @(filename) ===
+</code></pre>
+<p><em>(Note: We may be getting these facilities via string interpolation, but the point remains that it looks better when we can just write without delimiters.)</em></p>
+<h1>Problems Encountered</h1>
+<p>The single biggest problem encountered in the modularization is:</p>
+<p><strong>If you IMPORT a variable from a module, you get a copy of that variable in your own module, and you thus do not see changes to the imported library's original version of the variable.</strong></p>
+<p>This is an artifact of using the IMPORT statement in the body of the module, after it has already been scanned and "interned".  In other words: by the time the IMPORT has ran, the word you are importing already got connected to the module you are importing it to.  So the only way to wire it up is to add a copy of that variable into the module so the already-scanned-and-bound instances will see it.</p>
+<p>If we knew about the importation you wanted to do <em>before</em> we scanned and "interned" the module, then we'd be able to bind the variable directly to what you were importing.  <em>But is that really what you want?</em>  Certainly it hasn't been with LIB.  You don't want to bind variables to LIB because then overwriting anything the mezzanine uses--like PRINT--would trash the system.  This is part of the justification for why importing gets a copy.</p>
+<p>One way to get the latest version of a variable is not to import the module's words into a local scope, but to capture the module in a variable and access the fields through that.  Compare:</p>
+<pre><code>import %some-module.r  ; imports `something` and `change-something`
+change-something
+print [something]  ; won't see change
+
+m: import %some-module.r
+m.change-something
+print [m.something]  ; will see the field as it changes
+</code></pre>
+<p>Stylistically, some languages enforce this anyway.  Like in Node.js you can only do it the second way, and if you want a local name for things you have to make it yourself as a local variable to your script.  Then of course you don't expect that to change when the module variable changes--they're disconnected.</p>
+<p><em>I don't want to get into the business of being prescriptive about how much you import or export.</em>  That's a policy of whatever module framework you use and your personal decisions.  So I think there needs to be a workable way to bind in a way that sees changes to variables without also giving you access to accidentally overwrite them and break the module you are using for itself and other clients.</p>
+<h2>Why Doesn't "Attachment"/"Inheritance" Solve This?</h2>
+<p>Right now we don't have this problem with Lib.  But that's because it's being treated specially.  When you access a variable by name--and it's not in your evaluation context (your module or the implicit module where "do" is running)--then it falls through to look in Lib.</p>
+<p>We'd need some way to have modules be able to have this fall-through on a per-variable basis, to different libs.  They have to remember that they are attached to your module (in case you overwrite them), but they also have to know there's no instance in your module and point to where they can be found so long as they're not overwritten.</p>
+<p>Fortunately there's enough space for that.  We can make something the size of a variable, with no variable in it, that uses the variable spot to store where the module was that it was imported from.  An "import stub", basically.</p>
+<p>The goal of module inheritance from modules like Lib is to avoid a situation where you have to create these stubs for everything.  I'm not sure exactly how different the ideas are though, and if it should just be an implementation detail where the system decides "okay, that's a big library and you're importing it all... we use search mechanism 1" vs. "you only imported 3 things, better to make stubs for those 3".</p>
+<h2>That Aside, Everything Seemed To Work Smoothly</h2>
+<p>And even the Redbol emulation of the old R3-Alpha version of the interpreter works, using modularized Redbol!</p>
+<p>Redbol is definitely a case I want to keep central in the design, because it is executing on the pitch of what we're saying: This is a kit that you can rewrite the laws of the language on a whim.  And Redbol is a great case to look at, that has tests.</p>
+<p>But I also want to see more of how I can fuse together what's happening with LET and virtual binding, along with the sea of words, and what hope there is for string interning.  Having things like Whitespace around are good because if some change to the binding model makes it not possible to do what Whitespace does, that indicates it's not the right model.  So it's a stake in the ground.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/modularizing-the-whitespace-interpreter-experience-report/1683">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/modularizing-the-whitespace-interpreter-experience-report/1683</link>
+          <pubDate>Tue, 24 Aug 2021 08:29:38 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1683</guid>
+          <source url="https://forum.rebol.info/t/modularizing-the-whitespace-interpreter-experience-report/1683.rss">Modularizing The Whitespace Interpreter: Experience Report</source>
+        </item>
+        <item>
+          <title>Module Headers and Quoting: The Final Verdict</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>So there's been a long historical fight on whether you need quotes on module header fields...:</p>
+<pre><code>Rebol [
+    Title: {Your title here}
+    Type: 'Module
+    Name: 'Your-Module-Name-Here
+]
+</code></pre>
+<p>...or if you don't, and you can just say:</p>
+<pre><code>Rebol [
+    Title: {Your title here}
+    Type: Module
+    Name: Your-Module-Name-Here
+]
+</code></pre>
+<p>This wasn't a tremendously huge problem in historical Rebol, because the standard fields did not take WORD! types.  The issue was on the rise with the <code>Type:</code> and <code>Name:</code> fields in modules.</p>
+<p><strong>While I have flipped back and forth on which I support, I have never flipped on the idea that this has to be a standardardized.</strong></p>
+<p>But today, I think my verdict on which way to go is pretty clear.</p>
+<h2>Just Say No! <sub>(To Ticks In Unevaluated Contexts)</sub>
+</h2>
+<p>It's visual pollution that serves no purpose.</p>
+<p>Really, this is a dialect in a BLOCK!.  It uses SET-WORD!s.  It is not an OBJECT!.</p>
+<p>You can make an object out of it, but you need to be careful about it.  Not only do you not have to evaluate module headers, <em>you should not evaluate module headers</em>.</p>
+<p>It seems to me that the TO OBJECT! conversions can handle this; it fits the bill of my rule of TO not doing evaluation.  So the old "CONSTRUCT" operation can go.</p>
+<h2>Exception: When Quotes are Part of the Dialect</h2>
+<p>If you come up with your own header field, used for your own script type's purposes, use quotes if you want...if the quoting has meaning.</p>
+<p>Maybe you have some kind of generic thing like <code>initial-value:</code> up top in the header.  And that can be ANY-VALUE!, so anything you want to run a test on--for instance.  If you have:</p>
+<pre><code>Initial-Value: '''''&lt;foo&gt;
+</code></pre>
+<p>Then that's fine.  But for fields like the module's type, there is no such distinction in meaning intended by 'Module vs. Module.  So that's different.</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/module-headers-and-quoting-the-final-verdict/1677">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/module-headers-and-quoting-the-final-verdict/1677</link>
+          <pubDate>Sun, 22 Aug 2021 00:12:42 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1677</guid>
+          <source url="https://forum.rebol.info/t/module-headers-and-quoting-the-final-verdict/1677.rss">Module Headers and Quoting: The Final Verdict</source>
+        </item>
+        <item>
+          <title>Cache of rebol.org Writeup of Standard Header Fields</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <blockquote>
+<p>This is a cache of the writeup of what valid header fields are, as outlined by <strong><a href="http://www.rebol.org/one-click-submission-help.r">rebol.org's one-click-submission-help page</a></strong>.</p>
+<p>I'm putting it here as a cache (in case <a href="http://rebol.org">rebol.org</a> goes down), and also to be able to call out portions to comment on in a thread.</p>
+<p>Copyright is (c) whenever by <a href="http://rebol.org">rebol.org</a> (no particular remarks on license on their site).  It is unedited here except for formatting.</p>
+</blockquote>
+<h1>REBOL header</h1>
+<p>We need these fields in the REBOL header</p>
+<pre><code>REBOL [ File: %... Date: dd-mmm-yyyy Title: "..." Purpose: {......} ]
+</code></pre>
+<p>You can have other fields in the REBOL header, but we need the ones above.</p>
+<h2>REBOL header: File</h2>
+<p>The name of the script -- eg <strong>%my-script.r</strong> or <strong>%yet-another-map.r</strong></p>
+<p>File should follow these conventions</p>
+<ol>
+<li>Start with a percentage sign, %, like any other REBOL file!</li>
+<li>Contain only <strong>lower-case</strong> letters, digits, or hyphens. This ensures cross-platform compatibility</li>
+<li>Don't start or end with a hyphen (<strong>%-my-script</strong> and <strong>%myscript.r-</strong> are not good)</li>
+<li>Should have a suffix (eg <strong>.r</strong>). It doesn't <strong>need</strong> to be <strong>.r</strong>, but that is strongly recommended</li>
+<li>Not be a <strong>reserved file name</strong> for any of the platforms that REBOL runs on (e.g. con or lpt1 are reserved under Windows)</li>
+<li>For a new script, has a name that does not clash with any other script in the Library</li>
+</ol>
+<h2>REBOL header: Date</h2>
+<p>Should be a valid REBOL date. We use this to index recent changes and additions, so you should really set it to today's date,</p>
+<p>eg <strong>Date: 20-Aug-2021</strong>.</p>
+<h2>REBOL header: Title</h2>
+<p>A short string that descibes the script</p>
+<h2>REBOL header: Purpose</h2>
+<p>A string, possibly multi-line, that briefly describes the script. This is displayed on the <strong>View</strong> screen and other places. <strong>Purpose</strong> is optional, but highly recommended.</p>
+<h1>Library header</h1>
+<p>This is part of the REBOL header, and includes extra fields for cataloging your script. A basic library header looks like this:</p>
+<pre><code>library: [
+    level: 'intermediate
+    platform: 'all
+    type: [tutorial tool]
+    domain: [ftp game]
+    tested-under: none
+    support: none
+    license: none
+    see-also: none
+]
+</code></pre>
+<p>The <strong>Library header</strong> is optional. You do not need it, but it does let you easily associate <strong>tags</strong> with your script.</p>
+<h2>Library header: Level</h2>
+<p>A single quoted word to say what level of user expertise is embodied in the script. That is, the level of REBOL understanding that a user should have. It doesn't have anything to do with the domain-specific aspects of an entry. Use any one of: <strong>advanced beginner intermediate</strong></p>
+<p><strong>beginner</strong> - These should be understandable even to those that are just evaluating REBOL. We don't want to scare off newcomers.</p>
+<p><strong>intermediate</strong> - This assumes a basic working knowledge of REBOL and the ability to use HELP and SOURCE to learn more. Script size isn't as important as complexity. That is to say, scripts can be large as long as they are straight-forward.</p>
+<p><strong>advanced</strong> - Examples of things that fall into this category would be: higher order functions, USE blocks - beyond very obvious usage, BIND, anonymous functions - again beyond very basic usage of the mechanism, dynamic layout generation in View, etc.</p>
+<h2>Library header: Platform</h2>
+<p>The platform(s) on which this script will run. Can be a lit-word or block. Use any combination of:</p>
+<pre><code>*nix all amiga be linux
+mac plugin solaris unix win
+windows
+</code></pre>
+<h3>Examples</h3>
+<pre><code>Platform: [all plugin be]
+
+Platform: 'be
+</code></pre>
+<p>Most scripts will have no platform specified, which means they are expected (though not guaranteed) to work on any platform their target REBOL product runs on.</p>
+<h2>Library header: Plugin</h2>
+<p>If a script has a <strong>platform: [ ... plugin ...]</strong> entry (meaning it is certified as runnable under the REBOL browser plugin) it must also have a Library header of <strong>plugin</strong> to specify the settings needed by the plugin</p>
+<p>Values are:</p>
+<pre><code>plugin: [size: pair! version: string!]
+</code></pre>
+<p>Where:</p>
+<ul>
+<li>size -- the width and height of the window needed for the script to display properly. <strong>This value must be present</strong>. Minimum size is 100x100.</li>
+<li>version -- specific version number of the plugin, if the script needs anything other than the most recent version
+<ul>
+<li>This is optional -- omit if you do not mind which version is run</li>
+<li>The <strong>only</strong> version currently allowed is "<a href="http://www.rebol.com/plugin/rebolb4.cab#Version=0,5,0,0">http://www.rebol.com/plugin/rebolb4.cab#Version=0,5,0,0</a>"</li>
+</ul>
+</li>
+</ul>
+<p>Example:</p>
+<pre><code>rebol [ ... library: [ ... plugin: [size: 800x1000] ... ] ]
+</code></pre>
+<h2>Library header: Type</h2>
+<p>Says what type of thing the script is, or how it is used. What its purpose is. Can be a lit-word or block. Use any combination of:</p>
+<pre><code>article demo dialect faq fun
+function game how-to idiom module
+one-liner package protocol rebcode reference
+tool tutorial
+</code></pre>
+<h3>Examples</h3>
+<pre><code>Type: [demo dialect]
+
+Type: 'tutorial
+
+Type: [article dialect protocol]
+</code></pre>
+<h3>Applications</h3>
+<p>These are things you can just click and see something happen. They may be useful or not.</p>
+<p><strong>Demo</strong> - These are written to show REBOL off in some way. Good examples are Cyphre's graphic demos, Doc's v-balls, gel, and splash. Yes, you may learn something from their code, but their goal is to just look cool and show off. All demos will have a display of some kind, even if it's just a console. Scripts like rebodex.r and to-do.r might fall into two categories with a small change. They are good demos as they come with sample data, but they could also be Utilities if you were allowed to change the data they contain and persist those changes. Calculator is both a demo and a utility.</p>
+<p><strong>Tool</strong> - Tools and Utilities provide some kind of useful functionality. Some of them may also be good demos, easy-vid being a classic example. Effect-lab is another good example, because it shows you the effect block it's building up and you can copy it out for your own use.</p>
+<p><strong>Game</strong> - Games are games. If you can play it, it's a game.</p>
+<h3>Documentation Related</h3>
+<p>Things in this category may be documents of some kind other than a REBOL script, though scripts may also be included. Their intent is to inform, teach, etc.</p>
+<p><strong>Reference</strong> - Non-script entries would be things like dictionary.html or the view developer's guide from RT. It would also apply to easy-vid, view-ref, and other "active" documents.</p>
+<p><strong>How-To</strong> - The new REBOL Cookbook is kind of in line with this. They can be code without a separate article, or explanatory text may be included.</p>
+<p><strong>FAQ</strong> - Answers to simple questions. May be code or not. More concise than How-To's, but along the same lines. They should fit well as answers to a "How do I...?" question.</p>
+<p><strong>Article</strong> - These are items that are mainly text, but may also contain code. They are targeted at informing people about REBOL, not being technical.</p>
+<p><strong>Tutorial</strong> - I'd classify the REBOL Forces Articles as tutorials. They are explanatory, but contain code. Longer and deeper than a How-To.</p>
+<p><strong>Idiom</strong> - These are the little nuggets that show you the inner 'zen' of REBOL. There may be overlap between FAQs, one-liners, and Idioms. e.g. How do I concatenate strings? or How do I upload a file with FTP? Idiom entries should be small and well focused.</p>
+<h3>Code</h3>
+<p>This is the area for things that don't do anything on their own.</p>
+<p><strong>One-liner</strong> - If it fits on one line, it qualifies.</p>
+<p><strong>Function</strong> - A function (like Round.r) or a set of functions (like prime.r) that can be called or included in other scripts. They usually return a result.</p>
+<p><strong>Module</strong> - A function (or set of functions) that does something (like lrwp.r or melt.r). Generally these would define a context/namespace to avoid collisions.</p>
+<p><strong>Protocol</strong> - A full-blown protocol (like mysql_all.r). You should be able to determine if something qualifies for this by looking for "make root-protocol" and/or "net-utils/net-install" in the source.</p>
+<p><strong>Dialect</strong> - Some dialect scripts might also fall into other categories. It doesn't necessarily mean that all they do is provide a dialect (i.e. set of parse rules). Andrew's ML stuff is a good example, as is make-doc. It just means that a dialect of some kind is a prominent component of the functionality, though it may also be <strong>just</strong> a set of parse rules (and docs to go with them of course).</p>
+<h3>Mode of running</h3>
+<p><strong>Rebcode</strong> - Ther script runs in the Rebcode Virtual Machine.</p>
+<h2>Library header: Domain</h2>
+<p>What application area(s) the script addresses. All scripts should have at least one domain that they applies to them, and they may have more than one.</p>
+<p>Not all application areas are "published". The user view, so far, is much more limited. i.e. just because we have a domain listed doesn't mean it will appear as its own group in the user interface of library tools or the web/html version.</p>
+<p>Can be a lit-word or block. Use any combination of:</p>
+<pre><code>ai animation broken cgi compression
+database db dead debug dialects
+email encryption extension external-library file-handling
+files financial ftp game graphics
+gui html http ldc markup
+math mysql odbc other-net parse
+patch printing protocol scheme scientific
+sdk security shell sound sql
+ssl tcp testing text text-processing
+ui user-interface vid visualization web
+win-api x-file xml
+</code></pre>
+<h3>Examples</h3>
+<pre><code>Domain: [db external-library protocol]
+
+Domain: 'cgi
+
+Domain: [game mysql text broken sdk]
+</code></pre>
+<p><strong>Patch</strong> - A patch is an updated version of a mezzanine that ships with a standard REBOL distribution. Some of them will come from RT and others will come from users. There are a couple different reasons people write patches. For RT, it's a way to fix bugs without having to do an entire release of REBOL. Patches from RT are considered "official", but that doesn't mean they're perfect of course. Some patches change behavior because someone thinks the original behavior is incorrect, or inadequate. These have to be treated carefully as having patched functions that behave differently can be quite confusing. If you write a patch, make sure to comment it clearly as to what the purpose of the patch is.</p>
+<h2>Library header: Tested-under</h2>
+<p>Notes about the testing environment used. This field is designed to give people at least a hint about where the entry is known to work, or maybe that it wasn't tested at all. A <strong>string</strong>, <strong>block</strong>, or <strong>none</strong>.</p>
+<h3>NOTE:</h3>
+<p>We've talked briefly about the following dialect, but have not yet committed to it or updated existing scripts to use it. Comments are welcome.</p>
+<pre><code>values: Given in groups, as follows:
+
+    product version OS [opt notes] [opt tested-by]
+
+    product: word! ; command view core base IOS SDK
+    version: tuple!
+    OS: opt 'on [word! | string! | block!]
+    notes: opt string!
+    tested-by: opt 'by [word! | string! | block!]
+
+example values:
+
+    tested-under: [core 2.5.3.3.1 W2K]
+    tested-under: [view 1.2.8.3.1 on "Windows 98"]
+    tested-under: [
+        command 1.2.5 on [Win2K Me 98] "Sunanda"
+        command 2.1.1 on [W2K] "Anton"
+        command 2.0.0 on [linux] [Gregg Volker]
+    ]
+    tested-under: [
+        base 2.6.0 W2K {Patched in http protocol from Core 2.5.3} by GSI
+    ]
+</code></pre>
+<h2>Library header: Support</h2>
+<p>The standard header already contains a Home field, which should be used if it exists. The standard Author and EMail fields should also be used. The library Support field is there for the cases where the original author of an entry no longer supports it, or never did, but someone else steps up to fill that void. You may also include notes about any support you offer (e.g. "See my website for plug-ins"). A <strong>string</strong>, <strong>block</strong>, or <strong>none</strong>.</p>
+<p>A block is the preferred format, since that makes it easy to include, and find, email addresses and URLs among the comments.</p>
+<h2>Library header: License</h2>
+<p>Conditions under which the script can be used. See <a href="http://www.opensource.org/licenses/index.html">http://www.opensource.org/licenses/index.html</a> for information about various open source licenses. A <strong>string</strong>, <strong>lit-word</strong>, <strong>block</strong>, or <strong>none</strong>.</p>
+<p>See <a href="http://www.rebol.org/license-help.r"> help on choosing a license </a>for more details.</p>
+<p>The standard Copyright field should also be used if appropriate.</p>
+<p>Standard licenses are:</p>
+<pre><code>bsd cc-by cc-by-sa gpl lgpl
+</code></pre>
+<p>mit pd public-domain rvd</p>
+<h2>Library header: Replaced-by</h2>
+<p>This is an optional header -- most scripts will not have it. Use it only if you want to show that this script has been replaced by another.</p>
+<p>Rules:</p>
+<ul>
+<li>Format is a <strong>file name</strong> . eg <strong>replaced-by: %new-script.r</strong>
+</li>
+<li>The replacing file must already exist in the Library (so add it first)</li>
+<li>The replacing file must not itself have a <strong>replaced-by</strong> entry</li>
+<li>You can't replace a script with itself (<strong>replaced-by</strong> script name must be different to the current script's)</li>
+</ul>
+<h2>Library header: See-also</h2>
+<p>Cross-reference to other scripts of interest. A <strong>string</strong> or <strong>none</strong></p>
+<h3>Note:</h3>
+<p>We've talked about using this simple dialect:</p>
+<pre><code>some [[file! | url!] opt string!]
+</code></pre>
+<p>where file! values would be links to other library scripts, url! values would be links to external references, with optional notes included for each. Since things are still in flux, we haven't talked about how relative paths might be included and such.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/cache-of-rebol-org-writeup-of-standard-header-fields/1674">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/cache-of-rebol-org-writeup-of-standard-header-fields/1674</link>
+          <pubDate>Fri, 20 Aug 2021 08:35:57 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1674</guid>
+          <source url="https://forum.rebol.info/t/cache-of-rebol-org-writeup-of-standard-header-fields/1674.rss">Cache of rebol.org Writeup of Standard Header Fields</source>
+        </item>
+        <item>
+          <title>Design for IMPORT</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>So almost all languages are now at the point where modules are insulated from each other... and when they import definitions, these imports apply only to them and not other places.</p>
+<p>The way some import functions work actually forces you to give a new namespace for the imported definitions.  For instance, in Node.js</p>
+<pre><code>const some_lib = require('./some-library')
+</code></pre>
+<p>Then if you want to access any of the functions, you have to say <strong>some_lib.an_exported_api(...)</strong>.</p>
+<p>Of course if you didn't want to need to qualify it with the library, you could make local definitions:</p>
+<pre><code>const some_lib = require('./some-library')
+const an_exported_api = some_lib.an_exported_api
+</code></pre>
+<p>In the special case that you only want <em>exactly</em> one function, you can duck the variable for the library:</p>
+<pre><code>const an_exported_api = require('./some-library').an_exported_api
+</code></pre>
+<p>But usually you want more than just one definition.  <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/import">So JavaScript has evolved an <strong>import</strong> statement</a>:</p>
+<pre><code>import defaultExport from "module-name";
+import * as name from "module-name";
+import { export1 } from "module-name";
+import { export1 as alias1 } from "module-name";
+import { export1 , export2 } from "module-name";
+import { foo , bar } from "module-name/path/to/specific/un-exported/file";
+import { export1 , export2 as alias2 , [...] } from "module-name";
+import defaultExport, { export1 [ , [...] ] } from "module-name";
+import defaultExport, * as name from "module-name";
+import "module-name";
+var promise = import("module-name");
+</code></pre>
+<h2>So What Should Our IMPORT Look Like?</h2>
+<p>I'm wondering if to think of IMPORT as something that takes a bunch of refinements is to think of it as single arity.  If your intent for specifying what to import is simple enough to express in a FILE! or URL! or TAG!, then do that...otherwise dialect a block:</p>
+<pre><code>; import from a file
+import %../modules/module-name.r
+
+; import from url
+import http://example.com/module-name.r
+
+; import from package registry
+import &lt;json&gt;
+
+; import a particular registered version (maybe allow PATH!?)
+;
+import [&lt;json&gt; 1.2.0]
+import &lt;json&gt;/1.2.0
+
+; import a specific git hash
+; (Note: short hashes are 7 digits long, which are illegal BINARY!, so that
+; has made me think that we should be using ISSUE!/TOKEN! for Git hashes)
+;
+import [&lt;json&gt; #ccb4914]
+</code></pre>
+<p>Notice how I'm leaning toward using a BLOCK! vs trying to use refinements.  I think this is better than trying to say IMPORT/VERSION/ITEMS or similar.</p>
+<p>So when you have a complex list of specific things to import as well as their aliases, that just folds into the block:</p>
+<pre><code>import [
+    &lt;json&gt; #ccb4914
+    some-function
+    aliased-name: some-other-function
+]
+</code></pre>
+<p>We can't really use any WORD!s in this dialect, like <strong>as</strong> or <strong>from</strong> or <strong>-&gt;</strong>, because those could be the words of what you are importing.  :-/</p>
+<p>So that's why I went with this idea of using SET-WORD!s.</p>
+<h2>But That's Actually... Kind of Ugly</h2>
+<p>Looking at the IMPORT statement taking a block like that doesn't feel great.</p>
+<pre><code>import [
+    &lt;lib1&gt; #ccb4914
+    some-function
+    aliased-name: some-other-function
+]
+import [
+    http://example.com/some-library.r #1c37714
+    some-function2
+    aliased-name2: some-other-function2
+]
+</code></pre>
+<p>Even breaking the library out as a first argument improves it:</p>
+<pre><code>import &lt;lib1&gt; [
+    #ccb4914
+    some-function
+    aliased-name: some-other-function
+]
+import http://example.com/some-library.r [
+    #1c37714
+    some-function2
+    aliased-name2: some-other-function2
+]
+</code></pre>
+<p>I feel like having the library name next to the IMPORT statement is important.  And I don't think you should have to use a refinement to get the block.</p>
+<p>This makes me feel that a single-argument IMPORT is probably something to be avoided.  This combines with my remarks on <a href="https://forum.rebol.info/t/prescriptivism-on-wildcarding-non-namespaced-imports/1569"><strong>precriptivism regarding wildcard imports</strong></a>.</p>
+<h2>Detecting Assignment</h2>
+<p>The question of being able to tell whether there's an output is something I think we should certainly not shy away from in designing features.  JavaScript does it.</p>
+<p>We could make an IMPORT that can tell when you've assigned it:</p>
+<pre><code>zip-stuff: import &lt;ZipModule&gt;
+</code></pre>
+<p>Such a form could then avoid consuming a BLOCK! after it naming individual things to export, since you have named an aggregator:</p>
+<pre><code>import &lt;ZipModule&gt; [zip unzip]
+</code></pre>
+<p>But that would be foiled by the idea of putting more than just word mappings in the block (version info, etc.).  This would suggest winding up with refinements, like /VERSION, that would get harder to read:</p>
+<pre><code>import/version &lt;SomeModule&gt; [
+     blah-blah,
+     long-list
+] 1.0.4
+</code></pre>
+<p>The clunkiness of that is what made me favor using the block as a dialect, which gives more control over the ordering and presentation.</p>
+<p>Anyway, point is that detecting a variable on the left to assign to is an interesting idea but might be hard to exploit to make the simple arity-1 case work without a block.</p>
+<h2>Rethinking Prejudices About "Inline Dialecting"</h2>
+<p>Historically it was frowned upon to try and use the logic of literal searching for keywords to make things look "prettier", because they contaminated the function interface.</p>
+<p>This was early on given by the avoidance of IF...ELSE and using EITHER, because ELSE didn't have a way to make sense.</p>
+<p>There's a good enfix logic to them now, and ELSE is a function in its own right.  But what if it weren't, and someone just wanted to write a variadic that looked and saw the word "ELSE" and decided to read another argument?  Is that <em>bad</em>?</p>
+<p>I ask because it seems that a Redbol IMPORT has a tough time looking as nice if it can't pull from the playbook of "recognize when the next word at the callsite is FROM".  If everything has to be in a block or cued from refinements, you get a sort of stark regularity that can be a bit of a turn off.</p>
+<p>It just seems a bit like restrictive thinking to say you could start a BLOCK! and then do any dialect you want, but then forbidding "inline dialecting" where you recognize keywords without introducing a nesting level.</p>
+<p>Just something extra to think about while considering how IMPORT might be in striking distance of as good as JavaScript (!)</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/design-for-import/1570">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/design-for-import/1570</link>
+          <pubDate>Sun, 21 Mar 2021 22:21:55 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1570</guid>
+          <source url="https://forum.rebol.info/t/design-for-import/1570.rss">Design for IMPORT</source>
+        </item>
+        <item>
+          <title>Prescriptivism on &quot;Wildcarding&quot; non-Namespaced IMPORTs...?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>Many languages have the feature to import just one thing at a time out of a module that imports many things:</p>
+<pre><code>import unzip from &lt;ZipModule&gt;
+import zip from &lt;ZipModule&gt;
+</code></pre>
+<p>Most would let you use a list:</p>
+<pre><code>import [zip unzip] from &lt;ZipModule&gt;
+</code></pre>
+<p>And some languages would let you use wildcarding...or at least the wildcard of "give me everything"</p>
+<pre><code>import * from &lt;ZipModule&gt;
+</code></pre>
+<p><strong>But people have traditionally looked down on this practice...</strong> because it means that arbitrary additions to the module in the future could start conflicting with your code that had previously worked.</p>
+<p>Instead, what people suggest doing would be to namespace the whole thing, and store it in a variable:</p>
+<pre><code>zip-stuff: import &lt;ZipModule&gt;
+</code></pre>
+<p>This would give you everything ZipModule exported...but as <code>zip-stuff.zip</code> and <code>zip-stuff.unzip</code> and <code>zip-stuff.xxx</code>.  So it means your client code is still in control.</p>
+<h2>JavaScript doesn't just advise against <code>import *</code>, they prohibit it...</h2>
+<p>Plain "<strong><code>import &lt;ZipModule&gt;</code></strong>" does not exist in JavaScript.  Every variable you import from the module needs to be named, and if you don't feel like naming everything you have to name just one thing to contain them all.</p>
+<p>One of the reasons I'm hesitant to bring back the case-insensitivity is because when you work in a modularized world, it's very frequent that people want to do things like use uppercase capital letters to name the modules.  So along these lines:</p>
+<pre><code>N: import &lt;NewPrint&gt;
+Z: import &lt;ZipModule&gt;
+
+repeat n 10 [
+    N.print ["Unzipping file" n]
+    let filename: as file! unspaced ["zipfile" n ".zip"]
+    Z.unzip %unzipped/ filename
+]
+</code></pre>
+<p>This isn't so common in JavaScript.  But it's basically <em>the</em> dominant style in Haskell and Elm.</p>
+<p><em>Even if you aren't a fan of the convention, it's fairly heavy-handed to say that no one can use the style.</em>  Dealing in the domain of limited typewriter-space, taking away distinguished capital letters is a pretty big loss.</p>
+<p>I think we should very seriously weigh what the value is of saying that plain code is case-insensitive.  Dialects could still be implemented case-sensitively.  Anyway, issues surrounding the question are still percolating...back to the question in the title.</p>
+<h2>We Probably Want To Avoid Too Much Prescriptisim</h2>
+<p>We definitely shouldn't <em>prohibit</em> "<strong><code>import *</code></strong>" semantics.</p>
+<p>Particularly when you're trying to make a language where you can abstract ideas like variable declaration (see for instance <a href="https://forum.rebol.info/t/dissecting-the-tls-emit-dialect/1498">TLS Emit</a>)....then there could be all sorts of "import-like" abstractions which magically make groups of definitions appear for you to use...generated programmatically if necessary.</p>
+<p>What we might want to think about is whether or not we want to make it so easy to do that people assume they're supposed to do it.  If saying <strong><code>import &lt;ZipModule&gt;</code></strong> is how you get <strong>zip</strong> and <strong>unzip</strong> added for use, people are going to do that...because it's easy.</p>
+<p>There are jarring choices like <strong><code>import/unsafe &lt;ZipModule&gt;</code></strong>...but that is pretty nebulous on what's unsafe about it.  More specific might be <strong><code>import/pollute &lt;ZipModule&gt;</code></strong>.</p>
+<p>I think I'd suggest the thing to do is probably just to establish some sort of self-consciousness about it so it's not something that happens as a complete default.  The easiest thing to do should probably align with a "good practice".</p>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/prescriptivism-on-wildcarding-non-namespaced-imports/1569">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/prescriptivism-on-wildcarding-non-namespaced-imports/1569</link>
+          <pubDate>Sun, 21 Mar 2021 21:39:28 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1569</guid>
+          <source url="https://forum.rebol.info/t/prescriptivism-on-wildcarding-non-namespaced-imports/1569.rss">Prescriptivism on &quot;Wildcarding&quot; non-Namespaced IMPORTs...?</source>
+        </item>
+        <item>
+          <title>Where DO Variables go when you DO From a Module?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>Classically, the idea of DO of a string is that it adds the variable to the ever-growing user context.</p>
+<pre><code>&gt;&gt; do "x: 10"
+== 10
+
+&gt;&gt; system/contexts/user/x
+== 10
+
+&gt;&gt; x
+== 10
+</code></pre>
+<p>It's because it lives in the user context that you can see it just by typing X in the console, as the console binds everything to the user context as well.  (So the console is really just running <code>do {do "x: 10"}</code> there.)</p>
+<p>But modules have their own contexts they are bound to.  They inherit LIB, but are not connected to USER.  So you wind up with a problem... (not Sea-of-Words-specific, this existed in R3-Alpha as well):</p>
+<pre><code>r3-alpha&gt;&gt; m: module [] [do "x: 20", print [x]]
+** Script Error: x word is not bound to a context
+
+r3-alpha&gt;&gt; x
+== 20  ; outside the module, visible to the user context.
+</code></pre>
+<h2>It Doesn't Matter if It's a String or a FILE!/URL! that Points At One</h2>
+<p>When you say <strong>do %some-file.r</strong> then if it's not a module, that's no different than a string.  There's no extra information.</p>
+<h2>Why Can't It Just Use The "Currently Running Module"...?</h2>
+<p><em>...there...is...no...currently...running...module...</em>!!</p>
+<p>Consider a case where you make and export your own custom IF-like construct from a module.  Then someone will use it and pass it a block... like <strong>custom-if condition [do "x: 10"]</strong>.  So when the DO runs the stack is actually underneath the CUSTOM-IF.  You wouldn't want it declaring X in the custom if module.</p>
+<p>So the question goes along with a lot of other unfortunate things, like not being able to get the "currently running function" in the way that people might often think they can get it.  The language simply doesn't work like that.  And not working like that is intrinsic to its idea of not drawing a line between keywords and functions.</p>
+<h2>Could DO be defined per-Module, as RETURN is per-Function?</h2>
+<p>...maybe.  :-/</p>
+<p>But this would mean that any function that made use of DO in its implementation could wind up using the wrong DO.  A utility library that ran DO would be using the version from the utility library.</p>
+<pre><code> module [Name: Utility-Library] [
+     do-helper: func [source] [
+         print "Adding helpful behavior to DO!"
+         do source
+     ]
+ ]  
+</code></pre>
+<p>Anyone who called DO-HELPER with %some-file.reb or "x: 10" would wind up creating any of the definitions inside of the Utility Library.</p>
+<p>That seems...wrong.</p>
+<h2>What if instead of DO, there was a per-Module INTERN function?</h2>
+<p>Another idea builds on something we previously discussed, which was that strings themselves might have binding.</p>
+<p>So what if a TEXT! could have a binding saying what module it belonged to, and you could use a function provided on a per-module basis to glue that module's binding onto it?</p>
+<pre><code> module [] [  ; has its own BIND-STRING-TO-ME function defined
+     do bind-string-to-me "x: 10"  ; attaches module to string, DO heeds it
+ ]
+</code></pre>
+<p>This would be able to get past the DO-HELPER scenario.</p>
+<p>However, you'd also have to <strong>do bind-string-to-me %some-file.reb</strong> as well.  Meaning DO would be heeding the binding of a string only tangentially related.</p>
+<p>I've proposed some wilder ideas about DO over time, like that <strong>do 2</strong> could mean "Run the code in notepad 2".  The further you get away from the string to process and getting into "values that is used to figure out to find the string to process", you find things that not only don't make sense to be carrying bindings but that may not be able to.</p>
+<p>String binding is a somewhat interesting feature, but probably this is a bad idea.</p>
+<h2>So, Should Everything Just Act Like Modules?</h2>
+<p>One way of dispensing with the question would be to say that every string you execute effectively lives in its own module.</p>
+<p>If that's not what you want, you need to transcode the source and bind it manually.</p>
+<p>So this would mean isolation becomes implicit on all scripts.  The difference between DO is if you are calling something that is intended to have side-effects and want to pass it args (maybe) and get a result...while IMPORT is cached (only one instance of a module is used for all IMPORT, and you are asking to get access to some set of definitions inside of it).</p>
+<p>The compromise could be that each module gets an INTERN function specific to it, which means "make this string or code part of this module".</p>
+<p><strong>This probably makes the most sense.</strong>  Will pursue this direction.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567</link>
+          <pubDate>Sat, 20 Mar 2021 02:47:34 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1567</guid>
+          <source url="https://forum.rebol.info/t/where-do-variables-go-when-you-do-from-a-module/1567.rss">Where DO Variables go when you DO From a Module?</source>
+        </item>
+        <item>
+          <title>Who needs NEEDS: headers when you have IMPORT?</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>There's a concept that seems to have been in the module design that if you put the NEEDS of your code as part of the header.</p>
+<p>But you run into a bit of trouble if you want to do some kind of programmatic inclusion:</p>
+<pre><code>if "use-foo-version" = getenv "WHICH_FOO" [
+    utils: import &lt;foo&gt;
+] else [
+    utils: import &lt;bar&gt;
+]
+</code></pre>
+<p><strong>Because you're going to have a desire for this level of control, I don't really understand exactly what role the header and Needs: should be playing in module dependencies.</strong></p>
+<p>One possible reason it had been put in the header is because of the fact that you <a href="https://forum.rebol.info/t/slipping-bindings-into-a-module/1565">lose all your binding</a>, this would be the only chance you had to get bindings to the exports of the library on the code in the body.</p>
+<p>But with <a href="https://forum.rebol.info/t/the-sea-of-words/1564"><strong>Sea of Words</strong></a> you don't have this one chance in the hands of the MODULE-running to bind the body.  You get <em>all</em> the words bound writable to the module, and readably from the modules it inherits (e.g. LIB).</p>
+<p>That means IMPORT has the power to make declarations appear and link up to the code in the body.  Assuming it knows what module it's importing to.</p>
+<p><em>(This means IMPORT needs to be "definitionally" defined, like RETURN is.  EXPORT needs that as well.  e.g. they are different specializations of importation for each module.)</em></p>
+<h2>I'm Going to Drop NEEDS for the Moment</h2>
+<p>In order to be able to focus on getting at least one thing working right, I'm going to dig into IMPORT and EXPORT.</p>
+<p>When we better understand what the header form is for, we can add it back.</p>
+<p>Here is DO-NEEDS at time of writing (and it has dated concepts in it like /NO-LIB and /NO-USER, these ideas are going away with a rule of all modules being isolated):</p>
+<pre><code>do-needs: function [
+    {Process the NEEDS block of a program header. Returns unapplied mixins.}
+
+    needs "Needs block, header or version"
+        [block! object! tuple! blank!]  ; has to handle blank! if in object!
+    /no-lib "Don't export to the runtime library"
+    /no-user "Don't export to the user context (mixins returned)"
+    /block "Return all the imported modules in a block, instead"
+][
+    ; This is a low-level function and its use and return values reflect that.
+    ;
+    ; In user mode, the mixins are applied by IMPORT, so they don't need to
+    ; be returned. In /NO-USER mode the mixins are collected into an object
+    ; and returned, if the object isn't empty. This object can then be passed
+    ; to MAKE module! to be applied there.
+    ;
+    ; The /BLOCK option returns a block of all the modules imported, not any
+    ; mixins.  This is for when IMPORT is called with a `Needs: [...]` block.
+
+    if object? needs [  ; header object
+        needs: select needs 'needs  ; (protected)
+    ]
+
+    switch type of needs [
+        blank! [return blank]  ; may have come from SELECT, not just arg
+
+        tuple! [  ; simple version number check for interpreter itself
+            case [
+                needs &gt; system/version [
+                    cause-error 'syntax 'needs reduce ['core needs]
+                ]
+
+                3 &gt;= length of needs [  ; no platform id
+                    blank
+                ]
+
+                (needs and+ 0.0.0.255.255)
+                &lt;&gt; (system/version and+ 0.0.0.255.255) [
+                    cause-error 'syntax 'needs reduce ['core needs]
+                ]
+            ]
+            return blank
+        ]
+
+        block! [
+            if empty? needs [return blank]
+        ]
+    ] else [
+        needs: reduce [needs]  ; If it's an inline value, put it in a block
+    ]
+
+    ; Parse the needs dialect [source &lt;version&gt;]
+
+    mods: make block! length of needs
+    name: vers: hash: _
+    parse ensure block! needs [
+        here:
+        opt [opt 'core set vers tuple! (do-needs vers)]
+        any [
+            here:
+            set name [word! | file! | url! | tag!]
+            set vers opt tuple!
+            set hash opt binary!
+            (append mods reduce [name vers hash])
+        ]
+        end
+    ] else [
+        cause-error 'script 'invalid-arg here
+    ]
+
+    ; Temporary object to collect exports of "mixins" (private modules).
+    ; Don't bother if returning all the modules in a block, or if in user mode.
+    ;
+    if no-user and (not block) [
+        mixins: make object! 0  ; Minimal length since it may persist later
+    ]
+
+    ; Import the modules:
+    ;
+    mods: map-each [name vers hash] mods [
+        mod: applique :import [
+            module: name
+
+            version: true  ; !!! automatic from VERS?
+            ver: opt vers
+
+            no-lib: no-lib
+            no-user: no-user
+        ]
+
+        ; Collect any mixins into the object (if we are doing that)
+        if all [set? 'mixins, mixin? mod] [
+            resolve/extend/only mixins mod select meta-of mod 'exports
+        ]
+        mod
+    ]
+
+    return try case [
+        block [mods]  ; /BLOCK refinement asks for block of modules
+        not empty? to-value :mixins [mixins]  ; if any mixins, return them
+    ]
+]</code></pre>
+            <p><small>2 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566</link>
+          <pubDate>Fri, 19 Mar 2021 12:39:20 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1566</guid>
+          <source url="https://forum.rebol.info/t/who-needs-needs-headers-when-you-have-import/1566.rss">Who needs NEEDS: headers when you have IMPORT?</source>
+        </item>
+        <item>
+          <title>Code Ordering in Files</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>While thinking about how to <a href="https://forum.rebol.info/t/whitespace-interpreter-revisited/1482/5">update the decade-old Whitespace interpreter project</a>, the reorganization fused the spec for operation definitions along with code that was dispatched by the "virtual machine".</p>
+<p>This reorganization had the nice property of keeping the code together with the rule.  So it became easier to maintain, and a better showcase of the claimed premise of Rebol-like languages.</p>
+<h2>Dialect Improvement...at the cost of "First Impressions"</h2>
+<p>An unfortunate side effect of switching away from inert blocks to using dialecting functions is that <em>those functions must be defined before using them</em>.</p>
+<ul>
+<li>
+<p>Look at how the <a href="https://github.com/hostilefork/rebol-whitespacers/blob/5e91fa1ebfbe093b17ea8f49858e79354c33baec/historical/whitespace-old.reb#L170">original implementation started off</a>, going straight into the command specifications.</p>
+</li>
+<li>
+<p>Then look at the <a href="https://github.com/hostilefork/whitespacers/blob/4f9e6ce0137658e3809dc24ac1bcc988f1119d83/ren-c/whitespace.reb#L46">first declarations in the reboot, for CATEGORY and INSTRUCTION</a>.  Intimidating!</p>
+</li>
+</ul>
+<p>Even though the specification as a whole got much tighter, <em>the voodoo to get them working is the first thing people see</em>.  Those definitions are more bewildering right now than they'll need to be after whipping things into shape (we hope).  But no matter what, they're going to be harder to look at than if we could start with the nice command definitions.</p>
+<h2>Breaking Things Into Their Own Files Is Possible... but...</h2>
+<p>The blunt tool we have at the moment for dealing with this "first impressions problem" is to move stuff into multiple files.  So <code>%ws-dialect.reb</code> for defining things like CATEGORY and OPERATION.  Then include that into <code>%ws-commands.reb</code> for the command list.  Probably even splitting out <code>%ws-interpreter.reb</code> for the actual engine.</p>
+<p>But something about this feels disheartening.  The reason it would get broken up isn't really because of any problem with the length per se...the end goal is an amount of code that would be reasonable as one file.  <strong>It sucks if you have to break it into more files due to a language limitation that doesn't let you organize things within the file the way that you want.</strong></p>
+<h2>The Nature Of Rebol Is Rigid Ordering</h2>
+<p>Languages have been moving toward a model where within a file, it doesn't matter what order you put things in.  Compilers like Rust don't have to "forward declare" functions, you can use them at the top of a file and declare them later.</p>
+<p>But a language need not be compiled to let you use things out of order.  Python is interpreted and you can use a function at the top of a file and declare it at the end.</p>
+<p>So what's Rebol's excuse?</p>
+<p><strong>Rebol is in a different boat fundamentally: it can't "scan ahead" to catalog things, because it can't know what the words defining that thing would mean at the moment it would naturally encounter it.</strong>.</p>
+<p>The problem is that fundamentals like "what declares a function" can change on a whim.  The interpreter can't go scouting for the FUNC word and create a note like "oh, a function will be declared in the future!" so that information is available ahead of time.  The meaning of FUNC itself could be slated for change, so it could get a false positive.  Or it could get a false negative: skipping something that's an abstraction for declaring functions it hasn't heard about.</p>
+<h2>What If You Could Specify An Out-Of-Order Ordering?</h2>
+<p>Something that crossed my mind for dealing with the particular situation in Whitespace file was if there was some kind of syntax for "sections", as well as being able to say what order those sections run in.</p>
+<p>A first thought might be of something like this:</p>
+<pre><code>Rebol [
+   Type: 'Module
+   Section-Run-Order: [Dialect Interpreter Commands]
+]
+
+Commands: Section [
+    Stack-Manipulation: category [...]
+    Arithmetic: category [...]
+    ...
+]
+
+Dialect: Section [
+    category: func [...] [...]
+    operation: func [...] [...]
+]
+
+Interpreter: Section [...]
+</code></pre>
+<p>But that's awkward, and it also is invasive to the module's operation (pushing top-level declarations into blocks throws a wrench into everything).</p>
+<p>More reasonable would be if you could put multiple module definitions in a file.  Then they could automatically sort out their dependencies and find a non-conflicting order:</p>
+<pre><code>Rebol [
+   Type: 'Module
+   Name: 'Whitespace-Commands
+   Needs: [Whitespace-Dialect Whitespace-Interpreter]
+]
+
+Stack-Manipulation: category [...]
+Arithmetic: category [...]
+
+Rebol [  ; imagine still in same file...
+    Type: 'Module
+    Name: 'Whitespace-Dialect
+]
+
+category: func [...] [...]
+operation: func [...] [...]
+
+Rebol [
+    Type: 'Module
+    Name: 'Whitespace-Interpreter
+]
+
+...
+</code></pre>
+<p><strong>Having something like this where the order is figured out by the system seems appealing, and this lets you make the "new file" decision on its own merits rather than be forced into it.</strong></p>
+<p>I'll point out to <a class="mention" href="/u/rgchris">@rgchris</a> that being able to put multiple "units" into a single file is another good argument for my <a href="https://forum.rebol.info/t/plugging-the-script-header-hole/1430">"out of band signal" of module-ness</a>.  You wouldn't accidentally wind up taking these modules as an argument to a function--they'd clearly escape out of legal syntax and set up a boundary for where units began and ended.</p>
+<p>Right now the whitespace interpreter even has a demo file embedded in it... that's kind of cool, and it would be nice if whatever header-isms you'd put in a standalone file could be put on a unit that tagged along inside of another file.</p>
+<p><strong>You'd still need some way of saying the file was an aggregate, and explain why everything is glued together in the same file.</strong>  Not having that would make it confusing if you were looking for those parts and couldn't find them.  Still, it could be optional...as the whole file has to be scanned before running anyway, so it would see all the modules in it.</p>
+<pre><code>Aggregator&gt; [
+    Contents: [
+        Whitespace-Commands
+        Whitespace-Dialect
+        Whitespace-Interpreter
+        Demo
+    ]
+    Description: {
+        This file packages together Whitespace components as one file, for easier
+        transmission and maintenance.
+    }
+]
+
+Module&gt; [
+    Name: 'Whitespace-Commands
+    ...
+]
+</code></pre>
+<p>It might be interesting if some properties could be inherited by the contained modules from the aggregator if they weren't overridden (date? license?)</p>
+<p>This is all pretty far out, but, unless there's something like this the only way you're going to shuffle the order is breaking things into files.</p>
+<h2>Tech Note: Execution Does Scan Ahead, But Only for Binding</h2>
+<p>If you follow through <a href="https://forum.rebol.info/t/the-real-story-about-user-and-lib-contexts/764">"The Real Story about User and Lib Contexts"</a> you can see how Rebol winds up in the situation where you can have a variable declared after a function and it can still be <em>bound</em> in functions prior to its SET-WORD!.</p>
+<pre><code>&gt;&gt; foo: bar: x: '~unset~
+&gt;&gt; do [
+    bar: func [] [foo]
+    foo: func [] [print ["X is" x]]
+    x: 1020
+    bar
+]
+
+X is 1020
+</code></pre>
+<p>So some "looking ahead" is definitely going on.</p>
+<p>But this only means the <em>binding</em> is available "a priori".  The <em>value</em> doesn't get put into the variable until the SET-WORD! actually reaches the evaluation.</p>
+<pre><code>&gt;&gt; foo: bar: x: '~unset~
+&gt;&gt; do [
+    bar: func [] [foo]
+    bar  ; too early
+    foo: func [] [print ["X is" x]]
+    x: 1020
+]
+** Script Error: foo is ~unset~
+</code></pre>
+<p>You can try and think up imaginative (crazy) ways to deal with this.  For instance: going through a prepass and turning everything into a function stub that couples up SET-WORD!s with code after them, and then caches them on-demand when they're called.  That might be fun for special cases, but the generic stub functions would be variadic...and not everything is a function so you'd get false answers for <strong>get 'word</strong> saying things were ACTION! when they weren't... etc. etc.</p>
+<p>So I think it's unwise to fight this.  It's better to think about more interesting ways to express the ordering, than to defy the nature of the language to lie and make it seem order-agnostic.  It isn't.</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/code-ordering-in-files/1485">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/code-ordering-in-files/1485</link>
+          <pubDate>Mon, 01 Feb 2021 09:43:44 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1485</guid>
+          <source url="https://forum.rebol.info/t/code-ordering-in-files/1485.rss">Code Ordering in Files</source>
+        </item>
+        <item>
+          <title>Module and using libraries</title>
+          <dc:creator><![CDATA[iArnold]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>Having done some work on the MySQL extension and reviewing how binding to libraries is done in for example the sqlite3.r by Ashley (dobeash) (reminder it is something like</p>
+<pre><code> *open:				make routine! [name [string!] db-handle [struct! [[integer!]]] return: [integer!]] *lib "sqlite3_open"
+</code></pre>
+<p>) and it is done similarly on the other side, then I wondered why there is no such mechanism in R3 /Ren-C</p>
+<p>(Or is it just that I don't know about it?)</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/module-and-using-libraries/1437">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/module-and-using-libraries/1437</link>
+          <pubDate>Thu, 17 Dec 2020 19:11:56 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1437</guid>
+          <source url="https://forum.rebol.info/t/module-and-using-libraries/1437.rss">Module and using libraries</source>
+        </item>
+        <item>
+          <title>Plugging The Script Header Hole</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>In the <a href="https://forum.rebol.info/t/mold-and-load-parity/1429">"MOLD and LOAD Parity"</a> thread, <a class="mention" href="/u/rgchris">@rgchris</a> suggests something I have been wanting to do (but hadn't) which is to make LOAD always return a BLOCK!.</p>
+<p>Now that is done:</p>
+<p><a href="https://github.com/metaeducation/ren-c/commit/96000bd594c36281e18055518aa66b58d67d8bea"><strong>GitHub Commit: LOAD of code always BLOCK!, LOAD-VALUE for 1 item</strong></a></p>
+<h2>But...What About Script Headers?</h2>
+<p>If I'd just blindly flipped a switch that /ALL was true, we'd have gotten the historical behavior that LOAD/ALL includes headers as part of the data:</p>
+<pre><code>rebol2&gt;&gt; load "Rebol [] 1 2 3"
+== [1 2 3]
+
+rebol2&gt;&gt; load/all "Rebol [] 1 2 3"
+== [Rebol [] 1 2 3]
+</code></pre>
+<p>So I didn't do that.  Even though a block is always returned now, it still does header processing.</p>
+<p>But there's a catch:</p>
+<pre><code>&gt;&gt; load "rebol [%.r %.r3] ren-c [%.r %.reb] red [%.red %.reds]"
+** syntax Error: script header is not valid:
+</code></pre>
+<p>So now, how are you supposed to LOAD a string that starts with the (legitimate) WORD! Rebol?  More broadly we want more signals than this, based on the dialect or sublanguage...that would be <em>any</em> word (or path?)  What can be done about this?</p>
+<h2>The Header Needs A Special Signal</h2>
+<p><strong>I'm quite certain it's a design flaw that the header signal can be conflated with what could be legal data.</strong></p>
+<p>Contrast with something that didn't have that property:</p>
+<pre><code>&gt;&gt; load/all {$Rebol [Title: "stuff"] no contention here}
+== [no contention here]
+
+&gt;&gt; load/all {3.0-Rebol [Title: "stuff"] non symbolic option}
+== [non symbolic option]
+</code></pre>
+<p>I know a symbol might be a bit off-putting, but everything "pleasant" is already taken in-band for the mainline of the data format.</p>
+<pre><code>^Rebol [
+    Title: {My Script}
+]
+
+$Rebol [
+    Title: {My Script}
+]
+
+\Rebol [
+    Title: {My Script}
+]
+
+Rebol=[
+    Title: {My Script}
+]
+
+rebol&gt;&gt; [
+    Title: {My Script}
+]
+
+Rebol&gt; [
+    Title: {My Script}
+]
+</code></pre>
+<p>Okay, I actually like that "prompt-looking" last idea.  <strong>Rebol&gt;</strong> seems nice and light enough... it's even kind of "pointing at" the header block to say it's special and not part of the data.  And we've pretty clearly ruled out <strong>Xyz&gt;</strong> as a WORD!.  It can cover any name vs. encoding a word like "Rebol" specifically.</p>
+<p>LOAD/HEADER could slipstream whatever was in front of the <code>&gt;</code> to be in-band in the returned header.</p>
+<pre><code> &gt;&gt; [data hdr]: load {StyleTalk/3.0&gt; [Title: "Whatever"] your data here}
+ == [your data here]
+
+ &gt;&gt; hdr
+ == make object! [
+     Format: 'StyleTalk/3.0
+     Title: "Whatever"
+ ]
+</code></pre>
+<p>But maybe allowing paths that opens too many cans of worms (<strong><code>Rebol/&lt;tag-in-path&gt;&gt; [...]</code></strong>) and it should have to just be a WORD! otherwise, with everything else you need broken out in the header.</p>
+<p>Looks good to me.  Thoughts?</p>
+            <p><small>6 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/plugging-the-script-header-hole/1430">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/plugging-the-script-header-hole/1430</link>
+          <pubDate>Fri, 11 Dec 2020 01:44:15 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1430</guid>
+          <source url="https://forum.rebol.info/t/plugging-the-script-header-hole/1430.rss">Plugging The Script Header Hole</source>
+        </item>
+        <item>
+          <title>Idea: Agreed Upon Symbol Number for Extensions</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>A concept in the R3-Alpha codebase is that there are a certain number of built-in words...which come from a file called %words.r</p>
+<p><a href="https://github.com/rebol/rebol/blob/master/src/boot/words.r" rel="nofollow noopener">https://github.com/rebol/rebol/blob/master/src/boot/words.r</a></p>
+<p>This is done so you can switch on a numeric code for these words, and not bother with needing to do a string comparison in C.  Some words (like PARSE keywords) are strategically chosen to be in a sequential range, to make testing for them faster.</p>
+<p>If you write an extension in C that operates at the internal level API and want the performance of a native, you might want to talk about a word that's not in that list.  You can get a bit close to the performance for a single test by caching a pointer to the canonized version of that word, and comparing to that canon pointer.  But it won't be quite as fast, and since that won't be a constant...C can't use it in switch statements.</p>
+<p>To be more concrete, imagine you have some words not in %words.r like OVERLOAD, MULTIPLE, INHERITANCE.  You couldn't write:</p>
+<pre><code> switch (VAL_WORD_SYM(some_word)) {  ; small 16-bit # can be cached in word
+     case SYM_OVERLOAD: ...  ; ...but these weren't in %words.r!
+     case SYM_MULTIPLE: ...
+     case SYM_INHERITANCE: ...
+     default: ...
+}
+</code></pre>
+<p>Can't do that for those new terms.  You'd have to do case-insensitive string comparisons, or something like this pseudocode:</p>
+<pre><code> REBSTR *canon_overload;
+ REBSTR *canon_multiple;
+ REBSTR *canon_inheritance;
+
+ void On_Module_Load() {
+      canon_overload = Register_Word("overload");
+      canon_multiple = Register_Word("multiple");
+      canon_inheritance = Register_Word("inheritance");
+ }
+
+ void On_Module_Shutdown() {
+     Unregister_Word(canon_overload);
+     Unregister_Word(canon_multiple);
+     Unregister_Word(canon_inheritance);
+ }
+</code></pre>
+<p>So imagine this gives you word series pointers that are guarded from GC for as long as your module is loaded.  Then you could say:</p>
+<pre><code> REBSTR *canon = VAL_WORD_CANON(some_word);
+ if (canon == canon_overload) { ... }
+ else if (canon == canon_multiple) { ... }
+ else if (canon == canon_inheritance) { ... }
+ else { ... }
+</code></pre>
+<p>It's less elegant than the switch(), and since the numbers are runtime pointers and not fixed at compile-time, there's no way to optimize as in a switch() by repeatedly bisecting the range of values...if you have N words, you will do N comparisons.</p>
+<h2>Weird idea: Agree on a list of words and numbers, commit on Internet</h2>
+<p>It would be pretty heinous to make a much bigger %words.r and ship it in every executable...inflating the size of Rebol to include a dictionary.</p>
+<p>But there's a possibility that doesn't go that far yet still gets the benefit.  Make the word list and commit it somewhere on the internet that developers can look.  Give every common word a number.  Then, the extension ships with just the spellings and numbers it needs.  All extensions agree to use the same numbers:</p>
+<pre><code> #define SYM_OVERLOAD 15092
+ #define SYM_MULTIPLE 32091
+ #define SYM_INHERITANCE 63029
+
+ void On_Module_Load() {
+      Register_Word("overload", SYM_OVERLOAD);
+      Register_Word("multiple", SYM_MULTIPLE);
+      Register_Word("inheritance", SYM_INHERITANCE);
+ }
+
+ void On_Module_Shutdown() {
+     Unregister_Word(SYM_OVERLOAD);
+     Unregister_Word(SYM_MULTIPLE);
+     Unregister_Word(SYM_INHERITANCE);
+ }
+</code></pre>
+<p>Your switch() statements can work just fine, and you're only out of luck if you use a sequence of characters that wasn't committed to in the database.  But the database can grow, so long as it grows centrally and not inconsistently.  (In fact, it's probably better to do it that way, where extension authors ask for the words they want and get them approved before shipping the extension.)</p>
+<p>The worst that can happen is you load two extensions that disagree, and it refuses to load them.  It could print out the disagreeing numbers and you could consult the internet to decide who was the culprit using the wrong number.</p>
+<p>It's a weird idea but kind of interesting--not in particular because of the performance aspect, but because of enabling the C switch()es.  Since there's only 16 bits of space in the word available for the symbol trick, it's an exhaustible resource.  But maybe still worth doing.  This really isn't difficult, outside of the administrative headache of deciding the policy on giving out <span class="hashtag">#s</span></p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/idea-agreed-upon-symbol-number-for-extensions/1188">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/idea-agreed-upon-symbol-number-for-extensions/1188</link>
+          <pubDate>Thu, 25 Jul 2019 18:44:16 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1188</guid>
+          <source url="https://forum.rebol.info/t/idea-agreed-upon-symbol-number-for-extensions/1188.rss">Idea: Agreed Upon Symbol Number for Extensions</source>
+        </item>
+        <item>
+          <title>Modules vs. Rebol&#39;s Contention for Short Words</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>There's an aversion in Rebol scripts of putting things into sub-contexts.  You see it when the math operation <strong>tan</strong> competes with the color <strong>tan</strong>.</p>
+<p>Despite issues like this being known about since the earliest days, it's certainly telling that there wasn't some immediate backlash, where <strong>math: make object! [tan: ...]</strong> and <strong>color: make object! [tan: ...]</strong> were made.  Though Red decided to made <code>tanned</code> the color and take <code>tan</code> for the math operation, they didn't follow up by making <code>reddish</code>.  They still define <code>red</code> as 255.0.0, and <code>red</code> is not a <code>synonym</code> for the system object as <code>rebol</code> was.  <em>(<a href="https://github.com/rebol/rebol-issues/issues/2373">Which is a bad idea, anyway.</a>)</em></p>
+<h3>A Fractal of Contention</h3>
+<p>If you tried to put the operations and colors under "math/xxx" and "color/xxx" as above, you have another problem.  MATH is currently purposed as a dialect using "normal" mathematical precedence for expressions.  COLOR sounds like it would almost certainly be a local variable name, and you can't say <code>color: color/tan</code>.</p>
+<p>When other languages run up against this, they might attack it with case sensitivity.  If Rebol were to do that it would be <code>color: Color/tan</code>...but <a href="http://blog.hostilefork.com/making-the-case-for-caselessness/">that's not the game here</a>.  You can pluralize things maybe... <code>color: colors/tan</code>, but one might also have a variable like <code>colors: [tan red]</code>.</p>
+<p><strong>All text-based languages have problems like this.</strong>  BUT Rebol's desire for an English-like aesthetic puts more of a premium price on short words.  And its lexical uniformity makes it harder to suss out the "parts of speech" to know what the heck you are reading:</p>
+<pre><code>foo/baz/bar mumble/frotz fribble  ; objects? functions? refinements? (?!)
+
+foo.baz(mumble.frotz, bar: fribble)  ; More conventional syntax is clearer
+</code></pre>
+<p><em>(Note: I'm now thinking that with <span class="mention">@foo.bar</span> being a likely SYM-TUPLE!, that the inertness of tuples may be less useful than considering them to be a field-selector operation... and even to let you add fields to ACTION!s, as you can in JavaScript.  So <strong><code>math [1 + 2 * 3]</code></strong> could work, but so could <strong><code>math.tangent 0.0</code></strong>.  It wouldn't be a refinement, just a member of an aggregate that also could execute in its own right.  It's a thought, anyway.)</em></p>
+<h2>What About Getting the Brevity That You Pay For?</h2>
+<p>Very little of what I write involves colors at all (more now perhaps with the HTML console).  I'm also not a huge user of trigonometry or floating point math--at least not in Rebol.  The kinds of problems I'm interested in for a script language almost never require math outside of integers.  I'm more likely to use RED and BLACK as data structure annotations as in a <a href="https://en.wikipedia.org/wiki/Red%E2%80%93black_tree">Red-Black Tree</a>.  If I ever needed colors or trigonometry, it would be task-sensitive to say whether <code>tan</code> should win as <code>tangent</code> or the color.</p>
+<p>Over the long run, if there's going to be any sort of scalability for Rebol...things like the inclusion of colors in global scope has to be something that <em>someone</em> asked for.</p>
+<p>So perhaps modules should have a kind of dialected inclusion?  There could be a language for telling the trigonometry module "give me the abbreviations".  You could ask for sets of things to be bound as the words with no qualification, or others to be bound through a local alias for the module.</p>
+<p>If you have common sets of inclusions, you should be able to abstract that.  Even C can do this...  you can <code>#include</code> a file that includes others.</p>
+<p>In any case, I think the core language needs to pare down implicit definitions.  Things are <a href="https://github.com/metaeducation/ren-c/tree/master/extensions">moving that direction with the extensions</a>, but those extensions are still poking things into the LIB context without being asked.  I give the color and math operations as good examples of things that must be asked to be put into the main binding of the module...otherwise you get them through a name.</p>
+<h2>What About a Shortcut to a Module's "Needs" Space?</h2>
+<p>In C++, there is a way of getting out of your "local scope" and up to the global scope:</p>
+<aside class="onebox stackexchange">
+  <header class="source">
+      <a href="https://stackoverflow.com/questions/4269034/what-is-the-meaning-of-prepended-double-colon" target="_blank" rel="noopener">stackoverflow.com</a>
+  </header>
+  <article class="onebox-body">
+      <a href="https://stackoverflow.com/users/320369/rmbianchi" target="_blank" rel="noopener">
+    <img alt="rmbianchi" src="https://www.gravatar.com/avatar/fa36226dc6b4fc5d96c75061f39202c1?s=128&amp;d=identicon&amp;r=PG" class="thumbnail onebox-avatar" width="128" height="128">
+  </a>
+<h4>
+  <a href="https://stackoverflow.com/questions/4269034/what-is-the-meaning-of-prepended-double-colon" target="_blank" rel="noopener">What is the meaning of prepended double colon "::"?</a>
+</h4>
+
+<div class="tags">
+  <strong>c++, syntax, namespaces, scope-resolution</strong>
+</div>
+
+<div class="date">
+  asked by
+  
+  <a href="https://stackoverflow.com/users/320369/rmbianchi" target="_blank" rel="noopener">
+    rmbianchi
+  </a>
+  on <a href="https://stackoverflow.com/questions/4269034/what-is-the-meaning-of-prepended-double-colon" target="_blank" rel="noopener">04:24PM - 24 Nov 10 UTC</a>
+</div>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>Right now, getting access to the modules list requires you to do <code>system/modules/mod-name</code>.  But what if each module kept a small object for the extensions that it had included, and put it in something like <code>~</code>?</p>
+<pre><code>&gt;&gt; color: ~/colors/tan
+== 222.184.135
+
+&gt;&gt; ~/math/tan 0.0
+== 0.0
+
+&gt;&gt; math [1 + 2 * 3]
+== 7
+</code></pre>
+<p>Someone who is doing a modest amount of trigonometry might prefer to import it named <code>trig</code> and access it as <code>trig</code>.  Or import them with full names, or ask the module to abbreviate the names.  I'm just talking about a spectrum of options based on how much you use the thing.</p>
+<p>Or maybe MATH itself is what binds to TAN.  So you'd say <strong>math [tan 0.0]</strong>, and if you use TAN outside of MATH you don't get it.</p>
+<p>Or it may be that <code>~</code> is just the module itself, where the binding the module did at load time wasn't to necessarily bind everything that was included.  e.g. there may be a module field for <code>math</code> which is the math module, but it would bind plain uses of <code>math</code> to <code>lib/math</code> despite the existence of that field.</p>
+<p>Further: the idea of importing things locally could be at a function or USE granularity.  If only one of your functions mentions trigonometry, why not have that one be <code>function [... &lt;in&gt; ~/trigonometry] [...]</code>   If you have multiple functions that want to do this, why not make your own variant, e.g. TFUNCTION, that adds the trigonometry dependency?</p>
+<h2>Any Methodology Should Be Able To Do Redbol Emulation</h2>
+<p>These ideas sound like they may bring a lot of concerns and decisions to the average user.</p>
+<p>But if you can abstract it to something like <code>Needs: Redbol</code> and have that do all the necessary work to achieve a Rebol2/Red environment, then that would be a good proof of concept.</p>
+            <p><small>7 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/modules-vs-rebols-contention-for-short-words/1161">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/modules-vs-rebols-contention-for-short-words/1161</link>
+          <pubDate>Sun, 05 May 2019 09:07:15 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-1161</guid>
+          <source url="https://forum.rebol.info/t/modules-vs-rebols-contention-for-short-words/1161.rss">Modules vs. Rebol&#39;s Contention for Short Words</source>
+        </item>
+        <item>
+          <title>Module Startup and Shutdown (Constructors, Destructors?)</title>
+          <dc:creator><![CDATA[hostilefork]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>I've been trying to move toward a model extensions are just <em>"modules that ship along with a DLL that have some native code, too"</em>.  This helps avoid having parallel-and-variously-incompatible versions of the same features.</p>
+<p>In trying to merge the functionalities, one thing that extensions could do was that when DLLs were loaded they could run an arbitrary Startup() hook.  Then when the DLL was unloaded, it could run a Shutdown() hook.  So if you used a native API that had a paired open/close you had a moment to do both.</p>
+<p>However, since a module can ship with natives, this raises the question of why the startup code can't just be run as part of the normal course of the module:</p>
+<pre><code> Rebol [
+     Title: {ODBC Extension}
+     Type: 'Module
+ ]
+
+ call-odbc-init-c-function
+ odbc-settings: make object! [...]
+ ...
+</code></pre>
+<p>Being able to call a native living in the extension like CALL-ODBC-INIT-C-FUNCTION is every bit as good as having a special esoteric C function exposed, that the DLL loader looks up with OS APIs and calls with a magic incantation.  All that magic is already done to provide new natives to call, why not use it?</p>
+<p>Plus you have more options--you can break it into multiple functions, have it get parameters from the environment, etc.  Also very important: there doesn't have to be a distinct model for error handling if something happens--such things already had to have an answer for everything else you might be calling, why make it special for the init?</p>
+<h2>...but what about the shutdown?</h2>
+<p>It's not totally obvious that only a module which has some of its code written as user natives would need a shutdown.  What if you have a module that opens a persistent network connection--all in usermode--and wants to do some kind of graceful signoff if it can?  Why should "extensions" be special?</p>
+<p>If that generic hook were available, then native code could be run by putting it in a native ACTION! and doing it that way--just like the init.</p>
+<p>This could be a SHUTDOWN: field in the module header.  Or it could be an "register-on-shutdown-callback" method that modules offer to the code running in their body (kind of the way it would offer things like EXPORT).</p>
+<p>But it seems like maybe it should be more general.  Rebol doesn't have constructors and destructors...but, maybe it should?  There is now an explicit FREE which can be used to kill off an object, and only HANDLE! does cleanup...but maybe objects should be able to do something about it too.</p>
+<p>For now the easiest thing to do to keep extensions going is just to make some module-specific solution and move on.  But it's worth thinking about--are there other languages in Rebol's family which have interesting constructor/destructor behavior?  Or bad behavior that would be good to know about and avoid?  Just wanted to post a note on the topic...</p>
+            <p><small>4 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/module-startup-and-shutdown-constructors-destructors/960">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/module-startup-and-shutdown-constructors-destructors/960</link>
+          <pubDate>Fri, 14 Dec 2018 00:37:40 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-960</guid>
+          <source url="https://forum.rebol.info/t/module-startup-and-shutdown-constructors-destructors/960.rss">Module Startup and Shutdown (Constructors, Destructors?)</source>
+        </item>
+        <item>
+          <title>Anatomy of a ZIP scheme</title>
+          <dc:creator><![CDATA[rgchris]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>With increased exposure of built in compression routines, it's now feasible to write fairly succinct functions that can <a href="https://github.com/gchiu/Rebol3/blob/master/scripts/unzip.reb" rel="nofollow noopener">ZIP/UNZIP</a> (see also <a href="/t/does-ren-c-have-zip-and-unzip/136">Does Ren-C have zip and unzip?</a>).</p>
+<p>As always, rather than introduce new functions that would be complex in nature and PHPish in proliferation, I would see a ZIP scheme as the preferred way to interface with ZIP assets.</p>
+<h2>Implementation Sketches</h2>
+<p>Here's some thoughts for how this might work:</p>
+<pre><code>; Opening
+
+archive: open zip:///Users/Chris/Archive.zip  ; short form maps to filesystem
+
+archive: open [
+    scheme: 'zip
+    source: %/Users/Chris/Archive.zip
+]
+
+archive: open [
+    scheme: 'zip  ; new empty archive
+    source: #{}
+]
+
+archive: open [
+    scheme: 'zip  ; remote archive
+    source: s3://a-bucket/archive.zip
+]
+
+
+; Extracting
+
+select archive %path/to/file.reb
+
+select archive [from folder %path/to/]  ; dialect for selecting multiple contained assets
+
+first next archive  ; port offers a series API to access contained assets
+
+
+; Modifying
+
+append archive [%path/to/new.reb {Rebol []}]
+
+remove archive  ; removes an asset per the series API
+
+
+; Saving
+
+close archive  ; updates using existing reference
+
+close rename archive %/Users/Chris/Archive-Copy.zip
+
+copy archive  ; returns binary copy of archive
+</code></pre>
+<p>Thoughts, critiques, suggestions, etc...</p>
+            <p><small>5 posts - 3 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/anatomy-of-a-zip-scheme/160">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/anatomy-of-a-zip-scheme/160</link>
+          <pubDate>Sun, 25 Jun 2017 22:09:47 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-160</guid>
+          <source url="https://forum.rebol.info/t/anatomy-of-a-zip-scheme/160.rss">Anatomy of a ZIP scheme</source>
+        </item>
+        <item>
+          <title>Current module list</title>
+          <dc:creator><![CDATA[gchiu]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>The current module list is on GitHub in the r3n Repository and is pointed to in <code>system/locale/library</code></p>
+<aside class="onebox githubblob">
+  <header class="source">
+      <a href="https://github.com/r3n/renclib/blob/master/usermodules.reb" target="_blank" rel="nofollow noopener">github.com</a>
+  </header>
+  <article class="onebox-body">
+    <h4><a href="https://github.com/r3n/renclib/blob/master/usermodules.reb" target="_blank" rel="nofollow noopener">r3n/renclib/blob/master/usermodules.reb</a></h4>
+<pre><code class="lang-reb">[
+    &lt;amazon-s3&gt; [http://reb4.me/r3/s3.reb]
+    &lt;curl&gt; [https://raw.githubusercontent.com/rgchris/Scripts/master/ren-c/curl.reb]
+    &lt;dl-renc&gt; [https://raw.githubusercontent.com/gchiu/Rebol3/master/scripts/dl-renc.reb]
+    &lt;html&gt; [https://raw.githubusercontent.com/r3n/giuliolunati.renclib/master/usr/lib/r3/html.reb]
+    &lt;httpd&gt; [https://raw.githubusercontent.com/r3n/renclib/master/outdated/modules/httpd.reb]
+    &lt;json&gt; [https://raw.githubusercontent.com/r3n/renclib/master/modules/json.reb]
+    &lt;markup&gt; [https://raw.githubusercontent.com/rgchris/Scripts/master/experimental/markup.reb]
+    &lt;modflick&gt; [https://raw.githubusercontent.com/gchiu/Rebol3/master/scripts/modflick.reb]
+    &lt;mysql&gt; [https://raw.githubusercontent.com/zsx/mysql-r3/ren-c/mysql-protocol-pre.r]
+    &lt;pop3&gt; [https://raw.githubusercontent.com/gchiu/Rebol3/master/protocols/prot-pop3.reb]
+    &lt;rebmu&gt; [https://raw.githubusercontent.com/hostilefork/rebmu/master/rebmu.reb]
+    &lt;rem&gt; [https://raw.githubusercontent.com/r3n/giuliolunati.renclib/master/usr/lib/r3/rem.reb]
+    &lt;rest&gt; [https://raw.githubusercontent.com/rgchris/Scripts/master/experimental/rest.reb]
+    &lt;rsp&gt; [https://raw.githubusercontent.com/rgchris/Scripts/master/ren-c/rsp.reb]
+    &lt;send&gt; [https://raw.githubusercontent.com/gchiu/Rebol3/master/protocols/prot-send.reb]
+    &lt;smtp&gt; [https://raw.githubusercontent.com/gchiu/Rebol3/master/protocols/prot-smtp.reb]
+    &lt;synctcp&gt; [https://raw.githubusercontent.com/gchiu/Rebol3/master/protocols/prot-synctcp.reb]
+    &lt;trello&gt; [http://codeconscious.com/rebol-scripts/trello.r]
+    &lt;twitter&gt; [https://raw.githubusercontent.com/gchiu/rebolbot/master/twitter.r3]
+</code></pre>
+
+  This file has been truncated. <a href="https://github.com/r3n/renclib/blob/master/usermodules.reb" target="_blank" rel="nofollow noopener">show original</a>
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>Unfortunately it's not currenty clear as to which are functions which are evaluated using do and which are modules which are imported</p>
+<pre><code>import  &lt;smtp&gt;
+</code></pre>
+<p>vs</p>
+<pre><code>do &lt;dl-renc&gt;
+</code></pre>
+<p>so perhaps we need a convention as regards their naming.</p>
+<p>Should they all be <code>mod-*</code> such as <code>&lt;mod-smtp&gt;</code> and the ones without the <code>mod</code> are automatically not modules?</p>
+            <p><small>2 posts - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/current-module-list/87">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/current-module-list/87</link>
+          <pubDate>Fri, 26 May 2017 19:43:15 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-87</guid>
+          <source url="https://forum.rebol.info/t/current-module-list/87.rss">Current module list</source>
+        </item>
+        <item>
+          <title>Improving prot-http</title>
+          <dc:creator><![CDATA[gchiu]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>The main issues I see with prot-http are</p>
+<ul>
+<li>the lack of a trace as in SMTP and pop3</li>
+<li>the lack of flexibility with regard to errors</li>
+<li>the contortions one has to go through in adding custom headers for aws Amazon</li>
+<li>the lack of control when there's a http redirect</li>
+<li>others I can not quite think of at 5 am !</li>
+</ul>
+<p>Anyway, it's time to see if we can correct some of these issues as they are all in user space.</p>
+<p>It's been suggested we switch to using a http2 library but on the other hand we do get to stress the language to see how far we can go when we do this in user code.</p>
+            <p><small>3 posts - 2 participants</small></p>
+            <p><a href="https://forum.rebol.info/t/improving-prot-http/60">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/improving-prot-http/60</link>
+          <pubDate>Sun, 21 May 2017 17:16:08 +0000</pubDate>
+          <discourse:topicPinned>No</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-60</guid>
+          <source url="https://forum.rebol.info/t/improving-prot-http/60.rss">Improving prot-http</source>
+        </item>
+        <item>
+          <title>About the Modules category</title>
+          <dc:creator><![CDATA[asampal]]></dc:creator>
+          <category>Modules</category>
+          <description><![CDATA[
+            <p>Module Development Focus</p>
+            <p><small>1 post - 1 participant</small></p>
+            <p><a href="https://forum.rebol.info/t/about-the-modules-category/48">Read full topic</a></p>
+          ]]></description>
+          <link>https://forum.rebol.info/t/about-the-modules-category/48</link>
+          <pubDate>Fri, 19 May 2017 20:45:51 +0000</pubDate>
+          <discourse:topicPinned>Yes</discourse:topicPinned>
+          <discourse:topicClosed>No</discourse:topicClosed>
+          <discourse:topicArchived>No</discourse:topicArchived>
+          <guid isPermaLink="false">forum.rebol.info-topic-48</guid>
+          <source url="https://forum.rebol.info/t/about-the-modules-category/48.rss">About the Modules category</source>
+        </item>
+  </channel>
+</rss>

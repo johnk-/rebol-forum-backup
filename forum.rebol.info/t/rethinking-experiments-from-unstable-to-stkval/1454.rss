@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Rethinking Experiments: from `unstable` to `STKVAL(*)`</title>
+    <link>https://forum.rebol.info/t/rethinking-experiments-from-unstable-to-stkval/1454</link>
+    <description>As a C program with a lot of mutable state, the interpreter is in constant danger of bugs due to stale pointers.
+
+For instance: the &quot;data stack&quot; can have any of its pointers moved, whenever stack values are pushed or popped.  You can create problems as easily as this:
+
+     REBVAL *item = DS_TOP;  // top of data stack...right now
+     if (IS_WORD(item)) {
+          Init_Integer(DS_PUSH(), 1);  // *may* need to relocate entire stack
+          printf(&quot;Pushed a 1 after seeing %s\n&quot;, VAL_WORD_UTF8(item));  // !!! BAD
+     }
+
+The problem is that after you did a push, the previous item pointer *might* be bad.  It usually isn&#39;t, because the stack doesn&#39;t need to expand on most pushes.  But things that happen &quot;only sometimes&quot; are the most pernicious sorts of bugs.
+
+It would seem that these stack pointers need to be a fundamentally different type...something that encodes the fact that they go invalid.
+
+## Weird First Idea: Use `volatile`
+
+An odd thought I had some time ago was to leverage the `volatile` attribute.  This is a feature that operates a bit like `const`, but it signals that a memory address might change outside of the compiler&#39;s awareness...so it can&#39;t use caching or registers to optimize around it.  The memory has to be fetched each time.
+
+Using volatile to mark pointers to stack locations would make it more obvious where the unstable pointers were.  And then, if you had a routine that took unstable pointers or had them around on the stack, you&#39;d know that you couldn&#39;t do stack pushes or pops.  You also couldn&#39;t call the evaluator (because arbitrary evaluation can potentially call routines that do pushes and pops).
+
+What seemed nice about this is that volatile--like const--could push its compile time checking transitively through the call graph.  If you have a normal pointer, you can pass it to a routine that accepts either volatile or non-volatile pointers.  But if you have a volatile pointer, you can only pass it to routines that accept volatile pointers.  It would ferret out all the places that shouldn&#39;t call the evaluator...
+
+But one drawback is that since this isn&#39;t what volatile is actually *for*, it has the unintended side-effect of making the pointer accesses slow.  So this couldn&#39;t be used in the main build, hence volatile would have to have an alias that could be defined to nothing.  I chose **`unstable`**:
+
+    #ifdef DEBUG_CHECK_UNSTABLE_POINTERS
+        #define unstable volatile
+    #else
+        #define unstable  // nothing in unchecked builds
+    #endif
+
+As clever as this idea was, it made a big mess.  In particular, it suffered from the problem that C has no particularly good way of letting you build this routine pattern:
+
+      Type1 some_function(Type2 arg, ...)
+
+      unstable Type1 some_function(unstable Type2 arg, ...)
+
+You want the code to be exactly the same, you just don&#39;t want it to drop the annotation on the floor...because that defeats the purpose.  There are ways to do it, but they&#39;re very ugly.
+
+**...and after all that mess, there&#39;s no bug alerts to fire off.**
+
+All this does is make it possible for you to visually inspect a routine and have a little bit more information.  It doesn&#39;t intrinsically catch any bugs.
+
+## Taking Another Tactic: A Smart Pointer Class
+
+So I ripped out all the **`unstable`** stuff, and looked at it again.  What if in the C++ build, the pointers were actual smart pointer classes, that participated in a global count of how many such pointers were extant?  So the result of operations like DS_TOP would be a class... that would +1 the count on construction, and -1 the count on destruction.  An assert would trigger if you tried to push or pop the stack with any non-zero number of these outstanding.
+
+     STACKVAL(*) item = DS_TOP;  // result held in pointer class, extant count + 1
+     if (IS_WORD(item)) {
+          Init_Integer(DS_PUSH(), 1);  // asserts since a stack pointer is extant
+          printf(&quot;Pushed a 1 after seeing %s\n&quot;, VAL_WORD_UTF8(item));  // unreached
+     }
+
+The interesting thing about such classes is that they can implicitly coerce themselves to `REBVAL*`...and also, that C++ is willing to hold an instance live for as long as a callsite runs.  That means that if a function take a *REBVAL-by-pointer*, you can pass it a temporarily constructed *STACKVAL-by-value*:
+
+    Init_Integer(DS_PUSH(), 1);  // generated stackval destructed after Init_Integer()
+
+So ergonomically, it can act very much like it&#39;s returning `REBVAL*`.  But to get the benefit, you just have to avoid directly storing the result of `DS_TOP` or `DS_PUSH()` in a `REBVAL*` variable.  Always put them in one of these smart pointers.  (There&#39;s no particular good way to enforce this -and- be ergonomic, so it just has to be a policy developers making the core have to know about.)
+
+***And the C build just defines `STACKVAL(*)` as `REBVAL*` and is none the wiser.***
+
+There&#39;s a bit of a technical problem in that this relies on STACKVAL() having constructor and destructor behavior... e.g. the destructor is where the count gets decremented.  But since the interpreter uses longjmp() when a fail() happens, this can cut across the destructor, generating undefined behavior.  While that can mean &quot;anything&quot; what it generally means is &quot;your destructor does not run&quot;, which is fine because we enforce the extant count as zero at each evaluation.  Hence unwinding a frame can just reset the count to zero.  It&#39;s reliable enough for a debug feature.
+
+## And It Caught Bugs, Right Away!
+
+As expected, there were some instances of potential movability of stacks.  The cases were surprising; not things I would have suspected would be problems, but they were.
+
+It&#39;s good to have this category of bugs have a reliable device for catching them.  All while still remaining compilable as plain old C...
+
+I&#39;m not sure exactly what the moral of this story is.  But maybe it&#39;s that compile-time checking may be great in theory, but you need to have a pretty good ratio of source-contamination-to-bugs-findable.  If you can come up with a good way to catch the majority of things at runtime with a bit of localized code, that may be a better investment.</description>
+    
+    <lastBuildDate>Mon, 04 Jan 2021 08:29:14 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/rethinking-experiments-from-unstable-to-stkval/1454.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Rethinking Experiments: from `unstable` to `STKVAL(*)`</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Strange <code>unstable</code> Concept, For The Record</h2>
+<p>The trick might be useful for something else down the road, but not this.</p>
+<p>Here was the definition and some comments that were ripped out:</p>
+<pre><code>//=//// "UNSTABLE" TYPE CHECKING TRICK ////////////////////////////////////=//
+//
+// Some cells in Ren-C will potentially move if an evaluation is run.  This
+// includes cells on the stack, or in arrays that are controlled by the user.
+//
+// Code should not be holding onto such cells across an evaluation, as they
+// will become invalid.  To help make it clearer, this is an annotation put
+// on any cell with an "unstable" address.  It's given to cells on the data
+// stack, and pessimistically by any value accessed in an array with ARR_AT().
+//
+// In order to give the annotation some checking power, a debug mode will
+// match it to the C qualifier `volatile`.  As with `const` there is some
+// transitive power in the check...since a volatile can only be passed to
+// a parameter that also accepts a volatile.
+//
+// A FUNCTION THAT TAKES AN `UNSTABLE` INPUT IS THEREFORE EFFECTIVELY
+// PROMISING THAT IT WILL NOT CALL INTO THE EVALUATOR.
+//
+// Keeping the volatile setting on at run-time would have performance
+// implications, as it disables optimizations.  So this is purely a type
+// checking construct.  It should be disabled in other situations.
+//
+// TERMINOLOGY NOTE: Originally this was called `movable` and `FIXED()` was
+// used to annotate places where it would be okay to pass the movable pointer.
+// However, Windows API uses "FIXED" and movable means other things.  The
+// somewhat more foreboding name of "unstable" is a little jarring, but,
+// maybe it should be...you can't call evaluation or DS_PUSH() so long as
+// you expect these values to stay good!
+//
+#define DEBUG_UNSTABLE_CELLS
+#ifdef DEBUG_UNSTABLE_CELLS
+    #define unstable volatile
+    #define unstable_ok  // help annotate that there's a movable version
+
+    template&lt;typename T&gt;
+    inline static typename std::remove_volatile&lt;T&gt;::type* STABLE(T* v) {
+        static_assert(
+            std::is_volatile&lt;T&gt;::value,
+            "you should only use STABLE() on unstable pointers"
+        );
+        return const_cast&lt;typename std::remove_volatile&lt;T&gt;::type*&gt;(v);
+    }
+
+    // When you are done with an unstable value, trash its contents before
+    // calling into the evaluator.  This makes that clear.
+    //
+    #define FORGET(v) UNUSED(v)
+
+    // !!! There are parts in the code where a cell in a usermode array is
+    // held onto while arbitrary evaluation code is allowed to run.  This
+    // must ultimately make sure that array has at least a temporary hold
+    // on it, to avoid problems (this is what `unstable` is there to catch!)
+    // But since the codebase is being gradually improved, some parts don't
+    // do this yet.  Review these locations.
+    //
+    #define STABLE_HACK(v) STABLE(v)
+#else
+    #define unstable
+    #define unstable_ok
+    #define FORGET(v) UNUSED(v)
+    #define STABLE(v) (v)
+    #define STABLE_HACK(v) (v)
+#endif</code></pre>
+          <p><a href="https://forum.rebol.info/t/rethinking-experiments-from-unstable-to-stkval/1454/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-experiments-from-unstable-to-stkval/1454/2</link>
+        <pubDate>Mon, 04 Jan 2021 08:29:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1454-2</guid>
+        <source url="https://forum.rebol.info/t/rethinking-experiments-from-unstable-to-stkval/1454.rss">Rethinking Experiments: from `unstable` to `STKVAL(*)`</source>
+      </item>
+      <item>
+        <title>Rethinking Experiments: from `unstable` to `STKVAL(*)`</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>As a C program with a lot of mutable state, the interpreter is in constant danger of bugs due to stale pointers.</p>
+<p>For instance: the "data stack" can have any of its pointers moved, whenever stack values are pushed or popped.  You can create problems as easily as this:</p>
+<pre><code> REBVAL *item = DS_TOP;  // top of data stack...right now
+ if (IS_WORD(item)) {
+      Init_Integer(DS_PUSH(), 1);  // *may* need to relocate entire stack
+      printf("Pushed a 1 after seeing %s\n", VAL_WORD_UTF8(item));  // !!! BAD
+ }
+</code></pre>
+<p>The problem is that after you did a push, the previous item pointer <em>might</em> be bad.  It usually isn't, because the stack doesn't need to expand on most pushes.  But things that happen "only sometimes" are the most pernicious sorts of bugs.</p>
+<p>It would seem that these stack pointers need to be a fundamentally different type...something that encodes the fact that they go invalid.</p>
+<h2>Weird First Idea: Use <code>volatile</code>
+</h2>
+<p>An odd thought I had some time ago was to leverage the <code>volatile</code> attribute.  This is a feature that operates a bit like <code>const</code>, but it signals that a memory address might change outside of the compiler's awareness...so it can't use caching or registers to optimize around it.  The memory has to be fetched each time.</p>
+<p>Using volatile to mark pointers to stack locations would make it more obvious where the unstable pointers were.  And then, if you had a routine that took unstable pointers or had them around on the stack, you'd know that you couldn't do stack pushes or pops.  You also couldn't call the evaluator (because arbitrary evaluation can potentially call routines that do pushes and pops).</p>
+<p>What seemed nice about this is that volatile--like const--could push its compile time checking transitively through the call graph.  If you have a normal pointer, you can pass it to a routine that accepts either volatile or non-volatile pointers.  But if you have a volatile pointer, you can only pass it to routines that accept volatile pointers.  It would ferret out all the places that shouldn't call the evaluator...</p>
+<p>But one drawback is that since this isn't what volatile is actually <em>for</em>, it has the unintended side-effect of making the pointer accesses slow.  So this couldn't be used in the main build, hence volatile would have to have an alias that could be defined to nothing.  I chose <strong><code>unstable</code></strong>:</p>
+<pre><code>#ifdef DEBUG_CHECK_UNSTABLE_POINTERS
+    #define unstable volatile
+#else
+    #define unstable  // nothing in unchecked builds
+#endif
+</code></pre>
+<p>As clever as this idea was, it made a big mess.  In particular, it suffered from the problem that C has no particularly good way of letting you build this routine pattern:</p>
+<pre><code>  Type1 some_function(Type2 arg, ...)
+
+  unstable Type1 some_function(unstable Type2 arg, ...)
+</code></pre>
+<p>You want the code to be exactly the same, you just don't want it to drop the annotation on the floor...because that defeats the purpose.  There are ways to do it, but they're very ugly.</p>
+<p><strong>...and after all that mess, there's no bug alerts to fire off.</strong></p>
+<p>All this does is make it possible for you to visually inspect a routine and have a little bit more information.  It doesn't intrinsically catch any bugs.</p>
+<h2>Taking Another Tactic: A Smart Pointer Class</h2>
+<p>So I ripped out all the <strong><code>unstable</code></strong> stuff, and looked at it again.  What if in the C++ build, the pointers were actual smart pointer classes, that participated in a global count of how many such pointers were extant?  So the result of operations like DS_TOP would be a class... that would +1 the count on construction, and -1 the count on destruction.  An assert would trigger if you tried to push or pop the stack with any non-zero number of these outstanding.</p>
+<pre><code> STACKVAL(*) item = DS_TOP;  // result held in pointer class, extant count + 1
+ if (IS_WORD(item)) {
+      Init_Integer(DS_PUSH(), 1);  // asserts since a stack pointer is extant
+      printf("Pushed a 1 after seeing %s\n", VAL_WORD_UTF8(item));  // unreached
+ }
+</code></pre>
+<p>The interesting thing about such classes is that they can implicitly coerce themselves to <code>REBVAL*</code>...and also, that C++ is willing to hold an instance live for as long as a callsite runs.  That means that if a function take a <em>REBVAL-by-pointer</em>, you can pass it a temporarily constructed <em>STACKVAL-by-value</em>:</p>
+<pre><code>Init_Integer(DS_PUSH(), 1);  // generated stackval destructed after Init_Integer()
+</code></pre>
+<p>So ergonomically, it can act very much like it's returning <code>REBVAL*</code>.  But to get the benefit, you just have to avoid directly storing the result of <code>DS_TOP</code> or <code>DS_PUSH()</code> in a <code>REBVAL*</code> variable.  Always put them in one of these smart pointers.  (There's no particular good way to enforce this -and- be ergonomic, so it just has to be a policy developers making the core have to know about.)</p>
+<p><em><strong>And the C build just defines <code>STACKVAL(*)</code> as <code>REBVAL*</code> and is none the wiser.</strong></em></p>
+<p>There's a bit of a technical problem in that this relies on STACKVAL() having constructor and destructor behavior... e.g. the destructor is where the count gets decremented.  But since the interpreter uses longjmp() when a fail() happens, this can cut across the destructor, generating undefined behavior.  While that can mean "anything" what it generally means is "your destructor does not run", which is fine because we enforce the extant count as zero at each evaluation.  Hence unwinding a frame can just reset the count to zero.  It's reliable enough for a debug feature.</p>
+<h2>And It Caught Bugs, Right Away!</h2>
+<p>As expected, there were some instances of potential movability of stacks.  The cases were surprising; not things I would have suspected would be problems, but they were.</p>
+<p>It's good to have this category of bugs have a reliable device for catching them.  All while still remaining compilable as plain old C...</p>
+<p>I'm not sure exactly what the moral of this story is.  But maybe it's that compile-time checking may be great in theory, but you need to have a pretty good ratio of source-contamination-to-bugs-findable.  If you can come up with a good way to catch the majority of things at runtime with a bit of localized code, that may be a better investment.</p>
+          <p><a href="https://forum.rebol.info/t/rethinking-experiments-from-unstable-to-stkval/1454/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/rethinking-experiments-from-unstable-to-stkval/1454/1</link>
+        <pubDate>Mon, 04 Jan 2021 08:27:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1454-1</guid>
+        <source url="https://forum.rebol.info/t/rethinking-experiments-from-unstable-to-stkval/1454.rss">Rethinking Experiments: from `unstable` to `STKVAL(*)`</source>
+      </item>
+  </channel>
+</rss>

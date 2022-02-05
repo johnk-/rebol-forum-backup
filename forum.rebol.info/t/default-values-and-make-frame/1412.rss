@@ -1,0 +1,468 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Default Values And MAKE FRAME!</title>
+    <link>https://forum.rebol.info/t/default-values-and-make-frame/1412</link>
+    <description>NULL&#39;s storied history has taken it from being the *&quot;true undefined&quot;* to being the *&quot;true NONE!&quot;*
+
+This is seemingly not very profound, since even languages like JavaScript distinguish &quot;undefined&quot; and &quot;null&quot;.  In much the same way...an undefined variable is one you haven&#39;t assigned yet.  NULL is one you&#39;ve set to NULL.
+
+    // Chrome Console Session
+    &gt; asdf
+    VM66:1 Uncaught ReferenceError: asdf is not defined
+
+    &gt; typeof asdf
+    &lt;- &quot;undefined&quot;
+
+    &gt; asdf = null
+    &lt;- null
+
+    &gt; asdf
+    &lt;- null
+
+    &gt; typeof asdf
+    &lt;- &quot;object&quot;
+
+*(If you&#39;re curious why the **typeof** null is an object in JavaScript: [&quot;Because the spec says so.  This is generally regarded as a mistake.&quot;](https://stackoverflow.com/questions/18808226/why-is-typeof-null-object).  The move of not having an answer for the value of the type, e.g. saying the answer to **type of null** is null - is much better)*
+
+## So... MAKE FRAME! should set fields to ~undefined~, then (?)
+
+There&#39;s certainly advantages to making the fields undefined instead of NULL.
+
+It *typically* makes it easier to keep track of which fields you&#39;ve assigned and which ones you haven&#39;t:
+
+    &gt;&gt; f: make frame! :append
+    == make frame! [
+        series: ~undefined~
+        value: ~undefined~
+        part: ~undefined~
+        only: ~undefined~
+        dup: ~undefined~
+        line: ~undefined~
+    ]
+
+    &gt;&gt; if f/series [print &quot;An error here makes sense, right?&quot;]
+    ** Script Error: f/series is ~undefined~ (use GET/ANY to GET voids)
+
+It also has the benefit of initializing all the locals in the frame to ~undefined~ *(you don&#39;t see the locals when you are viewing the frame from the &quot;outside&quot;, as you are here)*.
+
+**But do you really want to have to set all the refinements to NULL before you DO the FRAME!?**
+
+It doesn&#39;t feel like you want to.  Because it&#39;s nice for this to work:
+
+    &gt;&gt; f: make frame! :append
+    &gt;&gt; f/series: [a b c]
+    &gt;&gt; f/value: &lt;d&gt;
+    &gt;&gt; do f
+    == [a b c &lt;d&gt;]
+
+But if there weren&#39;t some intervention in the frame, you&#39;d get the refinements as being undefined.
+
+*This is why MAKE FRAME! initially defaulted the fields to NULL.*  But that still requires intervention, because the locals should be voided.  There really is no perfect answer to what uninitialized frame fields are.
+
+*A key motivator for change was being able to notice specialization of refinements.*  While `~undefined~` is not a perfect answer, it can act as a reasonable marker of when things have been specialized out.
+
+Let&#39;s imagine you want to make a version of APPEND that doesn&#39;t offer a /DUP refinement and always appends a tag:
+
+    &gt;&gt; f: make frame! :append
+    &gt;&gt; f/value: &lt;tag&gt;
+    &gt;&gt; f/dup: null
+
+    &gt;&gt; apt: make action! f
+
+    &gt;&gt; parameters of :apt
+    == [series /part /only /line]  ; see, no /dup or /value
+
+Giving MAKE ACTION! knowledge of whether you set a refinement to NULL or not--plus the sensibility of erroring when accessing fields you hadn&#39;t assigned yet--made `~undefined~` seem like the natural default choice.
+
+## &quot;But what if you actually want to append `~undefined~`...&quot;
+
+Gah.
+
+The current theory I have is that you would hide the field from view.  This would make it like other specialized-out parameters, or the locals.  So the only undefineds that would be nulled out in execution would be those that were user visible in the frame.
+
+    &gt;&gt; f: make frame! :append
+    &gt;&gt; protect/hide &#39;f/value  ; just be HIDE?  what about `hide f/v: 1 + 2` syntax 
+
+    &gt;&gt; apv: make action! f
+
+    &gt;&gt; apv [a b c]
+    == [a b c ~undefined~]
+
+*There are technical issues with PROTECT/HIDE which prevent this from working today.*  The reason is that hiding tries to modify keylists, which in a frame is the function parameters.  This would mean that one frame hiding a parameter would effectively hide it for all function calls...even normal ones.  The bit needs to be moved somehow into the instance cells.
+
+What I like about this is that it&#39;s a generic mechanism which lets you put the bit on the values in a way that is &quot;visible&quot;.  Of course, the visible effect is making the field vanish from view.  But at least that&#39;s something you can notice the impact of, as opposed to some not visible bit you are setting on a value to say whether it is a &quot;specialized undefined&quot; or an &quot;unspecialized undefined&quot;.
+
+## Should Only ~undefined~ Count, or All Voids?
+
+An interesting thing about having multiple void forms is that if your only need was to specialize a slot to a void, you could give another name.  This other-named void would be considered specialized:
+
+     &gt;&gt; f1: make frame! :append
+     &gt;&gt; f1/value: ~undefined~  ; but it already was undefined :-/
+     &gt;&gt; ap1: make action! f1
+     &gt;&gt; ap1 [a b c]
+     ** Error: ap1 is missing its value argument  ; so didn&#39;t append ~undefined~
+
+     &gt;&gt; f2: make frame! :append
+     &gt;&gt; f2/value: ~oogway~
+     &gt;&gt; ap2: make action! f2
+     &gt;&gt; ap2 [a b c]
+     == [a b c ~oogway~]  ; not the magic ~undefined~, so it worked
+
+This would mean the &quot;harder to specialize&quot; case would be limited down *specifically* to when you really did mean only ~undefined~...and no other void would do.
+
+Of course, by virtue of elevating ~undefined~ to such a unique behavioral status, *we are guaranteeing the existence of scenarios where meta code needs to produce an ~undefined~...and no other void would do*.
+
+Escape mechanisms are kind of funny that way.  *[&quot;One often meets his destiny on the road he takes to avoid it.&quot;](https://www.youtube.com/watch?v=iGmHTbtPEac)*
+
+**What I don&#39;t like about this is that it might lead to complacency for anyone working with VOID!s, to not notice they&#39;d crossed the line into a type that doesn&#39;t have 100% specializability.**  It also gives a behavior to a specific name, which means no matter what language you speak the evaluator itself has blessed an English word.
+
+...though we&#39;re sort of already in that territory by having MAKE FRAME! create `~undefined~`s.  Should we instead be using plain label-free VOID! for these purposes **`~`** ?   This probably deserves a whole separate topic in &quot;Naming&quot;...
+
+## This Is Hopefully The Only Flip-Frame-While Evaluating Needed
+
+I firmed up that refinements that are &quot;present or not&quot; are either **NULL** or **`#`**.  That means we don&#39;t have the added problem of trying to canonize (#[true] and #[false]) to (#[true] and NULL) or other semantic pitfalls.
+
+This is a different and simplistic rule.  Any non-hidden frame field that is VOID! will be mutated into a NULL at the time of execution.
+
+The question to resolve is: does it do this for all VOID!s, or just a special one.  And if it does it for a special one, is that specialness made language-agnostic by choosing `~` (and adjusting MAKE FRAME! accordingly), or do we embrace English in the core and use `~undefined~`?</description>
+    
+    <lastBuildDate>Thu, 08 Jul 2021 20:09:42 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/default-values-and-make-frame/1412.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Default Values And MAKE FRAME!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="4" data-topic="1412">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><em>But it doesn't mean that higher level functions can't try to help you out...</em></p>
+</blockquote>
+</aside>
+<p>So now, this works!</p>
+<pre><code>unset: redescribe [
+    {Clear the value of a word to an unset isotope (in its current context)}
+](
+    specialize :set [value: ~unset~]  ; tricky case, but supported!
+)
+</code></pre>
+<p>It's been a long path to this but I think it's a good one.  We realize that what a higher-level construct like SPECIALIZE or APPLY can do is different from the raw FRAME! mechanic.</p>
+<p>There will be some people out there who use FRAME! and then are bitten by the fact that a function they think is "ordinary" (like SET or RETURN) turn out to take ^meta arguments.  But it just means you have to match the parameter convention.</p>
+<p>As I've said before, this is true of quoting as well.  Even if you're used to writing <code>for-each x ...</code> you can't do:</p>
+<pre><code> for-each-x-frame: make frame! :for-each
+ for-each-x-frame.vars: x
+</code></pre>
+<p>The quoting from the parameter convention doesn't apply to the assignment inside the frame.  You have to say:</p>
+<pre><code> for-each-x-frame: make frame! :for-each
+ for-each-x-frame.vars: 'x
+</code></pre>
+<p>And similarly for a meta parameter.  You need the ^.</p>
+<pre><code> return-unset-frame: make frame! :return
+ return-unset-frame.value: ^ ~unset~
+</code></pre>
+<p>Makes pretty good sense, and here SPECIALIZE is showing that higher levels can smooth over it.</p>
+          <p><a href="https://forum.rebol.info/t/default-values-and-make-frame/1412/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/default-values-and-make-frame/1412/5</link>
+        <pubDate>Thu, 08 Jul 2021 17:14:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1412-5</guid>
+        <source url="https://forum.rebol.info/t/default-values-and-make-frame/1412.rss">Default Values And MAKE FRAME!</source>
+      </item>
+      <item>
+        <title>Default Values And MAKE FRAME!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="3" data-topic="1412">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<h2>...and the drawback is...</h2>
+<p>It means that if the parameter convention changes, what you might have written for a MAKE FRAME! previously won't work.</p>
+</blockquote>
+</aside>
+<p>I think this is--for better or worse--the right answer for MAKE FRAME!.  If you are building a low-level frame for a function, you kind of become entangled in the guts of its implementation one way or another.</p>
+<p><em>But it doesn't mean that higher level functions can't try to help you out...</em></p>
+<p>Let's imagine you want to specialize RETURN.  It's one of those functions that takes a ^meta parameter, so that you can say things like <strong><code>return ~none~</code></strong> and hand back an isotope to the caller.</p>
+<p>But specialize can be creative in terms of how it builds the frame.  So let's say you don't want to care if it's a meta parameter or not, and want to write:</p>
+<pre><code>r5: specialize :return [value: 5]  ; you don't want to have to quote 5
+rU: specialize :return [value: ~unset~]  ; e.g. return an ~unset~ isotope
+</code></pre>
+<p>So imagine specialize isn't using an ~unset~ isotope as its initial condition for variables in the frame.</p>
+<p>Just for starters, let's have it use some kind of one-off series identity for the initial state of <code>value</code>.  A primordial example could just use a string like <strong>"!!!unspecialized!!!"</strong>.  If that were owned by SPECIALIZE then that could uniquely identify unspecialized fields...and assigning an identical string with a different identity wouldn't be mistaken for the identity that specialize knows.</p>
+<p>So then, anything it saw that it didn't recognize as that exact identity, it would assume had been specialized.  And if the parameter class was ^META, it would do the appropriate adjustment...turning BAD-WORD! isotopes into plain BAD-WORD!, and quoting other values.</p>
+<p>What you lose in this "specialized identity" approach being a string is the idea of getting errors on unassigned variables...or having an easy test of whether you've specialized things or not.  This might be a good argument for having something that carries a cheap notion of identity but can be recognized as unspecialized.  Maybe UNSPECIALIZED! should be its own datatype for the purpose?</p>
+<p><strong>But the point is...</strong> higher-level tools can come into play that are aware of the parameter conventions and do adjustments for you.  But if you work at the FRAME! level, you're at the metal...and you have to fill the slots with their <em>final</em> values; no parameter conventions will be applied to adjust them for you.</p>
+<p><strong>The only adjustment that happens in frame execution is that ~unset~ isotopes will be converted to NULLs.</strong></p>
+<p>And I will say again that as weird as it all may sound, it's quite elegant!</p>
+          <p><a href="https://forum.rebol.info/t/default-values-and-make-frame/1412/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/default-values-and-make-frame/1412/4</link>
+        <pubDate>Mon, 21 Jun 2021 07:03:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1412-4</guid>
+        <source url="https://forum.rebol.info/t/default-values-and-make-frame/1412.rss">Default Values And MAKE FRAME!</source>
+      </item>
+      <item>
+        <title>Default Values And MAKE FRAME!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-username="hostilefork" data-post="1" data-topic="1412">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>"But what if you actually want to append <strike><code>~undefined~</code></strike> <code>~unset~</code>..."</p>
+</blockquote>
+</aside>
+<aside class="quote no-group quote-modified" data-username="hostilefork" data-post="2" data-topic="1412">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Should the "unspecialized" behavior be for <em>all <strike>voids</strike> BAD-WORD!s</em>, for just <code>~unset~</code>, or should <code>~</code> become the universal undefined state?**</p>
+</blockquote>
+</aside>
+<p>My new answer is looking pretty darn elegant.</p>
+<ul>
+<li>
+<p>The ~unset~ isotope state represents actual unsetness, and should not be confused with the plain ~unset~ BAD-WORD!...which does not.</p>
+</li>
+<li>
+<p>The only category of function parameters that can accept isotopes are ^META parameters, and when they receive them they don't receive them as isotopes...they receive them as plain BAD-WORD!s...they've "leveled up" (non-isotopes get quoted)</p>
+</li>
+<li>
+<p>When doing a low-level build of a FRAME! for a function, you are on the hook for knowing the callsite parameter convention and doing what it takes to meet the expectation.</p>
+<ul>
+<li>
+<p>So for a quoted (literal) parameter, you have to take that into account...since no callsite quoting is going on, you must do your own quoting in the assignment.</p>
+</li>
+<li>
+<p>Same for a meta parameter...there's no callsite that's converitng it from an isotope into a non-isotope.  You have to set it to a <em>plain</em> BAD-WORD!</p>
+</li>
+</ul>
+</li>
+</ul>
+<h2>The Punchline...</h2>
+<p><strong>...is that function parameter slots never actually receive isotopes at the time of a function invocation!</strong></p>
+<p><strong>The core can safely assume ~unset~ isotopes it sees in a FRAME! are unspecialized slots (most likely left over from the initial MAKE FRAME!)</strong></p>
+<p><strong>All other isotopes will raise errors.</strong></p>
+<h2>...and the drawback is...</h2>
+<p>It means that if the parameter convention changes, what you might have written for a MAKE FRAME! previously won't work.</p>
+<p>Let's someone writes a function that returns if something is greater than 10:</p>
+<pre><code>greater-than-10: func [x [integer!]] [
+    return x &gt; 10
+]
+</code></pre>
+<p>Then you write code that builds a frame for it:</p>
+<pre><code>f: make frame! :greater-than-10
+f.x: 20
+assert [true = do f]
+</code></pre>
+<p>It works.  Yet later the person who wrote the function decides they want to do something special if it's passed an isotope, while keeping the behavior for integers the same:</p>
+<pre><code>greater-than-10: func [^x [integer!]] [
+    if bad-word? x [
+        print ["Doing special thing for" mold x]
+    ] else [
+        x &gt; 10
+    ]
+]
+
+&gt;&gt; greater-than-10 20
+== #[true]
+
+&gt;&gt; greater-than-10 ~asdf~
+Doing special thing for ~asdf~
+</code></pre>
+<p>Why did they add this feature?  Who knows.  But let's say they thought it was okay because existing callsites would remain the same.</p>
+<p>But it breaks our invocation via FRAME!...the code won't work any more.</p>
+<pre><code>&gt;&gt; f: make frame! :greater-than-10
+&gt;&gt; f.x: 20
+== 20
+
+&gt;&gt; do f
+** Error: ^META arguments must be quoted!, bad-word!, or null
+</code></pre>
+<p>That message should be better, and tell you that it's x that's the problem.  But the key is you have to now adjust how you fill the frame to meet the meta requirements:</p>
+<pre><code>&gt;&gt; f: make frame! :greater-than-10
+&gt;&gt; f.x: quote 20
+== '20
+
+&gt;&gt; do f
+== #[true]
+</code></pre>
+<h2>Take Comfort That You're Not <em>Supposed</em> To Use ^META Parameters</h2>
+<p>I'm going to go back to the part where I talk about Carl's post about why the core functions should not take unsets: <a href="https://forum.rebol.info/t/null-first-class-values-and-safety/895">First-Class Values and Safety</a></p>
+<p>You really aren't supposed to take the isotope states as function arguments.  They're signals that are out of band with what functions are supposed to see.  Only a very few--mostly tricky operators like ELSE--would want to process them.  And that's part of their design from inception, not something you'd add after the fact as above.</p>
+<p>With isotope forms not able to be added to blocks anyway, motivating questions like "how do you specialize APPEND to add an ~unset~ to a BLOCK!" don't apply.  You're either talking about the normal BAD-WORD! which works like everything else, or the isotope which you don't.</p>
+          <p><a href="https://forum.rebol.info/t/default-values-and-make-frame/1412/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/default-values-and-make-frame/1412/3</link>
+        <pubDate>Mon, 21 Jun 2021 02:44:51 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1412-3</guid>
+        <source url="https://forum.rebol.info/t/default-values-and-make-frame/1412.rss">Default Values And MAKE FRAME!</source>
+      </item>
+      <item>
+        <title>Default Values And MAKE FRAME!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1412">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><em>There are technical issues with PROTECT/HIDE which prevent this from working today.</em></p>
+</blockquote>
+</aside>
+<p>I have made an attempt to address these issues.  So now we have this:</p>
+<pre><code>&gt;&gt; f: make frame! :append
+== make frame! [
+    series: ~undefined~
+    value: ~undefined~
+    part: ~undefined~
+    only: ~undefined~
+    dup: ~undefined~
+    line: ~undefined~
+]
+
+&gt;&gt; protect/hide 'f/value
+
+&gt;&gt; f
+== make frame! [
+    series: ~undefined~
+    part: ~undefined~   ; notice value: is now missing
+    only: ~undefined~
+    dup: ~undefined~
+    line: ~undefined~
+]
+</code></pre>
+<p>When you make an action out of it, the non-hidden ~undefined~ are interpreted as unspecialized.  But the hidden one is assumed to be literally an ~undefined~.</p>
+<pre><code>&gt;&gt; apv: make action! f
+
+&gt;&gt; parameters of :apv
+== [series /part /only /dup /line]  ; also missing `value`
+
+&gt;&gt; apv [a b c]
+== [a b c ~undefined~]
+</code></pre>
+<p>You can sort of see the rhythm of why hiding would mean this.  It's a concept in sync with the verdict to actually remove the parameter from the interface.</p>
+<h2>Key Remaining Issue: Don't Forget to Vote  <img src="https://forum.rebol.info/images/emoji/twitter/ballot_box_with_check.png?v=9" title=":ballot_box_with_check:" class="emoji" alt=":ballot_box_with_check:">
+</h2>
+<p>Should the "unspecialized" behavior be for <em>all voids</em>, for just <code>~undefined~</code>, <strong><a href="https://forum.rebol.info/t/void-choices-the-role-of-english-in-the-evaluator/1413">or should <code>~</code> become the universal undefined state?</a></strong></p>
+<p>We could say that non-hidden voids besides the "distinguished" voids (whether that's <strong>~</strong> or <strong>~undefined~</strong>) are errors when you DO frame or make an action.  That might help avoid accidents by building awareness of the need to use a hiding mechanism when you're treading into VOID! specialization territory...vs having "that one day where you tried to specialize with the unspecialized void" tripping the behavior.</p>
+          <p><a href="https://forum.rebol.info/t/default-values-and-make-frame/1412/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/default-values-and-make-frame/1412/2</link>
+        <pubDate>Tue, 24 Nov 2020 17:52:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1412-2</guid>
+        <source url="https://forum.rebol.info/t/default-values-and-make-frame/1412.rss">Default Values And MAKE FRAME!</source>
+      </item>
+      <item>
+        <title>Default Values And MAKE FRAME!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>NULL's storied history has taken it from being the <em>"true undefined"</em> to being the <em>"true NONE!"</em></p>
+<p>This is seemingly not very profound, since even languages like JavaScript distinguish "undefined" and "null".  In much the same way...an undefined variable is one you haven't assigned yet.  NULL is one you've set to NULL.</p>
+<pre><code>// Chrome Console Session
+&gt; asdf
+VM66:1 Uncaught ReferenceError: asdf is not defined
+
+&gt; typeof asdf
+&lt;- "undefined"
+
+&gt; asdf = null
+&lt;- null
+
+&gt; asdf
+&lt;- null
+
+&gt; typeof asdf
+&lt;- "object"
+</code></pre>
+<p><em>(If you're curious why the <strong>typeof</strong> null is an object in JavaScript: <a href="https://stackoverflow.com/questions/18808226/why-is-typeof-null-object">"Because the spec says so.  This is generally regarded as a mistake."</a>.  The move of not having an answer for the value of the type, e.g. saying the answer to <strong>type of null</strong> is null - is much better)</em></p>
+<h2>So... MAKE FRAME! should set fields to ~undefined~, then (?)</h2>
+<p>There's certainly advantages to making the fields undefined instead of NULL.</p>
+<p>It <em>typically</em> makes it easier to keep track of which fields you've assigned and which ones you haven't:</p>
+<pre><code>&gt;&gt; f: make frame! :append
+== make frame! [
+    series: ~undefined~
+    value: ~undefined~
+    part: ~undefined~
+    only: ~undefined~
+    dup: ~undefined~
+    line: ~undefined~
+]
+
+&gt;&gt; if f/series [print "An error here makes sense, right?"]
+** Script Error: f/series is ~undefined~ (use GET/ANY to GET voids)
+</code></pre>
+<p>It also has the benefit of initializing all the locals in the frame to ~undefined~ <em>(you don't see the locals when you are viewing the frame from the "outside", as you are here)</em>.</p>
+<p><strong>But do you really want to have to set all the refinements to NULL before you DO the FRAME!?</strong></p>
+<p>It doesn't feel like you want to.  Because it's nice for this to work:</p>
+<pre><code>&gt;&gt; f: make frame! :append
+&gt;&gt; f/series: [a b c]
+&gt;&gt; f/value: &lt;d&gt;
+&gt;&gt; do f
+== [a b c &lt;d&gt;]
+</code></pre>
+<p>But if there weren't some intervention in the frame, you'd get the refinements as being undefined.</p>
+<p><em>This is why MAKE FRAME! initially defaulted the fields to NULL.</em>  But that still requires intervention, because the locals should be voided.  There really is no perfect answer to what uninitialized frame fields are.</p>
+<p><em>A key motivator for change was being able to notice specialization of refinements.</em>  While <code>~undefined~</code> is not a perfect answer, it can act as a reasonable marker of when things have been specialized out.</p>
+<p>Let's imagine you want to make a version of APPEND that doesn't offer a /DUP refinement and always appends a tag:</p>
+<pre><code>&gt;&gt; f: make frame! :append
+&gt;&gt; f/value: &lt;tag&gt;
+&gt;&gt; f/dup: null
+
+&gt;&gt; apt: make action! f
+
+&gt;&gt; parameters of :apt
+== [series /part /only /line]  ; see, no /dup or /value
+</code></pre>
+<p>Giving MAKE ACTION! knowledge of whether you set a refinement to NULL or not--plus the sensibility of erroring when accessing fields you hadn't assigned yet--made <code>~undefined~</code> seem like the natural default choice.</p>
+<h2>"But what if you actually want to append <code>~undefined~</code>..."</h2>
+<p>Gah.</p>
+<p>The current theory I have is that you would hide the field from view.  This would make it like other specialized-out parameters, or the locals.  So the only undefineds that would be nulled out in execution would be those that were user visible in the frame.</p>
+<pre><code>&gt;&gt; f: make frame! :append
+&gt;&gt; protect/hide 'f/value  ; just be HIDE?  what about `hide f/v: 1 + 2` syntax 
+
+&gt;&gt; apv: make action! f
+
+&gt;&gt; apv [a b c]
+== [a b c ~undefined~]
+</code></pre>
+<p><em>There are technical issues with PROTECT/HIDE which prevent this from working today.</em>  The reason is that hiding tries to modify keylists, which in a frame is the function parameters.  This would mean that one frame hiding a parameter would effectively hide it for all function calls...even normal ones.  The bit needs to be moved somehow into the instance cells.</p>
+<p>What I like about this is that it's a generic mechanism which lets you put the bit on the values in a way that is "visible".  Of course, the visible effect is making the field vanish from view.  But at least that's something you can notice the impact of, as opposed to some not visible bit you are setting on a value to say whether it is a "specialized undefined" or an "unspecialized undefined".</p>
+<h2>Should Only ~undefined~ Count, or All Voids?</h2>
+<p>An interesting thing about having multiple void forms is that if your only need was to specialize a slot to a void, you could give another name.  This other-named void would be considered specialized:</p>
+<pre><code> &gt;&gt; f1: make frame! :append
+ &gt;&gt; f1/value: ~undefined~  ; but it already was undefined :-/
+ &gt;&gt; ap1: make action! f1
+ &gt;&gt; ap1 [a b c]
+ ** Error: ap1 is missing its value argument  ; so didn't append ~undefined~
+
+ &gt;&gt; f2: make frame! :append
+ &gt;&gt; f2/value: ~oogway~
+ &gt;&gt; ap2: make action! f2
+ &gt;&gt; ap2 [a b c]
+ == [a b c ~oogway~]  ; not the magic ~undefined~, so it worked
+</code></pre>
+<p>This would mean the "harder to specialize" case would be limited down <em>specifically</em> to when you really did mean only ~undefined~...and no other void would do.</p>
+<p>Of course, by virtue of elevating ~undefined~ to such a unique behavioral status, <em>we are guaranteeing the existence of scenarios where meta code needs to produce an ~undefined~...and no other void would do</em>.</p>
+<p>Escape mechanisms are kind of funny that way.  <em><a href="https://www.youtube.com/watch?v=iGmHTbtPEac">"One often meets his destiny on the road he takes to avoid it."</a></em></p>
+<p><strong>What I don't like about this is that it might lead to complacency for anyone working with VOID!s, to not notice they'd crossed the line into a type that doesn't have 100% specializability.</strong>  It also gives a behavior to a specific name, which means no matter what language you speak the evaluator itself has blessed an English word.</p>
+<p>...though we're sort of already in that territory by having MAKE FRAME! create <code>~undefined~</code>s.  Should we instead be using plain label-free VOID! for these purposes <strong><code>~</code></strong> ?   This probably deserves a whole separate topic in "Naming"...</p>
+<h2>This Is Hopefully The Only Flip-Frame-While Evaluating Needed</h2>
+<p>I firmed up that refinements that are "present or not" are either <strong>NULL</strong> or <strong><code>#</code></strong>.  That means we don't have the added problem of trying to canonize (#[true] and #[false]) to (#[true] and NULL) or other semantic pitfalls.</p>
+<p>This is a different and simplistic rule.  Any non-hidden frame field that is VOID! will be mutated into a NULL at the time of execution.</p>
+<p>The question to resolve is: does it do this for all VOID!s, or just a special one.  And if it does it for a special one, is that specialness made language-agnostic by choosing <code>~</code> (and adjusting MAKE FRAME! accordingly), or do we embrace English in the core and use <code>~undefined~</code>?</p>
+          <p><a href="https://forum.rebol.info/t/default-values-and-make-frame/1412/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/default-values-and-make-frame/1412/1</link>
+        <pubDate>Sun, 22 Nov 2020 13:24:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1412-1</guid>
+        <source url="https://forum.rebol.info/t/default-values-and-make-frame/1412.rss">Default Values And MAKE FRAME!</source>
+      </item>
+  </channel>
+</rss>

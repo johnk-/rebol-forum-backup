@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+    <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187</link>
+    <description>I never liked /ANY as explaining what was going on with a SET that would use a void to unset a variable, or allow an unset variable to be the source for a GET.
+
+Though I didn&#39;t much like /OPT either.  But it was more consistent with other things.
+
+Naming-wise, /OPT is a pattern which appears now in other routines.  So for instance, **case [true []]** will return a blank, while **case/opt [true []]** will return a void.  Both **case [false []]** and **case/opt [false []]** will return void.
+
+So for control constructs, /OPT is a way of saying &quot;I&#39;m okay with having the return result obscure the knowledge of whether branches are taken or not&quot;.  It would seem a bit strange to do this with /ANY.
+
+Most of the void-embracing routines are aliased with asterisks.  So `GET*`, `CASE*`, `IF*`, etc.  And for convenience, `GET` of a bound but unset variable gives back a blank, while `GET*` gives the void.
+
+I&#39;ve considered just ignoring a name, and calling the refinement `/*`.  So `GET*` is just `specialize &#39;get [*: true]`.  We could even do this with optional function arguments, as `foo: func [x [&lt;*&gt; thing]] [...]` instead of `foo: func [x [&lt;opt&gt; thing]] [...]`.
+
+But I dunno.  It just seems like time to bite the bullet one way or another.  I kept a compatibility bridge for /ANY up until now based on my lack of conviction about /OPT as a name, and didn&#39;t want people to have to go around changing their source twice.  But `&lt;opt&gt;` and `/OPT` have now been around long enough I&#39;d think people might weigh in on the /OPT-ions...</description>
+    
+    <lastBuildDate>Sun, 23 Jul 2017 10:07:09 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Ah it's late and I only looked at GET/OPT.  SET has a meaning for /ONLY, a kind of weird one:</p>
+<pre><code>/only
+    {If target and value are blocks, set each item to the same value}
+</code></pre>
+<p>I'd rather name that one out of the way.  SET/MULTIPLE or SET/SAME or something.</p>
+<p>There is also the question of whether there needs to be a refinement at all, or if they really are two separate routines.  This is a generic question.  Do we always want the higher level operation to be able to pass through to the lower one, or if the higher level operation can be written entirely in terms of the lower-level one should they just stay two completely separate routines, with no refinement to switch modes?</p>
+<p>I should point out that it is not technically possible for all functions to work in this way.  For instance, You cannot (easily/efficiently) build IF on the functionality of IF/ONLY... because IF needs to know whether the branch returned void, as a distinct output from whether the condition did not match.  OTOH, something like SELECT can be built entirely on top of a second function called <code>SELECT*</code>, because all it's doing is "blankifying void results".</p>
+<p>This is <em>sort of</em> true of GET.  While it wants to "blankify" its results if <code>GET*</code> returns void, if you <code>get* [a b]</code> and either are void, the resulting block cannot hold voids...since that's not legal.  So <code>GET*</code> must consider that an error condition, while GET would like to have a blank in the slot.  Sure, GET could make multiple calls to <code>GET*</code> for each item in the block in usermode... but it's more efficient to have the /ONLY be a mode of the same routine.</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/9</link>
+        <pubDate>Sun, 23 Jul 2017 09:10:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-9</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I think the "brilliant" idea may have come along.</p>
+<p>Recently we've had the <a href="https://forum.rebol.info/t/rethinking-if-and-if-if-only-if-opt-safety-vs-complexity/212/12?u=hostilefork">merger of /OPT and /ONLY</a> on the conditionals to make "raw" conditionals, without any "as-is" behavior on blocks.</p>
+<p>There's also been a step of the conceptual structuring of a "user friendly" GET and SET on top of a lower-level <code>GET*</code> and <code>SET*</code>.  The GET calls into <code>GET*</code>, and if that call returns a void it blankifies it... assuming the caller doesn't care about the discernment, rather convenience.  The SET sticks in an error if you try to pass in a void value, so you can't unset the variable... and then adapts down to the lower-level <code>SET*</code> to do the actual work.  <code>SET*</code> on the other hand is willing to unset variables if you pass a void.</p>
+<p>It seems from this way of thinking, the "/ANY" versions aren't "more powerful" versions of GET and SET...rather GET and SET are layered atop the fundamental.  Historically we've been calling these fundamental operations /ONLY.</p>
+<p>So it seems to me that is what these are.  SET/ONLY ("only set, don't bother with that void check") and GET/ONLY ("only get, don't turn voids into blanks for convenience").</p>
+<p>And weirdo /OPT and /ANY can get the axe.  Sound good, <a class="mention" href="/u/rgchris">@rgchris</a>?</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/8</link>
+        <pubDate>Sun, 23 Jul 2017 08:57:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-8</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Well the forms we're talking about are somewhat less "strict", in the sense that strictness is usually assumed to mean a more constrained set of inputs/outputs rather than a wider one.  I use the term "core" for such things, Windows considers them "extended version" and call the pairings "WhateverTheThing" and "WhateverTheThingEx"...</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/7</link>
+        <pubDate>Thu, 06 Jul 2017 21:00:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-7</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>Another option would be to use STRICT-GET and STRICT-SET. More characters, but also more literate. Has the added benefit that you can do a HELP STRICT to list all related functions.</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/6</link>
+        <pubDate>Thu, 06 Jul 2017 20:45:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-6</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Well, if you name it then it's not particularly hard to do.  The natives themselves can be called SET* and GET*, but they can then as part of the boot process be put into a context, e.g.</p>
+<pre><code>core: [
+    set: :set*
+    get: :get*
+    ...
+]
+</code></pre>
+<p>Then you can invoke them as <code>core/set</code> or somesuch.  I will point out for the performance minded that using paths and looking things up in contexts like that is going to be slower.</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/5</link>
+        <pubDate>Thu, 06 Jul 2017 19:52:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-5</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>Can reaffirm that I still am not a fan of the <code>xxx*</code> convention and prefer context-sensitive words.</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/4</link>
+        <pubDate>Thu, 06 Jul 2017 19:48:01 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-4</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Actually, this may be a case where the brilliant idea is not to name it at all.</p>
+<p>SET* and GET* are strictly more powerful than SET and GET.  Hence they can be fundamental, with everything else built on top of them:</p>
+<pre><code>set: adapt 'set* [
+    if void? :value [
+         fail "SET requires value not to be void (otherwise use SET*)"
+    ]
+]
+
+get: chain [:get* | :to-value]
+
+get-value: chain [
+    :get*
+        |
+    func [x [&lt;opt&gt; any-value]] [
+        if void? :x [
+            fail "GET-VALUE requires variable to be set to a value"
+        ]
+        :x
+    ]
+ ]
+</code></pre>
+<p>So GET* acts as GET/ANY.  Then GET is the "user-friendly" GET, which doesn't discern between getting a blank and an unset variable... it gives back a blank in both cases... so if you have no reason to discern those scenarios you can just act like blank means not set.  GET-VALUE would throw in an error if you expect one to be there.</p>
+<p><a class="mention" href="/u/rgchris">@rgchris</a> has voiced not particularly liking the <code>XXX*</code> convention for "core" routines, and preferring something like picking them out of a context like <code>core/get</code> or such.  I personally like the <code>*</code>, myself.</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/3</link>
+        <pubDate>Thu, 06 Jul 2017 15:36:32 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-3</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>To me ANY sounds like the magician asking you to pick any card. For the ANY function this is fine, for the refinement it seems to imply a kind of random behaviour.<br>
+OPT is definitly better but far from perfect.<br>
+When the brilliant idea for the right refinement name comes in, change it to that.</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/2</link>
+        <pubDate>Thu, 06 Jul 2017 08:23:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-2</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+      <item>
+        <title>SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I never liked /ANY as explaining what was going on with a SET that would use a void to unset a variable, or allow an unset variable to be the source for a GET.</p>
+<p>Though I didn't much like /OPT either.  But it was more consistent with other things.</p>
+<p>Naming-wise, /OPT is a pattern which appears now in other routines.  So for instance, <strong>case [true []]</strong> will return a blank, while <strong>case/opt [true []]</strong> will return a void.  Both <strong>case [false []]</strong> and <strong>case/opt [false []]</strong> will return void.</p>
+<p>So for control constructs, /OPT is a way of saying "I'm okay with having the return result obscure the knowledge of whether branches are taken or not".  It would seem a bit strange to do this with /ANY.</p>
+<p>Most of the void-embracing routines are aliased with asterisks.  So <code>GET*</code>, <code>CASE*</code>, <code>IF*</code>, etc.  And for convenience, <code>GET</code> of a bound but unset variable gives back a blank, while <code>GET*</code> gives the void.</p>
+<p>I've considered just ignoring a name, and calling the refinement <code>/*</code>.  So <code>GET*</code> is just <code>specialize 'get [*: true]</code>.  We could even do this with optional function arguments, as <code>foo: func [x [&lt;*&gt; thing]] [...]</code> instead of <code>foo: func [x [&lt;opt&gt; thing]] [...]</code>.</p>
+<p>But I dunno.  It just seems like time to bite the bullet one way or another.  I kept a compatibility bridge for /ANY up until now based on my lack of conviction about /OPT as a name, and didn't want people to have to go around changing their source twice.  But <code>&lt;opt&gt;</code> and <code>/OPT</code> have now been around long enough I'd think people might weigh in on the /OPT-ions...</p>
+          <p><a href="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187/1</link>
+        <pubDate>Thu, 06 Jul 2017 00:34:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-187-1</guid>
+        <source url="https://forum.rebol.info/t/set-any-and-get-any-vs-set-opt-and-get-opt/187.rss">SET/ANY and GET/ANY vs. SET/OPT and GET/OPT</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Fundamental Changes Needed for GC (Reference Counting)</title>
+    <link>https://forum.rebol.info/t/fundamental-changes-needed-for-gc-reference-counting/1527</link>
+    <description>So I&#39;d gone ahead with the implementation of virtual binding and LET, because I don&#39;t see any real future for the language without it...at least not for the kinds of distinguishing features that I think would make it notable.
+
+But it means we&#39;re creating a lot of garbage.  I&#39;ve brought up pathological cases, like:
+
+    count-up x 1000000 [
+       let y: x + 1
+       print [&quot;Y is&quot; y]
+    ]
+
+Creating a million tiny tracking entities for each time through the loop is a lot of junk for the GC to have to crunch through.
+
+But the problem runs much deeper than this, because even without LETs you get issues with nested loops and their virtual binding information.  It&#39;s one example of many.
+
+It isn&#39;t allocating and freeing memory that kills us.  We have memory pools and the layouts of everything are tuned fairly well.  It&#39;s having to sweep through all of memory to clear out things that aren&#39;t used.
+
+## Reference Counting Can&#39;t Replace GC, But Would Help
+
+If we had room in each series node for a reference counter, we could notice when that counter reached zero...and free the series without allowing it to accumulate and tax the GC.
+
+That won&#39;t get everything, because blocks and objects can have cyclical references.  But a lot of the time, it would let us rapidly reclaim memory to reuse...leading to far less accumulation.
+
+So in the example of the tight COUNT-UP loop above, a FRAME! would be allocated that would have a &quot;specifier chain&quot;.  That chain would get the entry for the LET, and so that would count as a reference.  When PRINT runs, the BLOCK! **[&quot;Y is&quot; y]** fills into its argument slot...and that instance of the block cell is coupled with the specifier chain...adding another reference.  But when PRINT finished, it would release its hold on the frame where that block cell lived...in this case nothing is holding that frame (it&#39;s a native, no debugger, etc.)  That means no one is seeing the cells, so they could all be blanked out...releasing their references.  This would drop the reference **[&quot;Y is&quot; y]**&#39;s derelativization has on the specifier chain, bringing it down to 1 reference.  And then, when the frame finished that iteration of the body, it would drop the reference on the specifier chain...reducing its references to 0.  That would free the LET.
+
+*Or at least the theory is something like that.*
+
+## How Hard Would It Be?
+
+Offhand, I&#39;d say very hard.
+
+With a C++ build to draw on, it becomes easier to check.  Though I&#39;d definitely say this kind of change would be one of those moments where I&#39;d start to seriously question the sanity of trying to keep on building a sophisticated system in C89.
+
+Doing anything with low-level mechanics is harder the more low-level &quot;core&quot; code you have.  Anything written to higher-levels of abstraction like libRebol wouldn&#39;t have to change, but everything that assumes lower access gets a lot hairier.
+
+It&#39;s better at the moment to write the code how it&#39;s supposed to look...and tackle big challenges, tolerating the slowness.  But I just wanted to bring this up because I don&#39;t think the slowness can be beaten unless we do better bookkeeping to know how to reclaim memory.</description>
+    
+    <lastBuildDate>Fri, 26 Feb 2021 08:53:13 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/fundamental-changes-needed-for-gc-reference-counting/1527.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Fundamental Changes Needed for GC (Reference Counting)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So I'd gone ahead with the implementation of virtual binding and LET, because I don't see any real future for the language without it...at least not for the kinds of distinguishing features that I think would make it notable.</p>
+<p>But it means we're creating a lot of garbage.  I've brought up pathological cases, like:</p>
+<pre><code>count-up x 1000000 [
+   let y: x + 1
+   print ["Y is" y]
+]
+</code></pre>
+<p>Creating a million tiny tracking entities for each time through the loop is a lot of junk for the GC to have to crunch through.</p>
+<p>But the problem runs much deeper than this, because even without LETs you get issues with nested loops and their virtual binding information.  It's one example of many.</p>
+<p>It isn't allocating and freeing memory that kills us.  We have memory pools and the layouts of everything are tuned fairly well.  It's having to sweep through all of memory to clear out things that aren't used.</p>
+<h2>Reference Counting Can't Replace GC, But Would Help</h2>
+<p>If we had room in each series node for a reference counter, we could notice when that counter reached zero...and free the series without allowing it to accumulate and tax the GC.</p>
+<p>That won't get everything, because blocks and objects can have cyclical references.  But a lot of the time, it would let us rapidly reclaim memory to reuse...leading to far less accumulation.</p>
+<p>So in the example of the tight COUNT-UP loop above, a FRAME! would be allocated that would have a "specifier chain".  That chain would get the entry for the LET, and so that would count as a reference.  When PRINT runs, the BLOCK! <strong>["Y is" y]</strong> fills into its argument slot...and that instance of the block cell is coupled with the specifier chain...adding another reference.  But when PRINT finished, it would release its hold on the frame where that block cell lived...in this case nothing is holding that frame (it's a native, no debugger, etc.)  That means no one is seeing the cells, so they could all be blanked out...releasing their references.  This would drop the reference <strong>["Y is" y]</strong>'s derelativization has on the specifier chain, bringing it down to 1 reference.  And then, when the frame finished that iteration of the body, it would drop the reference on the specifier chain...reducing its references to 0.  That would free the LET.</p>
+<p><em>Or at least the theory is something like that.</em></p>
+<h2>How Hard Would It Be?</h2>
+<p>Offhand, I'd say very hard.</p>
+<p>With a C++ build to draw on, it becomes easier to check.  Though I'd definitely say this kind of change would be one of those moments where I'd start to seriously question the sanity of trying to keep on building a sophisticated system in C89.</p>
+<p>Doing anything with low-level mechanics is harder the more low-level "core" code you have.  Anything written to higher-levels of abstraction like libRebol wouldn't have to change, but everything that assumes lower access gets a lot hairier.</p>
+<p>It's better at the moment to write the code how it's supposed to look...and tackle big challenges, tolerating the slowness.  But I just wanted to bring this up because I don't think the slowness can be beaten unless we do better bookkeeping to know how to reclaim memory.</p>
+          <p><a href="https://forum.rebol.info/t/fundamental-changes-needed-for-gc-reference-counting/1527/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/fundamental-changes-needed-for-gc-reference-counting/1527/1</link>
+        <pubDate>Fri, 26 Feb 2021 08:53:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1527-1</guid>
+        <source url="https://forum.rebol.info/t/fundamental-changes-needed-for-gc-reference-counting/1527.rss">Fundamental Changes Needed for GC (Reference Counting)</source>
+      </item>
+  </channel>
+</rss>

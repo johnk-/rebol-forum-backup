@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Survey of Redefining Datatype WORD!s</title>
+    <link>https://forum.rebol.info/t/survey-of-redefining-datatype-word-s/1479</link>
+    <description>Here&#39;s a quick survey of what happens when you redefine **integer!: tag!**
+
+## R3-Alpha: Abstract, But Inaccurate
+
+R3-Alpha remembers what you wrote in the spec.
+
+    r3-alpha&gt;&gt; integer!: tag!  ; INTEGER! now means TAG!
+
+    r3-alpha&gt;&gt; foo: func [x [integer!]] []
+    r3-alpha&gt;&gt; help foo
+    USAGE:
+        FOO x
+
+    DESCRIPTION:
+        (undocumented)
+        FOO is a function value.
+
+    ARGUMENTS:
+        x (integer!)
+
+But showing what you said is disconnected from the behavior; as it built a concrete typeset by looking up the words you gave it:
+
+    r3-alpha&gt;&gt; foo 10
+    ** Script error: foo does not allow integer! for its x argument
+
+So it expects tags now, regardless of the `integer!` you see in HELP.  Changing it back won&#39;t make a difference...because it already captured that concrete typeset:
+
+    r3-alpha&gt;&gt; integer!: lib/integer!
+
+    r3-alpha&gt;&gt; foo 10
+    ** Script error: foo does not allow integer! for its x argument
+
+## Rebol2: Concrete
+
+Rebol2 does not remember what you said at source level...it generates the type list from the typeset it actually uses for the function:
+
+    rebol2&gt;&gt; integer!: tag!
+
+    rebol2&gt;&gt; foo: func [x [integer!]] []
+
+    rebol2&gt;&gt; help foo
+    USAGE:
+        FOO x
+
+    DESCRIPTION:
+        (undocumented)
+         FOO is a function value.
+
+    ARGUMENTS:
+         x -- (Type: tag)
+
+There we see it says **`Type: tag`**...no mention of the integer.  So your help has the benefit of being truthful, while being rather concrete.  Any flowery names or aliases you use will be gone.
+
+## Red: Crash, but basically it&#39;s the R3-Alpha approach
+
+Just typing **integer!: tag!** will crash Red.  That happens in both the stable and up-to-the-minute version.
+
+But we can get the gist of what would happen if they fixed it by making another type.
+
+    red&gt;&gt; test!: integer!
+
+    red&gt;&gt; foo: func [x [test!]] []
+
+    red&gt;&gt; foo 10
+
+    red&gt;&gt; help foo
+    USAGE:
+         FOO x
+
+    DESCRIPTION: 
+         FOO is a function! value.
+
+    ARGUMENTS:
+         x            [test!] 
+
+If you change the definition of TEST!, this will not be seen by FOO, as it&#39;s only using `[test!]` as a &quot;picture&quot; of the specification.  It concretized its parameter as whatever typeset TEST! made at the time the function was created:
+
+    red&gt;&gt; test!: tag!
+
+    red&gt;&gt; foo &lt;nochange&gt;
+    *** Script Error: foo does not allow tag for its x argument
+
+## Ren-C: Presently in same boat as R3-Alpha (hence sort of Red too)
+
+It seems misleading to be capturing information for HELP which doesn&#39;t actually correspond to a &quot;real thing&quot;.  The type word winds up being completely disconnected from what the function does.
+
+Could we (*should* we) react to changes in the source level construct?
+
+**It&#39;s fundamentally dangerous to let the user change the types of things and have the new types be what existing type checks use.**  If you have a native that only expects cells that have the integer layout and you let some other type of cell pass to that native, it will crash.  User functions shouldn&#39;t crash the interpreter, but arbitrarily bad things could happen anyway if they get types they don&#39;t expect.
+
+**We might be able to lock words that are used in type descriptions...** I mentioned this before as a possibility:
+
+    &gt;&gt; test!: integer!
+
+    &gt;&gt; foo: func [x [test!]] []
+
+    &gt;&gt; test!: tag!
+    ** Error: Cannot modify TEST! word, locked for use in a type spec
+
+This could address the potential instability issues of passing unexpected types.  Though it would have to be a &quot;semantically deep lock&quot;.  For instance, if it were legal to say:
+
+     my-types!: [integer! tag!]
+     foo: func [x [my-types!]] []
+
+...if the way types were interpreted was such that it would pull in types that were grouped in a block like that, then it would have to reach through and lock INTEGER! and TAG! too.  This same &quot;deep lock&quot; notion would need to apply to any functions that might be used.
+
+Also, it wouldn&#39;t necessarily assist with making the HELP coherent when reading it.  Because when you&#39;re just looking at a word you don&#39;t know what context it is coming from.  We could imagine that the user context might start out with no functions defined, and so its INTEGER! would be free to set to some other definition...but the lib context would have its INTEGER! locked down by the native definitions...
+
+## Is The Rebol2 Concrete Idea A Better Bet?
+
+I gather that having HELP return a customized/arbitrary block was seen as a step toward having an expanded notion of type expression.
+
+But as with most R3-Alpha &quot;advancements&quot; over Rebol2, it was a token gesture, and implementing any of it was left as an exercise to the reader.  :roll_eyes: 
+
+Where I&#39;d been leaning was the &quot;deep lock&quot; concept of hardening the definitions, and treating the block as a &quot;type dialect&quot;.  There could be some some amount of optimization (e.g. if you saw a simple list like [integer! tag!] to compress that as a bitset, and cache it).  But anything more complex would have some cost...probably not much less than if you wrote the check yourself, but with the advantage of being expressed in the function spec.
+
+But the &quot;type dialect&quot; idea hasn&#39;t seemed that promising.  I actually tried to turn MATCH into a type dialect with tricks like **[block!/2]** to represent &quot;block of length 2&quot;.  This problem is a universe unto itself... the code for it was confusing, and writing it out looks better:
+
+    &gt;&gt; arg: [a b]
+    &gt;&gt; 2 = length of try match block! arg
+    == #[true]
+
+    &gt;&gt; arg: &lt;not a block&gt;
+    &gt;&gt; 2 = length of try match block! arg  ; the try is necessary here
+    == #[false]
+
+    &gt;&gt; 2 = length of match block! arg  ; try because LENGTH OF errors on NULL
+    ** Error: NULL isn&#39;t valid for REFLECT, except for TYPE OF ()
+
+So given that we&#39;re not doing any compile-time magic, I think type checks are better expressed as something like [Eiffel preconditions](https://en.wikipedia.org/wiki/Precondition#Eiffel_example).  The language gives a lot of tools for that.  And maybe we should do better at capturing that source to be part of the public interface.
+
+Anyway...I still have more questions than answers...as usual.  But thought I&#39;d write this up as it&#39;s a fairly concrete survey of the state of things.</description>
+    
+    <lastBuildDate>Fri, 29 Jan 2021 12:13:47 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/survey-of-redefining-datatype-word-s/1479.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Survey of Redefining Datatype WORD!s</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Here's a quick survey of what happens when you redefine <strong>integer!: tag!</strong></p>
+<h2>R3-Alpha: Abstract, But Inaccurate</h2>
+<p>R3-Alpha remembers what you wrote in the spec.</p>
+<pre><code>r3-alpha&gt;&gt; integer!: tag!  ; INTEGER! now means TAG!
+
+r3-alpha&gt;&gt; foo: func [x [integer!]] []
+r3-alpha&gt;&gt; help foo
+USAGE:
+    FOO x
+
+DESCRIPTION:
+    (undocumented)
+    FOO is a function value.
+
+ARGUMENTS:
+    x (integer!)
+</code></pre>
+<p>But showing what you said is disconnected from the behavior; as it built a concrete typeset by looking up the words you gave it:</p>
+<pre><code>r3-alpha&gt;&gt; foo 10
+** Script error: foo does not allow integer! for its x argument
+</code></pre>
+<p>So it expects tags now, regardless of the <code>integer!</code> you see in HELP.  Changing it back won't make a difference...because it already captured that concrete typeset:</p>
+<pre><code>r3-alpha&gt;&gt; integer!: lib/integer!
+
+r3-alpha&gt;&gt; foo 10
+** Script error: foo does not allow integer! for its x argument
+</code></pre>
+<h2>Rebol2: Concrete</h2>
+<p>Rebol2 does not remember what you said at source level...it generates the type list from the typeset it actually uses for the function:</p>
+<pre><code>rebol2&gt;&gt; integer!: tag!
+
+rebol2&gt;&gt; foo: func [x [integer!]] []
+
+rebol2&gt;&gt; help foo
+USAGE:
+    FOO x
+
+DESCRIPTION:
+    (undocumented)
+     FOO is a function value.
+
+ARGUMENTS:
+     x -- (Type: tag)
+</code></pre>
+<p>There we see it says <strong><code>Type: tag</code></strong>...no mention of the integer.  So your help has the benefit of being truthful, while being rather concrete.  Any flowery names or aliases you use will be gone.</p>
+<h2>Red: Crash, but basically it's the R3-Alpha approach</h2>
+<p>Just typing <strong>integer!: tag!</strong> will crash Red.  That happens in both the stable and up-to-the-minute version.</p>
+<p>But we can get the gist of what would happen if they fixed it by making another type.</p>
+<pre><code>red&gt;&gt; test!: integer!
+
+red&gt;&gt; foo: func [x [test!]] []
+
+red&gt;&gt; foo 10
+
+red&gt;&gt; help foo
+USAGE:
+     FOO x
+
+DESCRIPTION: 
+     FOO is a function! value.
+
+ARGUMENTS:
+     x            [test!] 
+</code></pre>
+<p>If you change the definition of TEST!, this will not be seen by FOO, as it's only using <code>[test!]</code> as a "picture" of the specification.  It concretized its parameter as whatever typeset TEST! made at the time the function was created:</p>
+<pre><code>red&gt;&gt; test!: tag!
+
+red&gt;&gt; foo &lt;nochange&gt;
+*** Script Error: foo does not allow tag for its x argument
+</code></pre>
+<h2>Ren-C: Presently in same boat as R3-Alpha (hence sort of Red too)</h2>
+<p>It seems misleading to be capturing information for HELP which doesn't actually correspond to a "real thing".  The type word winds up being completely disconnected from what the function does.</p>
+<p>Could we (<em>should</em> we) react to changes in the source level construct?</p>
+<p><strong>It's fundamentally dangerous to let the user change the types of things and have the new types be what existing type checks use.</strong>  If you have a native that only expects cells that have the integer layout and you let some other type of cell pass to that native, it will crash.  User functions shouldn't crash the interpreter, but arbitrarily bad things could happen anyway if they get types they don't expect.</p>
+<p><strong>We might be able to lock words that are used in type descriptions...</strong> I mentioned this before as a possibility:</p>
+<pre><code>&gt;&gt; test!: integer!
+
+&gt;&gt; foo: func [x [test!]] []
+
+&gt;&gt; test!: tag!
+** Error: Cannot modify TEST! word, locked for use in a type spec
+</code></pre>
+<p>This could address the potential instability issues of passing unexpected types.  Though it would have to be a "semantically deep lock".  For instance, if it were legal to say:</p>
+<pre><code> my-types!: [integer! tag!]
+ foo: func [x [my-types!]] []
+</code></pre>
+<p>...if the way types were interpreted was such that it would pull in types that were grouped in a block like that, then it would have to reach through and lock INTEGER! and TAG! too.  This same "deep lock" notion would need to apply to any functions that might be used.</p>
+<p>Also, it wouldn't necessarily assist with making the HELP coherent when reading it.  Because when you're just looking at a word you don't know what context it is coming from.  We could imagine that the user context might start out with no functions defined, and so its INTEGER! would be free to set to some other definition...but the lib context would have its INTEGER! locked down by the native definitions...</p>
+<h2>Is The Rebol2 Concrete Idea A Better Bet?</h2>
+<p>I gather that having HELP return a customized/arbitrary block was seen as a step toward having an expanded notion of type expression.</p>
+<p>But as with most R3-Alpha "advancements" over Rebol2, it was a token gesture, and implementing any of it was left as an exercise to the reader.  <img src="https://forum.rebol.info/images/emoji/twitter/roll_eyes.png?v=9" title=":roll_eyes:" class="emoji" alt=":roll_eyes:"></p>
+<p>Where I'd been leaning was the "deep lock" concept of hardening the definitions, and treating the block as a "type dialect".  There could be some some amount of optimization (e.g. if you saw a simple list like [integer! tag!] to compress that as a bitset, and cache it).  But anything more complex would have some cost...probably not much less than if you wrote the check yourself, but with the advantage of being expressed in the function spec.</p>
+<p>But the "type dialect" idea hasn't seemed that promising.  I actually tried to turn MATCH into a type dialect with tricks like <strong>[block!/2]</strong> to represent "block of length 2".  This problem is a universe unto itself... the code for it was confusing, and writing it out looks better:</p>
+<pre><code>&gt;&gt; arg: [a b]
+&gt;&gt; 2 = length of try match block! arg
+== #[true]
+
+&gt;&gt; arg: &lt;not a block&gt;
+&gt;&gt; 2 = length of try match block! arg  ; the try is necessary here
+== #[false]
+
+&gt;&gt; 2 = length of match block! arg  ; try because LENGTH OF errors on NULL
+** Error: NULL isn't valid for REFLECT, except for TYPE OF ()
+</code></pre>
+<p>So given that we're not doing any compile-time magic, I think type checks are better expressed as something like <a href="https://en.wikipedia.org/wiki/Precondition#Eiffel_example">Eiffel preconditions</a>.  The language gives a lot of tools for that.  And maybe we should do better at capturing that source to be part of the public interface.</p>
+<p>Anyway...I still have more questions than answers...as usual.  But thought I'd write this up as it's a fairly concrete survey of the state of things.</p>
+          <p><a href="https://forum.rebol.info/t/survey-of-redefining-datatype-word-s/1479/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/survey-of-redefining-datatype-word-s/1479/1</link>
+        <pubDate>Fri, 29 Jan 2021 12:13:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1479-1</guid>
+        <source url="https://forum.rebol.info/t/survey-of-redefining-datatype-word-s/1479.rss">Survey of Redefining Datatype WORD!s</source>
+      </item>
+  </channel>
+</rss>

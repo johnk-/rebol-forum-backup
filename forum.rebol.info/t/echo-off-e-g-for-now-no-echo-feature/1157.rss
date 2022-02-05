@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>ECHO OFF (e.g. for now, no ECHO feature)</title>
+    <link>https://forum.rebol.info/t/echo-off-e-g-for-now-no-echo-feature/1157</link>
+    <description>Internally to R3-Alpha there was some code for implementing an ECHO feature, (a command which [existed in Rebol2](http://www.rebol.com/docs/words/wecho.html)).  This was something where you could capture the standard output of your interactive session to a file.
+
+It was one of those things that was hard to keep working... that didn&#39;t have any tests... so one didn&#39;t know what &quot;working&quot; was in the first place.  What were the expectations?  If all you have are hooks underneath the PORT! level in C code, that&#39;s going to lead to some strange log files.  Without console awareness, if you&#39;re merely streaming what got printed to standard output, you&#39;d have your transcript littered with non-sequitur **`&gt;&gt;`** prompts.
+
+If you&#39;re going to log the prompts, you probably want to log what the Rebol command input to the console was too.  If you&#39;re not going to log the prompts you probably don&#39;t want the *command* input, but you probably want interactive input in the log for other ASKs from your session.  Not to mention that an actually useful **echo** command would probably have a number of other useful features, for automatically naming and incrementing your log files.
+
+It sounds cool (Red has [a wish for it](https://github.com/red/red/issues/2487), including **echo input**, hence console awareness.)  But you don&#39;t want much of the logic for what ECHO does in C code.  So at one point, I took a stab at moving it out to userspace, building on HIJACK of WRITE-STDOUT and INPUT:
+
+[https://github.com/metaeducation/ren-c/pull/445](https://github.com/metaeducation/ren-c/pull/445)
+
+However, it has atrophied.  And with INPUT no longer being the chokepoint by which input is read due to the ASK redesign, it seems time to either revisit it and redo it...or let it go for now.  (Though of course, you can do a quick and dirty version on par with Rebol2&#39;s version if you don&#39;t mind it being bad, with **hijack &#39;write-stdout**...and just append everything to a file.)
+
+I&#39;m going with letting it go as a feature design space, and let people improvise their own solutions if they need them.  It&#39;s a nice wish, but as we move forward there&#39;s only so much non-maintained code to leave hanging around as a reminder of a wish.  So here&#39;s what it was, and discussion of the feature can reopen at a later date...when we&#39;ll likely be wanting to bring it back with a &quot;web console first&quot; point of view:
+
+    echo: function [
+        {Copies console I/O to a file.}
+
+        return: &lt;void&gt;
+        &#39;instruction [file! text! block! word!]
+            {File or template with * substitution, or command: [ON OFF RESET].}
+
+        &lt;static&gt;
+        target ([%echo * %.txt])
+        form-target
+        sub (&quot;&quot;)
+        old-input (copy :input)
+        old-write-stdout (copy :write-stdout)
+        hook-in
+        hook-out
+        logger
+        ensure-echo-on
+        ensure-echo-off
+    ][
+        ; Sample &quot;interesting&quot; feature, be willing to form the filename by filling
+        ; in the blank with a substitute string you can change.
+        ;
+        form-target: default [func [return: [file!]] [
+            either block? target [
+                as file! unspaced replace (copy target) &#39;* (
+                    either empty? sub [[]] [unspaced [&quot;-&quot; sub]]
+                )
+            ][
+                target
+            ]
+        ]]
+
+        logger: default [func [value][
+            write/append form-target either char? value [to-text value][value]
+            value
+        ]]
+
+        ; Installed hook; in an ideal world, WRITE-STDOUT would not exist and
+        ; would just be WRITE, so this would be hooking WRITE and checking for
+        ; STDOUT or falling through.  Note WRITE doesn&#39;t take CHAR! right now.
+        ;
+        hook-out: default [func [
+            return: &lt;void&gt;
+            value [text! char! binary!]
+                {Text to write, if a STRING! or CHAR! is converted to OS format}
+        ][
+            old-write-stdout value
+            logger value
+        ]]
+
+        ; It looks a bit strange to look at a console log without the input
+        ; being included too.  Note that hooking the input function doesn&#39;t get
+        ; the newlines, has to be added.
+        ;
+        hook-in: default [
+            chain [
+                :old-input
+                    |
+                func [value] [
+                    logger value
+                    logger newline
+                    value  ; hook still needs to return the original value
+                ]
+            ]
+        ]
+
+        ensure-echo-on: default [does [
+            ;
+            ; Hijacking is a NO-OP if the functions are the same.
+            ; (this is indicated by a BLANK! return vs an ACTION!)
+            ;
+            hijack &#39;write-stdout &#39;hook-out
+            hijack &#39;input &#39;hook-in
+        ]]
+
+        ensure-echo-off: default [does [
+            ;
+            ; Restoring a hijacked function with its original will
+            ; remove any overhead and be as fast as it was originally.
+            ;
+            hijack &#39;write-stdout &#39;old-write-stdout
+            hijack &#39;input &#39;old-input
+        ]]
+
+        switch type of instruction [
+            word! [
+                switch instruction [
+                    &#39;on [ensure-echo-on]
+                    &#39;off [ensure-echo-off]
+                    &#39;reset [
+                        delete form-target
+                        write/append form-target &quot;&quot;  ; or just have it not exist?
+                    ]
+                ] else [
+                    word: to-uppercase word
+                    fail [
+                        &quot;Unknown ECHO command, not [ON OFF RESET]&quot; LF
+                        &quot;Use ECHO&quot; unspaced [&quot;(&quot; word &quot;)&quot;] &quot;to force evaluation&quot;
+                    ]
+                ]
+            ]
+
+            text! [
+                sub: instruction
+                ensure-echo-on
+            ]
+
+            block! file! [
+                target: instruction
+                ensure-echo-on
+            ]
+        ]
+    ]</description>
+    
+    <lastBuildDate>Fri, 03 May 2019 00:11:48 +0000</lastBuildDate>
+    <category>Console</category>
+    <atom:link href="https://forum.rebol.info/t/echo-off-e-g-for-now-no-echo-feature/1157.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>ECHO OFF (e.g. for now, no ECHO feature)</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>I wonder if we can have a library of half baked implementations for people to work on? So that people don't have to start from scratch.</p>
+          <p><a href="https://forum.rebol.info/t/echo-off-e-g-for-now-no-echo-feature/1157/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/echo-off-e-g-for-now-no-echo-feature/1157/2</link>
+        <pubDate>Fri, 03 May 2019 00:11:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1157-2</guid>
+        <source url="https://forum.rebol.info/t/echo-off-e-g-for-now-no-echo-feature/1157.rss">ECHO OFF (e.g. for now, no ECHO feature)</source>
+      </item>
+      <item>
+        <title>ECHO OFF (e.g. for now, no ECHO feature)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Internally to R3-Alpha there was some code for implementing an ECHO feature, (a command which <a href="http://www.rebol.com/docs/words/wecho.html" rel="nofollow noopener">existed in Rebol2</a>).  This was something where you could capture the standard output of your interactive session to a file.</p>
+<p>It was one of those things that was hard to keep working... that didn't have any tests... so one didn't know what "working" was in the first place.  What were the expectations?  If all you have are hooks underneath the PORT! level in C code, that's going to lead to some strange log files.  Without console awareness, if you're merely streaming what got printed to standard output, you'd have your transcript littered with non-sequitur <strong><code>&gt;&gt;</code></strong> prompts.</p>
+<p>If you're going to log the prompts, you probably want to log what the Rebol command input to the console was too.  If you're not going to log the prompts you probably don't want the <em>command</em> input, but you probably want interactive input in the log for other ASKs from your session.  Not to mention that an actually useful <strong>echo</strong> command would probably have a number of other useful features, for automatically naming and incrementing your log files.</p>
+<p>It sounds cool (Red has <a href="https://github.com/red/red/issues/2487" rel="nofollow noopener">a wish for it</a>, including <strong>echo input</strong>, hence console awareness.)  But you don't want much of the logic for what ECHO does in C code.  So at one point, I took a stab at moving it out to userspace, building on HIJACK of WRITE-STDOUT and INPUT:</p>
+<p><a href="https://github.com/metaeducation/ren-c/pull/445" rel="nofollow noopener">https://github.com/metaeducation/ren-c/pull/445</a></p>
+<p>However, it has atrophied.  And with INPUT no longer being the chokepoint by which input is read due to the ASK redesign, it seems time to either revisit it and redo it...or let it go for now.  (Though of course, you can do a quick and dirty version on par with Rebol2's version if you don't mind it being bad, with <strong>hijack 'write-stdout</strong>...and just append everything to a file.)</p>
+<p>I'm going with letting it go as a feature design space, and let people improvise their own solutions if they need them.  It's a nice wish, but as we move forward there's only so much non-maintained code to leave hanging around as a reminder of a wish.  So here's what it was, and discussion of the feature can reopen at a later date...when we'll likely be wanting to bring it back with a "web console first" point of view:</p>
+<pre><code>echo: function [
+    {Copies console I/O to a file.}
+
+    return: &lt;void&gt;
+    'instruction [file! text! block! word!]
+        {File or template with * substitution, or command: [ON OFF RESET].}
+
+    &lt;static&gt;
+    target ([%echo * %.txt])
+    form-target
+    sub ("")
+    old-input (copy :input)
+    old-write-stdout (copy :write-stdout)
+    hook-in
+    hook-out
+    logger
+    ensure-echo-on
+    ensure-echo-off
+][
+    ; Sample "interesting" feature, be willing to form the filename by filling
+    ; in the blank with a substitute string you can change.
+    ;
+    form-target: default [func [return: [file!]] [
+        either block? target [
+            as file! unspaced replace (copy target) '* (
+                either empty? sub [[]] [unspaced ["-" sub]]
+            )
+        ][
+            target
+        ]
+    ]]
+
+    logger: default [func [value][
+        write/append form-target either char? value [to-text value][value]
+        value
+    ]]
+
+    ; Installed hook; in an ideal world, WRITE-STDOUT would not exist and
+    ; would just be WRITE, so this would be hooking WRITE and checking for
+    ; STDOUT or falling through.  Note WRITE doesn't take CHAR! right now.
+    ;
+    hook-out: default [func [
+        return: &lt;void&gt;
+        value [text! char! binary!]
+            {Text to write, if a STRING! or CHAR! is converted to OS format}
+    ][
+        old-write-stdout value
+        logger value
+    ]]
+
+    ; It looks a bit strange to look at a console log without the input
+    ; being included too.  Note that hooking the input function doesn't get
+    ; the newlines, has to be added.
+    ;
+    hook-in: default [
+        chain [
+            :old-input
+                |
+            func [value] [
+                logger value
+                logger newline
+                value  ; hook still needs to return the original value
+            ]
+        ]
+    ]
+
+    ensure-echo-on: default [does [
+        ;
+        ; Hijacking is a NO-OP if the functions are the same.
+        ; (this is indicated by a BLANK! return vs an ACTION!)
+        ;
+        hijack 'write-stdout 'hook-out
+        hijack 'input 'hook-in
+    ]]
+
+    ensure-echo-off: default [does [
+        ;
+        ; Restoring a hijacked function with its original will
+        ; remove any overhead and be as fast as it was originally.
+        ;
+        hijack 'write-stdout 'old-write-stdout
+        hijack 'input 'old-input
+    ]]
+
+    switch type of instruction [
+        word! [
+            switch instruction [
+                'on [ensure-echo-on]
+                'off [ensure-echo-off]
+                'reset [
+                    delete form-target
+                    write/append form-target ""  ; or just have it not exist?
+                ]
+            ] else [
+                word: to-uppercase word
+                fail [
+                    "Unknown ECHO command, not [ON OFF RESET]" LF
+                    "Use ECHO" unspaced ["(" word ")"] "to force evaluation"
+                ]
+            ]
+        ]
+
+        text! [
+            sub: instruction
+            ensure-echo-on
+        ]
+
+        block! file! [
+            target: instruction
+            ensure-echo-on
+        ]
+    ]
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/echo-off-e-g-for-now-no-echo-feature/1157/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/echo-off-e-g-for-now-no-echo-feature/1157/1</link>
+        <pubDate>Thu, 02 May 2019 21:21:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1157-1</guid>
+        <source url="https://forum.rebol.info/t/echo-off-e-g-for-now-no-echo-feature/1157.rss">ECHO OFF (e.g. for now, no ECHO feature)</source>
+      </item>
+  </channel>
+</rss>

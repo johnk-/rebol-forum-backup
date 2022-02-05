@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>A Quantum Leap in Testing: Isolating Into Contexts</title>
+    <link>https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680</link>
+    <description>Long ago @Brett took on the lame-but-important task of breaking the tests into individual files (from a giant, monolithic %core-tests.r file).
+
+And as part of that task, I asked the favor of converting it from the traditional &quot;tests-as-BLOCK!s&quot;:
+
+    ; Original Rebol Test Format
+    [&quot;abba&quot; = reverse &quot;abba&quot;]
+    [
+        foo: func [x] [
+            x + 1000
+        ]
+        true  ; tests have to return *exactly* LOGIC! true
+    ]
+    [1020 = foo x]
+    [304 = foo -696]
+
+...to use GROUP!s...
+
+    ; Ren-C Adjusted Test Format
+    (&quot;abba&quot; = reverse &quot;abba&quot;)
+    (
+        foo: func [x] [
+            x + 1000
+        ]
+        true
+    )
+    (1020 = foo x)
+    (304 = foo -696)
+
+# ...it Wasn&#39;t Just Change for the Sake of Change...
+
+I had a plan.
+
+The idea was that I wanted to save the more &quot;barrier-like&quot; blocks to represent isolated groups.  So then in the &quot;someday&quot; that we could run these tests into isolated contexts, we&#39;d be able to group only those tests that needed to interact together.
+
+While we were waiting for isolation technology to improve, the blocks were still used.  They were just documentation.
+
+**But today that is no longer--by the magic of science :man_scientist:   they are isolated!**
+
+    (&quot;abba&quot; = reverse &quot;abba&quot;)  ; does not need foo, stands alone
+
+    [
+        (foo: func [x] [
+            x + 1000
+        ]
+        true)
+
+        (1020 = foo x)  ; uses foo, wants to be in same isolated context
+        (304 = foo -696)  ; also sees foo
+    ]
+
+## But It&#39;s Better Than I Thought!
+
+**We can actually isolate every test if we feel like it!   We can run the thousands of tests and add nothing to the user context in the process!**
+
+Is it slower, you ask?  No--IT&#39;S MUCH FASTER!  The GC can clean things up it&#39;s not using.
+
+It Has Been A Good Test For Sea Of Words Modules!  Making thousands of mini-modules was a good exercise and found a couple of bugs.  Nothing too big, but certainly good to have that extra stress test.
+
+*(We still might try a mode where we don&#39;t isolate, just to throw a wrench in the GC and cause the user context to puff up.  It&#39;s a semi-random sort of stress test.)*
+
+## If BLOCK! Means &quot;Isolate Test&quot;, Most Want The Insulation
+
+    [&quot;abba&quot; = reverse &quot;abba&quot;]  ; we can isolate this!
+
+    [
+        (foo: func [x] [  ; we can *not* isolate this...
+            x + 1000   ; ...and make that also mean &quot;don&#39;t check result!&quot;
+        ])  ; ...so no need for the &quot;true&quot; here
+
+        [y: 1020, y = foo x]  ; uses foo, doesn&#39;t need to expose Y
+        [304 = foo -696]  ; uses foo, doesn&#39;t need to see Y
+    ]
+
+We don&#39;t quite yet have the underlying mechanisms to get that extra level of inheritance needed to isolate the &quot;cluster&quot; of tests, and then get that nested isolation for the blocks in the cluster.  But it&#39;s likely not too far away!
+
+## Could We do Better With the Notation?
+
+I tried some experimentation with separating out the idea of putting freeform code in the &quot;cluster&quot; of tests, and saying the freeform code is what&#39;s not isolated:
+
+    [
+        foo: func [x] [
+            x + 1000
+        ]
+
+        [1020 = foo x]
+        [304 = foo -696]
+    ]
+
+You could imagine it running not just setup code for definitions, but also shutdown:
+
+    [
+        port: open %test-data.txt
+
+        [port? port]
+        [binary? read port]
+
+        close port
+    ]
+
+But trying my hand at it, I think being this freeform isn&#39;t a good idea for this particular dialect.  There&#39;s potential for confusion since you&#39;re sensing so much based on when a block is on a newline or not.  Seems easy to make mistakes.
+
+Main thing to focus on here is the advancements in the isolation.  I&#39;ll keep thinking on the dialect!</description>
+    
+    <lastBuildDate>Wed, 25 Aug 2021 18:55:09 +0000</lastBuildDate>
+    <category>Testing</category>
+    <atom:link href="https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>A Quantum Leap in Testing: Isolating Into Contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1680">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><em>(Note2: Unfortunately, we can't use double-spacing to mean anything...because LOAD doesn't preserve double-spacing.)</em></p>
+</blockquote>
+</aside>
+<p><strong>So...this has led me to think we may well need to be able to discern double-spacing.</strong></p>
+<p>We can find the bits to encode this, as well as other formatting.  The main problem is just what happens as you reorganize code and this formatting travels with it.  You get weird-looking stuff.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>Also, some of the conveniences like <strong>append/line</strong> (which things like <strong>keep/line</strong> inherit) get more complex.  Although I guess you could say:</p>
+<pre><code>&gt;&gt; collect [keep/line [a b] keep/line [] keep/line [c d]]
+== [
+    a b
+
+    c d
+]
+</code></pre>
+<p>Tricky, but doable.</p>
+<p>I guess the thing I've just noticed visually is that when it comes to horizontal separators, a double-space says a lot by saying nothing.  These tests would be much easier to maintain, I think, if they were just spaced.</p>
+<p>If you wanted internal spacing in your test, <em>then</em> you could use a GROUP!.</p>
+          <p><a href="https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680/3</link>
+        <pubDate>Wed, 25 Aug 2021 18:55:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1680-3</guid>
+        <source url="https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680.rss">A Quantum Leap in Testing: Isolating Into Contexts</source>
+      </item>
+      <item>
+        <title>A Quantum Leap in Testing: Isolating Into Contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1680">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Main thing to focus on here is the advancements in the isolation. I'll keep thinking on the dialect!</p>
+</blockquote>
+</aside>
+<p>Few random brainstorms:</p>
+<p>Maybe having setup code segments return <code>true</code> isn't so bad?  It helps make sure you know what you're doing, and you haven't accidentally run and vaporized some test code result due to a bug in the test system itself.  It's more foolproof.</p>
+<p>We could go in another direction...foregoing the GROUP!/BLOCK! requirement and using dashes:</p>
+<pre><code>[
+    port: (open %test-data.txt)
+    true
+    ----
+    port? port
+    ----
+    binary? read port
+    ----
+    close port
+    true
+]
+</code></pre>
+<p>It does start feeling a bit junky.  Red's tests have a lot of dashes and squiggles in them to try and put dividers all over the place, and I kind of prefer the more minimalist direction the historical notation was shooting for.</p>
+<p>But dashes start to look more appealing the more complicated your tests get:</p>
+<pre><code>; AS aliasing of TEXT! as BINARY! constrains binary modifications to UTF-8
+https://github.com/metaeducation/ren-c/issues/817
+[
+    t: "օʊʀֆօռǟɢɢօռ"
+    b: as binary! t
+    true
+    ----
+    insert b "ƈ"
+    t = "ƈօʊʀֆօռǟɢɢօռ"
+    ----
+    append b #{C9A8}
+    t = "ƈօʊʀֆօռǟɢɢօռɨ"
+    ----
+    e: trap [insert b #{E08080}]
+    e/id = 'bad-utf8-bin-edit
+    ----
+    b: as binary! const "test"
+    e: trap [append b 1]
+    e/id = 'const-value
+]
+</code></pre>
+<p>This loses the distinction I wanted to make between code that is supposed to be common, and the reliant code bits that are supposed to be all independent.  :-/</p>
+<p>But with the delimiters, you have their potential ambiguous use in the non-test portions... and it gets uncomfortable knowing where to put them.  I'd had some various bad answers historically, that don't get better with code outside the GROUP! coming on the scene:</p>
+<pre><code>[
+    t: "օʊʀֆօռǟɢɢօռ"
+    b: as binary! t
+(
+    insert b "ƈ"
+    t = "ƈօʊʀֆօռǟɢɢօռ"
+)(
+    append b #{C9A8}
+    t = "ƈօʊʀֆօռǟɢɢօռɨ"
+)(
+    e: trap [insert b #{E08080}]
+    e/id = 'bad-utf8-bin-edit
+)(
+    b: as binary! const "test"
+    e: trap [append b 1]
+    e/id = 'const-value
+)]
+</code></pre>
+<p>Not putting the groups on a separate line for multiline is an option, probably the best one:</p>
+<pre><code>[
+    (t: "օʊʀֆօռǟɢɢօռ"
+    b: as binary! t)
+
+    [insert b "ƈ"
+    t = "ƈօʊʀֆօռǟɢɢօռ"]
+
+    [append b #{C9A8}
+    t = "ƈօʊʀֆօռǟɢɢօռɨ"]
+
+    [e: trap [insert b #{E08080}]
+    e/id = 'bad-utf8-bin-edit]
+
+    [b: as binary! const "test"
+    e: trap [append b 1]
+    e/id = 'const-value]
+]
+</code></pre>
+<p><em>(Note: The GROUP! vs. BLOCK! distinction seems pretty subtle here, in a way that's surprising considering that we read code all the time and need to know the difference.  It looks more obvious without the group.)</em></p>
+<p><em>(Note2: Unfortunately, we can't use double-spacing to mean anything...because LOAD doesn't preserve double-spacing.)</em>  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<h2>I'm Just Not Going to go Gung-Ho Converting The Tests Yet...</h2>
+<p>My format choice is compatible with what was there and will give an opportunity to experiment.  Once there's more experience with it I'll make some decisions...</p>
+          <p><a href="https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680/2</link>
+        <pubDate>Mon, 23 Aug 2021 10:20:27 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1680-2</guid>
+        <source url="https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680.rss">A Quantum Leap in Testing: Isolating Into Contexts</source>
+      </item>
+      <item>
+        <title>A Quantum Leap in Testing: Isolating Into Contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Long ago <a class="mention" href="/u/brett">@Brett</a> took on the lame-but-important task of breaking the tests into individual files (from a giant, monolithic %core-tests.r file).</p>
+<p>And as part of that task, I asked the favor of converting it from the traditional "tests-as-BLOCK!s":</p>
+<pre><code>; Original Rebol Test Format
+["abba" = reverse "abba"]
+[
+    foo: func [x] [
+        x + 1000
+    ]
+    true  ; tests have to return *exactly* LOGIC! true
+]
+[1020 = foo x]
+[304 = foo -696]
+</code></pre>
+<p>...to use GROUP!s...</p>
+<pre><code>; Ren-C Adjusted Test Format
+("abba" = reverse "abba")
+(
+    foo: func [x] [
+        x + 1000
+    ]
+    true
+)
+(1020 = foo x)
+(304 = foo -696)
+</code></pre>
+<h1>...it Wasn't Just Change for the Sake of Change...</h1>
+<p>I had a plan.</p>
+<p>The idea was that I wanted to save the more "barrier-like" blocks to represent isolated groups.  So then in the "someday" that we could run these tests into isolated contexts, we'd be able to group only those tests that needed to interact together.</p>
+<p>While we were waiting for isolation technology to improve, the blocks were still used.  They were just documentation.</p>
+<p><strong>But today that is no longer--by the magic of science <img src="https://forum.rebol.info/images/emoji/twitter/man_scientist.png?v=9" title=":man_scientist:" class="emoji" alt=":man_scientist:">   they are isolated!</strong></p>
+<pre><code>("abba" = reverse "abba")  ; does not need foo, stands alone
+
+[
+    (foo: func [x] [
+        x + 1000
+    ]
+    true)
+
+    (1020 = foo x)  ; uses foo, wants to be in same isolated context
+    (304 = foo -696)  ; also sees foo
+]
+</code></pre>
+<h2>But It's Better Than I Thought!</h2>
+<p><strong>We can actually isolate every test if we feel like it!   We can run the thousands of tests and add nothing to the user context in the process!</strong></p>
+<p>Is it slower, you ask?  No--IT'S MUCH FASTER!  The GC can clean things up it's not using.</p>
+<p>It Has Been A Good Test For Sea Of Words Modules!  Making thousands of mini-modules was a good exercise and found a couple of bugs.  Nothing too big, but certainly good to have that extra stress test.</p>
+<p><em>(We still might try a mode where we don't isolate, just to throw a wrench in the GC and cause the user context to puff up.  It's a semi-random sort of stress test.)</em></p>
+<h2>If BLOCK! Means "Isolate Test", Most Want The Insulation</h2>
+<pre><code>["abba" = reverse "abba"]  ; we can isolate this!
+
+[
+    (foo: func [x] [  ; we can *not* isolate this...
+        x + 1000   ; ...and make that also mean "don't check result!"
+    ])  ; ...so no need for the "true" here
+
+    [y: 1020, y = foo x]  ; uses foo, doesn't need to expose Y
+    [304 = foo -696]  ; uses foo, doesn't need to see Y
+]
+</code></pre>
+<p>We don't quite yet have the underlying mechanisms to get that extra level of inheritance needed to isolate the "cluster" of tests, and then get that nested isolation for the blocks in the cluster.  But it's likely not too far away!</p>
+<h2>Could We do Better With the Notation?</h2>
+<p>I tried some experimentation with separating out the idea of putting freeform code in the "cluster" of tests, and saying the freeform code is what's not isolated:</p>
+<pre><code>[
+    foo: func [x] [
+        x + 1000
+    ]
+
+    [1020 = foo x]
+    [304 = foo -696]
+]
+</code></pre>
+<p>You could imagine it running not just setup code for definitions, but also shutdown:</p>
+<pre><code>[
+    port: open %test-data.txt
+
+    [port? port]
+    [binary? read port]
+
+    close port
+]
+</code></pre>
+<p>But trying my hand at it, I think being this freeform isn't a good idea for this particular dialect.  There's potential for confusion since you're sensing so much based on when a block is on a newline or not.  Seems easy to make mistakes.</p>
+<p>Main thing to focus on here is the advancements in the isolation.  I'll keep thinking on the dialect!</p>
+          <p><a href="https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680/1</link>
+        <pubDate>Mon, 23 Aug 2021 09:38:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1680-1</guid>
+        <source url="https://forum.rebol.info/t/a-quantum-leap-in-testing-isolating-into-contexts/1680.rss">A Quantum Leap in Testing: Isolating Into Contexts</source>
+      </item>
+  </channel>
+</rss>

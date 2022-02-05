@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Progress on Nativizing Parser Combinators</title>
+    <link>https://forum.rebol.info/t/progress-on-nativizing-parser-combinators/1636</link>
+    <description>So... let&#39;s start with a virtual machine I have...where r3-alpha gets this time for a rather simple parse operation:
+
+    r3-alpha&gt;&gt; delta-time [
+         parse &quot;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&quot; [
+             some [opt &quot;c&quot; opt &quot;b&quot; opt &quot;a&quot;]
+         ]
+     ]
+     == 0:00:00.000020  ; averages around here on 
+
+UPARSE was written with design consideration only; it wasn&#39;t even optimized usermode code.  Performance was no object.  And of course, that shows:
+
+    uparse-on-day-zero&gt;&gt; delta-time [
+         uparse &quot;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&quot; [
+             some further [opt &quot;c&quot; opt &quot;b&quot; opt &quot;a&quot;]  ; here UPARSE needs FURTHER
+         ]
+     ]
+     == 0:00:00.014000  ; averages around here
+
+The performance varies a lot because there&#39;s so much stuff happening the GC gets triggered, so you have to eyeball it.  
+
+But it shows we&#39;re talking a ballpark of around 700x slower.  This didn&#39;t surprise me at all...running usermode code for all parts of the operation...specializing functions and making frames on so many steps... in a completely general architecture.  **I&#39;m actually surprised it wasn&#39;t even slower!**
+
+I began chipping away at the infrastructure for combinators to make more of it native.  Generally not the combinators themselves yet (actually only OPT has been changed here...)
+
+    basics-plus-opt&gt;&gt; delta-time [
+         uparse &quot;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&quot; [
+             some further [opt &quot;c&quot; opt &quot;b&quot; opt &quot;a&quot;]
+         ]
+    ]
+    == 0:00:00.006000  ; averages around here
+
+So that cuts it from 700x down to around 300x slower.  This is actually not bad for a beginning!
+
+*In fact*, right here in real-time I&#39;m going to use the techniques I&#39;ve established to make the combinator that matches TEXT! native and see how much that moves the needle.
+
+    with-text&gt;&gt; delta-time [
+         uparse &quot;aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&quot; [
+             some further [opt &quot;c&quot; opt &quot;b&quot; opt &quot;a&quot;]
+         ]
+    ]
+    == 0:00:00.005000  ; averages around here
+
+Just then I&#39;d estimate an hour of work just took it from 300x slower to 250x slower.
+
+[Here is the usermode form of the original TEXT! combinator](https://github.com/metaeducation/ren-c/blob/4a17795c153ff45d8477387987fe8e15e7a2480b/src/mezz/uparse.reb#L846)
+
+[Here is the native form that I compiled, tested, and measured in about an hour on a slow-compiling machine...](https://github.com/metaeducation/ren-c/blob/4a17795c153ff45d8477387987fe8e15e7a2480b/src/core/functionals/c-combinator.c#L367)
+
+Since I just succeeded so quickly, [I just hacked up SOME and FURTHER as natives...they&#39;re easier than TEXT!](https://github.com/metaeducation/ren-c/commit/608286c941889a36c70fbdec984f9d5ccd0d00a7)
+
+And with that it dips down to around 0:00:00.004000.  *A total of an hour and a half of work for three combinators and we went from 300x slower down to a mere 200x slower!*  :)
+
+It might seem for this example we&#39;ve run out of combinators to make native.  But there&#39;s one combinator you&#39;re missing that might not be obvious...that&#39;s the BLOCK! combinator which orchestrates the sequencing of the OPT clauses.  It&#39;s quite a high value case to optimize!
+
+Doing that optimization would mean that with any luck, we&#39;d get to 150x slower than R3-Alpha PARSE for this (or any other) apples-to-apples comparison task.  But I have some things I need to do first, and it would take longer than I want before I finish this post.  But I think you got the idea.
+
+## Even With The High Multiplier, I&#39;m Optimistic About The Endgame
+
+There&#39;s still a bunch of infrastructure besides the combinators to attack where much of the cost exists.  Most of the combinators themselves are pretty simple, but the logic that does the &quot;combinating&quot; itself is not!
+
+But let&#39;s imagine that at the end of optimizing *all* the usermode pieces into native pieces it hits a wall of being 20x or so slower than traditional PARSE.  What then?
+
+Let me give you several reasons why I&#39;m optimistic:
+
+* **The UPARSE concept is built around fundamental mechanics that are used everywhere by the system.**  For example: there&#39;s no special &quot;parse stack&quot;, it&#39;s using function calls on the same stack as everything else.  It uses clever mechanisms to hook which levels are parsing so you can get UPARSE trace output which doesn&#39;t mix up regular function calls with the combinators, but those mechanisms are generic too.
+
+  This has plenty of good implications.  Improvements to the function call stack become improvements to the &quot;UPARSE stack&quot; automaticlly (e.g. stacklessness).  Any work we do on making parse recursions faster are likely to make all function calls faster.  Think about all the other aspects this applies to as well.
+
+  *(Of course I&#39;ll just restate that all of this is in service of one of the big goals...of letting users pick their own mixes of combinators and write their own.  It wasn&#39;t just about reusing work, it was about designing the protocol in a way that the native code wouldn&#39;t be locked into a monolithic blob just to save on optimizing some switch() statement.  Everything can be teased out and reconfigured as a mash-up of natives and usermode code.)*
+
+* **UPARSE is vastly more powerful, so chasing performance parity with any given laborious piece of historical parse code may not be the point.**  Let&#39;s say you can express something briefly and eloquently as an idiomatic UPARSE expression and that code runs in 1 second.  Then does it matter that when you write it the convoluted way in historical PARSE it takes 3 seconds, when that convoluted code would run in UPARSE in 5?
+
+* **People with performance-sensitive scenarios who hit a bottleneck can attack that with a combinator specific to their purpose.**  If you write **`opt some [&quot;a&quot; | &quot;b&quot;]`** so often that it&#39;s bothering you to pay for all the generalized protocols where OPT talks to SOME talks to BLOCK! talks to TEXT!... you could natively write the OPT-SOME-A-OR-B combinator and plug it in.
+
+  In addition: there could be ways to make a semi-optimized version of an OPT-SOME-A-OR-B by just asking to pre-combinate those things together.  This would cost you some flexibility... in the past I&#39;ve talked about [when PARSE notices rule changes&quot;](https://forum.rebol.info/t/when-should-parse-notice-changes/1528/3) and that&#39;s the kind of phenomenon that might come into play.
+
+  *(Note: Building a CHAIN of functions like **negated-multiply: chain [:multiply | :negate]** have a similar aspect.  They are faster but if what&#39;s assigned to the word MULTIPLY or NEGATE change they won&#39;t see it...as they commit to the definitions from the time of the CHAIN.)*
+
+* **The code is organized so much better with responsibility isolated so clearly that I think clever optimizations will be much easier to try.**  There was little you could do with R3-Alpha PARSE without worrying about breaking it.
+
+## I Hope I&#39;m Right
+
+It&#39;s a challenge but an interesting one to make UPARSE perform.  Let&#39;s see where this goes...</description>
+    
+    <lastBuildDate>Mon, 19 Jul 2021 10:23:01 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/progress-on-nativizing-parser-combinators/1636.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Progress on Nativizing Parser Combinators</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So... let's start with a virtual machine I have...where r3-alpha gets this time for a rather simple parse operation:</p>
+<pre><code>r3-alpha&gt;&gt; delta-time [
+     parse "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [
+         some [opt "c" opt "b" opt "a"]
+     ]
+ ]
+ == 0:00:00.000020  ; averages around here on 
+</code></pre>
+<p>UPARSE was written with design consideration only; it wasn't even optimized usermode code.  Performance was no object.  And of course, that shows:</p>
+<pre><code>uparse-on-day-zero&gt;&gt; delta-time [
+     uparse "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [
+         some further [opt "c" opt "b" opt "a"]  ; here UPARSE needs FURTHER
+     ]
+ ]
+ == 0:00:00.014000  ; averages around here
+</code></pre>
+<p>The performance varies a lot because there's so much stuff happening the GC gets triggered, so you have to eyeball it.</p>
+<p>But it shows we're talking a ballpark of around 700x slower.  This didn't surprise me at all...running usermode code for all parts of the operation...specializing functions and making frames on so many steps... in a completely general architecture.  <strong>I'm actually surprised it wasn't even slower!</strong></p>
+<p>I began chipping away at the infrastructure for combinators to make more of it native.  Generally not the combinators themselves yet (actually only OPT has been changed here...)</p>
+<pre><code>basics-plus-opt&gt;&gt; delta-time [
+     uparse "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [
+         some further [opt "c" opt "b" opt "a"]
+     ]
+]
+== 0:00:00.006000  ; averages around here
+</code></pre>
+<p>So that cuts it from 700x down to around 300x slower.  This is actually not bad for a beginning!</p>
+<p><em>In fact</em>, right here in real-time I'm going to use the techniques I've established to make the combinator that matches TEXT! native and see how much that moves the needle.</p>
+<pre><code>with-text&gt;&gt; delta-time [
+     uparse "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" [
+         some further [opt "c" opt "b" opt "a"]
+     ]
+]
+== 0:00:00.005000  ; averages around here
+</code></pre>
+<p>Just then I'd estimate an hour of work just took it from 300x slower to 250x slower.</p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/4a17795c153ff45d8477387987fe8e15e7a2480b/src/mezz/uparse.reb#L846">Here is the usermode form of the original TEXT! combinator</a></p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/4a17795c153ff45d8477387987fe8e15e7a2480b/src/core/functionals/c-combinator.c#L367">Here is the native form that I compiled, tested, and measured in about an hour on a slow-compiling machine...</a></p>
+<p>Since I just succeeded so quickly, <a href="https://github.com/metaeducation/ren-c/commit/608286c941889a36c70fbdec984f9d5ccd0d00a7">I just hacked up SOME and FURTHER as natives...they're easier than TEXT!</a></p>
+<p>And with that it dips down to around 0:00:00.004000.  <em>A total of an hour and a half of work for three combinators and we went from 300x slower down to a mere 200x slower!</em>  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>It might seem for this example we've run out of combinators to make native.  But there's one combinator you're missing that might not be obvious...that's the BLOCK! combinator which orchestrates the sequencing of the OPT clauses.  It's quite a high value case to optimize!</p>
+<p>Doing that optimization would mean that with any luck, we'd get to 150x slower than R3-Alpha PARSE for this (or any other) apples-to-apples comparison task.  But I have some things I need to do first, and it would take longer than I want before I finish this post.  But I think you got the idea.</p>
+<h2>Even With The High Multiplier, I'm Optimistic About The Endgame</h2>
+<p>There's still a bunch of infrastructure besides the combinators to attack where much of the cost exists.  Most of the combinators themselves are pretty simple, but the logic that does the "combinating" itself is not!</p>
+<p>But let's imagine that at the end of optimizing <em>all</em> the usermode pieces into native pieces it hits a wall of being 20x or so slower than traditional PARSE.  What then?</p>
+<p>Let me give you several reasons why I'm optimistic:</p>
+<ul>
+<li>
+<p><strong>The UPARSE concept is built around fundamental mechanics that are used everywhere by the system.</strong>  For example: there's no special "parse stack", it's using function calls on the same stack as everything else.  It uses clever mechanisms to hook which levels are parsing so you can get UPARSE trace output which doesn't mix up regular function calls with the combinators, but those mechanisms are generic too.</p>
+<p>This has plenty of good implications.  Improvements to the function call stack become improvements to the "UPARSE stack" automaticlly (e.g. stacklessness).  Any work we do on making parse recursions faster are likely to make all function calls faster.  Think about all the other aspects this applies to as well.</p>
+<p><em>(Of course I'll just restate that all of this is in service of one of the big goals...of letting users pick their own mixes of combinators and write their own.  It wasn't just about reusing work, it was about designing the protocol in a way that the native code wouldn't be locked into a monolithic blob just to save on optimizing some switch() statement.  Everything can be teased out and reconfigured as a mash-up of natives and usermode code.)</em></p>
+</li>
+<li>
+<p><strong>UPARSE is vastly more powerful, so chasing performance parity with any given laborious piece of historical parse code may not be the point.</strong>  Let's say you can express something briefly and eloquently as an idiomatic UPARSE expression and that code runs in 1 second.  Then does it matter that when you write it the convoluted way in historical PARSE it takes 3 seconds, when that convoluted code would run in UPARSE in 5?</p>
+</li>
+<li>
+<p><strong>People with performance-sensitive scenarios who hit a bottleneck can attack that with a combinator specific to their purpose.</strong>  If you write <strong><code>opt some ["a" | "b"]</code></strong> so often that it's bothering you to pay for all the generalized protocols where OPT talks to SOME talks to BLOCK! talks to TEXT!... you could natively write the OPT-SOME-A-OR-B combinator and plug it in.</p>
+<p>In addition: there could be ways to make a semi-optimized version of an OPT-SOME-A-OR-B by just asking to pre-combinate those things together.  This would cost you some flexibility... in the past I've talked about <a href="https://forum.rebol.info/t/when-should-parse-notice-changes/1528/3">when PARSE notices rule changes"</a> and that's the kind of phenomenon that might come into play.</p>
+<p><em>(Note: Building a CHAIN of functions like <strong>negated-multiply: chain [:multiply | :negate]</strong> have a similar aspect.  They are faster but if what's assigned to the word MULTIPLY or NEGATE change they won't see it...as they commit to the definitions from the time of the CHAIN.)</em></p>
+</li>
+<li>
+<p><strong>The code is organized so much better with responsibility isolated so clearly that I think clever optimizations will be much easier to try.</strong>  There was little you could do with R3-Alpha PARSE without worrying about breaking it.</p>
+</li>
+</ul>
+<h2>I Hope I'm Right</h2>
+<p>It's a challenge but an interesting one to make UPARSE perform.  Let's see where this goes...</p>
+          <p><a href="https://forum.rebol.info/t/progress-on-nativizing-parser-combinators/1636/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/progress-on-nativizing-parser-combinators/1636/1</link>
+        <pubDate>Mon, 19 Jul 2021 05:07:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1636-1</guid>
+        <source url="https://forum.rebol.info/t/progress-on-nativizing-parser-combinators/1636.rss">Progress on Nativizing Parser Combinators</source>
+      </item>
+  </channel>
+</rss>

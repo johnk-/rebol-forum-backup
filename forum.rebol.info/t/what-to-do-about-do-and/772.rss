@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>What to do about `do []` and `()`</title>
+    <link>https://forum.rebol.info/t/what-to-do-about-do-and/772</link>
+    <description>Rebol2 considers both **do []** and **()** to be #[unset], and neither true nor false.  But that doesn&#39;t necessarily suggest things always run through a common path.  The following situations are similar, but give different error messages:
+
+    rebol2&gt;&gt; if () [print &quot;won&#39;t work&quot;]
+    ** Script Error: if is missing its condition argument
+
+    rebol2&gt;&gt; while [] [print &quot;similar situation&quot;]
+    ** Script Error: Block did not return a value
+
+Furthering the &quot;not going through the same path&quot; situation, Red either intentionally-or-unintentionally permits the first:
+
+    red&gt;&gt; if () [print &quot;uh, it&#39;s truthy here?&quot;]
+    uh, it&#39;s truthy here?
+
+    red&gt;&gt; while [] [print &quot;but this is a problem for some reason&quot;]
+    *** Script Error: block did not return a value
+
+Historically in Ren-C both `()` and `do []` were null... the absence of a value.  However, absence of a value was ultimately deemed to serve best as being conditionally false, as NULL is in C.  This falsey null state has became a cornerstone of the API interaction, and the out-of-band non-valued definition of &quot;soft failure&quot; for functions like SELECT or FIND.  Which is turning out *fantastic*.
+
+But when you run things through common code paths and try to get common behaviors, you get some differences.  This led to `while []` seeing that condition block as producing null and thus being falsey, as if you had written `while [null] [...]`.  So there was no error.  And `if () [print &quot;this just wouldn&#39;t print&quot;]`...falsey again.
+
+### Enter the void
+
+Yet Ren-C has something that is neither true-nor-false, the #[void].  You really can think of it very much like &quot;an unset&quot;--except it has nothing to do with variables being unset.  It is a &quot;void value&quot;--a legitimate item that can appear in blocks (the way #[unset] deceptively could).
+
+But when to make a void?  Here are some situations to look at:
+
+    a: func [] []
+    b: func [] [return]
+    c: func [] [do []]
+    d: func [] [if true []]
+    e: func [] [()]
+
+Should these do the same thing?  Different things?
+
+Previously, we had the situation where **if b [...]** would fail with the argument-less RETURN yielding void, and **if d [...]** failing because d is void (the branch ran and had to be distinguished from NULL).  But the other cases would return plain old NULL.
+
+Something about it felt wrong to me.  It seemed to me that *at least* a/b/c/d should return the same thing, yielding a function that would error if you tried to use it in a conditional clause.  And possibly/probably e too.
+
+### The impact of splicing
+
+Imagine that you have something like **block: [a b c]**.  There is today--and probably for the future of binding--a difference between:
+
+    code: [... do block ...]
+
+...and:
+
+    code: compose/only [... (as group! block) ...]
+
+They might look similar, in that they execute the block through a &quot;link&quot;/&quot;reference&quot;, without making a copy. 
+ But the latter makes the contents of the block visible as a group, which means an operation like BIND on the code will affect it.  So imagine if BLOCK contained things like RETURN in it and you tried to use this code as the body of a function.  The first case would leave whatever binding was on the return initially, while the second would pick up the binding for the new function.
+
+But let&#39;s step away from the binding can-of-worms and focus on the question of what this might imply for our needs in the decayed case where the BLOCK! is empty.  What is the likely intent?
+
+One possibility is that composing in the **as group!** is semantically the same as splicing, but the goal is to avoid duplicating the block&#39;s contents.  The wish to avoid duplication might be for memory efficiency, or it might be because it&#39;s could be modified and the modifications should be seen.  If this is the case, then the behavior of () might be best if it were the same as an expression barrier.
+
+    &gt;&gt; 1 + () 2
+    ** + is missing its value2 argument
+
+    &gt;&gt; 1 + 2 ()
+    == 3
+
+That&#39;s weird, but it sort of makes sense.  It makes GROUP!s a little more ghostly, but it keeps them from coming up with values that aren&#39;t there.
+
+If DO [] is #[void], and () has this behavior, it makes the a/b/c/d/e examples above all return the same thing.  It also makes `if () [...]` an error, but for a different reason...not because it&#39;s trying to determine the conditional truth or falsehood of a void, but because the IF &quot;hit a wall&quot;...as if you&#39;d written `if | []` or `(if) []`.
+
+Does this seem coherent?</description>
+    
+    <lastBuildDate>Mon, 11 Mar 2019 13:08:46 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/what-to-do-about-do-and/772.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>What to do about `do []` and `()`</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebol2 considers both <strong>do []</strong> and <strong>()</strong> to be #[unset], and neither true nor false.  But that doesn't necessarily suggest things always run through a common path.  The following situations are similar, but give different error messages:</p>
+<pre><code>rebol2&gt;&gt; if () [print "won't work"]
+** Script Error: if is missing its condition argument
+
+rebol2&gt;&gt; while [] [print "similar situation"]
+** Script Error: Block did not return a value
+</code></pre>
+<p>Furthering the "not going through the same path" situation, Red either intentionally-or-unintentionally permits the first:</p>
+<pre><code>red&gt;&gt; if () [print "uh, it's truthy here?"]
+uh, it's truthy here?
+
+red&gt;&gt; while [] [print "but this is a problem for some reason"]
+*** Script Error: block did not return a value
+</code></pre>
+<p>Historically in Ren-C both <code>()</code> and <code>do []</code> were null... the absence of a value.  However, absence of a value was ultimately deemed to serve best as being conditionally false, as NULL is in C.  This falsey null state has became a cornerstone of the API interaction, and the out-of-band non-valued definition of "soft failure" for functions like SELECT or FIND.  Which is turning out <em>fantastic</em>.</p>
+<p>But when you run things through common code paths and try to get common behaviors, you get some differences.  This led to <code>while []</code> seeing that condition block as producing null and thus being falsey, as if you had written <code>while [null] [...]</code>.  So there was no error.  And <code>if () [print "this just wouldn't print"]</code>...falsey again.</p>
+<h3>Enter the void</h3>
+<p>Yet Ren-C has something that is neither true-nor-false, the #[void].  You really can think of it very much like "an unset"--except it has nothing to do with variables being unset.  It is a "void value"--a legitimate item that can appear in blocks (the way #[unset] deceptively could).</p>
+<p>But when to make a void?  Here are some situations to look at:</p>
+<pre><code>a: func [] []
+b: func [] [return]
+c: func [] [do []]
+d: func [] [if true []]
+e: func [] [()]
+</code></pre>
+<p>Should these do the same thing?  Different things?</p>
+<p>Previously, we had the situation where <strong>if b [...]</strong> would fail with the argument-less RETURN yielding void, and <strong>if d [...]</strong> failing because d is void (the branch ran and had to be distinguished from NULL).  But the other cases would return plain old NULL.</p>
+<p>Something about it felt wrong to me.  It seemed to me that <em>at least</em> a/b/c/d should return the same thing, yielding a function that would error if you tried to use it in a conditional clause.  And possibly/probably e too.</p>
+<h3>The impact of splicing</h3>
+<p>Imagine that you have something like <strong>block: [a b c]</strong>.  There is today--and probably for the future of binding--a difference between:</p>
+<pre><code>code: [... do block ...]
+</code></pre>
+<p>...and:</p>
+<pre><code>code: compose/only [... (as group! block) ...]
+</code></pre>
+<p>They might look similar, in that they execute the block through a "link"/"reference", without making a copy.<br>
+But the latter makes the contents of the block visible as a group, which means an operation like BIND on the code will affect it.  So imagine if BLOCK contained things like RETURN in it and you tried to use this code as the body of a function.  The first case would leave whatever binding was on the return initially, while the second would pick up the binding for the new function.</p>
+<p>But let's step away from the binding can-of-worms and focus on the question of what this might imply for our needs in the decayed case where the BLOCK! is empty.  What is the likely intent?</p>
+<p>One possibility is that composing in the <strong>as group!</strong> is semantically the same as splicing, but the goal is to avoid duplicating the block's contents.  The wish to avoid duplication might be for memory efficiency, or it might be because it's could be modified and the modifications should be seen.  If this is the case, then the behavior of () might be best if it were the same as an expression barrier.</p>
+<pre><code>&gt;&gt; 1 + () 2
+** + is missing its value2 argument
+
+&gt;&gt; 1 + 2 ()
+== 3
+</code></pre>
+<p>That's weird, but it sort of makes sense.  It makes GROUP!s a little more ghostly, but it keeps them from coming up with values that aren't there.</p>
+<p>If DO [] is #[void], and () has this behavior, it makes the a/b/c/d/e examples above all return the same thing.  It also makes <code>if () [...]</code> an error, but for a different reason...not because it's trying to determine the conditional truth or falsehood of a void, but because the IF "hit a wall"...as if you'd written <code>if | []</code> or <code>(if) []</code>.</p>
+<p>Does this seem coherent?</p>
+          <p><a href="https://forum.rebol.info/t/what-to-do-about-do-and/772/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/what-to-do-about-do-and/772/1</link>
+        <pubDate>Fri, 03 Aug 2018 16:34:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-772-1</guid>
+        <source url="https://forum.rebol.info/t/what-to-do-about-do-and/772.rss">What to do about `do []` and `()`</source>
+      </item>
+  </channel>
+</rss>

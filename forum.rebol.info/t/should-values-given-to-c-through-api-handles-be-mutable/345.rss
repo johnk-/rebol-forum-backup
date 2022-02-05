@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Should values given to C through API &quot;handles&quot; be mutable?</title>
+    <link>https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345</link>
+    <description>In libRed, the definition for [a `red_value` is a `void*`](https://github.com/red/red/blob/33aaf1c983aae16490edf5753d205d844b7b6096/libRed/red.h#L35).  In the [&quot;lifetime of handles&quot;](https://forum.rebol.info/t/lifetime-of-handles-given-back-to-c-code/343/1) post, I mentioned where these pointers point at...a small pool of values, that go bad quickly (last 50 API call results, at time of writing).
+
+Due to the definition, the parameters don&#39;t give the appearance of pointers, they look like they&#39;re being passed-by-value, e.g. **red_value redSelect(red_series series, red_value value);**  Hence it&#39;s not surprising that libRed doesn&#39;t have mutating operators on red_values themselves.  This parallels how Rebol works in userspace; you don&#39;t fiddle with the bits inside values, you use operations that generate new values and overwrite old ones.
+
+Consider their structure of a cell that holds a [BLOCK!](https://github.com/red/red/blob/868f584896d12853009f529703085f26a03ca7e8/runtime/datatypes/structures.reds#L54):
+
+    red-block!: alias struct! [
+        header [integer!] ;-- cell header
+        head   [integer!] ;-- block&#39;s head index (zero-based)
+        node   [node!]    ;-- series node pointer
+        extra  [integer!] ;-- (reserved for block-derivative types)
+    ]
+
+Imagine you wanted to visit each position in a BLOCK! from C.  Since red_value is an opaque type, you can&#39;t twiddle the bits and increment the `head` index, you&#39;d have to call [redSkip](https://doc.red-lang.org/en/libred.html#_redskip).  And that will produce a new cell for each position.
+
+Their philosophy on keeping this from being &quot;cost prohibitive&quot; is to have a tiny pool of cells they reuse for these results.  The results are temporaries, and you aren&#39;t supposed to get too attached to these cells.  If you have some long-running operation and ask to tweak the index of a value you got some number of calls ago, you&#39;re going to run into trouble.
+
+But RenCpp was designed differently.  The cell behind a **ren::AnyValue** has the standard lifetime of the C++ object...it will exist so long as it is in scope.  You can pass them by value (in which case they are copied and a new cell is created) or you can pass them by reference (which means mutations will be seen by other references to the same object).  So rather than create 100000 distinct cells during iteration of 100000 positions in an array, when you call the **.next()** method on a series subclass, it just updates the bits of a single cell.
+
+I&#39;m not very eager to change this behavior of RenCpp.  But this raises the question of how a C-friendly libRebol that parallels libRed--but with a different model of lifetimes of API handles--should operate.  Should it offer functions that let you mutate the guts of a value you already have?
+
+A less invasive way of thinking would be if every API function took as a parameter an existing cell to write to, perhaps with NULL meaning &quot;create a new cell&quot;...
+
+    REBVAL *gotten = rebAlloc();
+    for (i = 0; i &lt; 100, i++) {
+        rebGet(gotten, &quot;a&quot;); // fetch into already existing cell
+        rebAppend(gotten, rebBlank());
+    }
+    rebFree(gotten);
+
+The approaches aren&#39;t mutually exclusive.  Every API could have an &quot;Ex&quot; version which has a slot to write to, and then specialize it:
+
+    #define rebGet(symbol) \
+        rebGetEx(NULL, (symbol))
+
+**However** one thing I do like about the idea of immutability and not thinking in terms of &quot;cells the user can write to&quot; would be the elimination of &quot;nulled cells&quot; from API awareness.  Since you never ask to overwrite an existing cell address with an operation result, you never worry about what bit pattern that would need to hold the absence of a result...and you could just use NULL for that.  That has very strong appeal for me.
+
+*(RenCpp has a C++-shaped tool for avoiding the need for expressing nulled cells...it uses [std::optional](http://en.cppreference.com/w/cpp/utility/optional).)*
+
+My leaning here is to say that RenCpp and libRebol just go down different paths with this.  I guess I&#39;d have to see more libRed example code to think about what users are interested in, and what the kind of code they&#39;d write would look like...since my only real example case so far is Ren Garden, and libRed would be thoroughly unsuitable for it.</description>
+    
+    <lastBuildDate>Mon, 23 Sep 2019 17:43:38 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Should values given to C through API &quot;handles&quot; be mutable?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="1" data-topic="345">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>one thing I do like about the idea of immutability and not thinking in terms of "cells the user can write to" would be the elimination of "nulled cells" from API awareness.</p>
+</blockquote>
+</aside>
+<p>I feel like I've sort of answered my own question.</p>
+<p>Whatever the C++ API does, the "C friendly" API should probably not have any mutators.  If people have an iteration that they're particularly worried about the consequences of generating tons of superfluous handles, they should probably escape out from C to Rebol and <em>do that iteration in Rebol code</em>.</p>
+<p>I think this is just going to have to be the performance balance.  People writing repetitive procedures called into Rebol from C should probably register their C-part as a FUNCTION! and do their loop part as a string of Rebol code... OR... get comfortable with releasing handles manually... OR... not care and let the FRAME! clean it up... OR... use C++ and have it taken care of automatically... OR... use the <code>rebRing()</code> concept <em>(<code>rebTemp()</code>?)</em>.</p>
+<p>Not sure where this leaves <strong>reb_value</strong> vs <strong><code>REBVAL*</code></strong>.  Windows programming involves a lot of HWND and HPROCESS and other H-prefixed stuff where you understand that you're responsible for it, while it's not expressed as a literal pointer.  If we're going to be talking about lifetime management being in the client's consciousness, I'm not sure a name like <strong>reb_value</strong> that looks to be passed by value fits in.  Also, one benefit of being forthcoming about it being a legitimate <code>REBVAL*</code> is that any code linked to the internal API would see the type as non-opaque and yet be able to use it with the same libRebol functions.</p>
+<p>Anyway, guess I'm just saying there are enough options here to not sweat it, and indeed to say that NULL pointers mean what Ren-C calls a NULL.  I guess we'll have to wait to see if libRed tries to introduce any ways to mutate cells in the ring, but under their current direction it doesn't seem likely that would happen.</p>
+<p>To put it another way: If libRed ever allowed mutating operations, the by-value look of <strong>red_value</strong> being passed would seem a lie.  When you pass a C function something that doesn't look like it's being passed by pointer, you semantically assume you got your own copy.  The only way to make that work when your underlying implementation is a void pointer to a cell in a ring would be if copying meant nothing, e.g. immutability.</p>
+          <p><a href="https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345/2</link>
+        <pubDate>Thu, 26 Oct 2017 08:25:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-345-2</guid>
+        <source url="https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345.rss">Should values given to C through API &quot;handles&quot; be mutable?</source>
+      </item>
+      <item>
+        <title>Should values given to C through API &quot;handles&quot; be mutable?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In libRed, the definition for <a href="https://github.com/red/red/blob/33aaf1c983aae16490edf5753d205d844b7b6096/libRed/red.h#L35" rel="nofollow noopener">a <code>red_value</code> is a <code>void*</code></a>.  In the <a href="https://forum.rebol.info/t/lifetime-of-handles-given-back-to-c-code/343/1">"lifetime of handles"</a> post, I mentioned where these pointers point at...a small pool of values, that go bad quickly (last 50 API call results, at time of writing).</p>
+<p>Due to the definition, the parameters don't give the appearance of pointers, they look like they're being passed-by-value, e.g. <strong>red_value redSelect(red_series series, red_value value);</strong>  Hence it's not surprising that libRed doesn't have mutating operators on red_values themselves.  This parallels how Rebol works in userspace; you don't fiddle with the bits inside values, you use operations that generate new values and overwrite old ones.</p>
+<p>Consider their structure of a cell that holds a <a href="https://github.com/red/red/blob/868f584896d12853009f529703085f26a03ca7e8/runtime/datatypes/structures.reds#L54" rel="nofollow noopener">BLOCK!</a>:</p>
+<pre><code>red-block!: alias struct! [
+    header [integer!] ;-- cell header
+    head   [integer!] ;-- block's head index (zero-based)
+    node   [node!]    ;-- series node pointer
+    extra  [integer!] ;-- (reserved for block-derivative types)
+]
+</code></pre>
+<p>Imagine you wanted to visit each position in a BLOCK! from C.  Since red_value is an opaque type, you can't twiddle the bits and increment the <code>head</code> index, you'd have to call <a href="https://doc.red-lang.org/en/libred.html#_redskip" rel="nofollow noopener">redSkip</a>.  And that will produce a new cell for each position.</p>
+<p>Their philosophy on keeping this from being "cost prohibitive" is to have a tiny pool of cells they reuse for these results.  The results are temporaries, and you aren't supposed to get too attached to these cells.  If you have some long-running operation and ask to tweak the index of a value you got some number of calls ago, you're going to run into trouble.</p>
+<p>But RenCpp was designed differently.  The cell behind a <strong>ren::AnyValue</strong> has the standard lifetime of the C++ object...it will exist so long as it is in scope.  You can pass them by value (in which case they are copied and a new cell is created) or you can pass them by reference (which means mutations will be seen by other references to the same object).  So rather than create 100000 distinct cells during iteration of 100000 positions in an array, when you call the <strong>.next()</strong> method on a series subclass, it just updates the bits of a single cell.</p>
+<p>I'm not very eager to change this behavior of RenCpp.  But this raises the question of how a C-friendly libRebol that parallels libRed--but with a different model of lifetimes of API handles--should operate.  Should it offer functions that let you mutate the guts of a value you already have?</p>
+<p>A less invasive way of thinking would be if every API function took as a parameter an existing cell to write to, perhaps with NULL meaning "create a new cell"...</p>
+<pre><code>REBVAL *gotten = rebAlloc();
+for (i = 0; i &lt; 100, i++) {
+    rebGet(gotten, "a"); // fetch into already existing cell
+    rebAppend(gotten, rebBlank());
+}
+rebFree(gotten);
+</code></pre>
+<p>The approaches aren't mutually exclusive.  Every API could have an "Ex" version which has a slot to write to, and then specialize it:</p>
+<pre><code>#define rebGet(symbol) \
+    rebGetEx(NULL, (symbol))
+</code></pre>
+<p><strong>However</strong> one thing I do like about the idea of immutability and not thinking in terms of "cells the user can write to" would be the elimination of "nulled cells" from API awareness.  Since you never ask to overwrite an existing cell address with an operation result, you never worry about what bit pattern that would need to hold the absence of a result...and you could just use NULL for that.  That has very strong appeal for me.</p>
+<p><em>(RenCpp has a C++-shaped tool for avoiding the need for expressing nulled cells...it uses <a href="http://en.cppreference.com/w/cpp/utility/optional" rel="nofollow noopener">std::optional</a>.)</em></p>
+<p>My leaning here is to say that RenCpp and libRebol just go down different paths with this.  I guess I'd have to see more libRed example code to think about what users are interested in, and what the kind of code they'd write would look like...since my only real example case so far is Ren Garden, and libRed would be thoroughly unsuitable for it.</p>
+          <p><a href="https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345/1</link>
+        <pubDate>Thu, 19 Oct 2017 06:37:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-345-1</guid>
+        <source url="https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345.rss">Should values given to C through API &quot;handles&quot; be mutable?</source>
+      </item>
+  </channel>
+</rss>

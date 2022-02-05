@@ -1,0 +1,647 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Executable Size Analysis</title>
+    <link>https://forum.rebol.info/t/executable-size-analysis/1367</link>
+    <description>I compiled [&quot;Bloaty McBloatface&quot;](https://github.com/google/bloaty) to get a dump of what the general file size usage is in an -O2 executable which has the default things included (Crypto, Filesystem, HTTP/TCP, JPEG, PNG, etc.)
+
+The file is around 2 megabytes at this point...with all the encryption protocols and such.  Quick summary of findings:
+
+## Mezzanine/Boot Compressed Source Is Biggest Single Chunk
+
+The compressed source code for all the mezzanine and boot stuff is 65K...which is uncompressed and LOADed, and then the text is thrown away.  But of course the loaded/bound representation for anything that sticks around after boot is going to be bigger in memory.
+
+If one is going to be space conscious--especially about how much memory is taken once things get loaded--this code is where to look.
+
+One thing I have done is set it up so we could have a boot mode that doesn&#39;t remember help information.  So if we&#39;re looking to make small embeddable forms, it would be good to look at how well things pack and make sure all unnecessary memory is reclaimed.
+
+*(This involves things like if you have a `startup` function that&#39;s only used once, then after you run it be sure to set `startup: null` so it can be GC&#39;d. )*
+
+## Third-Party Libraries
+
+* Zlib is 58.1K.  It&#39;s good that things have been rigged up to only include one version of Zlib (instead of duplicating it in PNG loading, for example).  There&#39;s probably not much that can be cut there--although on some systems that have a zlib shared library, you could build an executable that used that instead.
+
+* The JPEG decoder--which only decodes and does not encode--takes up 53.8K.  That seems excessive, especially considering there are [pure C 6K decoders](https://keyj.emphy.de/nanojpeg/).  JPEG is an extension, so you can build without this in any case.
+
+* LodePNG the PNG extension uses that Zlib...but then its own code is 42.5K.  That covers both encoding and decoding.  Again...PNG is optional, so people who don&#39;t want the extension don&#39;t need to have it.
+
+* f-dtoa.c is 31.2K...this is some fairly [arcane but vetted C code](https://stackoverflow.com/questions/3173056/why-does-dtoa-c-contain-so-much-code) for converting between floating point `double` numbers and ASCII.
+
+* The elliptic curves for cryptography are the single-largest crypto chunk, at 29.3K.  You can build without crypto at all, and you can pare out some of the curves as well...so this is optional.
+
+* The BigNum math at 24.1Ki is the second largest crypto chunk.  Right now it&#39;s optional and you only get it if you build with crypto.  But I&#39;m aiming to say that this is part of the standard implementation of INTEGER!.  (Although perhaps there could be a build where you don&#39;t have bignums, and large integers just overflow, for those who wanted it.)
+
+It kind of goes down from there, with particular hashes and such for the cryptography.
+
+## Interpreter Code
+
+* PARSE is the biggest single largest piece of code it seems...at 52.6K it&#39;s larger than the evaluator and the action execution code combined.  I definitely think it needs a revisit to its implementation for all kinds of reasons, and most of what I&#39;d think of doing to it would hopefully make it smaller.
+
+* The &quot;control structures&quot; that include SWITCH and CASE and IF take up a lot of space, and I imagine some of that is also the kind-of-out-of-control batch of MATCH experimentation.
+
+* The scanner is another thing that could be reduced, it&#39;s 39.6K and I&#39;m sure it could be both smaller and faster.  Since Red has attacked this particular problem it&#39;s probably worth looking to see if there&#39;s anything useful in their answer.
+
+Anyway...it&#39;s kind of a case of &quot;things just add up&quot;.  Most important is making sure that a core can be put together that&#39;s small and doesn&#39;t pull in things it doesn&#39;t need...and things remain on track for that point.  The system still builds on old systems and dependencies are under control.
+
+It&#39;s good to look at, and will keep it all in mind.
+
+Though the stripped file is almost 2MB, debug symbols multiply that by a factor of 10, so a debug executable will be 20 megabytes in file size.  **So ignore the FILE SIZE, only the VM SIZE counts here...**
+
+       FILE SIZE        VM SIZE    
+     --------------  -------------- 
+       0.4%  73.1Ki   3.4%  65.4Ki    prep/core/tmp-boot-block.c
+       1.2%   220Ki   3.0%  58.1Ki    ../Projects/ren-c/src/core/u-zlib.c
+       2.8%   524Ki   2.8%  54.5Ki    ../Projects/ren-c/src/core/n-control.c
+       1.5%   279Ki   2.8%  53.8Ki    ../Projects/ren-c/extensions/jpg/u-jpg.c
+       3.0%   554Ki   2.7%  52.6Ki    ../Projects/ren-c/src/core/u-parse.c
+       1.2%   227Ki   2.2%  42.5Ki    ../Projects/ren-c/extensions/png/lodepng.c
+       2.4%   440Ki   2.1%  41.8Ki    ../Projects/ren-c/src/core/c-path.c
+       2.6%   490Ki   2.1%  41.7Ki    ../Projects/ren-c/src/core/n-data.c
+       1.8%   341Ki   2.0%  39.6Ki    ../Projects/ren-c/src/core/l-scan.c
+       1.8%   335Ki   1.9%  36.6Ki    ../Projects/ren-c/src/core/a-lib.c
+       1.7%   308Ki   1.6%  31.8Ki    ../Projects/ren-c/src/core/n-loop.c
+       1.8%   339Ki   1.6%  31.4Ki    ../Projects/ren-c/extensions/image/t-image.c
+       0.6%   107Ki   1.6%  31.2Ki    ../Projects/ren-c/src/core/f-dtoa.c
+       1.7%   322Ki   1.5%  29.7Ki    ../Projects/ren-c/src/core/t-block.c
+       1.0%   187Ki   1.5%  29.4Ki    ../Projects/ren-c/src/core/f-deci.c
+       1.1%   212Ki   1.5%  29.3Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/ecp.c
+       1.5%   276Ki   1.5%  29.1Ki    ../Projects/ren-c/src/core/n-reduce.c
+       1.6%   298Ki   1.4%  28.0Ki    ../Projects/ren-c/src/core/t-binary.c
+       1.5%   288Ki   1.4%  27.9Ki    ../Projects/ren-c/src/core/c-error.c
+       1.5%   282Ki   1.4%  27.6Ki    ../Projects/ren-c/src/core/n-do.c
+       1.8%   331Ki   1.4%  26.4Ki    ../Projects/ren-c/src/core/t-string.c
+       0.2%  34.4Ki   1.3%  26.0Ki    ../Projects/ren-c/src/main/main.c
+       0.7%   121Ki   1.2%  24.1Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/bignum.c
+       1.4%   269Ki   1.2%  23.3Ki    ../Projects/ren-c/src/core/b-init.c
+       1.4%   260Ki   1.1%  22.2Ki    ../Projects/ren-c/extensions/crypt/mod-crypt.c
+       1.1%   213Ki   1.1%  22.0Ki    ../Projects/ren-c/src/core/evaluator/c-action.c
+       1.4%   261Ki   1.1%  20.7Ki    ../Projects/ren-c/src/core/n-strings.c
+       1.0%   185Ki   1.1%  20.6Ki    ../Projects/ren-c/src/core/evaluator/c-eval.c
+       1.2%   227Ki   1.0%  19.8Ki    ../Projects/ren-c/src/core/t-varargs.c
+       1.1%   211Ki   1.0%  18.9Ki    ../Projects/ren-c/extensions/gob/t-gob.c
+       1.1%   195Ki   1.0%  18.9Ki    ../Projects/ren-c/src/core/c-function.c
+       1.1%   208Ki   0.9%  18.0Ki    ../Projects/ren-c/src/core/t-object.c
+       1.1%   202Ki   0.9%  17.5Ki    ../Projects/ren-c/src/core/s-make.c
+       1.0%   177Ki   0.9%  17.3Ki    ../Projects/ren-c/src/core/functionals/c-specialize.c
+       0.8%   147Ki   0.9%  16.9Ki    ../Projects/ren-c/src/core/l-types.c
+       0.2%  44.2Ki   0.9%  16.6Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/aes.c
+       1.0%   193Ki   0.8%  16.3Ki    ../Projects/ren-c/src/core/c-context.c
+       0.8%   150Ki   0.8%  15.7Ki    ../Projects/ren-c/src/core/s-mold.c
+       1.0%   177Ki   0.8%  15.6Ki    ../Projects/ren-c/src/core/s-ops.c
+       0.9%   169Ki   0.8%  15.3Ki    ../Projects/ren-c/src/core/t-map.c
+       0.9%   162Ki   0.8%  15.1Ki    ../Projects/ren-c/src/core/t-bitset.c
+       0.9%   171Ki   0.8%  14.7Ki    ../Projects/ren-c/extensions/vector/t-vector.c
+       0.1%  24.4Ki   0.7%  14.0Ki    ../Projects/ren-c/src/core/s-cases.c
+       0.8%   158Ki   0.7%  13.5Ki    ../Projects/ren-c/src/core/c-bind.c
+       0.7%   134Ki   0.7%  13.2Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/ecp_curves.c
+       0.4%  72.2Ki   0.7%  13.0Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/rsa.c
+       0.7%   125Ki   0.6%  12.6Ki    ../Projects/ren-c/extensions/event/mod-event.c
+       0.9%   159Ki   0.6%  12.3Ki    ../Projects/ren-c/extensions/filesystem/mod-filesystem.c
+       0.7%   135Ki   0.6%  12.0Ki    ../Projects/ren-c/extensions/network/mod-network.c
+       0.6%   110Ki   0.6%  11.8Ki    ../Projects/ren-c/src/core/t-logic.c
+       0.5%   100Ki   0.6%  11.7Ki    ../Projects/ren-c/src/core/t-date.c
+       0.8%   153Ki   0.6%  11.5Ki    ../Projects/ren-c/extensions/filesystem/p-file.c
+       0.9%   163Ki   0.6%  11.4Ki    ../Projects/ren-c/src/core/f-modify.c
+       0.7%   125Ki   0.6%  11.3Ki    ../Projects/ren-c/extensions/utf/mod-utf.c
+       0.7%   128Ki   0.6%  11.0Ki    ../Projects/ren-c/src/core/t-char.c
+       0.6%   105Ki   0.6%  10.9Ki    ../Projects/ren-c/src/core/c-word.c
+       0.6%   109Ki   0.5%  10.7Ki    ../Projects/ren-c/src/core/n-math.c
+       0.1%  19.2Ki   0.5%  10.5Ki    ../Projects/ren-c/src/core/f-random.c
+       0.1%  19.6Ki   0.5%  10.3Ki    prep/core/tmp-type-hooks.c
+       0.8%   143Ki   0.5%  10.3Ki    ../Projects/ren-c/src/core/u-compress.c
+       0.6%   109Ki   0.5%  9.75Ki    ../Projects/ren-c/src/core/f-blocks.c
+       0.4%  80.3Ki   0.5%  9.45Ki    ../Projects/ren-c/src/core/f-stubs.c
+       0.1%  18.9Ki   0.5%  9.26Ki    prep/extensions/console/tmp-mod-console-init.c
+       0.6%   108Ki   0.5%  9.20Ki    ../Projects/ren-c/src/core/t-integer.c
+       0.6%   104Ki   0.5%  9.12Ki    ../Projects/ren-c/src/core/t-tuple.c
+       0.5%  87.4Ki   0.5%  9.05Ki    ../Projects/ren-c/src/core/t-time.c
+       0.5%  86.6Ki   0.5%  8.92Ki    ../Projects/ren-c/src/core/m-gc.c
+       0.5%  96.6Ki   0.5%  8.89Ki    ../Projects/ren-c/src/core/s-find.c
+       0.5%  92.4Ki   0.5%  8.76Ki    ../Projects/ren-c/extensions/event/t-event.c
+       0.5%  88.6Ki   0.4%  8.70Ki    ../Projects/ren-c/src/core/n-error.c
+       0.5%  99.0Ki   0.4%  8.54Ki    ../Projects/ren-c/src/core/s-crc.c
+       0.4%  76.1Ki   0.4%  8.53Ki    ../Projects/ren-c/src/core/m-pools.c
+       0.4%  75.9Ki   0.4%  8.32Ki    ../Projects/ren-c/extensions/process/call-posix.c
+       0.5%  87.9Ki   0.4%  8.20Ki    ../Projects/ren-c/src/core/functionals/c-oneshot.c
+       0.5%  97.3Ki   0.4%  8.15Ki    ../Projects/ren-c/src/core/m-series.c
+       0.4%  82.2Ki   0.4%  7.90Ki    ../Projects/ren-c/src/core/t-decimal.c
+       0.5%  93.2Ki   0.4%  7.83Ki    ../Projects/ren-c/src/core/t-function.c
+       0.4%  75.9Ki   0.4%  7.55Ki    ../Projects/ren-c/src/core/t-datatype.c
+       0.4%  67.0Ki   0.4%  7.45Ki    ../Projects/ren-c/src/core/t-money.c
+       0.5%  83.9Ki   0.4%  7.24Ki    ../Projects/ren-c/src/core/n-sets.c
+       0.4%  80.2Ki   0.4%  7.15Ki    ../Projects/ren-c/src/core/functionals/n-function.c
+       0.2%  41.5Ki   0.4%  7.04Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/ripemd160.c
+       0.2%  36.6Ki   0.4%  7.01Ki    ../Projects/ren-c/extensions/stdio/readline-posix.c
+       0.4%  79.8Ki   0.4%  6.89Ki    ../Projects/ren-c/src/core/n-protect.c
+       0.4%  77.7Ki   0.3%  6.72Ki    ../Projects/ren-c/src/core/functionals/c-hijack.c
+       0.3%  56.9Ki   0.3%  6.67Ki    ../Projects/ren-c/extensions/stdio/p-stdio.c
+       0.4%  73.0Ki   0.3%  6.66Ki    ../Projects/ren-c/src/core/functionals/c-enclose.c
+       0.4%  76.4Ki   0.3%  6.58Ki    ../Projects/ren-c/extensions/signal/mod-signal.c
+       0.4%  70.8Ki   0.3%  6.52Ki    ../Projects/ren-c/src/core/t-pair.c
+       0.4%  70.1Ki   0.3%  6.42Ki    ../Projects/ren-c/extensions/serial/mod-serial.c
+       0.3%  54.8Ki   0.3%  6.29Ki    ../Projects/ren-c/extensions/process/mod-process.c
+       0.3%  62.2Ki   0.3%  6.21Ki    ../Projects/ren-c/src/core/f-extension.c
+       0.4%  65.8Ki   0.3%  6.21Ki    ../Projects/ren-c/src/core/t-port.c
+       0.3%  53.2Ki   0.3%  6.12Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/sha1.c
+       0.4%  75.9Ki   0.3%  6.06Ki    ../Projects/ren-c/src/core/functionals/c-chain.c
+       0.3%  57.6Ki   0.3%  5.95Ki    ../Projects/ren-c/src/core/f-enbase.c
+       0.3%  63.9Ki   0.3%  5.88Ki    ../Projects/ren-c/src/core/t-typeset.c
+       0.4%  66.7Ki   0.3%  5.73Ki    ../Projects/ren-c/extensions/filesystem/file-posix.c
+       0.4%  70.3Ki   0.3%  5.54Ki    ../Projects/ren-c/extensions/event/p-event.c
+       0.1%  15.1Ki   0.3%  5.46Ki    prep/extensions/debugger/tmp-mod-debugger-init.c
+       0.0%  5.46Ki   0.3%  5.46Ki    [section .gnu.hash]
+       0.3%  58.5Ki   0.3%  5.35Ki    ../Projects/ren-c/src/core/f-series.c
+       0.3%  61.7Ki   0.3%  5.33Ki    ../Projects/ren-c/src/core/t-word.c
+       0.3%  46.8Ki   0.3%  5.22Ki    ../Projects/ren-c/extensions/bmp/mod-bmp.c
+       0.4%  68.2Ki   0.3%  5.22Ki    ../Projects/ren-c/src/core/functionals/c-does.c
+       0.3%  58.5Ki   0.3%  5.18Ki    ../Projects/ren-c/extensions/network/dev-net.c
+       0.1%  19.0Ki   0.3%  5.01Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/sha512.c
+       0.1%  22.4Ki   0.3%  5.00Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/sha256.c
+       0.1%  14.6Ki   0.3%  4.90Ki    prep/extensions/locale/tmp-mod-locale-init.c
+       0.3%  62.2Ki   0.2%  4.83Ki    ../Projects/ren-c/src/core/functionals/c-reskin.c
+       0.4%  68.5Ki   0.2%  4.73Ki    ../Projects/ren-c/extensions/filesystem/p-dir.c
+       0.1%  24.6Ki   0.2%  4.73Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/md.c
+       0.3%  62.4Ki   0.2%  4.70Ki    ../Projects/ren-c/extensions/stdio/mod-stdio.c
+       0.1%  21.9Ki   0.2%  4.65Ki    ../Projects/ren-c/src/core/a-globals.c
+       0.1%  19.1Ki   0.2%  4.54Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/cipher_wrap.c
+       0.2%  28.5Ki   0.2%  4.48Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/cipher.c
+       0.2%  41.0Ki   0.2%  4.01Ki    ../Projects/ren-c/src/core/f-device.c
+       0.2%  40.2Ki   0.2%  3.77Ki    ../Projects/ren-c/src/core/t-quoted.c
+       0.3%  47.5Ki   0.2%  3.77Ki    ../Projects/ren-c/extensions/dns/mod-dns.c
+       0.1%  13.2Ki   0.2%  3.57Ki    prep/extensions/process/tmp-mod-process-init.c
+       0.3%  52.1Ki   0.2%  3.52Ki    ../Projects/ren-c/src/core/d-stack.c
+       0.2%  31.7Ki   0.2%  3.51Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/md5.c
+       0.1%  20.8Ki   0.2%  3.48Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/dhm.c
+       0.1%  23.3Ki   0.2%  3.46Ki    ../Projects/ren-c/extensions/console/mod-console.c
+       0.2%  43.3Ki   0.2%  3.41Ki    ../Projects/ren-c/src/core/m-stacks.c
+       0.0%  3.40Ki   0.2%  3.40Ki    [section .dynsym]
+       0.2%  37.9Ki   0.2%  3.39Ki    ../Projects/ren-c/extensions/gif/mod-gif.c
+       0.1%  16.3Ki   0.2%  3.38Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/rsa_internal.c
+       0.3%  46.8Ki   0.2%  3.36Ki    ../Projects/ren-c/src/core/functionals/c-augment.c
+       0.2%  46.1Ki   0.2%  3.36Ki    ../Projects/ren-c/extensions/debugger/mod-debugger.c
+       0.2%  44.7Ki   0.2%  3.27Ki    ../Projects/ren-c/src/core/n-io.c
+       0.0%  3.09Ki   0.2%  3.09Ki    [section .rela.plt]
+       0.2%  39.5Ki   0.2%  3.08Ki    ../Projects/ren-c/extensions/png/mod-png.c
+       0.2%  29.2Ki   0.2%  3.05Ki    ../Projects/ren-c/src/core/f-round.c
+       0.2%  46.3Ki   0.1%  2.76Ki    ../Projects/ren-c/src/core/c-port.c
+       0.1%  26.0Ki   0.1%  2.67Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/ecdh.c
+       0.1%  23.2Ki   0.1%  2.66Ki    ../Projects/ren-c/src/core/f-qsort.c
+       0.1%  12.3Ki   0.1%  2.64Ki    prep/extensions/secure/tmp-mod-secure-init.c
+       0.1%  25.9Ki   0.1%  2.63Ki    ../Projects/ren-c/extensions/serial/serial-posix.c
+       0.2%  28.3Ki   0.1%  2.62Ki    ../Projects/ren-c/src/core/d-print.c
+       0.1%  24.1Ki   0.1%  2.56Ki    ../Projects/ren-c/src/core/f-math.c
+       0.1%  16.9Ki   0.1%  2.52Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/hmac_drbg.c
+       0.2%  35.0Ki   0.1%  2.27Ki    ../Projects/ren-c/extensions/gob/mod-gob.c
+       0.1%  14.0Ki   0.1%  2.26Ki    ../Projects/ren-c/extensions/uuid/libuuid/gen_uuid.c
+       0.2%  33.0Ki   0.1%  2.24Ki    ../Projects/ren-c/src/core/n-system.c
+       0.1%  19.1Ki   0.1%  2.23Ki    ../Projects/ren-c/extensions/locale/mod-locale.c
+       0.2%  37.6Ki   0.1%  2.21Ki    ../Projects/ren-c/src/core/d-crash.c
+       0.2%  37.3Ki   0.1%  2.16Ki    ../Projects/ren-c/extensions/secure/mod-secure.c
+       0.1%  11.8Ki   0.1%  2.11Ki    prep/extensions/event/tmp-mod-event-init.c
+       0.0%  2.08Ki   0.1%  2.08Ki    [section .plt]
+       0.0%  2.06Ki   0.1%  2.06Ki    [section .plt.sec]
+       0.1%  11.7Ki   0.1%  2.05Ki    prep/extensions/crypt/tmp-mod-crypt-init.c
+       1.4%   254Ki   0.1%  2.00Ki    ../Projects/ren-c/src/core/a-constants.c
+       0.2%  34.8Ki   0.1%  1.99Ki    ../Projects/ren-c/src/core/functionals/c-typechecker.c
+       0.2%  30.1Ki   0.1%  1.85Ki    ../Projects/ren-c/extensions/stdio/stdio-posix.c
+       0.2%  32.0Ki   0.1%  1.81Ki    ../Projects/ren-c/src/core/functionals/c-adapt.c
+       0.0%  1.72Ki   0.1%  1.72Ki    [section .gnu.version]
+       0.1%  17.9Ki   0.1%  1.57Ki    ../Projects/ren-c/extensions/signal/dev-signal.c
+       0.1%  11.1Ki   0.1%  1.44Ki    prep/extensions/network/tmp-mod-network-init.c
+       0.1%  27.3Ki   0.1%  1.42Ki    ../Projects/ren-c/extensions/jpg/mod-jpg.c
+       0.1%  27.3Ki   0.1%  1.37Ki    ../Projects/ren-c/extensions/library/mod-library.c
+       0.0%  1.26Ki   0.1%  1.26Ki    [section .dynstr]
+       0.1%  10.9Ki   0.1%  1.25Ki    prep/extensions/gob/tmp-mod-gob-init.c
+       0.1%  10.9Ki   0.1%  1.24Ki    prep/extensions/filesystem/tmp-mod-filesystem-init.c
+       0.1%  20.5Ki   0.1%  1.21Ki    ../Projects/ren-c/src/core/t-blank.c
+       0.1%  10.8Ki   0.1%  1.16Ki    prep/extensions/stdio/tmp-mod-stdio-init.c
+       0.1%  15.7Ki   0.1%  1.14Ki    ../Projects/ren-c/extensions/time/time-posix.c
+       0.0%  1.05Ki   0.1%  1.05Ki    [section .got]
+       0.1%  18.4Ki   0.1%  1.03Ki    ../Projects/ren-c/src/core/d-trace.c
+       0.0%  8.58Ki   0.1%  1.01Ki    ../Projects/ren-c/extensions/uuid/libuuid/randutils.c
+       0.1%  14.9Ki   0.1%    1016    ../Projects/ren-c/src/core/f-int.c
+       0.1%  14.5Ki   0.1%     997    ../Projects/ren-c/extensions/event/event-posix.c
+       0.1%  10.6Ki   0.0%     977    prep/extensions/utf/tmp-mod-utf-init.c
+       0.1%  10.6Ki   0.0%     969    prep/extensions/view/tmp-mod-view-init.c
+       0.1%  17.9Ki   0.0%     944    ../Projects/ren-c/extensions/time/mod-time.c
+       0.1%  20.0Ki   0.0%     930    ../Projects/ren-c/src/core/c-signal.c
+       0.1%  15.5Ki   0.0%     836    ../Projects/ren-c/extensions/view/mod-view.c
+       0.0%     805   0.0%     805    [LOAD #2 [R]]
+       0.1%  10.4Ki   0.0%     734    prep/extensions/library/tmp-mod-library-init.c
+       0.1%  13.3Ki   0.0%     720    ../Projects/ren-c/extensions/library/library-posix.c
+       0.1%  10.3Ki   0.0%     716    prep/extensions/image/tmp-mod-image-init.c
+       0.0%     712   0.0%     712    [section .eh_frame]
+       0.0%     667   0.0%     667    [section .rodata]
+       0.1%  10.3Ki   0.0%     640    prep/extensions/vector/tmp-mod-vector-init.c
+       0.0%     628   0.0%     628    [section .text]
+       0.1%  10.2Ki   0.0%     591    prep/extensions/time/tmp-mod-time-init.c
+       0.1%  10.2Ki   0.0%     589    prep/extensions/serial/tmp-mod-serial-init.c
+       0.1%  10.2Ki   0.0%     552    prep/extensions/gif/tmp-mod-gif-init.c
+       0.1%  10.2Ki   0.0%     529    prep/extensions/bmp/tmp-mod-bmp-init.c
+       0.1%  10.1Ki   0.0%     529    prep/extensions/png/tmp-mod-png-init.c
+       0.0%     528   0.0%     528    [section .dynamic]
+       0.0%  4.42Ki   0.0%     512    ../Projects/ren-c/extensions/crypt/mbedtls/library/arc4.c
+       0.1%  10.1Ki   0.0%     502    prep/extensions/jpg/tmp-mod-jpg-init.c
+       0.1%  12.2Ki   0.0%     486    ../Projects/ren-c/src/core/d-test.c
+       0.1%  10.1Ki   0.0%     478    prep/extensions/dns/tmp-mod-dns-init.c
+       0.1%  10.1Ki   0.0%     476    prep/extensions/uuid/tmp-mod-uuid-init.c
+       0.1%  10.1Ki   0.0%     456    prep/extensions/signal/tmp-mod-signal-init.c
+       0.1%  11.4Ki   0.0%     426    ../Projects/ren-c/extensions/vector/mod-vector.c
+       0.1%  11.4Ki   0.0%     421    ../Projects/ren-c/extensions/image/mod-image.c
+       0.0%       0   0.0%     313    [section .bss]
+       0.1%  15.5Ki   0.0%     296    ../Projects/ren-c/src/core/d-stats.c
+       0.1%  11.3Ki   0.0%     280    ../Projects/ren-c/extensions/uuid/mod-uuid.c
+       0.0%     240   0.0%     240    [section .gnu.version_r]
+       0.0%  2.44Ki   0.0%     168    ../Projects/ren-c/extensions/crypt/mbedtls/library/platform.c
+       0.0%  2.86Ki   0.0%     152    ../Projects/ren-c/extensions/crypt/mbedtls/library/platform_util.c
+       0.0%  2.75Ki   0.0%     128    ../Projects/ren-c/extensions/uuid/libuuid/unpack.c
+       0.1%  13.8Ki   0.0%     104    ../Projects/ren-c/src/core/d-dump.c
+       0.0%  2.41Ki   0.0%      96    ../Projects/ren-c/extensions/uuid/libuuid/pack.c
+       0.0%      60   0.0%      60    [section .eh_frame_hdr]
+       0.0%      48   0.0%      48    [section .data]
+       0.0%      48   0.0%      48    [section .rela.dyn]
+       0.0%      36   0.0%      36    [section .note.gnu.build-id]
+       0.0%      32   0.0%      32    [section .note.ABI-tag]
+       0.0%      32   0.0%      32    [section .note.gnu.property]
+       0.0%      28   0.0%      28    [section .interp]
+       0.0%      27   0.0%      27    [section .init]
+       0.0%       0   0.0%      24    [LOAD #5 [RW]]
+       0.0%      16   0.0%      16    [section .plt.got]
+       0.0%      13   0.0%      13    [section .fini]
+       0.0%       8   0.0%       8    [LOAD #3 [RX]]
+       0.0%       8   0.0%       8    [section .fini_array]
+       0.0%       8   0.0%       8    [section .init_array]
+       0.0%       4   0.0%       4    [LOAD #4 [R]]
+       0.0%     324   0.0%       1    ../Projects/ren-c/src/core/d-winstack.c
+       0.0%     243   0.0%       0    
+       0.0%  9.11Ki   0.0%       0    ../Projects/ren-c/src/core/c-do.c
+       0.0%  9.11Ki   0.0%       0    ../Projects/ren-c/src/core/c-value.c
+       0.0%  9.11Ki   0.0%       0    ../Projects/ren-c/src/core/d-eval.c
+       0.0%  9.11Ki   0.0%       0    ../Projects/ren-c/src/core/d-gc.c
+       0.0%  2.50Ki   0.0%       0    [ELF Headers]
+       0.0%  4.69Ki   0.0%       0    [Unmapped]
+       0.0%      42   0.0%       0    [section .comment]
+       0.0%     133   0.0%       0    [section .debug_abbrev]
+       0.1%  9.38Ki   0.0%       0    [section .debug_aranges]
+       0.6%   119Ki   0.0%       0    [section .debug_loc]
+       2.4%   455Ki   0.0%       0    [section .debug_macro]
+       0.0%     368   0.0%       0    [section .debug_ranges]
+       1.6%   296Ki   0.0%       0    [section .debug_str]
+       0.0%     397   0.0%       0    [section .shstrtab]
+       0.0%  4.64Ki   0.0%       0    [section .strtab]
+       0.1%  9.33Ki   0.0%       0    [section .symtab]
+     100.0%  18.2Mi 100.0%  1.90Mi    TOTAL</description>
+    
+    <lastBuildDate>Fri, 16 Oct 2020 19:07:57 +0000</lastBuildDate>
+    <category>Testing</category>
+    <atom:link href="https://forum.rebol.info/t/executable-size-analysis/1367.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Executable Size Analysis</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="iArnold" data-post="3" data-topic="1367">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>That is more about twice the size of your executable.</p>
+</blockquote>
+</aside>
+<p>Hopefully you are making a debug build, and compiling with asserts on (e.g. not using NDEBUG).  That increases the size a lot.</p>
+<p>The figures I give are for release builds, optimized for speed (-O2) --not space (-Os).  Optimizing for space could generate a smaller binary, but I tend to assume that is not usually the tradeoff people want in desktop builds.</p>
+<p>This is why being fixated on byte size isn't particularly wise...but it still can serve as a bit of a heuristic for measuring complexity and understanding dependencies.</p>
+          <p><a href="https://forum.rebol.info/t/executable-size-analysis/1367/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/executable-size-analysis/1367/4</link>
+        <pubDate>Fri, 16 Oct 2020 19:07:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1367-4</guid>
+        <source url="https://forum.rebol.info/t/executable-size-analysis/1367.rss">Executable Size Analysis</source>
+      </item>
+      <item>
+        <title>Executable Size Analysis</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>My version of ren-c (with mysql support) is 4.2 MB, and with the static linked library it is 4.5 MB.<br>
+That is more about twice the size of your executable.<br>
+I can imagine my programming style is debet to this <img src="https://forum.rebol.info/images/emoji/twitter/smiley.png?v=9" title=":smiley:" class="emoji" alt=":smiley:"><br>
+But I think there might be more staticly linked parts included on account of a number of missing symbolic links in the configuration of my VM's and thus having the .a's included.</p>
+          <p><a href="https://forum.rebol.info/t/executable-size-analysis/1367/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/executable-size-analysis/1367/3</link>
+        <pubDate>Fri, 16 Oct 2020 11:52:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1367-3</guid>
+        <source url="https://forum.rebol.info/t/executable-size-analysis/1367.rss">Executable Size Analysis</source>
+      </item>
+      <item>
+        <title>Executable Size Analysis</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Still less than the weight of the average web page (2MB).</p>
+          <p><a href="https://forum.rebol.info/t/executable-size-analysis/1367/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/executable-size-analysis/1367/2</link>
+        <pubDate>Thu, 15 Oct 2020 14:51:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1367-2</guid>
+        <source url="https://forum.rebol.info/t/executable-size-analysis/1367.rss">Executable Size Analysis</source>
+      </item>
+      <item>
+        <title>Executable Size Analysis</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I compiled <a href="https://github.com/google/bloaty">"Bloaty McBloatface"</a> to get a dump of what the general file size usage is in an -O2 executable which has the default things included (Crypto, Filesystem, HTTP/TCP, JPEG, PNG, etc.)</p>
+<p>The file is around 2 megabytes at this point...with all the encryption protocols and such.  Quick summary of findings:</p>
+<h2>Mezzanine/Boot Compressed Source Is Biggest Single Chunk</h2>
+<p>The compressed source code for all the mezzanine and boot stuff is 65K...which is uncompressed and LOADed, and then the text is thrown away.  But of course the loaded/bound representation for anything that sticks around after boot is going to be bigger in memory.</p>
+<p>If one is going to be space conscious--especially about how much memory is taken once things get loaded--this code is where to look.</p>
+<p>One thing I have done is set it up so we could have a boot mode that doesn't remember help information.  So if we're looking to make small embeddable forms, it would be good to look at how well things pack and make sure all unnecessary memory is reclaimed.</p>
+<p><em>(This involves things like if you have a <code>startup</code> function that's only used once, then after you run it be sure to set <code>startup: null</code> so it can be GC'd. )</em></p>
+<h2>Third-Party Libraries</h2>
+<ul>
+<li>
+<p>Zlib is 58.1K.  It's good that things have been rigged up to only include one version of Zlib (instead of duplicating it in PNG loading, for example).  There's probably not much that can be cut there--although on some systems that have a zlib shared library, you could build an executable that used that instead.</p>
+</li>
+<li>
+<p>The JPEG decoder--which only decodes and does not encode--takes up 53.8K.  That seems excessive, especially considering there are <a href="https://keyj.emphy.de/nanojpeg/">pure C 6K decoders</a>.  JPEG is an extension, so you can build without this in any case.</p>
+</li>
+<li>
+<p>LodePNG the PNG extension uses that Zlib...but then its own code is 42.5K.  That covers both encoding and decoding.  Again...PNG is optional, so people who don't want the extension don't need to have it.</p>
+</li>
+<li>
+<p>f-dtoa.c is 31.2K...this is some fairly <a href="https://stackoverflow.com/questions/3173056/why-does-dtoa-c-contain-so-much-code">arcane but vetted C code</a> for converting between floating point <code>double</code> numbers and ASCII.</p>
+</li>
+<li>
+<p>The elliptic curves for cryptography are the single-largest crypto chunk, at 29.3K.  You can build without crypto at all, and you can pare out some of the curves as well...so this is optional.</p>
+</li>
+<li>
+<p>The BigNum math at 24.1Ki is the second largest crypto chunk.  Right now it's optional and you only get it if you build with crypto.  But I'm aiming to say that this is part of the standard implementation of INTEGER!.  (Although perhaps there could be a build where you don't have bignums, and large integers just overflow, for those who wanted it.)</p>
+</li>
+</ul>
+<p>It kind of goes down from there, with particular hashes and such for the cryptography.</p>
+<h2>Interpreter Code</h2>
+<ul>
+<li>
+<p>PARSE is the biggest single largest piece of code it seems...at 52.6K it's larger than the evaluator and the action execution code combined.  I definitely think it needs a revisit to its implementation for all kinds of reasons, and most of what I'd think of doing to it would hopefully make it smaller.</p>
+</li>
+<li>
+<p>The "control structures" that include SWITCH and CASE and IF take up a lot of space, and I imagine some of that is also the kind-of-out-of-control batch of MATCH experimentation.</p>
+</li>
+<li>
+<p>The scanner is another thing that could be reduced, it's 39.6K and I'm sure it could be both smaller and faster.  Since Red has attacked this particular problem it's probably worth looking to see if there's anything useful in their answer.</p>
+</li>
+</ul>
+<p>Anyway...it's kind of a case of "things just add up".  Most important is making sure that a core can be put together that's small and doesn't pull in things it doesn't need...and things remain on track for that point.  The system still builds on old systems and dependencies are under control.</p>
+<p>It's good to look at, and will keep it all in mind.</p>
+<p>Though the stripped file is almost 2MB, debug symbols multiply that by a factor of 10, so a debug executable will be 20 megabytes in file size.  <strong>So ignore the FILE SIZE, only the VM SIZE counts here...</strong></p>
+<pre><code>   FILE SIZE        VM SIZE    
+ --------------  -------------- 
+   0.4%  73.1Ki   3.4%  65.4Ki    prep/core/tmp-boot-block.c
+   1.2%   220Ki   3.0%  58.1Ki    ../Projects/ren-c/src/core/u-zlib.c
+   2.8%   524Ki   2.8%  54.5Ki    ../Projects/ren-c/src/core/n-control.c
+   1.5%   279Ki   2.8%  53.8Ki    ../Projects/ren-c/extensions/jpg/u-jpg.c
+   3.0%   554Ki   2.7%  52.6Ki    ../Projects/ren-c/src/core/u-parse.c
+   1.2%   227Ki   2.2%  42.5Ki    ../Projects/ren-c/extensions/png/lodepng.c
+   2.4%   440Ki   2.1%  41.8Ki    ../Projects/ren-c/src/core/c-path.c
+   2.6%   490Ki   2.1%  41.7Ki    ../Projects/ren-c/src/core/n-data.c
+   1.8%   341Ki   2.0%  39.6Ki    ../Projects/ren-c/src/core/l-scan.c
+   1.8%   335Ki   1.9%  36.6Ki    ../Projects/ren-c/src/core/a-lib.c
+   1.7%   308Ki   1.6%  31.8Ki    ../Projects/ren-c/src/core/n-loop.c
+   1.8%   339Ki   1.6%  31.4Ki    ../Projects/ren-c/extensions/image/t-image.c
+   0.6%   107Ki   1.6%  31.2Ki    ../Projects/ren-c/src/core/f-dtoa.c
+   1.7%   322Ki   1.5%  29.7Ki    ../Projects/ren-c/src/core/t-block.c
+   1.0%   187Ki   1.5%  29.4Ki    ../Projects/ren-c/src/core/f-deci.c
+   1.1%   212Ki   1.5%  29.3Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/ecp.c
+   1.5%   276Ki   1.5%  29.1Ki    ../Projects/ren-c/src/core/n-reduce.c
+   1.6%   298Ki   1.4%  28.0Ki    ../Projects/ren-c/src/core/t-binary.c
+   1.5%   288Ki   1.4%  27.9Ki    ../Projects/ren-c/src/core/c-error.c
+   1.5%   282Ki   1.4%  27.6Ki    ../Projects/ren-c/src/core/n-do.c
+   1.8%   331Ki   1.4%  26.4Ki    ../Projects/ren-c/src/core/t-string.c
+   0.2%  34.4Ki   1.3%  26.0Ki    ../Projects/ren-c/src/main/main.c
+   0.7%   121Ki   1.2%  24.1Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/bignum.c
+   1.4%   269Ki   1.2%  23.3Ki    ../Projects/ren-c/src/core/b-init.c
+   1.4%   260Ki   1.1%  22.2Ki    ../Projects/ren-c/extensions/crypt/mod-crypt.c
+   1.1%   213Ki   1.1%  22.0Ki    ../Projects/ren-c/src/core/evaluator/c-action.c
+   1.4%   261Ki   1.1%  20.7Ki    ../Projects/ren-c/src/core/n-strings.c
+   1.0%   185Ki   1.1%  20.6Ki    ../Projects/ren-c/src/core/evaluator/c-eval.c
+   1.2%   227Ki   1.0%  19.8Ki    ../Projects/ren-c/src/core/t-varargs.c
+   1.1%   211Ki   1.0%  18.9Ki    ../Projects/ren-c/extensions/gob/t-gob.c
+   1.1%   195Ki   1.0%  18.9Ki    ../Projects/ren-c/src/core/c-function.c
+   1.1%   208Ki   0.9%  18.0Ki    ../Projects/ren-c/src/core/t-object.c
+   1.1%   202Ki   0.9%  17.5Ki    ../Projects/ren-c/src/core/s-make.c
+   1.0%   177Ki   0.9%  17.3Ki    ../Projects/ren-c/src/core/functionals/c-specialize.c
+   0.8%   147Ki   0.9%  16.9Ki    ../Projects/ren-c/src/core/l-types.c
+   0.2%  44.2Ki   0.9%  16.6Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/aes.c
+   1.0%   193Ki   0.8%  16.3Ki    ../Projects/ren-c/src/core/c-context.c
+   0.8%   150Ki   0.8%  15.7Ki    ../Projects/ren-c/src/core/s-mold.c
+   1.0%   177Ki   0.8%  15.6Ki    ../Projects/ren-c/src/core/s-ops.c
+   0.9%   169Ki   0.8%  15.3Ki    ../Projects/ren-c/src/core/t-map.c
+   0.9%   162Ki   0.8%  15.1Ki    ../Projects/ren-c/src/core/t-bitset.c
+   0.9%   171Ki   0.8%  14.7Ki    ../Projects/ren-c/extensions/vector/t-vector.c
+   0.1%  24.4Ki   0.7%  14.0Ki    ../Projects/ren-c/src/core/s-cases.c
+   0.8%   158Ki   0.7%  13.5Ki    ../Projects/ren-c/src/core/c-bind.c
+   0.7%   134Ki   0.7%  13.2Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/ecp_curves.c
+   0.4%  72.2Ki   0.7%  13.0Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/rsa.c
+   0.7%   125Ki   0.6%  12.6Ki    ../Projects/ren-c/extensions/event/mod-event.c
+   0.9%   159Ki   0.6%  12.3Ki    ../Projects/ren-c/extensions/filesystem/mod-filesystem.c
+   0.7%   135Ki   0.6%  12.0Ki    ../Projects/ren-c/extensions/network/mod-network.c
+   0.6%   110Ki   0.6%  11.8Ki    ../Projects/ren-c/src/core/t-logic.c
+   0.5%   100Ki   0.6%  11.7Ki    ../Projects/ren-c/src/core/t-date.c
+   0.8%   153Ki   0.6%  11.5Ki    ../Projects/ren-c/extensions/filesystem/p-file.c
+   0.9%   163Ki   0.6%  11.4Ki    ../Projects/ren-c/src/core/f-modify.c
+   0.7%   125Ki   0.6%  11.3Ki    ../Projects/ren-c/extensions/utf/mod-utf.c
+   0.7%   128Ki   0.6%  11.0Ki    ../Projects/ren-c/src/core/t-char.c
+   0.6%   105Ki   0.6%  10.9Ki    ../Projects/ren-c/src/core/c-word.c
+   0.6%   109Ki   0.5%  10.7Ki    ../Projects/ren-c/src/core/n-math.c
+   0.1%  19.2Ki   0.5%  10.5Ki    ../Projects/ren-c/src/core/f-random.c
+   0.1%  19.6Ki   0.5%  10.3Ki    prep/core/tmp-type-hooks.c
+   0.8%   143Ki   0.5%  10.3Ki    ../Projects/ren-c/src/core/u-compress.c
+   0.6%   109Ki   0.5%  9.75Ki    ../Projects/ren-c/src/core/f-blocks.c
+   0.4%  80.3Ki   0.5%  9.45Ki    ../Projects/ren-c/src/core/f-stubs.c
+   0.1%  18.9Ki   0.5%  9.26Ki    prep/extensions/console/tmp-mod-console-init.c
+   0.6%   108Ki   0.5%  9.20Ki    ../Projects/ren-c/src/core/t-integer.c
+   0.6%   104Ki   0.5%  9.12Ki    ../Projects/ren-c/src/core/t-tuple.c
+   0.5%  87.4Ki   0.5%  9.05Ki    ../Projects/ren-c/src/core/t-time.c
+   0.5%  86.6Ki   0.5%  8.92Ki    ../Projects/ren-c/src/core/m-gc.c
+   0.5%  96.6Ki   0.5%  8.89Ki    ../Projects/ren-c/src/core/s-find.c
+   0.5%  92.4Ki   0.5%  8.76Ki    ../Projects/ren-c/extensions/event/t-event.c
+   0.5%  88.6Ki   0.4%  8.70Ki    ../Projects/ren-c/src/core/n-error.c
+   0.5%  99.0Ki   0.4%  8.54Ki    ../Projects/ren-c/src/core/s-crc.c
+   0.4%  76.1Ki   0.4%  8.53Ki    ../Projects/ren-c/src/core/m-pools.c
+   0.4%  75.9Ki   0.4%  8.32Ki    ../Projects/ren-c/extensions/process/call-posix.c
+   0.5%  87.9Ki   0.4%  8.20Ki    ../Projects/ren-c/src/core/functionals/c-oneshot.c
+   0.5%  97.3Ki   0.4%  8.15Ki    ../Projects/ren-c/src/core/m-series.c
+   0.4%  82.2Ki   0.4%  7.90Ki    ../Projects/ren-c/src/core/t-decimal.c
+   0.5%  93.2Ki   0.4%  7.83Ki    ../Projects/ren-c/src/core/t-function.c
+   0.4%  75.9Ki   0.4%  7.55Ki    ../Projects/ren-c/src/core/t-datatype.c
+   0.4%  67.0Ki   0.4%  7.45Ki    ../Projects/ren-c/src/core/t-money.c
+   0.5%  83.9Ki   0.4%  7.24Ki    ../Projects/ren-c/src/core/n-sets.c
+   0.4%  80.2Ki   0.4%  7.15Ki    ../Projects/ren-c/src/core/functionals/n-function.c
+   0.2%  41.5Ki   0.4%  7.04Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/ripemd160.c
+   0.2%  36.6Ki   0.4%  7.01Ki    ../Projects/ren-c/extensions/stdio/readline-posix.c
+   0.4%  79.8Ki   0.4%  6.89Ki    ../Projects/ren-c/src/core/n-protect.c
+   0.4%  77.7Ki   0.3%  6.72Ki    ../Projects/ren-c/src/core/functionals/c-hijack.c
+   0.3%  56.9Ki   0.3%  6.67Ki    ../Projects/ren-c/extensions/stdio/p-stdio.c
+   0.4%  73.0Ki   0.3%  6.66Ki    ../Projects/ren-c/src/core/functionals/c-enclose.c
+   0.4%  76.4Ki   0.3%  6.58Ki    ../Projects/ren-c/extensions/signal/mod-signal.c
+   0.4%  70.8Ki   0.3%  6.52Ki    ../Projects/ren-c/src/core/t-pair.c
+   0.4%  70.1Ki   0.3%  6.42Ki    ../Projects/ren-c/extensions/serial/mod-serial.c
+   0.3%  54.8Ki   0.3%  6.29Ki    ../Projects/ren-c/extensions/process/mod-process.c
+   0.3%  62.2Ki   0.3%  6.21Ki    ../Projects/ren-c/src/core/f-extension.c
+   0.4%  65.8Ki   0.3%  6.21Ki    ../Projects/ren-c/src/core/t-port.c
+   0.3%  53.2Ki   0.3%  6.12Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/sha1.c
+   0.4%  75.9Ki   0.3%  6.06Ki    ../Projects/ren-c/src/core/functionals/c-chain.c
+   0.3%  57.6Ki   0.3%  5.95Ki    ../Projects/ren-c/src/core/f-enbase.c
+   0.3%  63.9Ki   0.3%  5.88Ki    ../Projects/ren-c/src/core/t-typeset.c
+   0.4%  66.7Ki   0.3%  5.73Ki    ../Projects/ren-c/extensions/filesystem/file-posix.c
+   0.4%  70.3Ki   0.3%  5.54Ki    ../Projects/ren-c/extensions/event/p-event.c
+   0.1%  15.1Ki   0.3%  5.46Ki    prep/extensions/debugger/tmp-mod-debugger-init.c
+   0.0%  5.46Ki   0.3%  5.46Ki    [section .gnu.hash]
+   0.3%  58.5Ki   0.3%  5.35Ki    ../Projects/ren-c/src/core/f-series.c
+   0.3%  61.7Ki   0.3%  5.33Ki    ../Projects/ren-c/src/core/t-word.c
+   0.3%  46.8Ki   0.3%  5.22Ki    ../Projects/ren-c/extensions/bmp/mod-bmp.c
+   0.4%  68.2Ki   0.3%  5.22Ki    ../Projects/ren-c/src/core/functionals/c-does.c
+   0.3%  58.5Ki   0.3%  5.18Ki    ../Projects/ren-c/extensions/network/dev-net.c
+   0.1%  19.0Ki   0.3%  5.01Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/sha512.c
+   0.1%  22.4Ki   0.3%  5.00Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/sha256.c
+   0.1%  14.6Ki   0.3%  4.90Ki    prep/extensions/locale/tmp-mod-locale-init.c
+   0.3%  62.2Ki   0.2%  4.83Ki    ../Projects/ren-c/src/core/functionals/c-reskin.c
+   0.4%  68.5Ki   0.2%  4.73Ki    ../Projects/ren-c/extensions/filesystem/p-dir.c
+   0.1%  24.6Ki   0.2%  4.73Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/md.c
+   0.3%  62.4Ki   0.2%  4.70Ki    ../Projects/ren-c/extensions/stdio/mod-stdio.c
+   0.1%  21.9Ki   0.2%  4.65Ki    ../Projects/ren-c/src/core/a-globals.c
+   0.1%  19.1Ki   0.2%  4.54Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/cipher_wrap.c
+   0.2%  28.5Ki   0.2%  4.48Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/cipher.c
+   0.2%  41.0Ki   0.2%  4.01Ki    ../Projects/ren-c/src/core/f-device.c
+   0.2%  40.2Ki   0.2%  3.77Ki    ../Projects/ren-c/src/core/t-quoted.c
+   0.3%  47.5Ki   0.2%  3.77Ki    ../Projects/ren-c/extensions/dns/mod-dns.c
+   0.1%  13.2Ki   0.2%  3.57Ki    prep/extensions/process/tmp-mod-process-init.c
+   0.3%  52.1Ki   0.2%  3.52Ki    ../Projects/ren-c/src/core/d-stack.c
+   0.2%  31.7Ki   0.2%  3.51Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/md5.c
+   0.1%  20.8Ki   0.2%  3.48Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/dhm.c
+   0.1%  23.3Ki   0.2%  3.46Ki    ../Projects/ren-c/extensions/console/mod-console.c
+   0.2%  43.3Ki   0.2%  3.41Ki    ../Projects/ren-c/src/core/m-stacks.c
+   0.0%  3.40Ki   0.2%  3.40Ki    [section .dynsym]
+   0.2%  37.9Ki   0.2%  3.39Ki    ../Projects/ren-c/extensions/gif/mod-gif.c
+   0.1%  16.3Ki   0.2%  3.38Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/rsa_internal.c
+   0.3%  46.8Ki   0.2%  3.36Ki    ../Projects/ren-c/src/core/functionals/c-augment.c
+   0.2%  46.1Ki   0.2%  3.36Ki    ../Projects/ren-c/extensions/debugger/mod-debugger.c
+   0.2%  44.7Ki   0.2%  3.27Ki    ../Projects/ren-c/src/core/n-io.c
+   0.0%  3.09Ki   0.2%  3.09Ki    [section .rela.plt]
+   0.2%  39.5Ki   0.2%  3.08Ki    ../Projects/ren-c/extensions/png/mod-png.c
+   0.2%  29.2Ki   0.2%  3.05Ki    ../Projects/ren-c/src/core/f-round.c
+   0.2%  46.3Ki   0.1%  2.76Ki    ../Projects/ren-c/src/core/c-port.c
+   0.1%  26.0Ki   0.1%  2.67Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/ecdh.c
+   0.1%  23.2Ki   0.1%  2.66Ki    ../Projects/ren-c/src/core/f-qsort.c
+   0.1%  12.3Ki   0.1%  2.64Ki    prep/extensions/secure/tmp-mod-secure-init.c
+   0.1%  25.9Ki   0.1%  2.63Ki    ../Projects/ren-c/extensions/serial/serial-posix.c
+   0.2%  28.3Ki   0.1%  2.62Ki    ../Projects/ren-c/src/core/d-print.c
+   0.1%  24.1Ki   0.1%  2.56Ki    ../Projects/ren-c/src/core/f-math.c
+   0.1%  16.9Ki   0.1%  2.52Ki    ../Projects/ren-c/extensions/crypt/mbedtls/library/hmac_drbg.c
+   0.2%  35.0Ki   0.1%  2.27Ki    ../Projects/ren-c/extensions/gob/mod-gob.c
+   0.1%  14.0Ki   0.1%  2.26Ki    ../Projects/ren-c/extensions/uuid/libuuid/gen_uuid.c
+   0.2%  33.0Ki   0.1%  2.24Ki    ../Projects/ren-c/src/core/n-system.c
+   0.1%  19.1Ki   0.1%  2.23Ki    ../Projects/ren-c/extensions/locale/mod-locale.c
+   0.2%  37.6Ki   0.1%  2.21Ki    ../Projects/ren-c/src/core/d-crash.c
+   0.2%  37.3Ki   0.1%  2.16Ki    ../Projects/ren-c/extensions/secure/mod-secure.c
+   0.1%  11.8Ki   0.1%  2.11Ki    prep/extensions/event/tmp-mod-event-init.c
+   0.0%  2.08Ki   0.1%  2.08Ki    [section .plt]
+   0.0%  2.06Ki   0.1%  2.06Ki    [section .plt.sec]
+   0.1%  11.7Ki   0.1%  2.05Ki    prep/extensions/crypt/tmp-mod-crypt-init.c
+   1.4%   254Ki   0.1%  2.00Ki    ../Projects/ren-c/src/core/a-constants.c
+   0.2%  34.8Ki   0.1%  1.99Ki    ../Projects/ren-c/src/core/functionals/c-typechecker.c
+   0.2%  30.1Ki   0.1%  1.85Ki    ../Projects/ren-c/extensions/stdio/stdio-posix.c
+   0.2%  32.0Ki   0.1%  1.81Ki    ../Projects/ren-c/src/core/functionals/c-adapt.c
+   0.0%  1.72Ki   0.1%  1.72Ki    [section .gnu.version]
+   0.1%  17.9Ki   0.1%  1.57Ki    ../Projects/ren-c/extensions/signal/dev-signal.c
+   0.1%  11.1Ki   0.1%  1.44Ki    prep/extensions/network/tmp-mod-network-init.c
+   0.1%  27.3Ki   0.1%  1.42Ki    ../Projects/ren-c/extensions/jpg/mod-jpg.c
+   0.1%  27.3Ki   0.1%  1.37Ki    ../Projects/ren-c/extensions/library/mod-library.c
+   0.0%  1.26Ki   0.1%  1.26Ki    [section .dynstr]
+   0.1%  10.9Ki   0.1%  1.25Ki    prep/extensions/gob/tmp-mod-gob-init.c
+   0.1%  10.9Ki   0.1%  1.24Ki    prep/extensions/filesystem/tmp-mod-filesystem-init.c
+   0.1%  20.5Ki   0.1%  1.21Ki    ../Projects/ren-c/src/core/t-blank.c
+   0.1%  10.8Ki   0.1%  1.16Ki    prep/extensions/stdio/tmp-mod-stdio-init.c
+   0.1%  15.7Ki   0.1%  1.14Ki    ../Projects/ren-c/extensions/time/time-posix.c
+   0.0%  1.05Ki   0.1%  1.05Ki    [section .got]
+   0.1%  18.4Ki   0.1%  1.03Ki    ../Projects/ren-c/src/core/d-trace.c
+   0.0%  8.58Ki   0.1%  1.01Ki    ../Projects/ren-c/extensions/uuid/libuuid/randutils.c
+   0.1%  14.9Ki   0.1%    1016    ../Projects/ren-c/src/core/f-int.c
+   0.1%  14.5Ki   0.1%     997    ../Projects/ren-c/extensions/event/event-posix.c
+   0.1%  10.6Ki   0.0%     977    prep/extensions/utf/tmp-mod-utf-init.c
+   0.1%  10.6Ki   0.0%     969    prep/extensions/view/tmp-mod-view-init.c
+   0.1%  17.9Ki   0.0%     944    ../Projects/ren-c/extensions/time/mod-time.c
+   0.1%  20.0Ki   0.0%     930    ../Projects/ren-c/src/core/c-signal.c
+   0.1%  15.5Ki   0.0%     836    ../Projects/ren-c/extensions/view/mod-view.c
+   0.0%     805   0.0%     805    [LOAD #2 [R]]
+   0.1%  10.4Ki   0.0%     734    prep/extensions/library/tmp-mod-library-init.c
+   0.1%  13.3Ki   0.0%     720    ../Projects/ren-c/extensions/library/library-posix.c
+   0.1%  10.3Ki   0.0%     716    prep/extensions/image/tmp-mod-image-init.c
+   0.0%     712   0.0%     712    [section .eh_frame]
+   0.0%     667   0.0%     667    [section .rodata]
+   0.1%  10.3Ki   0.0%     640    prep/extensions/vector/tmp-mod-vector-init.c
+   0.0%     628   0.0%     628    [section .text]
+   0.1%  10.2Ki   0.0%     591    prep/extensions/time/tmp-mod-time-init.c
+   0.1%  10.2Ki   0.0%     589    prep/extensions/serial/tmp-mod-serial-init.c
+   0.1%  10.2Ki   0.0%     552    prep/extensions/gif/tmp-mod-gif-init.c
+   0.1%  10.2Ki   0.0%     529    prep/extensions/bmp/tmp-mod-bmp-init.c
+   0.1%  10.1Ki   0.0%     529    prep/extensions/png/tmp-mod-png-init.c
+   0.0%     528   0.0%     528    [section .dynamic]
+   0.0%  4.42Ki   0.0%     512    ../Projects/ren-c/extensions/crypt/mbedtls/library/arc4.c
+   0.1%  10.1Ki   0.0%     502    prep/extensions/jpg/tmp-mod-jpg-init.c
+   0.1%  12.2Ki   0.0%     486    ../Projects/ren-c/src/core/d-test.c
+   0.1%  10.1Ki   0.0%     478    prep/extensions/dns/tmp-mod-dns-init.c
+   0.1%  10.1Ki   0.0%     476    prep/extensions/uuid/tmp-mod-uuid-init.c
+   0.1%  10.1Ki   0.0%     456    prep/extensions/signal/tmp-mod-signal-init.c
+   0.1%  11.4Ki   0.0%     426    ../Projects/ren-c/extensions/vector/mod-vector.c
+   0.1%  11.4Ki   0.0%     421    ../Projects/ren-c/extensions/image/mod-image.c
+   0.0%       0   0.0%     313    [section .bss]
+   0.1%  15.5Ki   0.0%     296    ../Projects/ren-c/src/core/d-stats.c
+   0.1%  11.3Ki   0.0%     280    ../Projects/ren-c/extensions/uuid/mod-uuid.c
+   0.0%     240   0.0%     240    [section .gnu.version_r]
+   0.0%  2.44Ki   0.0%     168    ../Projects/ren-c/extensions/crypt/mbedtls/library/platform.c
+   0.0%  2.86Ki   0.0%     152    ../Projects/ren-c/extensions/crypt/mbedtls/library/platform_util.c
+   0.0%  2.75Ki   0.0%     128    ../Projects/ren-c/extensions/uuid/libuuid/unpack.c
+   0.1%  13.8Ki   0.0%     104    ../Projects/ren-c/src/core/d-dump.c
+   0.0%  2.41Ki   0.0%      96    ../Projects/ren-c/extensions/uuid/libuuid/pack.c
+   0.0%      60   0.0%      60    [section .eh_frame_hdr]
+   0.0%      48   0.0%      48    [section .data]
+   0.0%      48   0.0%      48    [section .rela.dyn]
+   0.0%      36   0.0%      36    [section .note.gnu.build-id]
+   0.0%      32   0.0%      32    [section .note.ABI-tag]
+   0.0%      32   0.0%      32    [section .note.gnu.property]
+   0.0%      28   0.0%      28    [section .interp]
+   0.0%      27   0.0%      27    [section .init]
+   0.0%       0   0.0%      24    [LOAD #5 [RW]]
+   0.0%      16   0.0%      16    [section .plt.got]
+   0.0%      13   0.0%      13    [section .fini]
+   0.0%       8   0.0%       8    [LOAD #3 [RX]]
+   0.0%       8   0.0%       8    [section .fini_array]
+   0.0%       8   0.0%       8    [section .init_array]
+   0.0%       4   0.0%       4    [LOAD #4 [R]]
+   0.0%     324   0.0%       1    ../Projects/ren-c/src/core/d-winstack.c
+   0.0%     243   0.0%       0    
+   0.0%  9.11Ki   0.0%       0    ../Projects/ren-c/src/core/c-do.c
+   0.0%  9.11Ki   0.0%       0    ../Projects/ren-c/src/core/c-value.c
+   0.0%  9.11Ki   0.0%       0    ../Projects/ren-c/src/core/d-eval.c
+   0.0%  9.11Ki   0.0%       0    ../Projects/ren-c/src/core/d-gc.c
+   0.0%  2.50Ki   0.0%       0    [ELF Headers]
+   0.0%  4.69Ki   0.0%       0    [Unmapped]
+   0.0%      42   0.0%       0    [section .comment]
+   0.0%     133   0.0%       0    [section .debug_abbrev]
+   0.1%  9.38Ki   0.0%       0    [section .debug_aranges]
+   0.6%   119Ki   0.0%       0    [section .debug_loc]
+   2.4%   455Ki   0.0%       0    [section .debug_macro]
+   0.0%     368   0.0%       0    [section .debug_ranges]
+   1.6%   296Ki   0.0%       0    [section .debug_str]
+   0.0%     397   0.0%       0    [section .shstrtab]
+   0.0%  4.64Ki   0.0%       0    [section .strtab]
+   0.1%  9.33Ki   0.0%       0    [section .symtab]
+ 100.0%  18.2Mi 100.0%  1.90Mi    TOTAL</code></pre>
+          <p><a href="https://forum.rebol.info/t/executable-size-analysis/1367/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/executable-size-analysis/1367/1</link>
+        <pubDate>Thu, 15 Oct 2020 02:45:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1367-1</guid>
+        <source url="https://forum.rebol.info/t/executable-size-analysis/1367.rss">Executable Size Analysis</source>
+      </item>
+  </channel>
+</rss>

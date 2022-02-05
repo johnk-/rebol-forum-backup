@@ -1,0 +1,321 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Null Tolerance and Conditionals: Making a Decision</title>
+    <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663</link>
+    <description>It has been a long road of looking at the tuning of UNSET! and NONE!.  I think it&#39;s almost there.
+
+I&#39;m *extremely* pleased with NULL--which has replaced &quot;values of type UNSET!&quot;.  Especially great is how it&#39;s working in the API, and having a failing conditional return a signal which can be tested for without any additional API calls:
+
+    REBVAL *result = rebRun(&quot;switch type of&quot;, some_val, &quot;[&quot;,
+        ..., ...,
+        ..., ..., &quot;]&quot;, END
+    );
+
+    if (!result) { /* no match in the switch */ }
+
+It&#39;s a huge payoff for all the work and thinking done to get rid of &quot;values of type unset!&quot;  Not only do all the constructs that speak the &quot;null protocol&quot; work this way, but users can create their own...or twist blanks into nulls with OPT.
+
+### But here&#39;s the (hopefully) &quot;Last Big Question&quot;...
+
+While NULLs are becoming more prevalent as a signal, there&#39;s the issue that *most constructs are supposed to error on them when they get passed*.  This is because NULL&#39;s other purpose is to provide locality in errors.
+
+A rough premise I gave is that **routines which are not specifically related to NULL processing should error if the input is NULL**.  It&#39;s easy enough to convert a NULL into a BLANK! (with TRY), or switch it to some other value (with ELSE or !!).
+
+But what about COMPOSE?  Should this be an error?
+
+    block: [&lt;one&gt; &lt;two&gt;]
+    compose [a (third block) b]
+
+*A part of me itches and feels like that should be an error.*  The natural way of following the rules here is to have COMPOSE choke on NULL.  So the author of the code would have written:
+
+    block: [&lt;one&gt; &lt;two&gt;]
+    compose [a (try third block) b]
+
+Then COMPOSE without /ONLY would treat blanks as it does empty blocks, and vaporize them.
+
+But I&#39;d be really disappointed if the following situation would do anything other than vaporize the group:
+
+    condition: false
+    compose [a (if condition [branch]) b]
+
+Not having to write **either condition [branch] []** was one of the big motivators for NULL&#39;s design in the first place.  And it feels redundant to have to write **try if condition [branch]**.
+
+When we run the numbers, we have to pick one of the following:
+
+1. **Failed conditionals return blank** - this would be a way of blessing a conditional&#39;s failure as intended. *&quot;because I&#39;m a conditional, that the branch would not run sometimes was of course expected&quot;*.  The API could offer rebOpt() as an alternative to rebRun() that returns a `REBVAL*`, but implicitly converts blanks to NULLs...so it&#39;s no more typing.
+
+2. **COMPOSE accepts nulls without erroring** - but something about `compose [a (third block) b]` silently ignoring if block has only two items seems to be throwing away what NULL is supposed to be catching.  I think you need that TRY.  This isn&#39;t to say that a NULL-tolerating version shouldn&#39;t exist, e.g. COMPOSE/OPT a.k.a. `compose*`.
+
+2 is the status quo.  But I&#39;ve already talked about how I want some of the status quo to change in other places, that **append block third [a b]** should fail, requiring you to say **append block try third [a b]** or **append/opt block third [a b]** or some other mitigation.
+
+### What&#39;s happened trying #1 in the past
+
+There was a moment where it was questioned if ELSE should be driven not by nullness of the left hand side, but by falseyness.  Hence `false else [print &quot;this would print in that world&quot;]`.
+
+That experiment was deemed a failure.  It seemed that logic false was too legitimate a result of a conditional, e.g.:
+
+    flag: switch text [
+        &quot;on&quot; &quot;yes&quot; &quot;true&quot; [true]
+        &quot;off&quot; &quot;no&quot; &quot;false&quot; [false]
+    ] else [ ;-- don&#39;t want this to run if false case matches
+        fail [&quot;Invalid flag state&quot; text]
+    ]
+
+The &quot;truthy/falsey-driven-ELSE&quot; was achieved another way, using a special form of OR, which took a literal block on its right-hand side.  (That has been quite the success!)
+
+Yet while that concept was stewing, I mused about whether ELSE could be &quot;nothingness-driven&quot;, e.g. either null or blank would be reason to run the else clause.  [At first I said:](https://forum.rebol.info/t/the-fallout-from-the-switch-fallout-feature/312/5?u=hostilefork)
+
+&gt; But would BAR!-ification of BLANK! be that bad? How often is BLANK! intentionally the return result of conditional branches? Is the desirability to use ANY and ALL with [ALSO] and ELSE high enough to push intentional-blank-return into the “expert” domain of SWITCH* or SWITCH/ONLY (“if I say [null] or blank, that’s what I meant the result to be…don’t BAR!-ify them for the sake of THEN and ELSE”)
+&gt;
+&gt; Offhand I’d say it is probably sufficiently desirable.
+
+But something motivated me to back off:
+
+&gt; Hrm. Well, experimenting with it, I feel like it crosses a line.
+&gt; ...
+&gt; The problem here is that BLANK! is a value, and it’s a value that we are encouraging people to use instead of inventing their own way of saying “nothing” on each type. In practice, not letting branches evaluate to it feels significantly more disruptive than not letting branches evaluate to void (especially for the reasons mentioned about how a [null] couldn’t even be used as an assignment source previously, and now it can’t be put in blocks either).
+
+I mention it as being disruptive, but it&#39;s a fairly common kind of disruption, regarding the need in some cases to avoid conflating blanks and nulls.  DEFAULT has this problem...since BLANK! is &quot;a value&quot;, should it overwrite with a default in that case, or only if the variable *really is not set*?  This is why the DEFAULT/OPT (a.k.a. **`default*`**) routine exists.  And anyone who really needed &quot;full spectrum&quot; assignment from a CASE statement would similarly use **`case*`**.
+
+### Should we even *care* about catching errors?
+
+The only reason to change the status quo is if we care about error locality.
+
+If we don&#39;t care about that, there&#39;s no reason why **append block third [a b]** should be anything but a no-op.  Then there&#39;s nothing wrong with **compose [a (third [b c]) d]**, and certainly nothing wrong with **compose [a (if false [stuff]) b]** having the conditional evaluate to null and then vaporize.
+
+So what I&#39;m talking about may all be getting too overprotective.  It&#39;s certainly going an extra mile beyond Rebol of yore.  Perhaps the rule should be:
+
+**operations which may reasonably interpret a null argument as a no-op should do so**
+
+Whatever decision is made I&#39;d just like to see it applied consistently.</description>
+    
+    <lastBuildDate>Mon, 04 Jun 2018 23:39:12 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[johnk]]></dc:creator>
+        <description><![CDATA[
+            <p>Thanks for the response. I agree that it sounds like the right direction. -John</p>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/9</link>
+        <pubDate>Mon, 04 Jun 2018 23:39:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-9</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>At first I was leaning towards having to use 'try, to have consistency on null being an error state.<br>
+But after thinking about it a while longer, I guess that having nulls evaporate is why you'd use 'if here, so my final vote is on letting it evaporate.</p>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/8</link>
+        <pubDate>Mon, 04 Jun 2018 15:33:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-8</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>The no-op approach seems reasonable to me.</p>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/7</link>
+        <pubDate>Mon, 04 Jun 2018 15:12:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-7</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="5" data-topic="663">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/johnk/40/229_2.png" class="avatar"> johnk:</div>
+<blockquote>
+<p>compose [ 1 (third [ 1 2 ]) 3 ]</p>
+</blockquote>
+</aside>
+<p>THIRD is a specialization of PICK, and the general idea is that returning NULL is the way of ensure a "full spectrum" response.  e.g. you cannot confuse a null result with any legal value that could have been in the block--like a blank or a logic false--since NULL cannot be put in a block.</p>
+<p>There are a lot of options for handling it:</p>
+<pre><code> ;-- x will be blank if either the third element was
+ ;-- a blank or if there was no third element
+ if x: try third [1 2] [...branch...]
+
+ ;-- x will be null if there was no third element, and
+ ;-- branch won't run if it was null/blank/false
+ if did x: third [1 2] [...branch....]
+
+ ;-- branch runs only if there was no third element
+ x: third [1 2] else [...branch...]
+
+ ;-- value is assigned only if there was no third
+ ;-- element, blocks not executed
+ x: third [1 2] !! [&lt;not&gt; &lt;executed&gt;]
+</code></pre>
+<p>And of course there are a lot of situations that will error on null, if you don't take some mitigating action like the above.  You can't SELECT from null, use null as a condition, you can't APPEND <em>to</em> a null, etc.  Non-mutating operations will however let you operate on blank and then return a null, e.g. <code>third _</code> is null.</p>
+<p><strong>It's a purposeful choice.  And I think that after talking it through here, it would be a bad idea to mess with it for the sake of the errors I was suggesting.  ELSE should not widen its reaction to blanks on the left, and failed conditionals like IF/CASE/SWITCH should stick to returning null.</strong></p>
+<p>Since I won't budge on <code>compose [1 (if false [...]) 2]</code> vaporizing the IF, COMPOSE will vaporize out of band PICKs without complaining, as well.</p>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/6</link>
+        <pubDate>Mon, 04 Jun 2018 12:01:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-6</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[johnk]]></dc:creator>
+        <description><![CDATA[
+            <p>Quick question for clarity. I assume that</p>
+<pre><code>compose [ 1 (1 / 0) 3 ]
+</code></pre>
+<p>would be a math error. Why is</p>
+<pre><code>compose [ 1 (third [ 1 2 ]) 3 ]
+</code></pre>
+<p>not some kind of a range check error?</p>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/5</link>
+        <pubDate>Mon, 04 Jun 2018 04:00:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-5</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>Theory rarely survives unscathed when meeting praxis.</p>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/4</link>
+        <pubDate>Mon, 04 Jun 2018 02:51:38 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-4</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="2" data-topic="663">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/gchiu/40/22_2.png" class="avatar"> gchiu:</div>
+<blockquote>
+<p>Without a lot of field testing we don’t really know how things are going to work out</p>
+</blockquote>
+</aside>
+<p>Possibly.  But I think with enough reasoning and looking at the angles, we can probably rule things out.</p>
+<p>What we know is that it is necessary to allow conditional statements (SWITCH, CASE, IF, etc.) to have taken branches that evaluate to blank.  <em>Users have to be able to do that.</em>  The question is if you should need to use some refinement or modifier.</p>
+<p>Right now you only need to use a modifier if you "really meant a branch evaluation to be null".  You're going to screw up interactions with ELSE, but that's what you have to expect when you use <strong><code>SWITCH*</code></strong>, <strong><code>IF*</code></strong> etc.</p>
+<p>But having talked out loud about it enough here, I think I've gradually convinced myself that in a fast-and-loose language like Rebol, the hand-holding error checking doesn't warrant the damage to the "full spectrum" return results.  Failed conditionals should be null, not blank.  There's too many good reasons for it.  And the only reason against it is to force more error checking, in a case where <em>you may well have meant what you said</em>.</p>
+<hr>
+<p>I think I'm just going to have to recant that <strong>append block third [a b]</strong> be an error.  It will be a no-op.  And plain <strong>compose [a (if condition [branch]) b]</strong> will be how you do that, even though that's COMPOSE letting a null slide by quietly.</p>
+<p>This is less of a strong design guidance on nulls than I would like, but I think that's just how it has to be.  There will still be plenty of slots that don't take nulls, but we'll start erring on the side of permissiveness, e.g. "how likely is it that you might have actually wanted that", and if it's reasonably reasonable, allow the null to mean "make this operation a no-op".</p>
+<hr>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/3</link>
+        <pubDate>Sun, 03 Jun 2018 23:47:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-3</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>Can't we have a mode that switches to a strict form and less strict?  Sometimes I don't care if it's null returned but other times I want it to error.  And I don't want to put in a <em>try</em> and then later on remove it?</p>
+<p>Yes, I do know that modes are probably bad.  But it would be just be hijacking <em>compose</em> to work in a certain way in much the same way we can currently turn on or off net-tracing.</p>
+<p>Without a lot of field testing we don't really know how things are going to work out so I'd like some choices.</p>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/2</link>
+        <pubDate>Sun, 03 Jun 2018 22:27:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-2</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+      <item>
+        <title>Null Tolerance and Conditionals: Making a Decision</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>It has been a long road of looking at the tuning of UNSET! and NONE!.  I think it's almost there.</p>
+<p>I'm <em>extremely</em> pleased with NULL--which has replaced "values of type UNSET!".  Especially great is how it's working in the API, and having a failing conditional return a signal which can be tested for without any additional API calls:</p>
+<pre><code>REBVAL *result = rebRun("switch type of", some_val, "[",
+    ..., ...,
+    ..., ..., "]", END
+);
+
+if (!result) { /* no match in the switch */ }
+</code></pre>
+<p>It's a huge payoff for all the work and thinking done to get rid of "values of type unset!"  Not only do all the constructs that speak the "null protocol" work this way, but users can create their own...or twist blanks into nulls with OPT.</p>
+<h3>But here's the (hopefully) "Last Big Question"...</h3>
+<p>While NULLs are becoming more prevalent as a signal, there's the issue that <em>most constructs are supposed to error on them when they get passed</em>.  This is because NULL's other purpose is to provide locality in errors.</p>
+<p>A rough premise I gave is that <strong>routines which are not specifically related to NULL processing should error if the input is NULL</strong>.  It's easy enough to convert a NULL into a BLANK! (with TRY), or switch it to some other value (with ELSE or !!).</p>
+<p>But what about COMPOSE?  Should this be an error?</p>
+<pre><code>block: [&lt;one&gt; &lt;two&gt;]
+compose [a (third block) b]
+</code></pre>
+<p><em>A part of me itches and feels like that should be an error.</em>  The natural way of following the rules here is to have COMPOSE choke on NULL.  So the author of the code would have written:</p>
+<pre><code>block: [&lt;one&gt; &lt;two&gt;]
+compose [a (try third block) b]
+</code></pre>
+<p>Then COMPOSE without /ONLY would treat blanks as it does empty blocks, and vaporize them.</p>
+<p>But I'd be really disappointed if the following situation would do anything other than vaporize the group:</p>
+<pre><code>condition: false
+compose [a (if condition [branch]) b]
+</code></pre>
+<p>Not having to write <strong>either condition [branch] []</strong> was one of the big motivators for NULL's design in the first place.  And it feels redundant to have to write <strong>try if condition [branch]</strong>.</p>
+<p>When we run the numbers, we have to pick one of the following:</p>
+<ol>
+<li>
+<p><strong>Failed conditionals return blank</strong> - this would be a way of blessing a conditional's failure as intended. <em>"because I'm a conditional, that the branch would not run sometimes was of course expected"</em>.  The API could offer rebOpt() as an alternative to rebRun() that returns a <code>REBVAL*</code>, but implicitly converts blanks to NULLs...so it's no more typing.</p>
+</li>
+<li>
+<p><strong>COMPOSE accepts nulls without erroring</strong> - but something about <code>compose [a (third block) b]</code> silently ignoring if block has only two items seems to be throwing away what NULL is supposed to be catching.  I think you need that TRY.  This isn't to say that a NULL-tolerating version shouldn't exist, e.g. COMPOSE/OPT a.k.a. <code>compose*</code>.</p>
+</li>
+</ol>
+<p>2 is the status quo.  But I've already talked about how I want some of the status quo to change in other places, that <strong>append block third [a b]</strong> should fail, requiring you to say <strong>append block try third [a b]</strong> or <strong>append/opt block third [a b]</strong> or some other mitigation.</p>
+<h3>What's happened trying <span class="hashtag">#1</span> in the past</h3>
+<p>There was a moment where it was questioned if ELSE should be driven not by nullness of the left hand side, but by falseyness.  Hence <code>false else [print "this would print in that world"]</code>.</p>
+<p>That experiment was deemed a failure.  It seemed that logic false was too legitimate a result of a conditional, e.g.:</p>
+<pre><code>flag: switch text [
+    "on" "yes" "true" [true]
+    "off" "no" "false" [false]
+] else [ ;-- don't want this to run if false case matches
+    fail ["Invalid flag state" text]
+]
+</code></pre>
+<p>The "truthy/falsey-driven-ELSE" was achieved another way, using a special form of OR, which took a literal block on its right-hand side.  (That has been quite the success!)</p>
+<p>Yet while that concept was stewing, I mused about whether ELSE could be "nothingness-driven", e.g. either null or blank would be reason to run the else clause.  <a href="https://forum.rebol.info/t/the-fallout-from-the-switch-fallout-feature/312/5?u=hostilefork">At first I said:</a></p>
+<blockquote>
+<p>But would BAR!-ification of BLANK! be that bad? How often is BLANK! intentionally the return result of conditional branches? Is the desirability to use ANY and ALL with [ALSO] and ELSE high enough to push intentional-blank-return into the “expert” domain of SWITCH* or SWITCH/ONLY (“if I say [null] or blank, that’s what I meant the result to be…don’t BAR!-ify them for the sake of THEN and ELSE”)</p>
+<p>Offhand I’d say it is probably sufficiently desirable.</p>
+</blockquote>
+<p>But something motivated me to back off:</p>
+<blockquote>
+<p>Hrm. Well, experimenting with it, I feel like it crosses a line.<br>
+...<br>
+The problem here is that BLANK! is a value, and it’s a value that we are encouraging people to use instead of inventing their own way of saying “nothing” on each type. In practice, not letting branches evaluate to it feels significantly more disruptive than not letting branches evaluate to void (especially for the reasons mentioned about how a [null] couldn’t even be used as an assignment source previously, and now it can’t be put in blocks either).</p>
+</blockquote>
+<p>I mention it as being disruptive, but it's a fairly common kind of disruption, regarding the need in some cases to avoid conflating blanks and nulls.  DEFAULT has this problem...since BLANK! is "a value", should it overwrite with a default in that case, or only if the variable <em>really is not set</em>?  This is why the DEFAULT/OPT (a.k.a. <strong><code>default*</code></strong>) routine exists.  And anyone who really needed "full spectrum" assignment from a CASE statement would similarly use <strong><code>case*</code></strong>.</p>
+<h3>Should we even <em>care</em> about catching errors?</h3>
+<p>The only reason to change the status quo is if we care about error locality.</p>
+<p>If we don't care about that, there's no reason why <strong>append block third [a b]</strong> should be anything but a no-op.  Then there's nothing wrong with <strong>compose [a (third [b c]) d]</strong>, and certainly nothing wrong with <strong>compose [a (if false [stuff]) b]</strong> having the conditional evaluate to null and then vaporize.</p>
+<p>So what I'm talking about may all be getting too overprotective.  It's certainly going an extra mile beyond Rebol of yore.  Perhaps the rule should be:</p>
+<p><strong>operations which may reasonably interpret a null argument as a no-op should do so</strong></p>
+<p>Whatever decision is made I'd just like to see it applied consistently.</p>
+          <p><a href="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663/1</link>
+        <pubDate>Sun, 03 Jun 2018 16:48:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-663-1</guid>
+        <source url="https://forum.rebol.info/t/null-tolerance-and-conditionals-making-a-decision/663.rss">Null Tolerance and Conditionals: Making a Decision</source>
+      </item>
+  </channel>
+</rss>

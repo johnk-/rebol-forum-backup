@@ -1,0 +1,298 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>WHILE [Cold Feet]</title>
+    <link>https://forum.rebol.info/t/while-cold-feet/1772</link>
+    <description>**I&#39;m really certain that ANY should not be a looping construct in PARSE.**  Rebol&#39;s use of ANY everywhere else means &quot;any one of&quot;, not &quot;any number of&quot;.  That applies to the ANY short-circuit-OR operation, to the ANY-XXX! types, and it can come up in PARSE such as:
+
+    parse block [some any-value!]
+
+I like the shorthand for this this that works across series types with the TAG! combinator:
+
+    uparse block [some &lt;any&gt;]
+
+This meaning *any one element*.  It gets at that English concept that operators like **`*`** (or **`&lt;*&gt;`**) just don&#39;t have.
+
+Plus, the &quot;zero-or-more matches of a rule&quot; interpretation doesn&#39;t jibe with how we use ANY in English:
+
+* &quot;Do you have ANY bananas?&quot;
+* &quot;Yes.&quot;
+* &quot;Cool.  Can I have one, then?&quot;
+* &quot;No, sorry.  I don&#39;t have ANY.&quot;
+
+## But I&#39;m Not Happy With Bending WHILE For This
+
+It seemed appealing at first to say that WHILE would be standardized in the language as arity-1, both in PARSE and in ordinary code loops.  This would make UNTIL and WHILE line up, and LOOP could take the arity-2 role that WHILE used to have.
+
+But I&#39;ve been lamenting **[just how universally WHILE is arity-2 in pretty much every language](https://en.wikipedia.org/wiki/While_loop)** and that LOOP doesn&#39;t really quite cut it while reading.  :-/
+
+Sorry for the flux, but I want to move back to **while [condition] [body]** as it was.  However going through the process has spurred thought...
+
+## An Observation: OPT SOME &lt;=&gt; WHILE
+
+It has in the past occurred to me that PARSE&#39;s WHILE (or ANY) was really OPT SOME.  It&#39;s three more characters to say it:
+
+    while pattern
+    opt some pattern
+
+*(Note: This is only true in modern Ren-C, as previously the progress requirement differentiated these...that is now broken out into FURTHER.)*
+
+...but although it&#39;s more characters, &quot;optionally some number of occurrences of the pattern&quot; is pretty literally what you are talking about.  In the UPARSE model of synthesized values it&#39;s kind of less confusing, because it&#39;s clearer what it returns in the case of nothing...the same thing OPT always returns when a rule doesn&#39;t match: NULL.
+
+Anyway, I&#39;m feeling remorse and a wish to go back to WHILE for arity-2 loops in the language.  But I don&#39;t want to go back to ANY in PARSE.
+
+## Is OPT SOME really so bad?
+
+**I&#39;ve gotten to wondering if there is a reason we don&#39;t have a separate word for &quot;zero or more&quot; in English.  You actually have to write out &quot;zero or more&quot; to convey that intent... *maybe because the intent is too weird for a single word*.**
+
+When you just write WHILE it may be that you have a case that&#39;s actually supposed to be a SOME but it hasn&#39;t really bit you yet.  If you&#39;re willing to tolerate between 1 and a million of something, the case of no things being there is distinguished...and calling attention to the fact that the rule you have may not match at all can be an asset.
+
+I actually think OPT SOME offers an advantage, because it encourages you to look at it and decide if the OPT belongs there or not.  It may feel kind of like a wart, but maybe it&#39;s a helpful wart.
+
+(It reminds me a bit of the UNLESS vs. IF NOT situation.  Many people felt UNLESS is actually obfuscating nearly everywhere it&#39;s used, and that it&#39;s better to break it apart even if that means two words instead of one.)
+
+## Trying Out The Change, I Noticed...
+
+I actually did find a difference how I read the code.  &quot;This entire next section may not be relevant... *none* of it could match and it would go on.&quot;  That weight of the OPT is felt more heavily when the word is there than the WHILE...which if you *frequently* expect the thing to be there, you may assume it will *always* be there for at least one instance.
+
+You also can see redundancy in OPT more clearly.  Things like:
+
+    opt [
+        while [...]
+    ]
+
+Stand out more if they look like:
+
+    opt [
+       opt some [...]
+    ]
+
+I think some things really do read more clearly.  You can look at this as removing 0 or more newlines at the head of a series via a WHILE:
+
+    parse series [
+        remove [while newline]
+        ...
+    ]
+
+Or rephrase that with OPT SOME:
+
+    parse series [
+        remove [opt some newline]
+        ...
+    ]
+
+But I think it reads clearest when you bring the OPT outside, to say you&#39;re *optionally removing some newlines*:
+
+    parse series [
+        opt remove [some newline]
+        ...
+    ]
+
+## More Distinct
+
+ANY and WHILE both had the problem that they had analogues in imperative code.  But if SOME remains a PARSE keyword, then this helps better intuit the difference...so the code looks more differentiable.
+
+## Compression Is Possible By Other Avenues
+
+I noticed a particularly laborious substitution in %make-zlib.r which extracts the headers and code for zlib using parse, because it often was parsing C code and looking for the pattern **`while whitespace`**.  This would happen multiple lines in a row and multiple times on a line.  When it became **`opt some whitespace`** it got more annoying.
+
+But this is kind of a problem anytime you repeat something over and over.  Maybe that pattern should have been **`ws*: [opt some whitespace]`** and then it would just be **`ws*`** to mean &quot;any number of whitespace characters here, including zero&quot;.
+
+## A Motivated Individual Can Overrule It
+
+Remember, UPARSE is going to let you be the judge.  If you want your own keywords, you can have them.  Maybe you like MANY (some parser combinators seem to think that 0...N is &quot;many&quot; and 1...N is &quot;some&quot;).  Maybe you don&#39;t care if WHILE is different.  Maybe you don&#39;t want to use the ANY parse abstraction that I think is more interesting.
+
+## I&#39;m Trying It Out
+
+One can argue there&#39;s a bit of a 1984-newspeak to it (&quot;you don&#39;t need words like better or worse, use plus-good and un-good and double-plus-ungood&quot;).  But we&#39;re sort of asking a programming language to be more &quot;nuanced&quot; in its wording than English, which has evolved to be pretty much where the brain is at.  I&#39;ve shown some concrete benefits here to breaking out the OPT so you can see its relationship to the other OPTs you have and move it around.
+
+I do know I&#39;m getting cold feet on the WHILE &lt;=&gt; LOOP change.  And I don&#39;t think the arity of WHILE in PARSE should be different from the arity of WHILE in the language, it&#39;s jarring.
+
+I&#39;m giving it a shot in the bootstrap and rebmake to see what kind of thoughts it inspires.  So far it seems to be around equally good and bad...and since the bad is just largely unfamiliarity which should wear off...that points to a win, especially since it means retaking WHILE.</description>
+    
+    <lastBuildDate>Tue, 14 Dec 2021 15:42:03 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/while-cold-feet/1772.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>WHILE [Cold Feet]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="gchiu" data-post="3" data-topic="1772">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/gchiu/40/22_2.png" class="avatar"> gchiu:</div>
+<blockquote>
+<p><code>Opt</code> isn't an English word.</p>
+</blockquote>
+</aside>
+<p>We have accepted it as one, given that "opt in" and "opt out" are used pervasively.</p>
+<p>There's the full word OPTIONAL which we could offer as an alternative spelling, though we really want it to be read as OPTIONALLY</p>
+<pre><code>option some space  ; hmmm
+
+optionally some space  ; what we actually mean
+</code></pre>
+<p>MAYBE is shorter and and more appealing, but it does have another use.  And we're starting to stretch the limits of how annoying the change is:</p>
+<pre><code>any rule
+=&gt;
+while rule
+=&gt;
+opt some rule
+=&gt;
+maybe some rule
+</code></pre>
+<p>I've kind of made peace with OPT, myself.</p>
+          <p><a href="https://forum.rebol.info/t/while-cold-feet/1772/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/while-cold-feet/1772/5</link>
+        <pubDate>Tue, 14 Dec 2021 15:42:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1772-5</guid>
+        <source url="https://forum.rebol.info/t/while-cold-feet/1772.rss">WHILE [Cold Feet]</source>
+      </item>
+      <item>
+        <title>WHILE [Cold Feet]</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>It's not? It's listed as a verb in most English dictionaries that I'm aware of.</p>
+          <p><a href="https://forum.rebol.info/t/while-cold-feet/1772/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/while-cold-feet/1772/4</link>
+        <pubDate>Tue, 14 Dec 2021 13:57:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1772-4</guid>
+        <source url="https://forum.rebol.info/t/while-cold-feet/1772.rss">WHILE [Cold Feet]</source>
+      </item>
+      <item>
+        <title>WHILE [Cold Feet]</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p><code>Opt</code> isn't an English word. If you wanted one co<br>
+uld try <code>maybe</code></p>
+          <p><a href="https://forum.rebol.info/t/while-cold-feet/1772/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/while-cold-feet/1772/3</link>
+        <pubDate>Tue, 14 Dec 2021 07:44:47 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1772-3</guid>
+        <source url="https://forum.rebol.info/t/while-cold-feet/1772.rss">WHILE [Cold Feet]</source>
+      </item>
+      <item>
+        <title>WHILE [Cold Feet]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>I want to emphasize that there's a lot of thinking points you see from this.</strong></p>
+<p>Here's a little section of code in HELP (that needs revisiting, just in general), where it's breaking down parameters and refinements of a function:</p>
+<pre><code>uparse parameters of :value [
+    args: across while [word! | meta-word! | get-word! | quoted-word!]
+    refinements: across while path!
+] else [
+    fail [...]
+]
+</code></pre>
+<p>When we rewrite the WHILE as OPT SOME it shows us something interesting:</p>
+<pre><code>uparse parameters of :value [
+    args: across opt some [word! | meta-word! | get-word! | quoted-word!]
+    refinements: across opt some path!
+] else [
+    fail [...]
+]
+</code></pre>
+<p>Since our ACROSS goes over something effectively OPT, we could wind up with an empty block.  But an empty block isn't as cleanly differentiated as a null.  What if we move the OPT outside the across?</p>
+<pre><code>uparse parameters of :value [
+    args: opt across some [word! | meta-word! | get-word! | quoted-word!]
+    refinements: opt across some path!
+] else [
+    fail [...]
+]
+</code></pre>
+<p>Now we know that <strong>args</strong> and <strong>refinements</strong> are either null, or non-empty.  So testing "are there args" becomes just <strong>if args</strong> and not the more laborious <strong>if not empty? args</strong>.</p>
+<p><strong>I think it's interesting to see how these transformations jump off the page when you use OPT SOME instead of the atomic-seeming WHILE.</strong></p>
+          <p><a href="https://forum.rebol.info/t/while-cold-feet/1772/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/while-cold-feet/1772/2</link>
+        <pubDate>Sun, 12 Dec 2021 23:14:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1772-2</guid>
+        <source url="https://forum.rebol.info/t/while-cold-feet/1772.rss">WHILE [Cold Feet]</source>
+      </item>
+      <item>
+        <title>WHILE [Cold Feet]</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>I'm really certain that ANY should not be a looping construct in PARSE.</strong>  Rebol's use of ANY everywhere else means "any one of", not "any number of".  That applies to the ANY short-circuit-OR operation, to the ANY-XXX! types, and it can come up in PARSE such as:</p>
+<pre><code>parse block [some any-value!]
+</code></pre>
+<p>I like the shorthand for this this that works across series types with the TAG! combinator:</p>
+<pre><code>uparse block [some &lt;any&gt;]
+</code></pre>
+<p>This meaning <em>any one element</em>.  It gets at that English concept that operators like <strong><code>*</code></strong> (or <strong><code>&lt;*&gt;</code></strong>) just don't have.</p>
+<p>Plus, the "zero-or-more matches of a rule" interpretation doesn't jibe with how we use ANY in English:</p>
+<ul>
+<li>"Do you have ANY bananas?"</li>
+<li>"Yes."</li>
+<li>"Cool.  Can I have one, then?"</li>
+<li>"No, sorry.  I don't have ANY."</li>
+</ul>
+<h2>But I'm Not Happy With Bending WHILE For This</h2>
+<p>It seemed appealing at first to say that WHILE would be standardized in the language as arity-1, both in PARSE and in ordinary code loops.  This would make UNTIL and WHILE line up, and LOOP could take the arity-2 role that WHILE used to have.</p>
+<p>But I've been lamenting <strong><a href="https://en.wikipedia.org/wiki/While_loop">just how universally WHILE is arity-2 in pretty much every language</a></strong> and that LOOP doesn't really quite cut it while reading.  :-/</p>
+<p>Sorry for the flux, but I want to move back to <strong>while [condition] [body]</strong> as it was.  However going through the process has spurred thought...</p>
+<h2>An Observation: OPT SOME &lt;=&gt; WHILE</h2>
+<p>It has in the past occurred to me that PARSE's WHILE (or ANY) was really OPT SOME.  It's three more characters to say it:</p>
+<pre><code>while pattern
+opt some pattern
+</code></pre>
+<p><em>(Note: This is only true in modern Ren-C, as previously the progress requirement differentiated these...that is now broken out into FURTHER.)</em></p>
+<p>...but although it's more characters, "optionally some number of occurrences of the pattern" is pretty literally what you are talking about.  In the UPARSE model of synthesized values it's kind of less confusing, because it's clearer what it returns in the case of nothing...the same thing OPT always returns when a rule doesn't match: NULL.</p>
+<p>Anyway, I'm feeling remorse and a wish to go back to WHILE for arity-2 loops in the language.  But I don't want to go back to ANY in PARSE.</p>
+<h2>Is OPT SOME really so bad?</h2>
+<p><strong>I've gotten to wondering if there is a reason we don't have a separate word for "zero or more" in English.  You actually have to write out "zero or more" to convey that intent... <em>maybe because the intent is too weird for a single word</em>.</strong></p>
+<p>When you just write WHILE it may be that you have a case that's actually supposed to be a SOME but it hasn't really bit you yet.  If you're willing to tolerate between 1 and a million of something, the case of no things being there is distinguished...and calling attention to the fact that the rule you have may not match at all can be an asset.</p>
+<p>I actually think OPT SOME offers an advantage, because it encourages you to look at it and decide if the OPT belongs there or not.  It may feel kind of like a wart, but maybe it's a helpful wart.</p>
+<p>(It reminds me a bit of the UNLESS vs. IF NOT situation.  Many people felt UNLESS is actually obfuscating nearly everywhere it's used, and that it's better to break it apart even if that means two words instead of one.)</p>
+<h2>Trying Out The Change, I Noticed...</h2>
+<p>I actually did find a difference how I read the code.  "This entire next section may not be relevant... <em>none</em> of it could match and it would go on."  That weight of the OPT is felt more heavily when the word is there than the WHILE...which if you <em>frequently</em> expect the thing to be there, you may assume it will <em>always</em> be there for at least one instance.</p>
+<p>You also can see redundancy in OPT more clearly.  Things like:</p>
+<pre><code>opt [
+    while [...]
+]
+</code></pre>
+<p>Stand out more if they look like:</p>
+<pre><code>opt [
+   opt some [...]
+]
+</code></pre>
+<p>I think some things really do read more clearly.  You can look at this as removing 0 or more newlines at the head of a series via a WHILE:</p>
+<pre><code>parse series [
+    remove [while newline]
+    ...
+]
+</code></pre>
+<p>Or rephrase that with OPT SOME:</p>
+<pre><code>parse series [
+    remove [opt some newline]
+    ...
+]
+</code></pre>
+<p>But I think it reads clearest when you bring the OPT outside, to say you're <em>optionally removing some newlines</em>:</p>
+<pre><code>parse series [
+    opt remove [some newline]
+    ...
+]
+</code></pre>
+<h2>More Distinct</h2>
+<p>ANY and WHILE both had the problem that they had analogues in imperative code.  But if SOME remains a PARSE keyword, then this helps better intuit the difference...so the code looks more differentiable.</p>
+<h2>Compression Is Possible By Other Avenues</h2>
+<p>I noticed a particularly laborious substitution in %make-zlib.r which extracts the headers and code for zlib using parse, because it often was parsing C code and looking for the pattern <strong><code>while whitespace</code></strong>.  This would happen multiple lines in a row and multiple times on a line.  When it became <strong><code>opt some whitespace</code></strong> it got more annoying.</p>
+<p>But this is kind of a problem anytime you repeat something over and over.  Maybe that pattern should have been <strong><code>ws*: [opt some whitespace]</code></strong> and then it would just be <strong><code>ws*</code></strong> to mean "any number of whitespace characters here, including zero".</p>
+<h2>A Motivated Individual Can Overrule It</h2>
+<p>Remember, UPARSE is going to let you be the judge.  If you want your own keywords, you can have them.  Maybe you like MANY (some parser combinators seem to think that 0...N is "many" and 1...N is "some").  Maybe you don't care if WHILE is different.  Maybe you don't want to use the ANY parse abstraction that I think is more interesting.</p>
+<h2>I'm Trying It Out</h2>
+<p>One can argue there's a bit of a 1984-newspeak to it ("you don't need words like better or worse, use plus-good and un-good and double-plus-ungood").  But we're sort of asking a programming language to be more "nuanced" in its wording than English, which has evolved to be pretty much where the brain is at.  I've shown some concrete benefits here to breaking out the OPT so you can see its relationship to the other OPTs you have and move it around.</p>
+<p>I do know I'm getting cold feet on the WHILE &lt;=&gt; LOOP change.  And I don't think the arity of WHILE in PARSE should be different from the arity of WHILE in the language, it's jarring.</p>
+<p>I'm giving it a shot in the bootstrap and rebmake to see what kind of thoughts it inspires.  So far it seems to be around equally good and bad...and since the bad is just largely unfamiliarity which should wear off...that points to a win, especially since it means retaking WHILE.</p>
+          <p><a href="https://forum.rebol.info/t/while-cold-feet/1772/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/while-cold-feet/1772/1</link>
+        <pubDate>Sun, 12 Dec 2021 05:02:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1772-1</guid>
+        <source url="https://forum.rebol.info/t/while-cold-feet/1772.rss">WHILE [Cold Feet]</source>
+      </item>
+  </channel>
+</rss>

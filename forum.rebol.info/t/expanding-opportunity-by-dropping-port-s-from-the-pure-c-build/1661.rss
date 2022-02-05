@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Expanding Opportunity (by Dropping PORT!s from the pure C Build)</title>
+    <link>https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661</link>
+    <description>I was closing and resolving all the rebol-issues tickets related to PARSE...considering them &quot;resolved&quot; if they are solved by UPARSE.  *Quite a lot of them were!*  :partying_face: 
+
+Among the few tickets that weren&#39;t resolved was an old one in which BrianH talks about adding an /IGNORE flag to PARSE:
+
+**[Rebol Issue #1080](https://github.com/metaeducation/rebol-issues/issues/1080)**
+
+But to me... **this sounds like a generalized feature being narrowly articulated as a PARSE wish.**
+
+What he&#39;s asking for is there to be a kind of iterator over a series which does not show some of its content.  The closest concept that Rebol has potentially had for this would be a PORT!.
+
+Here&#39;s some random imaginary pseudocode:
+
+    &gt;&gt; input: [1 2 3 4 5 6 7 8]
+
+    &gt;&gt; port: make-filtering-port input :even?
+    == #[port! [...]]
+
+    &gt;&gt; read/part port 2
+    == [2 4]
+
+    &gt;&gt; read/part port 2
+    == [6 8]
+
+Ideally you could do this kind of filtering on a file on disk, a series in memory, a network stream, etc.  Even if the file were gigabytes in size you wouldn&#39;t wind up creating a huge amount of data just to iterate over the even numbers in it.
+
+## This Kind of Mechanic Has Prior Art
+
+*(Well, at least when I assume you&#39;re not asking for the impossible.  e.g. the data you&#39;re filtering is read only.  And you&#39;re not expecting to be able to have some automatic way of inserting things in the middle of a disk file and sliding the contents up...writing back over only the even values.  Sane requests here only, please.)*
+
+In the past I&#39;ve often brought up [Boost.ASIO, the C++ Asynchronous I/O library](http://think-async.com/Asio/).  It&#39;s for wiring up streams and layering them...dealing with buffering and disconnection exceptions and multi-platform eventing.  The whole nine yards.
+
+The filtering example I give above is actually one of the textbook examples of something you can do in Boost by building on streaming iterators:
+
+    struct is_even {
+        bool operator()( int x ) const { return x % 2 == 0; }
+    };
+
+    std::vector&lt;int&gt; input;
+    input += 1,2,3,4,5,6,7,8,9;
+
+    boost::copy(
+        input | filtered(is_even()),
+        std::ostream_iterator&lt;int&gt;(std::cout, &quot;,&quot;));
+
+That gives the output **2,4,6,8,**
+
+But it goes much further than that.  You really can stack a streaming decompressor on top of a network port, and then stick a TCP processor and a TLS layer and an HTTP layer on top of that: [https://dens.website/tutorials/cpp-asio/ssl-tls](https://dens.website/tutorials/cpp-asio/ssl-tls)
+
+There&#39;s a library for WebSockets in Boost.ASIO, and I&#39;ve already talked about how I think it&#39;s important for the desktop executable to be able to speak to the browser automation APIs.
+
+## Plan: Strip PORT! Out of The Pure C Build
+
+There&#39;s no reason that the pure C build can&#39;t read files into memory in one fell swoop, and be able to bootstrap itself.  But I can say without a doubt that with the PORT! implementation behind the scenes today: *&quot;There&#39;s no gold in them thar hills.&quot;*
+
+So why not leave the pure C build with the basics of reading and writing files in their entirety... very simple and without any need for a PORT! model.  Then start from scratch on ports embracing existing work as much as possible, and building on proven and tested code?
+
+We&#39;ll keep the CALL facility written in pure C for now.  That way the basic executables can always reach out to curl or wget or whatever, if they want to trigger something like a network request.
+
+## Starting From Scratch Can Advance Rapidly
+
+It should be clear from UPARSE that when I start out tackling a problem anew with the stored up knowledge and experience from seeing the previous problems, the results can be good.
+
+I&#39;ve not really worked much on the port model, because there was no model there.  But in keeping the code adjusted to stay running and be more convenient over time, a ton of design points on the core have been stressed.  So as bad as much of the code is, it&#39;s been a proving ground for various pieces of the system.
+
+But now...it&#39;s time.  I think that basically wiping out pretty much all the PORT! code and starting again can go nowhere but up!</description>
+    
+    <lastBuildDate>Fri, 27 Aug 2021 00:15:53 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Expanding Opportunity (by Dropping PORT!s from the pure C Build)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1661">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>In the past I've often brought up <a href="http://think-async.com/Asio/">Boost.ASIO, the C++ Asynchronous I/O library</a>. It's for wiring up streams and layering them...dealing with buffering and disconnection exceptions and multi-platform eventing.</p>
+</blockquote>
+</aside>
+<p>Looking at the C++ ASIO in more detail for non-network applications (e.g. streaming files) it doesn't offer as much as I thought in that area.  The streaming is all byte-level so you have to build higher level services based on eventing if you want to come up with streams of objects.  So it really doesn't map well to Haskell libraries like Conduit or Pipes the way I might have imagined.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>It may be that the path of least resistance library--which provides more of a generic platform abstraction layer--is likely libuv:</p>
+<p><a href="http://docs.libuv.org/en/v1.x/design.html" class="inline-onebox">Design overview — libuv documentation</a></p>
+<p><a href="https://nikhilm.github.io/uvbook/An%20Introduction%20to%20libuv.pdf">https://nikhilm.github.io/uvbook/An%20Introduction%20to%20libuv.pdf</a></p>
+<p>It's used by Node.js and Julia and Rust, and in a number of standalone servers and clients.  It seems to be pure C, and may even compile with tcc.  We'll see.</p>
+<h1>Either way, my point remains the same...</h1>
+<p>It's time to kill off the R3-Alpha networking and file system code.  There's nothing there to fix.</p>
+<ul>
+<li>
+<p><strong>We won't wind libUV in with the core--provably so--because the WebAssembly build won't use it.</strong></p>
+</li>
+<li>
+<p><strong>It will also be provable because we'll allow making desktop builds without it...they just won't have PORT!s.</strong>  They will have READ-FILE, WRITE-FILE, and CALL.</p>
+</li>
+</ul>
+<p>I'm trying to get the Sea of Words and Roaring Bitsets stuff tied up, but I'm actually looking forward to deleting the R3-Alpha "Device" layer.  The time I've spent with it has really been about switching it to do more of its work in terms of Rebol values and APIs...so hopefully that will pay off in terms of having hardened things to be able to interface nicely with libuv.</p>
+          <p><a href="https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661/2</link>
+        <pubDate>Wed, 18 Aug 2021 06:44:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1661-2</guid>
+        <source url="https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661.rss">Expanding Opportunity (by Dropping PORT!s from the pure C Build)</source>
+      </item>
+      <item>
+        <title>Expanding Opportunity (by Dropping PORT!s from the pure C Build)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I was closing and resolving all the rebol-issues tickets related to PARSE...considering them "resolved" if they are solved by UPARSE.  <em>Quite a lot of them were!</em>  <img src="https://forum.rebol.info/images/emoji/twitter/partying_face.png?v=9" title=":partying_face:" class="emoji" alt=":partying_face:"></p>
+<p>Among the few tickets that weren't resolved was an old one in which BrianH talks about adding an /IGNORE flag to PARSE:</p>
+<p><strong><a href="https://github.com/metaeducation/rebol-issues/issues/1080">Rebol Issue #1080</a></strong></p>
+<p>But to me... <strong>this sounds like a generalized feature being narrowly articulated as a PARSE wish.</strong></p>
+<p>What he's asking for is there to be a kind of iterator over a series which does not show some of its content.  The closest concept that Rebol has potentially had for this would be a PORT!.</p>
+<p>Here's some random imaginary pseudocode:</p>
+<pre><code>&gt;&gt; input: [1 2 3 4 5 6 7 8]
+
+&gt;&gt; port: make-filtering-port input :even?
+== #[port! [...]]
+
+&gt;&gt; read/part port 2
+== [2 4]
+
+&gt;&gt; read/part port 2
+== [6 8]
+</code></pre>
+<p>Ideally you could do this kind of filtering on a file on disk, a series in memory, a network stream, etc.  Even if the file were gigabytes in size you wouldn't wind up creating a huge amount of data just to iterate over the even numbers in it.</p>
+<h2>This Kind of Mechanic Has Prior Art</h2>
+<p><em>(Well, at least when I assume you're not asking for the impossible.  e.g. the data you're filtering is read only.  And you're not expecting to be able to have some automatic way of inserting things in the middle of a disk file and sliding the contents up...writing back over only the even values.  Sane requests here only, please.)</em></p>
+<p>In the past I've often brought up <a href="http://think-async.com/Asio/">Boost.ASIO, the C++ Asynchronous I/O library</a>.  It's for wiring up streams and layering them...dealing with buffering and disconnection exceptions and multi-platform eventing.  The whole nine yards.</p>
+<p>The filtering example I give above is actually one of the textbook examples of something you can do in Boost by building on streaming iterators:</p>
+<pre><code>struct is_even {
+    bool operator()( int x ) const { return x % 2 == 0; }
+};
+
+std::vector&lt;int&gt; input;
+input += 1,2,3,4,5,6,7,8,9;
+
+boost::copy(
+    input | filtered(is_even()),
+    std::ostream_iterator&lt;int&gt;(std::cout, ","));
+</code></pre>
+<p>That gives the output <strong>2,4,6,8,</strong></p>
+<p>But it goes much further than that.  You really can stack a streaming decompressor on top of a network port, and then stick a TCP processor and a TLS layer and an HTTP layer on top of that: <a href="https://dens.website/tutorials/cpp-asio/ssl-tls">https://dens.website/tutorials/cpp-asio/ssl-tls</a></p>
+<p>There's a library for WebSockets in Boost.ASIO, and I've already talked about how I think it's important for the desktop executable to be able to speak to the browser automation APIs.</p>
+<h2>Plan: Strip PORT! Out of The Pure C Build</h2>
+<p>There's no reason that the pure C build can't read files into memory in one fell swoop, and be able to bootstrap itself.  But I can say without a doubt that with the PORT! implementation behind the scenes today: <em>"There's no gold in them thar hills."</em></p>
+<p>So why not leave the pure C build with the basics of reading and writing files in their entirety... very simple and without any need for a PORT! model.  Then start from scratch on ports embracing existing work as much as possible, and building on proven and tested code?</p>
+<p>We'll keep the CALL facility written in pure C for now.  That way the basic executables can always reach out to curl or wget or whatever, if they want to trigger something like a network request.</p>
+<h2>Starting From Scratch Can Advance Rapidly</h2>
+<p>It should be clear from UPARSE that when I start out tackling a problem anew with the stored up knowledge and experience from seeing the previous problems, the results can be good.</p>
+<p>I've not really worked much on the port model, because there was no model there.  But in keeping the code adjusted to stay running and be more convenient over time, a ton of design points on the core have been stressed.  So as bad as much of the code is, it's been a proving ground for various pieces of the system.</p>
+<p>But now...it's time.  I think that basically wiping out pretty much all the PORT! code and starting again can go nowhere but up!</p>
+          <p><a href="https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661/1</link>
+        <pubDate>Sat, 14 Aug 2021 08:34:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1661-1</guid>
+        <source url="https://forum.rebol.info/t/expanding-opportunity-by-dropping-port-s-from-the-pure-c-build/1661.rss">Expanding Opportunity (by Dropping PORT!s from the pure C Build)</source>
+      </item>
+  </channel>
+</rss>

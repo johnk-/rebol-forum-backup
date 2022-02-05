@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>VOID! (and the end of &quot;blankification&quot;)</title>
+    <link>https://forum.rebol.info/t/void-and-the-end-of-blankification/704</link>
+    <description>Ren-C now has a VOID! datatype.  It&#39;s what PROCEDURE returns, and it&#39;s unfriendly (on purpose):
+
+    &gt;&gt; type of print &quot;Hi&quot;
+    Hi
+    == void!
+
+    &gt;&gt; if (print &quot;Hi&quot;) [print &quot;can&#39;t use in IF or CASE conditions&quot;]
+    Hi
+    ** Script Error: VOID! values are not conditionally true or false
+
+    &gt;&gt; var: print &quot;can&#39;t assign via SET-WORD! or SET-PATH!&quot;
+    can&#39;t assign via SET-WORD! or SET-PATH!
+    ** Script Error: var can&#39;t be assigned a VOID! (override with SET*)
+    
+So it may look even meaner than NULL.  But unlike NULL, it is a value and you can put it in arrays:
+
+    &gt;&gt; data: copy [a b c]
+    &gt;&gt; append data print &quot;will add to array&quot;
+    == [a b c #[void]]
+
+    &gt;&gt; do compose [print &quot;if seen by the evaluator&quot; (print &quot;They error&quot;)]
+    They error
+    if seen by the evaluator
+    ** Script Error: Cannot evaluate VOID! ;-- Note: Rebol2/Red/R3-Alpha ignore UNSET!
+
+Hence it is a lot like a historical UNSET!, except one very foundational thing:
+
+    &gt;&gt; set* &#39;var print &quot;If you are persistent, you can set it&quot;
+    If you are persistent, you can set it
+    == #[void]
+ 
+    &gt;&gt; unset? &#39;var ;-- e.g. Rebol2s `not value? &#39;var`
+    == #[false] ;-- Big difference!
+
+    &gt;&gt; void? var ;-- plain WORD! gets it, no GET-WORD! needed
+    == #[true]
+
+**So it is an ANY-VALUE!, and as such, a variable holding it IS SET.**
+
+This is nice because ever since NULL became legitimately falsey, there wasn&#39;t protection for when the result of a procedure call got tested for logic, or composed and executed.  So for instance: now your PRINTs in ANY and ALL and similar won&#39;t silently act falsey, they&#39;ll error...and to work around this, just say **elide print ...** and it will run, but the result will be &quot;invisible&quot; and not processed.
+
+As nice as that is, that wasn&#39;t the motivator...
+
+### The motivation was to put an end to &quot;blankification&quot;
+
+If you haven&#39;t been working with the new ELSE+ALSO+UNLESS+OPT+TRY+!!+??+DEFAULT+MAYBE+MATCH and everything related... what&#39;s wrong with you, *this stuff is amazing*.  :-)
+
+But if you had been working with the routines, you would have noticed the appearance of new-and-likely-confusing refinements.  The names would vary...but you&#39;d see **`if/opt`**, **`switch*`**, **`case/only`**.  The issue was this:
+
+ELSE was an experiment in Ren-C that began driving the idea that it was necessary to be able to tell from the outside of a conditional expression (like an IF, CASE, SWITCH) whether it took a branch or not.  The concept was to use NULL as a signal for this--since it did not represent a value.
+
+Yet since NULL was an evaluative result, it was possible to get one in the branch.  This situation arose:
+
+    if true [
+       ;-- code that makes a null result
+    ] else [
+       print &quot;this shouldn&#39;t run, but would if it got null&quot;
+    ]
+
+To work around this, the idea of &quot;BLANK!-ification&quot; came up.  If a branch ran and returned null, it would be converted into a blank.  You would lose the distinction, but nulls were not particularly common.  Their closest relative was the UNSET!, and you didn&#39;t see much code that intentionally handled them.
+
+The blankification came to be applied to every branch...not just the IF, but the ELSE as well.  In order to avoid casual errors for people flipping between EITHER and IF...ELSE, EITHER was subjected to the same rules.  Even though it didn&#39;t need the signaling that IF did, it still required a special refinement to ask to pass through the null:
+
+    &gt;&gt; either true [] []
+    == _
+
+    &gt;&gt; either false [] []
+    == _
+
+    &gt;&gt; either/opt true [] []
+    ;-- null
+
+    &gt;&gt; either* false [] [] ;-- * specialization same as /OPT
+    ;-- null
+
+Users of these refinements were taking the risk that they wouldn&#39;t be able to use things like ELSE correctly, but they accepted that.
+
+Then things changed... NULLs arose to be a major signal--and auto-converting them to blanks proved to not be always what you wanted.
+
+### A Better Idea
+
+The better idea switches from blankification to VOID!-ification... *because VOID!s have more congruent properties with a NULL that has not been explicitly disarmed by a TRY*.
+
+This allows more safety in moving to a philosophy where *if a branch doesn&#39;t have to mutate a result for its usage pattern, then leave it alone*.  So while IF has to alter a NULL somehow in order to differentiate the signal that a branch was run to ELSE, there is no such rule forcing ELSE&#39;s hand regarding its branch.  And there&#39;s no reason for EITHER to do it at all--you should even be able to use EITHER with an ELSE that tests its branch outcomes for nullity!
+
+Under the new rules, examine these two conditionals...both of which have both branches as evaluating to NULL:
+
+    x: if condition [third [a b]] else [second [z]]
+    y: either condition [third [a b]] [second [z]]
+
+Whether condition is true or false, neither will permit the assignment.  IF is now producing VOID!s for its null branch--not BLANK!s.
+
+While the EITHER can give a true NULL back in the true case, the IF gives back something spiky enough to draw attention to it.  And in the falsey branches of both, the NULL can be given unhindered...since ELSE doesn&#39;t have to disrupt any NULLs it produces.
+
+As a technical matter, the OPT action now also considers VOID! along with BLANK! as a candidate for conversion to NULL.  So it&#39;s possible to write:
+
+    &gt;&gt; opt case [
+       ... [&quot;a b c&quot;]
+       ... [] ;-- no-op
+       ... [&quot;d e f&quot;]
+    ]
+    ;-- null
+
+...and not wind up with a VOID! value that would cause errors in response to the NO-OP branch.
+
+### What the simplifcation hinges on...
+
+The old system was based on the idea that when push came to shove, people needed to know when something like an IF or a SWITCH returned NULL vs. BLANK!.  That distinction started out a little important, and then became increasingly important.  Somehow the conditional had to be told to act differently than it did by default, which subsequently ruined its interaction with things like ELSE, etc.
+
+This new system is based on the idea that you do not now--or in the future--care about the distinction between whether a branch ran and made a VOID! vs. a NULL.  In the general case you can&#39;t know.  It also assumes that if you&#39;re going to be deliberately making a branch evaluate to a NULL, you&#39;ll be doing it in the else.
+
+That&#39;s not such a bad bet.  Increasingly a lot of ELSEs don&#39;t even have IFs to their left... it&#39;s not **if x: select ... [...] else [...]** but **x: select ... else [...]**.  And with this change that ELSE doesn&#39;t taint its branch evaluations, you can even write chains of ELSE:
+
+    if condition [...] else [third [a b]] else [find [a b] &#39;c] else [&lt;not-found&gt;]
+
+And also--importantly--since there&#39;s no way to get an IF or a SWITCH to pass through NULL in taken branches unvoided, you can&#39;t mess up their interactions with ELSE.  So that&#39;s another thing no one has to worry about.
+
+---
+
+One important moral of the story is: *don&#39;t try treating voids nicely*.  Even though **they are values** and **variables holding them are set**... you should spurn them like the freaks they are.  They cause all those errors for a reason...just not a &quot;variable is not set&quot; error.  If you start putting voids anywhere on purpose and trying to use them for something meaningful, then you&#39;ll start caring if a branch made them vs. a null...and that would be bad.</description>
+    
+    <lastBuildDate>Fri, 03 Jul 2020 16:32:22 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/void-and-the-end-of-blankification/704.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>VOID! (and the end of &quot;blankification&quot;)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Ren-C now has a VOID! datatype.  It's what PROCEDURE returns, and it's unfriendly (on purpose):</p>
+<pre><code>&gt;&gt; type of print "Hi"
+Hi
+== void!
+
+&gt;&gt; if (print "Hi") [print "can't use in IF or CASE conditions"]
+Hi
+** Script Error: VOID! values are not conditionally true or false
+
+&gt;&gt; var: print "can't assign via SET-WORD! or SET-PATH!"
+can't assign via SET-WORD! or SET-PATH!
+** Script Error: var can't be assigned a VOID! (override with SET*)
+</code></pre>
+<p>So it may look even meaner than NULL.  But unlike NULL, it is a value and you can put it in arrays:</p>
+<pre><code>&gt;&gt; data: copy [a b c]
+&gt;&gt; append data print "will add to array"
+== [a b c #[void]]
+
+&gt;&gt; do compose [print "if seen by the evaluator" (print "They error")]
+They error
+if seen by the evaluator
+** Script Error: Cannot evaluate VOID! ;-- Note: Rebol2/Red/R3-Alpha ignore UNSET!
+</code></pre>
+<p>Hence it is a lot like a historical UNSET!, except one very foundational thing:</p>
+<pre><code>&gt;&gt; set* 'var print "If you are persistent, you can set it"
+If you are persistent, you can set it
+== #[void]
+
+&gt;&gt; unset? 'var ;-- e.g. Rebol2s `not value? 'var`
+== #[false] ;-- Big difference!
+
+&gt;&gt; void? var ;-- plain WORD! gets it, no GET-WORD! needed
+== #[true]
+</code></pre>
+<p><strong>So it is an ANY-VALUE!, and as such, a variable holding it IS SET.</strong></p>
+<p>This is nice because ever since NULL became legitimately falsey, there wasn't protection for when the result of a procedure call got tested for logic, or composed and executed.  So for instance: now your PRINTs in ANY and ALL and similar won't silently act falsey, they'll error...and to work around this, just say <strong>elide print ...</strong> and it will run, but the result will be "invisible" and not processed.</p>
+<p>As nice as that is, that wasn't the motivator...</p>
+<h3>The motivation was to put an end to "blankification"</h3>
+<p>If you haven't been working with the new ELSE+ALSO+UNLESS+OPT+TRY+!!+??+DEFAULT+MAYBE+MATCH and everything related... what's wrong with you, <em>this stuff is amazing</em>.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>But if you had been working with the routines, you would have noticed the appearance of new-and-likely-confusing refinements.  The names would vary...but you'd see <strong><code>if/opt</code></strong>, <strong><code>switch*</code></strong>, <strong><code>case/only</code></strong>.  The issue was this:</p>
+<p>ELSE was an experiment in Ren-C that began driving the idea that it was necessary to be able to tell from the outside of a conditional expression (like an IF, CASE, SWITCH) whether it took a branch or not.  The concept was to use NULL as a signal for this--since it did not represent a value.</p>
+<p>Yet since NULL was an evaluative result, it was possible to get one in the branch.  This situation arose:</p>
+<pre><code>if true [
+   ;-- code that makes a null result
+] else [
+   print "this shouldn't run, but would if it got null"
+]
+</code></pre>
+<p>To work around this, the idea of "BLANK!-ification" came up.  If a branch ran and returned null, it would be converted into a blank.  You would lose the distinction, but nulls were not particularly common.  Their closest relative was the UNSET!, and you didn't see much code that intentionally handled them.</p>
+<p>The blankification came to be applied to every branch...not just the IF, but the ELSE as well.  In order to avoid casual errors for people flipping between EITHER and IF...ELSE, EITHER was subjected to the same rules.  Even though it didn't need the signaling that IF did, it still required a special refinement to ask to pass through the null:</p>
+<pre><code>&gt;&gt; either true [] []
+== _
+
+&gt;&gt; either false [] []
+== _
+
+&gt;&gt; either/opt true [] []
+;-- null
+
+&gt;&gt; either* false [] [] ;-- * specialization same as /OPT
+;-- null
+</code></pre>
+<p>Users of these refinements were taking the risk that they wouldn't be able to use things like ELSE correctly, but they accepted that.</p>
+<p>Then things changed... NULLs arose to be a major signal--and auto-converting them to blanks proved to not be always what you wanted.</p>
+<h3>A Better Idea</h3>
+<p>The better idea switches from blankification to VOID!-ification... <em>because VOID!s have more congruent properties with a NULL that has not been explicitly disarmed by a TRY</em>.</p>
+<p>This allows more safety in moving to a philosophy where <em>if a branch doesn't have to mutate a result for its usage pattern, then leave it alone</em>.  So while IF has to alter a NULL somehow in order to differentiate the signal that a branch was run to ELSE, there is no such rule forcing ELSE's hand regarding its branch.  And there's no reason for EITHER to do it at all--you should even be able to use EITHER with an ELSE that tests its branch outcomes for nullity!</p>
+<p>Under the new rules, examine these two conditionals...both of which have both branches as evaluating to NULL:</p>
+<pre><code>x: if condition [third [a b]] else [second [z]]
+y: either condition [third [a b]] [second [z]]
+</code></pre>
+<p>Whether condition is true or false, neither will permit the assignment.  IF is now producing VOID!s for its null branch--not BLANK!s.</p>
+<p>While the EITHER can give a true NULL back in the true case, the IF gives back something spiky enough to draw attention to it.  And in the falsey branches of both, the NULL can be given unhindered...since ELSE doesn't have to disrupt any NULLs it produces.</p>
+<p>As a technical matter, the OPT action now also considers VOID! along with BLANK! as a candidate for conversion to NULL.  So it's possible to write:</p>
+<pre><code>&gt;&gt; opt case [
+   ... ["a b c"]
+   ... [] ;-- no-op
+   ... ["d e f"]
+]
+;-- null
+</code></pre>
+<p>...and not wind up with a VOID! value that would cause errors in response to the NO-OP branch.</p>
+<h3>What the simplifcation hinges on...</h3>
+<p>The old system was based on the idea that when push came to shove, people needed to know when something like an IF or a SWITCH returned NULL vs. BLANK!.  That distinction started out a little important, and then became increasingly important.  Somehow the conditional had to be told to act differently than it did by default, which subsequently ruined its interaction with things like ELSE, etc.</p>
+<p>This new system is based on the idea that you do not now--or in the future--care about the distinction between whether a branch ran and made a VOID! vs. a NULL.  In the general case you can't know.  It also assumes that if you're going to be deliberately making a branch evaluate to a NULL, you'll be doing it in the else.</p>
+<p>That's not such a bad bet.  Increasingly a lot of ELSEs don't even have IFs to their left... it's not <strong>if x: select ... [...] else [...]</strong> but <strong>x: select ... else [...]</strong>.  And with this change that ELSE doesn't taint its branch evaluations, you can even write chains of ELSE:</p>
+<pre><code>if condition [...] else [third [a b]] else [find [a b] 'c] else [&lt;not-found&gt;]
+</code></pre>
+<p>And also--importantly--since there's no way to get an IF or a SWITCH to pass through NULL in taken branches unvoided, you can't mess up their interactions with ELSE.  So that's another thing no one has to worry about.</p>
+<hr>
+<p>One important moral of the story is: <em>don't try treating voids nicely</em>.  Even though <strong>they are values</strong> and <strong>variables holding them are set</strong>... you should spurn them like the freaks they are.  They cause all those errors for a reason...just not a "variable is not set" error.  If you start putting voids anywhere on purpose and trying to use them for something meaningful, then you'll start caring if a branch made them vs. a null...and that would be bad.</p>
+          <p><a href="https://forum.rebol.info/t/void-and-the-end-of-blankification/704/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/void-and-the-end-of-blankification/704/1</link>
+        <pubDate>Fri, 22 Jun 2018 07:45:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-704-1</guid>
+        <source url="https://forum.rebol.info/t/void-and-the-end-of-blankification/704.rss">VOID! (and the end of &quot;blankification&quot;)</source>
+      </item>
+  </channel>
+</rss>

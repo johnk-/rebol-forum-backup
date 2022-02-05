@@ -1,0 +1,377 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Separating Parse rules across contexts</title>
+    <link>https://forum.rebol.info/t/separating-parse-rules-across-contexts/313</link>
+    <description>Am going to flesh out an example here to illustrate my problem.
+
+I have a mini-JSON string parser that offloads escapes parsing to a separate context.
+
+    escapes: use [chars][
+        chars: make map! [
+            newline &quot;^/&quot;
+            tab &quot;^-&quot;
+        ]
+
+        [
+            #&quot;\&quot; [
+                  #&quot;n&quot; (chars/newline)
+                | #&quot;t&quot; (chars/tab)
+            ]
+        ]
+    ]
+
+I don&#39;t want to copy any strings here or change any of the source content, just acknowledge the switch and pass the results back to the calling rule. Which would look like this:
+
+    string-rule: use [chars][
+        chars: complement charset &quot;\&quot;
+
+        [
+            any [
+                  copy part some chars (emit part)
+                | escapes (emit escapes-product)
+                | skip (emit &quot;\&quot;)
+            ]
+        ]
+    ]
+
+*(ignore the mechanics of **emit** for the moment)*
+
+The only way I can see to pass `escapes-product` is to explicitly create a variable in a shared context outside the two rule contexts. This seems unwieldy—perhaps there are other ways?
+
+## Catch/Throw
+
+One possibility is a CATCH/THROW-like setup:
+
+    escapes: use [chars][
+        chars: make map! [
+            newline &quot;^/&quot;
+            tab &quot;^-&quot;
+        ]
+
+        [
+            #&quot;\&quot; [
+                  #&quot;n&quot; throw (chars/newline)
+                | #&quot;t&quot; throw (chars/tab)
+            ]
+        ]
+    ]
+
+    string-rule: use [chars][
+        chars: complement charset &quot;\&quot;
+
+        [
+            any [
+                  copy part some chars (emit part)
+                | set escapes-product catch escapes (emit escapes-product)
+                | skip (emit &quot;\&quot;)
+            ]
+        ]
+    ]
+
+## Other Suggestions
+
+&amp;lt;fill this space&amp;gt;</description>
+    
+    <lastBuildDate>Mon, 16 Aug 2021 04:31:43 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Separating Parse rules across contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="5" data-topic="313">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>In any case, I have a very inefficient version of PARSE/INSIDE working.</p>
+</blockquote>
+</aside>
+<p>PARSE3 (which I'm calling the native PARSE) is no longer a place where I want to be doing experiments.  UPARSE is the hacking lab now!</p>
+<p>I have removed PARSE3/INSIDE as it just made PARSE3 more buggy and confusing.</p>
+<p>I'll see about grafting features in a similar spirit onto UPARSE where the model is clearer.</p>
+          <p><a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/7</link>
+        <pubDate>Mon, 16 Aug 2021 04:31:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-313-7</guid>
+        <source url="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313.rss">Separating Parse rules across contexts</source>
+      </item>
+      <item>
+        <title>Separating Parse rules across contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="Brett" data-post="2" data-topic="313">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/brett/40/177_2.png" class="avatar"> Brett:</div>
+<blockquote>
+<p>Haven't got a great suggestion nor will comment on catch/throw due to lack of understanding, but I wonder if parse needs some some sort of built-in output channel (stack) that collects declaratively marked emit events - firing them according to some user defined policy (backtracking will not cause multiple of the same event).</p>
+</blockquote>
+</aside>
+<p>I'm entertaining the notion that maybe PARSE rules when used in assignments act like DO, in terms of "evaluates to the last result".</p>
+<p>This becomes more flexible with <strong>(...)</strong> rules becoming value-bearing evaluations (not inlined rules):</p>
+<pre><code>&gt;&gt; parse ["hello"] [num: [integer! elide (print "got here") | (0)], id: text!]
+
+&gt;&gt; num
+== 0
+
+&gt;&gt; id
+== "hello"
+</code></pre>
+<p>The existence of ELIDE allows the feature of not mucking with the results:</p>
+<pre><code>&gt;&gt; parse [3 "hello"] [num: [integer! elide (print "got here") | (0)], id: text!]
+got here
+
+&gt;&gt; num
+== 3
+
+&gt;&gt; id
+== "hello"
+</code></pre>
+<p>Thoughts leading up to this from this thread:</p>
+<p><a href="https://forum.rebol.info/t/toward-reusable-rules-set-of-a-block-in-parse/1579" class="inline-onebox">Toward Reusable Rules: SET of a BLOCK! in PARSE</a></p>
+<p>I talk about THROW and CATCH in that post as well.  Maybe that's important to add too.  But something about formulating a BLOCK! rule to return a result is interesting, as being more lightweight...and it would provide a sensible reason for why <strong>x: [integer! | text!]</strong> should work.</p>
+<p>Anyway, the "big" proposal question is whether rules should evaluate to their last result...and if using that natural benefit of position has a good relation to how the evaluator works to use that as an advantage... <em>it looks from where I'm standing this is a good move</em>.</p>
+          <p><a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/6</link>
+        <pubDate>Wed, 07 Apr 2021 03:45:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-313-6</guid>
+        <source url="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313.rss">Separating Parse rules across contexts</source>
+      </item>
+      <item>
+        <title>Separating Parse rules across contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="1" data-topic="313">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>The only way I can see to pass <code>escapes-product</code> is to explicitly create a variable in a shared context outside the two rule contexts. This seems unwieldy—perhaps there are other ways?</p>
+</blockquote>
+</aside>
+<p>So here we are three years later, and, well...</p>
+<p>We can make PARSE complicit with virtual binding, adding a context to lookup even after fetching a rule out of a variable:</p>
+<pre><code>&gt;&gt; rule: [copy data [some integer!]]
+
+&gt;&gt; obj: make object! [data: _]
+
+&gt;&gt; parse/inside [1 2 3] [some rule] obj
+== [1 2 3]
+
+&gt;&gt; obj/data
+== [1 2 3]
+</code></pre>
+<p>I'm having a hard time thinking of what sort of coherent way you could do this kind of thing if PARSE was not going to be complicit.  How can you set an absolute rule about when binding should follow through a fetched-variable link or not?</p>
+<p>For instance, if you write:</p>
+<pre><code>use [name] [
+   name: "Bob"
+   do code
+   print ["Hello there," name]
+]
+</code></pre>
+<p>The general assumption we have is that <code>name: "Bob"</code> would not transmit through the DO.</p>
+<p>So that's the kind of limit you'd expect with:</p>
+<pre><code>parse [1 2 3] inside obj [some rule]
+</code></pre>
+<p>That form would only apply to the block, and not jump through to RULE.</p>
+<p>In any case, I have a very inefficient version of PARSE/INSIDE working.  Currently it applies to blocks and groups:</p>
+<pre><code>&gt;&gt; rule: [(foo "hi")]
+== [(foo "hi")]
+
+&gt;&gt; obj: make object! [foo: func [x] [print ["Foo" x]]]
+
+&gt;&gt; parse "ab" ["a" rule "b"]  ; without /INSIDE
+** Script Error: foo is ~unset~ (use GET/ANY to GET voids)
+
+&gt;&gt; parse/inside "ab" ["a" rule "b"] obj
+Foo hi
+== "ab"
+</code></pre>
+<p>But I can imagine wanting different contexts for block vs group.  It also seems like you could want it to be more granular... pushing the /inside specifications into the rules.  But I'm not sure how you'd do that.</p>
+          <p><a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/5</link>
+        <pubDate>Wed, 27 Jan 2021 14:51:37 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-313-5</guid>
+        <source url="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313.rss">Separating Parse rules across contexts</source>
+      </item>
+      <item>
+        <title>Separating Parse rules across contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><em>(I talked about this <a href="https://chat.stackoverflow.com/transcript/message/39851492#39851492" rel="nofollow noopener">in chat</a>, but thought perhaps here would be a better place to record the thoughts.)</em></p>
+<hr>
+<p>In thinking about this question about reuse of parse rules, we confront Rebol's practice where BLOCK! is used as a unit of currency...in places where other composition-based languages would demand a function with explicit arguments.  The trick in Rebol's playbook is that each level of recursion doesn't force conventional "parameterization", your intent can be conveyed with a "rich" data structure which gets interpreted by the evaluator...either fully (as with the body of a loop) or partially (as with a GROUP! in a parse rule).</p>
+<p>This gets you unstuck from a rigid model of information exchange (as <code>f(x(y,z(a,b,c)))</code> indefinitely).  But if you use a BLOCK!, the absence of parameterization via the "call stack" <em>(let's lump in parse rule embedding as its own kind of a "call stack")</em>, puts a lot of pressure on binding to accomplish composability.  And binding, even ignoring its costs to do correctly, is a bit of a Rube-Goldberg black art.</p>
+<p>While contemplating the benefits of the loose and unusual idea of "part code, part data" composition-via-data-structure, it's worth noticing that composition via ordinary functions has a long history and can do <em>pretty much anything</em>.  We might note that in the extremes of no access to mutable global state--a la Haskell--you can (<a href="https://wiki.haskell.org/If-then-else" rel="nofollow noopener">and probably should</a>) write IF in userspace too:</p>
+<pre><code>if' :: Bool -&gt; a -&gt; a -&gt; a
+if' True  x _ = x
+if' False _ y = y
+</code></pre>
+<p>Their IF is handcuffed far more than a shared parse rule is, yet they have ways of escaping constraints.  The Monad jumps in as a boundary-breaking concept, exempting one from certain rules in order to balance an otherwise imbalanced equation...all in the service of composability.  Interestingly, if not coincidentally, one of the two involved operators <a href="https://www.haskell.org/tutorial/monads.html" rel="nofollow noopener">is called bind (&gt;&gt;=)</a>:</p>
+<p><em>(Recommended Viewing: <a href="https://www.youtube.com/watch?v=ZhuHCtR3xq8" rel="nofollow noopener">Don't Fear The Monad</a>...not that you need to understand monads to understand what I'm trying to get at here, but everyone with an interest in software paradigms in this day and age would probably enjoy knowing at least a little about them.)</em></p>
+<p>It seems to me that for Rebol to go further, it needs its own cross-cutting boundary-breaking concept...something that's equally applicable to PARSE as it is to DO or your own dialects.  And in an imperative language, the only place I can see missing leverage coming from is the "stack" (again using my extended definition of "stack", where recursion in PARSE rules is effectively a call stack).</p>
+<p><a class="mention" href="/u/rgchris">@rgchris</a>'s direction of solution to the parse reuse problem is trying to mine that "call-stack" sensitivity with THROW and CATCH; where a rule achieves generality by deferring to the context of invocation.  That would be a very PARSE-specific mechanism.  But I've been talking for a while about something called <em>virtual binding</em> which is a system-wide way that parameters might follow a block around.</p>
+<p>The good news is: Ren-C has a fairly solid technical basis to attack scenarios in this vein. Where Red's BLOCK! cell has a <a href="https://github.com/red/red/blob/868f584896d12853009f529703085f26a03ca7e8/runtime/datatypes/structures.reds#L54" rel="nofollow noopener">"reserved for future use" slot</a>, Ren-C has leveraged that pointer-sized slot to build up a good model for beaming contextual information down through blocks.  When a cell is pulled out of an array, it is considered "relative until it is combined with a specifier"...and there's a whole tricky type-checked bookkeeping making sure every relative cell undergoes that specification process before any words can be looked up.  (A function FRAME! is one kind of specifier, and it's the reason why recursions in Ren-C have unique lookups for the same word based on the recursion, while Red's hands are tied here and it can only resolve words by <a href="https://github.com/metaeducation/ren-c/wiki/Relative-Binding-and-FRAME!-Internals" rel="nofollow noopener">looking at the C call stack</a>.)</p>
+<p>The bad news is: I'm not sure exactly how to use this to practical effect. The best idea I had so far was to say that REFINEMENT! would be a way of accessing contexts which had been augmented via the call stack... so one would be able to have one block that without a BIND could actually search linked attribute space based on who did the DO CODE.</p>
+<pre><code>&gt;&gt; code: [print /foo]
+
+&gt;&gt; do in [foo: 10] code
+10
+
+&gt;&gt; do in [foo: 20] code
+20
+</code></pre>
+<p>It's an idea that can be accomplished with no binding or modifications involved.  All because that out of band "specifier" threads through the execution path, and so for this example it's IN that tweaks that specifier to add some information (in this case an OBJECT! created from the block contexts).</p>
+<p>Just to reiterate the good news: this mechanic is already solved...when a "cell" is picked out of an array, it is considered to be "unspecified". The only way it becomes a "specified" value (one which can resolve to a variable in a context) is if something threaded through the call stack gets recombined with it.</p>
+<p>The underlying mechanic is something that has been working for well over a year now, and is pretty well understood, and checked to the point that I'm confident it works.  The question is how to use this in practice for the practical problems we are seeing.  I feel like if we get too theoretical about how parameters get synthesized or inherited, it starts seeming like <a href="https://en.wikipedia.org/wiki/Attribute_grammar" rel="nofollow noopener">attribute grammars</a>, and that gives me headaches.  So perhaps we can focus on real examples and see if there's any good-enough tricks to pull.</p>
+          <p><a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/4</link>
+        <pubDate>Mon, 06 Nov 2017 11:33:33 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-313-4</guid>
+        <source url="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313.rss">Separating Parse rules across contexts</source>
+      </item>
+      <item>
+        <title>Separating Parse rules across contexts</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I too have been disappointed in the lack of reusability of PARSE rules.  If you want to see something pretty bad, note how the desire to <a href="https://github.com/metaeducation/ren-c/blob/4291cd31a901aaa7db768e2ff636e2b04874dae8/src/os/encap.reb#L110" rel="nofollow noopener">use the same BINARY! parsing rules</a> for writing encapped data and reading it came out.  <img src="//forum.rebol.info/images/emoji/twitter/frowning.png?v=7" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<p>If we put efficiency aside for a moment, <strong>might PARSE be built out of composable parts that speak a protocol a bit better?</strong>  DO is a way of connecting FUNCTION!s together...some of which are native and some user-mode...but generally a user function can mimic a native.  What if ANY and THRU were FUNCTION!s that were bound from a specific context, and you could throw some more in there?</p>
+<p>If it helps the conversation about what the possibilities are, read this comment in %u-parse.c:</p>
+<blockquote>
+<p>As a major operational difference from R3-Alpha, each recursion in Ren-C's PARSE runs using a "Rebol Stack Frame"--similar to how the DO evaluator works.  So <code>[print "abc"]</code> and <code>[thru "abc"]</code> are both seen as "code" and iterated using the same mechanic.  (The rules are also locked from modification during the course of the PARSE, as code is in Ren-C.)</p>
+<p>This leverages common services like reporting the start of the last "expression" that caused an error.  So merely calling <code>fail()</code> will use the call stack to properly indicate the start of the parse rule that caused a problem.  But most importantly, debuggers can break in and see the state at every step in the parse rule recursions.</p>
+<p>The function users see on the stack for each recursion is a native called SUBPARSE.  Although it is shaped similarly to typical DO code, there are differences.  The subparse advances the "current evaluation position" in the frame as it operates, so it is a variadic function...with the rules as the variadic parameter.  Calling it directly looks a bit unusual:</p>
+<pre><code>&gt;&gt; flags: 0
+&gt;&gt; subparse "aabb" flags some "a" some "b"
+== 4
+</code></pre>
+</blockquote>
+<p>Think of PARSE as leaning on DO a bit more, like this little "COMPOSER" sketch:</p>
+<pre><code> composer-rules: make object! [
+      any: function [data [string!] state [object!] rules [string! &lt;...&gt;] [
+          str: take rules
+          forever [
+              if not pos: find/match data str [return data]
+              data: pos
+          ]]]
+
+ composer: function [
+     data [string!] rules [block!]
+     /with context [object!]
+  ][
+     bind rules composer-rules ;-- imagine this is a virtual bind
+     bind rules context ;-- add extra definitions
+
+     v: make varargs! composer-rules 
+     s: make object! [] ;-- imagine expandable
+     until [tail? v] [
+          unless function? f: get take first rules [fail "demo needs functions"]
+          if not data: (f data s v) [ ;-- can update s and advance v forward
+              return false
+          ]]
+      return tail? data
+  ]
+</code></pre>
+<p>That's just a late night sketch after smoking a little bit of crack--so don't take it too seriously.  But the premise is that maybe what PARSE needs to do is lean on that more powerful notion of contextual binding, and let you expand that state object with your own custom operations.</p>
+<p>Binding remains very much a core problem for all this.  And I think it's important to think about the difference between <strong>contextual-operation [... do block ...]</strong> and <strong>contextual-operation compose [... (block) ...]</strong>, because the semantics may wind up being quite different in terms of whether the outer operation imposes its binding notions on that block.</p>
+          <p><a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/3</link>
+        <pubDate>Mon, 02 Oct 2017 10:23:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-313-3</guid>
+        <source url="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313.rss">Separating Parse rules across contexts</source>
+      </item>
+      <item>
+        <title>Separating Parse rules across contexts</title>
+        <dc:creator><![CDATA[Brett]]></dc:creator>
+        <description><![CDATA[
+            <p>There's been an awkwardness around reuse and integration of parse rules from the beginning.  <a href="https://trello.com/c/xHClxgzS" rel="nofollow noopener">Related trello card</a></p>
+<p>"Other Suggestions"</p>
+<p>Haven't got a great suggestion nor will comment on catch/throw due to lack of understanding, but I wonder if parse needs some some sort of built-in output channel (stack) that collects declaratively marked emit events - firing them according to some user defined policy (backtracking will not cause multiple of the same event).</p>
+          <p><a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/2</link>
+        <pubDate>Tue, 26 Sep 2017 09:20:15 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-313-2</guid>
+        <source url="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313.rss">Separating Parse rules across contexts</source>
+      </item>
+      <item>
+        <title>Separating Parse rules across contexts</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>Am going to flesh out an example here to illustrate my problem.</p>
+<p>I have a mini-JSON string parser that offloads escapes parsing to a separate context.</p>
+<pre><code>escapes: use [chars][
+    chars: make map! [
+        newline "^/"
+        tab "^-"
+    ]
+
+    [
+        #"\" [
+              #"n" (chars/newline)
+            | #"t" (chars/tab)
+        ]
+    ]
+]
+</code></pre>
+<p>I don't want to copy any strings here or change any of the source content, just acknowledge the switch and pass the results back to the calling rule. Which would look like this:</p>
+<pre><code>string-rule: use [chars][
+    chars: complement charset "\"
+
+    [
+        any [
+              copy part some chars (emit part)
+            | escapes (emit escapes-product)
+            | skip (emit "\")
+        ]
+    ]
+]
+</code></pre>
+<p><em>(ignore the mechanics of <strong>emit</strong> for the moment)</em></p>
+<p>The only way I can see to pass <code>escapes-product</code> is to explicitly create a variable in a shared context outside the two rule contexts. This seems unwieldy—perhaps there are other ways?</p>
+<h2>Catch/Throw</h2>
+<p>One possibility is a CATCH/THROW-like setup:</p>
+<pre><code>escapes: use [chars][
+    chars: make map! [
+        newline "^/"
+        tab "^-"
+    ]
+
+    [
+        #"\" [
+              #"n" throw (chars/newline)
+            | #"t" throw (chars/tab)
+        ]
+    ]
+]
+
+string-rule: use [chars][
+    chars: complement charset "\"
+
+    [
+        any [
+              copy part some chars (emit part)
+            | set escapes-product catch escapes (emit escapes-product)
+            | skip (emit "\")
+        ]
+    ]
+]
+</code></pre>
+<h2>Other Suggestions</h2>
+<p>&lt;fill this space&gt;</p>
+          <p><a href="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/separating-parse-rules-across-contexts/313/1</link>
+        <pubDate>Mon, 25 Sep 2017 23:56:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-313-1</guid>
+        <source url="https://forum.rebol.info/t/separating-parse-rules-across-contexts/313.rss">Separating Parse rules across contexts</source>
+      </item>
+  </channel>
+</rss>

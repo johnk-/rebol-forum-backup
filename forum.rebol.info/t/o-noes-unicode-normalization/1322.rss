@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>O noes, Unicode Normalization</title>
+    <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322</link>
+    <description>UTF8-Everywhere has been running along relatively well...even without any optimization on ASCII strings.
+
+But there&#39;s a next level of bugaboo to worry about, and that&#39;s unicode normalization.  This is where certain codepoint sequences are considered to make the same &quot;glyph&quot;...e.g. there can be a single accented form of a character with an accent, or a two-codepoint sequence that is the unaccented character and the codepoint for an accent.
+
+Since there&#39;s more than one form for the codepoints, one can ask what form you canonize them to.  You can either try to get them to the fewest codepoints (for the smallest file to transmit) or the most (to make it easier to process them as their decomposed parts).
+
+On the plus side... unicode provides a documented standard and instructions for how to do these normalizations.  The Julia language has what seems to be a nicely factored implementation in C with few dependencies, called **&quot;[utf8proc](https://github.com/JuliaStrings/utf8proc)&quot;**  It should not be hard to incorporate that.
+
+On the minus side... pretty much everything about dealing with unicode normalization.  :roll_eyes:  There have been cases of bugs where filenames got normalized but then were not recognized as the same filename by the filesystem with the shuffled codepoints...despite looking the same visually.  So you can wind up with data loss if you&#39;re not careful about where and when you do these normalizations.
+
+This could get arbitrarily weird, especially with WORD! lookups.  Consider the kinds of things that can happen historically:
+
+    &gt;&gt; o: make object! [LetTer: &quot;A&quot;]
+    &gt;&gt; find words-of o &#39;letter
+    == [LetTer]
+
+The casing has to match, but also be preserved...and this means you could get a wacky casing you weren&#39;t expecting pretty easily.  Now add unicode normalization (I haven&#39;t even mentioned case folding).
+
+* Do we preserve different un-normalized versions as distinct synonyms?
+* When you AS TEXT! convert a WORD! does the sequence of codepoints vary from one same-looking word to another?
+* Are conversions between TEXT! &lt;=&gt; WORD! guaranteed not to change the bytes?
+
+It&#39;s pretty crazy stuff.  I&#39;m tempted to say this is another instance where making a strong bet could be a win.  For instance: say that all TEXT! must use the minimal canon forms--and if your file isn&#39;t in that format, you must convert it or process it as a BINARY!.
+
+Or there could also be an alternative type, maybe something like UTF8!...which supported the full codepoint range?
+
+Anyway...this stuff is the kind of thing you can&#39;t opt-out of making a decision on.  I&#39;m gathering there should probably be a conservative mode that lets you avoid potential damage from emoji and wild characters altogether, and then these modes relax with certain settings based on what kind of data you&#39;re dealing with.</description>
+    
+    <lastBuildDate>Wed, 30 Dec 2020 01:13:59 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>O noes, Unicode Normalization</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>Another wrinkle is how one constructs charsets to capture these forms.</p>
+          <p><a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322/8</link>
+        <pubDate>Wed, 30 Dec 2020 01:13:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1322-8</guid>
+        <source url="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss">O noes, Unicode Normalization</source>
+      </item>
+      <item>
+        <title>O noes, Unicode Normalization</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="4" data-topic="1322">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If you are writing a terminal program that gets one complete codepoint at a time and writes it down a pipe for output, such that you want to output as you go...you won't get this "combining" behavior unless you go back in time and edit what you've already output.</p>
+</blockquote>
+</aside>
+<p>Looking back at this in more detail, it seems that not all decomposed characters have composed forms, and composed forms are mostly for compatibility.  e.g. a subset of combining forms existed in scripts where they were actually used, but all the others are legal as well.  It's even legal to put combining characters on newlines and control codes (?!).</p>
+<p>And there's <a href="https://stackoverflow.com/a/11983435/">apparently no limit to the number of combining characters in the spec</a>, with numbers like 3 in Greek and 10 in Tibetan being actual legitimate cases.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  The only standard that seems to exist sets a limit of 30, arbitrarily!</p>
+<p>This tool is useful for experimenting: <a href="https://onlineunicodetools.com/add-combining-characters">https://onlineunicodetools.com/add-combining-characters</a></p>
+<h2>So What About That Non-Backtracking Terminal?</h2>
+<p>If a terminal can't go back and erase what it has already printed, it would need a different philosophy.  For example: "disallow combining characters on newline, and don't output a character until you get the start of the next non-combining character, or a request for input."  This is the only way it could build a buffer for each full combined character.</p>
+<p>Hence if the following code ran on a "coherent" terminal:</p>
+<pre><code>write-stdout "a"  ; e.g. PRIN
+wait 10
+write-stdout "newline"
+wait 10
+write-stdout "b"
+wait 10
+data: ask text!
+</code></pre>
+<p>You'd see nothing before the first 10 seconds, and then <strong><code>a</code></strong>.  Then nothing for the second 10 seconds, and then a newline and the <code>a</code> would appear.  Then ten seconds would pass and nothing happened.  Then <strong>"b"</strong> would be output and you'd input text at the prompt.</p>
+<p>But as I point out, this uses a rule that's not even a rule...that you can't put combining characters on a newline.  Also, there are now "combining emoji" which people are expecting to work, which is not covered by formal specs.</p>
+<p>Anyway I'd have to write some tests to see what existing terminals do with such situations when combining characters come after a delay vs. not.</p>
+<h2>Should "CHAR!" be multi-codepoint ("Grapheme Cluster"?)</h2>
+<p>Since not all valid combining characters coalesce into single known codepoints, that tips the scales somewhat toward using the decomposed normalized form internally (vs. working with sporadic compressions that only get created sometimes, in the cases that character is common enough to have earned its own codepoint).</p>
+<p>However, it would be unfortunate if the in-memory representation of strings wasn't something you could just generally write directly out to a file in the format expected by reading.  And the W3C advocates for the compressed form...plus that's what many text editors are going to favor, as users aren't entering things via combining marks generally.</p>
+<p>It also seems like from the user's point of view, "CHAR!" should likely be multi-codepoint, pulling together base characters and their combining characters.  The foundation for this is already laid somewhat, since the "token/issue" basis of storage is done as an encoding instead of an integer...and that encoding can (if necessary) exceed the size of a cell.</p>
+<p>This would mean <code>length of string</code> would not give you a codepoint count, but the number of "indivisible" character+cominer units.  You'd have to say <strong><code>nfc of string</code></strong> or <strong><code>nfd of string</code></strong> to get the codepoints as arrays of integers.</p>
+<p>I'm not sure what <strong><code>codepoint of char</code></strong> would do, since there'd be no single answer.  It seems it would have to either default to the compressed form, or the intersection of where the compressed and decompressed forms are the same.  But if it were the latter, you could never get the <code>codepoint of</code> an accented character without being more specific.  (<strong><code>codepoint/nfc of</code></strong> ?)  But maybe forcing you to be explicit and aware of when multiple codepoints can be returned is good... codepoint vs. codepoints giving back an array of integers.</p>
+<p>We don't need to have all the answers (nor is it likely to be possible to, this is a very <em>human</em> construction and has a fair amount of incoherence).  But it would be nice if the common cases worked and kept you on track...warned you when you were drifting out of the "easy" zone, and gave you enough tools to handle the harder cases if you come across them.</p>
+          <p><a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322/7</link>
+        <pubDate>Tue, 29 Dec 2020 06:36:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1322-7</guid>
+        <source url="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss">O noes, Unicode Normalization</source>
+      </item>
+      <item>
+        <title>O noes, Unicode Normalization</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="5" data-topic="1322">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>An argument for the decomposed form as canonical would be that it'd be a smaller number of concerns when applying a transformative function such as UPPERCASE.</p>
+</blockquote>
+</aside>
+<p>The <a href="https://www.w3.org/International/questions/qa-html-css-normalization" rel="nofollow noopener">W3C officially suggests to use NFC</a> (which is the composed form):</p>
+<pre><code>The best way to ensure that these match is to use one particular Unicode
+normalization form for all authored content. As we said above, the W3C
+recommends NFC.
+</code></pre>
+<p>Actually it seems pretty much unenforceable to try and get you to use a particular normalization at runtime.  Because you might grab a string sequence that is legitimate on its own (something like just three accent marks in a row)...but then paste it into where it would act in a combining way (like after a vowel).</p>
+<p>So I'll stick to my claim that the real villain here is the automatic combination.  Every display surface (terminal, GUI, etc.) should strive to show as many codepoints as are there.  If your editor wants to make it so you type e-then-accent as two steps, and get an e-with-accent, then it's the editor's job to do that upgrade (or give you a keystroke to ask it to combine or decombine a character).</p>
+<p><em>(I'm not sure how this would apply if there are some visual glyphs that can only be seen as composed forms, and have no canon representation as a single codepoint (?))</em></p>
+<p>Stopping you from loading or saving data with non-NFC sequences in it by default seems about the best you can do, and then have you say what you want done with it.  But I don't think we want to entangle the runtime with things like normalization-agnostic-hashing for WORD!-lookup.  Going with the W3C's suggestion we can just say NFC is the standard.</p>
+          <p><a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322/6</link>
+        <pubDate>Fri, 04 Sep 2020 14:52:54 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1322-6</guid>
+        <source url="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss">O noes, Unicode Normalization</source>
+      </item>
+      <item>
+        <title>O noes, Unicode Normalization</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>What a mess!</p>
+<p>An argument for the decomposed form as canonical would be that it'd be a smaller number of concerns when applying a transformative function such as UPPERCASE.</p>
+<p>This is a fairly crude observation, I think I'd need another read over. On filenames/URLs, I presume supporting non-UTF8 sequences may still be a concern, e.g. <code>url://foo-%de%ca%fb%ad</code> or <code>%%de%ca%fb%ad.bin</code>—in the spirit of, if the filesystem supports it (which I don't know which ones would, again just a cursory observation—it's certainly a valid URL)—thus the only concern would be how they are FORMed.</p>
+          <p><a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322/5</link>
+        <pubDate>Tue, 01 Sep 2020 18:39:42 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1322-5</guid>
+        <source url="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss">O noes, Unicode Normalization</source>
+      </item>
+      <item>
+        <title>O noes, Unicode Normalization</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1322">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/mark-hi/40/212_2.png" class="avatar"> Mark-hi:</div>
+<blockquote>
+<p>It's true, file names are a bastard, but they already are, even with just ASCII.</p>
+</blockquote>
+</aside>
+<p>Jeebus.</p>
+<p><a href="https://metacpan.org/pod/Encode::UTF8Mac" rel="nofollow noopener">https://metacpan.org/pod/Encode::UTF8Mac</a></p>
+<blockquote>
+<p>" On OSX, utf-8 encoding is used and it is NFD (Normalization Form canonical Decomposition) form. If you want to get NFC (Normalization Form canonical Composition) character you need to use <a href="https://metacpan.org/pod/Unicode::Normalize" rel="nofollow noopener">Unicode::Normalize</a>'s  <code>NFC()</code> .</p>
+<p>However, OSX filesystem does not follow the exact specification."</p>
+</blockquote>
+<p>Linux doesn't seem to normalize at all:</p>
+<pre><code>$ cat /proc/version
+Linux version 5.4.0-42-generic (buildd@lgw01-amd64-038)
+(gcc version 9.3.0 (Ubuntu 9.3.0-10ubuntu2))
+#46-Ubuntu SMP Fri Jul 10 00:24:02 UTC 2020
+
+$ echo $'\xc3\xa9.txt' $'e\xcc\x81.txt'
+é.txt é.txt
+
+$ echo "foo" &gt; $'\xc3\xa9.txt'
+
+$ echo "bar" &gt; $'e\xcc\x81.txt'
+
+$ ls
+é.txt  é.txt
+</code></pre>
+<p>Windows Console rendering makes these files look unique in the directory (<strong>e`</strong> vs. <strong>é</strong>), and the new Windows Terminal renders them both as <strong>é</strong> but makes the two-codepoint version take up two characters worth of space (so there's a margin on either side of it).  :-/</p>
+<p>GitHub allows you to add those files to a repo and push it:</p>
+<p><a href="https://github.com/hostilefork/unicode-pathology" rel="nofollow noopener">https://github.com/hostilefork/unicode-pathology</a></p>
+<p>Each link is treated uniquely by Chrome and Firefox, despite showing up the same in the URL bar (gets percent-encoded on copying and pasting, as here):</p>
+<p><a href="https://github.com/hostilefork/unicode-pathology/blob/master/e%CC%81.txt" rel="nofollow noopener">https://github.com/hostilefork/unicode-pathology/blob/master/e%CC%81.txt</a><br>
+<a href="https://github.com/hostilefork/unicode-pathology/blob/master/%C3%A9.txt" rel="nofollow noopener">https://github.com/hostilefork/unicode-pathology/blob/master/%C3%A9.txt</a></p>
+<p><strong>This is nuts.</strong>  If you are writing a terminal program that gets one complete codepoint at a time and writes it down a pipe for output, such that you want to output as you go...you won't get this "combining" behavior unless you go back in time and edit what you've already output.</p>
+<p>I can see there is a usability issue for people who want to enter combining characters as a sequence.  But this should be a property of the editor you are using, not automatically done by the display layer.</p>
+<p>When do you have people on one side of a connection with a dummy terminal that can't go back and "upgrade" the codepoint stream they are sending to the composite character...and yet expect the person on the other side to have a smart terminal that will see the composite codepoint they intended?!</p>
+<p>Still leaning to the answer as to warn about non-canon data when you get it and have a special override to say "I meant to do that".  I'd liken this to the situation with ^M, where the system stops the badness at the endpoints vs. contaminating every parse rule with having to support more than just plain <code>newline</code>.  If you are unfortunate enough to have to work with tainted data, then make that taintedness as visible as you can; don't render distinct codepoint streams identically.  Stop the madness.</p>
+<hr>
+<p><strong>Putting this into a concrete philosophy</strong>:  if I were in charge of Chrome's URL-bar display formatting, I'd make it so only the canon composed form should render as <strong>é</strong> and then the decomposed form should look like <strong>e%CC%81.txt</strong> .   I'd also say the old and "broken" Windows Terminal visual which shows the discrete codepoints is superior to the "fixed" form.</p>
+<p>I feel this is kind of like in Unix text editors like <code>vi</code> where you see the ^M everywhere... at least you know that garbage is there.</p>
+<p>I'm of the same opinion that all "invisibles" should have a rendering, albeit a faint one...this helps me see differences between tabs and spaces, or whitespace at ends of lines.  The whole concept of "make underlyingly different things look indistinguishable" is flawed at its core.  Whenever you do this, you have introduced potential for exploits and bugs.</p>
+          <p><a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322/4</link>
+        <pubDate>Mon, 31 Aug 2020 06:52:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1322-4</guid>
+        <source url="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss">O noes, Unicode Normalization</source>
+      </item>
+      <item>
+        <title>O noes, Unicode Normalization</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="1322">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/mark-hi/40/212_2.png" class="avatar"> Mark-hi:</div>
+<blockquote>
+<p>I strongly feel that differently-encoded-but-canonically-equal forms should compare equal.</p>
+</blockquote>
+</aside>
+<p>Most people consider languages that don't to be buggy.  Though we might argue the bug is in the "standard" allowing more than one way to encode the same character.  :-/</p>
+<p>My point is just that if there are differently-normalized forms to be floating around all the time (lets just focus on WORD!s, for instance) then at any moment in time you might run down a code path that gives you one of the variants.  It would bring in a random element.</p>
+<p>Coming up with an agnostic hash that compares all the various alternate spellings the same for WORD! and looks them up properly...while allowing the variations to exist...is a performance issue as well.</p>
+<p>I don't mind there being modes in which you can decompose characters into parts...that's just an API for picking a character apart.  But I don't think those decomposed characters should be used as a medium of exchange.  Especially because you'll get deceptive-seeming answers for the "length".</p>
+<p>Being more hard-line would say the system only tolerated the compact normalized form.  This would not be done silently...it would simply error unless you explicitly used a normalizing codec, so you knew you were throwing something away (a similar approach has been applied to the ^M atrocity).</p>
+<p>But there's a difference here with ^M, because there'd have to be a constant running check on any binaries you tried to insert into strings to make sure they only used the canon forms.  And these checks would have to look at the edges to make sure you didn't insert something that would be valid on its own next to something that would combine it into a new character.  Combining would need to be an intentional act, where you identified the character you wanted to compose or decompose.</p>
+          <p><a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322/3</link>
+        <pubDate>Sat, 29 Aug 2020 13:58:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1322-3</guid>
+        <source url="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss">O noes, Unicode Normalization</source>
+      </item>
+      <item>
+        <title>O noes, Unicode Normalization</title>
+        <dc:creator><![CDATA[Mark-hi]]></dc:creator>
+        <description><![CDATA[
+            <p>For what it's worth, I strongly feel that differently-encoded-but-canonically-equal forms should compare equal. I understand that you won't be able to tell by looking at it what bytes will be in its to-binary form (unlike case-insensitivity), but if that is important to you than you should explicitly canonicalise everything the way you want. Particularly because there is no a priori reason to prefer one canonical form over the other (which is why there are two canonical forms actually, kind of a misnomer really). It's true, file names are a bastard, but they already are, even with just ASCII.</p>
+          <p><a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322/2</link>
+        <pubDate>Thu, 27 Aug 2020 23:55:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1322-2</guid>
+        <source url="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss">O noes, Unicode Normalization</source>
+      </item>
+      <item>
+        <title>O noes, Unicode Normalization</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>UTF8-Everywhere has been running along relatively well...even without any optimization on ASCII strings.</p>
+<p>But there's a next level of bugaboo to worry about, and that's unicode normalization.  This is where certain codepoint sequences are considered to make the same "glyph"...e.g. there can be a single accented form of a character with an accent, or a two-codepoint sequence that is the unaccented character and the codepoint for an accent.</p>
+<p>Since there's more than one form for the codepoints, one can ask what form you canonize them to.  You can either try to get them to the fewest codepoints (for the smallest file to transmit) or the most (to make it easier to process them as their decomposed parts).</p>
+<p>On the plus side... unicode provides a documented standard and instructions for how to do these normalizations.  The Julia language has what seems to be a nicely factored implementation in C with few dependencies, called <strong>"<a href="https://github.com/JuliaStrings/utf8proc" rel="nofollow noopener">utf8proc</a>"</strong>  It should not be hard to incorporate that.</p>
+<p>On the minus side... pretty much everything about dealing with unicode normalization.  <img src="https://forum.rebol.info/images/emoji/twitter/roll_eyes.png?v=9" title=":roll_eyes:" class="emoji" alt=":roll_eyes:">  There have been cases of bugs where filenames got normalized but then were not recognized as the same filename by the filesystem with the shuffled codepoints...despite looking the same visually.  So you can wind up with data loss if you're not careful about where and when you do these normalizations.</p>
+<p>This could get arbitrarily weird, especially with WORD! lookups.  Consider the kinds of things that can happen historically:</p>
+<pre><code>&gt;&gt; o: make object! [LetTer: "A"]
+&gt;&gt; find words-of o 'letter
+== [LetTer]
+</code></pre>
+<p>The casing has to match, but also be preserved...and this means you could get a wacky casing you weren't expecting pretty easily.  Now add unicode normalization (I haven't even mentioned case folding).</p>
+<ul>
+<li>Do we preserve different un-normalized versions as distinct synonyms?</li>
+<li>When you AS TEXT! convert a WORD! does the sequence of codepoints vary from one same-looking word to another?</li>
+<li>Are conversions between TEXT! &lt;=&gt; WORD! guaranteed not to change the bytes?</li>
+</ul>
+<p>It's pretty crazy stuff.  I'm tempted to say this is another instance where making a strong bet could be a win.  For instance: say that all TEXT! must use the minimal canon forms--and if your file isn't in that format, you must convert it or process it as a BINARY!.</p>
+<p>Or there could also be an alternative type, maybe something like UTF8!...which supported the full codepoint range?</p>
+<p>Anyway...this stuff is the kind of thing you can't opt-out of making a decision on.  I'm gathering there should probably be a conservative mode that lets you avoid potential damage from emoji and wild characters altogether, and then these modes relax with certain settings based on what kind of data you're dealing with.</p>
+          <p><a href="https://forum.rebol.info/t/o-noes-unicode-normalization/1322/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/o-noes-unicode-normalization/1322/1</link>
+        <pubDate>Thu, 27 Aug 2020 16:08:09 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1322-1</guid>
+        <source url="https://forum.rebol.info/t/o-noes-unicode-normalization/1322.rss">O noes, Unicode Normalization</source>
+      </item>
+  </channel>
+</rss>

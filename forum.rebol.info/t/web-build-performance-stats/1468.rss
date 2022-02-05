@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Web Build Performance Stats</title>
+    <link>https://forum.rebol.info/t/web-build-performance-stats/1468</link>
+    <description>I resurrected the &quot;stats&quot; function to get some metrics.  It&#39;s actually a good example of how nicely Ren-C can improve things:
+
+* [Here&#39;s the code for stats in R3-Alpha](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/n-system.c#L129) (which references an object prototype [defined elsewhere in sysobj.h](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/boot/sysobj.r#L255), and you can also see that all you see in this file of the function spec is REBNATIVE(stats))
+
+* [Here&#39;s that in Ren-C](https://github.com/metaeducation/ren-c/blob/de62515f95ce335c07622ef51218d5da9e938a12/src/core/d-stats.c#L56), and the maintainability advantages should be obvious.  The distinction of counting natives didn&#39;t exist in the same fashion as before, so it was deleted, but we could do that kind of thing another way.
+
+In any case, running the statistics between R3-Alpha and Ren-C are going to show *a lot* more series and memory use in Ren-C.  The main reasons are:
+
+* There&#39;s a Windows encapping issue that it reads the whole executable into memory to probe it for resource sections.  This is especially crazy for debug builds.  I&#39;d raised this as an issue for Shixin to look at but forgot about it.
+
+* **Function frames do not use the data stack, and instead the arguments of functions are stored in individual arrays.**  While there are some optimizations to mean this doesn&#39;t require an allocation on quite every function call, it means a good portion of function calls do allocate series.  This stresses the GC, but, I&#39;ve mentioned how it was important for many reasons (including that the data stack memory isn&#39;t stable, and that meant the previous approach had bugs passing pointers to arguments around.  It&#39;s a given that this is how things are done now--especially with stackless--so it just needs to be designed around and tuned.
+
+* **WORD!s are special cases of string series.**  Things like the word table and binding didn&#39;t count in series memory before, and wasn&#39;t tabulated in R3-Alpha in the series count.  There are some other examples of this.
+
+* **ACTION!s create more series and contexts.**  The HELP information for most actions that have help information has two objects linked to it...one mapping parameter names to datatypes, and one mapping parameter names to descriptions.  I&#39;m hoping that the one mapping parameter names to datatypes can be covered by the parameter information that the interpreter also sees...but for today, there&#39;s a difference because one contains TYPESET!s and the other contains human-readable BLOCK!s.
+
+* **So Much More Is Done In Usermode.**  Ranging from console code to command-line argument processing, there&#39;s more source code (which counts as series itself) and more code running.
+
+I see it as good--not bad--that a ton of things run in the boot process.  Although I think you should be able to build an run a minimal system...even one that doesn&#39;t waste memory on HELP strings (it&#39;s now easier to make such things, since the spec isn&#39;t preserved).
+
+But for today, the closest we have to a &quot;minimal build&quot; is the web build.  It&#39;s a bit more comparable to R3-Alpha in terms of how much startup code it runs.
+
+## The Current State
+
+Starting up R3-Alpha on Linux, I get the following for **stats/profile**:
+
+    r3-alpha&gt;&gt; stats/profile
+    == make object! [
+        timer: 0:00:02.639939
+        evals: 20375
+        eval-natives: 3340
+        eval-functions: 369
+        series-made: 8393
+        series-freed: 2597
+        series-expanded: 70
+        series-bytes: 2211900
+        series-recycled: 2526
+        made-blocks: 5761
+        made-objects: 64
+        recycles: 1
+    ]
+
+Ren-C on the web is considerably heavier, at least when it comes to evals + series made + GC churn *(a little less overall series bytes...probably mostly owed to optimizations that fit small series into the place where tracking information would be stored if it were a larger one)*:
+
+    ren-c/web&gt;&gt; stats/profile
+    == make object! [
+        evals: 65422
+        series-made: 28569
+        series-freed: 11160
+        series-expanded: 419
+        series-bytes: 1731611
+        series-recycled: 8669
+        made-blocks: 16447
+        made-objects: 109
+        recycles: 229  ; !!! see update, this is now 1
+    ]
+
+The increased number of evals just goes with the &quot;a lot more is done in usermode&quot; bit.  There&#39;s lots of ways to attack that if it&#39;s bothersome.
+
+The series-made number is much bigger.  8393 v. 28569.  I mentioned how a lot of this is going to come from the fact that many evals need to make series, but we don&#39;t really have a breakdown of that number here to be sure that&#39;s accounting for them.  Anyway, this number isn&#39;t all that bothersome to me given that knowledge...but it should be sanity-checked.
+
+What does bother me is the 229 recycles.  That&#39;s a lot.  Despite making 3-4x as many series, I don&#39;t see how exactly that&#39;s translating into 200x the recycling.
+
+**UPDATE: This was the result of accidentally committed debug code.  It&#39;s back to 1.**
+
+## Writing Down The Current State is Better Than Nothing
+
+Ideally we&#39;d have some kind of performance regression chart that plotted some of these numbers after each build.  Though really it&#39;s not too worth doing that unless the numbers carried more information that was more actionable.
+
+But...lacking an automated method, writing it down now and having a forum thread to keep track of findings and improvements is better than nothing.
+
+There&#39;s likely a lot that could be done to help the desktop build (such as obviously tending to that encap-reading issue).  But I&#39;d like to focus principally on improvements to the internals that offer benefit to the web build, where I think the main relevance is.  And:
+
+* **Having a system built from rigorously understood invariants is the best plan for optimization over the long-term.**  If you don&#39;t have a lot of assertions and confidence about what is and isn&#39;t true around your codebase, you can&#39;t know if a rearrangement will break it or not.  So I spend a lot of time focusing on defining these invariants and making sure they are true.
+
+* **Avoid optimizing things before you&#39;re sure if they&#39;re right.**  I&#39;m guilty as anyone of fiddling with things for optimization reasons just because it&#39;s cool or I get curious of whether something can work or not.  Programmers are tinkerers and that&#39;s just how it is.  But it&#39;s definitely not time to go over things with a fine-toothed comb when so many design issues are not worked out.</description>
+    
+    <lastBuildDate>Wed, 03 Feb 2021 06:20:58 +0000</lastBuildDate>
+    <category>Optimization</category>
+    <atom:link href="https://forum.rebol.info/t/web-build-performance-stats/1468.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Web Build Performance Stats</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1468">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>What does bother me is the 229 recycles. That's a lot. Despite making 3-4x as many series, I don't see how exactly that's translating into 200x the recycling.</p>
+</blockquote>
+</aside>
+<p>Because I thought "oh this might be complex" I didn't immediately look at it.  But I should have just set a breakpoint, because this was the result of some debugging Recycle() calls accidentally getting committed.  It was recycling on every native creation!</p>
+<p>Removing it gets us to the expected recycle of 1.</p>
+<p>Yay.</p>
+          <p><a href="https://forum.rebol.info/t/web-build-performance-stats/1468/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/web-build-performance-stats/1468/2</link>
+        <pubDate>Wed, 03 Feb 2021 06:20:58 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1468-2</guid>
+        <source url="https://forum.rebol.info/t/web-build-performance-stats/1468.rss">Web Build Performance Stats</source>
+      </item>
+      <item>
+        <title>Web Build Performance Stats</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I resurrected the "stats" function to get some metrics.  It's actually a good example of how nicely Ren-C can improve things:</p>
+<ul>
+<li>
+<p><a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/n-system.c#L129">Here's the code for stats in R3-Alpha</a> (which references an object prototype <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/boot/sysobj.r#L255">defined elsewhere in sysobj.h</a>, and you can also see that all you see in this file of the function spec is REBNATIVE(stats))</p>
+</li>
+<li>
+<p><a href="https://github.com/metaeducation/ren-c/blob/de62515f95ce335c07622ef51218d5da9e938a12/src/core/d-stats.c#L56">Here's that in Ren-C</a>, and the maintainability advantages should be obvious.  The distinction of counting natives didn't exist in the same fashion as before, so it was deleted, but we could do that kind of thing another way.</p>
+</li>
+</ul>
+<p>In any case, running the statistics between R3-Alpha and Ren-C are going to show <em>a lot</em> more series and memory use in Ren-C.  The main reasons are:</p>
+<ul>
+<li>
+<p>There's a Windows encapping issue that it reads the whole executable into memory to probe it for resource sections.  This is especially crazy for debug builds.  I'd raised this as an issue for Shixin to look at but forgot about it.</p>
+</li>
+<li>
+<p><strong>Function frames do not use the data stack, and instead the arguments of functions are stored in individual arrays.</strong>  While there are some optimizations to mean this doesn't require an allocation on quite every function call, it means a good portion of function calls do allocate series.  This stresses the GC, but, I've mentioned how it was important for many reasons (including that the data stack memory isn't stable, and that meant the previous approach had bugs passing pointers to arguments around.  It's a given that this is how things are done now--especially with stackless--so it just needs to be designed around and tuned.</p>
+</li>
+<li>
+<p><strong>WORD!s are special cases of string series.</strong>  Things like the word table and binding didn't count in series memory before, and wasn't tabulated in R3-Alpha in the series count.  There are some other examples of this.</p>
+</li>
+<li>
+<p><strong>ACTION!s create more series and contexts.</strong>  The HELP information for most actions that have help information has two objects linked to it...one mapping parameter names to datatypes, and one mapping parameter names to descriptions.  I'm hoping that the one mapping parameter names to datatypes can be covered by the parameter information that the interpreter also sees...but for today, there's a difference because one contains TYPESET!s and the other contains human-readable BLOCK!s.</p>
+</li>
+<li>
+<p><strong>So Much More Is Done In Usermode.</strong>  Ranging from console code to command-line argument processing, there's more source code (which counts as series itself) and more code running.</p>
+</li>
+</ul>
+<p>I see it as good--not bad--that a ton of things run in the boot process.  Although I think you should be able to build an run a minimal system...even one that doesn't waste memory on HELP strings (it's now easier to make such things, since the spec isn't preserved).</p>
+<p>But for today, the closest we have to a "minimal build" is the web build.  It's a bit more comparable to R3-Alpha in terms of how much startup code it runs.</p>
+<h2>The Current State</h2>
+<p>Starting up R3-Alpha on Linux, I get the following for <strong>stats/profile</strong>:</p>
+<pre><code>r3-alpha&gt;&gt; stats/profile
+== make object! [
+    timer: 0:00:02.639939
+    evals: 20375
+    eval-natives: 3340
+    eval-functions: 369
+    series-made: 8393
+    series-freed: 2597
+    series-expanded: 70
+    series-bytes: 2211900
+    series-recycled: 2526
+    made-blocks: 5761
+    made-objects: 64
+    recycles: 1
+]
+</code></pre>
+<p>Ren-C on the web is considerably heavier, at least when it comes to evals + series made + GC churn <em>(a little less overall series bytes...probably mostly owed to optimizations that fit small series into the place where tracking information would be stored if it were a larger one)</em>:</p>
+<pre><code>ren-c/web&gt;&gt; stats/profile
+== make object! [
+    evals: 65422
+    series-made: 28569
+    series-freed: 11160
+    series-expanded: 419
+    series-bytes: 1731611
+    series-recycled: 8669
+    made-blocks: 16447
+    made-objects: 109
+    recycles: 229  ; !!! see update, this is now 1
+]
+</code></pre>
+<p>The increased number of evals just goes with the "a lot more is done in usermode" bit.  There's lots of ways to attack that if it's bothersome.</p>
+<p>The series-made number is much bigger.  8393 v. 28569.  I mentioned how a lot of this is going to come from the fact that many evals need to make series, but we don't really have a breakdown of that number here to be sure that's accounting for them.  Anyway, this number isn't all that bothersome to me given that knowledge...but it should be sanity-checked.</p>
+<p>What does bother me is the 229 recycles.  That's a lot.  Despite making 3-4x as many series, I don't see how exactly that's translating into 200x the recycling.</p>
+<p><strong>UPDATE: This was the result of accidentally committed debug code.  It's back to 1.</strong></p>
+<h2>Writing Down The Current State is Better Than Nothing</h2>
+<p>Ideally we'd have some kind of performance regression chart that plotted some of these numbers after each build.  Though really it's not too worth doing that unless the numbers carried more information that was more actionable.</p>
+<p>But...lacking an automated method, writing it down now and having a forum thread to keep track of findings and improvements is better than nothing.</p>
+<p>There's likely a lot that could be done to help the desktop build (such as obviously tending to that encap-reading issue).  But I'd like to focus principally on improvements to the internals that offer benefit to the web build, where I think the main relevance is.  And:</p>
+<ul>
+<li>
+<p><strong>Having a system built from rigorously understood invariants is the best plan for optimization over the long-term.</strong>  If you don't have a lot of assertions and confidence about what is and isn't true around your codebase, you can't know if a rearrangement will break it or not.  So I spend a lot of time focusing on defining these invariants and making sure they are true.</p>
+</li>
+<li>
+<p><strong>Avoid optimizing things before you're sure if they're right.</strong>  I'm guilty as anyone of fiddling with things for optimization reasons just because it's cool or I get curious of whether something can work or not.  Programmers are tinkerers and that's just how it is.  But it's definitely not time to go over things with a fine-toothed comb when so many design issues are not worked out.</p>
+</li>
+</ul>
+          <p><a href="https://forum.rebol.info/t/web-build-performance-stats/1468/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/web-build-performance-stats/1468/1</link>
+        <pubDate>Mon, 18 Jan 2021 06:51:16 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1468-1</guid>
+        <source url="https://forum.rebol.info/t/web-build-performance-stats/1468.rss">Web Build Performance Stats</source>
+      </item>
+  </channel>
+</rss>

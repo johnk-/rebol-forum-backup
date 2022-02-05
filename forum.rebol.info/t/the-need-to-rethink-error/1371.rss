@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Need To Rethink ERROR!</title>
+    <link>https://forum.rebol.info/t/the-need-to-rethink-error/1371</link>
+    <description>Looking around at how people deal with failure conditions, *there&#39;s a pretty strong trend against exceptions--a trend which has grown stronger in the last batch of popular languages*.
+
+Exceptions operate on a dubious principle: that a trigger condition originating transitively in a deep stack of code can be meaningfully handled when passed up through intermediary stacks.  There&#39;s an uncomfortable violation of abstraction: you are no longer dealing with a return result that was clearly formalized in the contract between caller-and-callee.  *&quot;The function you called couldn&#39;t handle an error... but you&#39;re trying to do it without even knowing what that function called that failed...?&quot;*
+
+Even exception advocates agree that they should not be used lightly...the name suggests it is only for &quot;exceptional&quot; circumstances.  So things that are very reasonable to expect to occur during operation--like a filesystem API trying to open the file and it not being there--should fit into the normal return results.  This is a slippery slope and subject to what your program considers &quot;normal&quot;...but the intent is that it&#39;s supposed to be more for things like &quot;ran out of memory&quot; or &quot;network cable was unplugged during transfer&quot;.
+
+But there are many who are against exceptions.  e.g. Google&#39;s is against them: [*&quot;We do not use C++ exceptions.&quot;*](https://google.github.io/styleguide/cppguide.html#Exceptions)  When the pros and cons are weighed, they think it&#39;s just not worth it.
+
+Rebol code that uses TRAP (old TRY) or ATTEMPT frequently shows that Rebol has an even greater weakness of the approach than usual: any arbitrary typo inside the executing code can be interpreted as the wrong kind of failure.  Conflating a syntax error with something like file-not-found is much too easy.
+
+Another key contributor to exception unpopularity is **exceptions don&#39;t work well with asynchronous programming**.  Code that triggered a request can be off the stack while a handler is running.  So there is nowhere to put a `catch {}` above the stack for the problem.
+
+## Emergent Pattern: Branching Returns
+
+Across languages you see a consistent pattern of functions formalizing the return of a branched result: either a &quot;successful&quot; return or an &quot;error&quot; return...and labeling the return value as such.
+
+* Haskell has &quot;the [`Either`](https://wiki.haskell.org/Handling_errors_in_Haskell#Error_using_the_Either_type) monad&quot;...which bundles a value with a label of &quot;left&quot; and &quot;right&quot;.  By convention, if the value is labeled &quot;left&quot; it is an error value...and if it is labeled &quot;right&quot; it is a successful return.  There is no &quot;umbrella&quot; error datatype--so strings labeled &quot;left&quot; or other common tuples are typically used.
+
+* Haskell-inspired Rust has [`result`](https://doc.rust-lang.org/stable/rust-by-example/error/result.html), which has a similar labeling scheme...though it specializes the purpose and gives the labels the names &quot;Ok&quot; and &quot;Err&quot;.  It suggests (but does not enforce) that Err-labeled values be instances of the [`std::error::Error`](https://doc.rust-lang.org/std/error/trait.Error.html) datatype...which meets the basic expectations of what an error should be able to do (e.g. print itself out, show a call stack of where it originated).
+
+* JavaScript ES6 handles asynchronous scenarios by making it so that `async` functions don&#39;t return their result with `return`, but with either `resolve()` or `reject()`.  If resolve is called, then callsites will trigger `then()` handling, otherwise they will trigger `catch()` handling.  If `await` is used vs. then/catch, a failed promise will resort to throwing the error (e.g. an exception).
+
+* Node.js used the [&quot;callback convention&quot;](https://nodejs.org/en/knowledge/errors/what-are-the-error-conventions/) where asynchronous functions return errors as the first parameter to a callback, and if that is null the other arguments are assumed valid...but this is now typically [converted into ES6 promises](https://medium.com/better-programming/converting-callbacks-to-promises-like-a-pro-in-node-js-f5d4d466a1a7) where errors produce
+
+* Go uses [multiple return values for errors](https://www.digitalocean.com/community/tutorials/handling-errors-in-go#:~:text=When%20a%20function%20returns%20multiple,value%20to%20a%20zero%20value.), with a convention that the *last* value in the return sequence is the error...with all other values being &quot;zero values&quot; of their type.
+
+So if your own unsatisfying experiences with &quot;throw/catch&quot; and &quot;fail/trap&quot; solutions isn&#39;t enough to convince you...there&#39;s a pretty strong batch of added evidence.
+
+## Using The Parts In The Box Effectively
+
+Something I had in the back of my mind ever since THEN could conveniently take a parameter value via lambdas, was what if ELSE could too.
+
+At the moment ELSE only triggers on NULL.  But what might happen if THEN didn&#39;t take ERROR!s or nulls, but ELSE did.  Something like:
+
+     (make error! &quot;how about this?&quot;) then value -&gt; [
+         print [&quot;This would not run:&quot; value]
+     ] else error -&gt; [
+         print [&quot;This would run:&quot; error]
+     ]
+
+But that crude sketch shows a weak basis for doing error handling:
+
+* It operates in the &quot;single return result&quot; realm...so to use it, you&#39;d have to conflate ERROR! values in with a function&#39;s ordinary return values.  That would be tricky to avoid including ERROR! itself, if it can return ANY-VALUE! (e.g. you can PICK an ERROR! out of an array)
+
+* There&#39;s nothing guaranteeing you handle an error...you could just forget and leave off the ELSE  (The &quot;good&quot; versions of the branched error approaches make sure you never accidentally ignore them, you have to consciously throw them away.)
+
+* It may be (probably is?) a bad fit to fold this into ELSE...which isn&#39;t really about error handling, but whether branches are taken.
+
+Using SET-BLOCK! for [multiple return values](https://forum.rebol.info/t/forward-to-multiple-return-values-and-return-value-forwarding/1271) wedged open the door for being more effective in this space.  But we can think through this some more.
+
+One thing I notice in JavaScript and Go is that the error result is distinguished, but positioning is set by convention instead of by name.  As a random sample thought, we could syntactically push errors out somehow, e.g. with a TUPLE!
+
+    ; function that returns 3 values and a possible error
+    ;
+    [a b c].err: some-func arg1 arg2 arg3
+
+I didn&#39;t say it was a great idea--just pointing out a degree of freedom.
+
+## Could We Get More Mileage Out Of ERROR!
+
+Rebol2&#39;s ERROR! had an interesting aspect to it, as being an &quot;ornery&quot; value...like a VOID!...that you couldn&#39;t inspect normally.  You had to DISARM it and view it as an object in order to pick apart its properties.
+
+R3-Alpha&#39;s ERROR! was neutered and became just another flavor of OBJECT!.  It carries a bit of standardized information about what line and location it originated from...but arguably this could be a useful feature for any value *(internally to the system for debugging, I have functions like Touch() which will tag a value with the last place that modified it...and it comes in handy a lot)*.
+
+Maybe it&#39;s all right as it is... and what we&#39;re missing is more like Rust&#39;s **`result`**.  But I can&#39;t help but feel that in a universe of possible designs...that &quot;OBJECT! that reports a different type&quot; is weak.
+
+Again: I don&#39;t have any great ideas right now.  This is just noticing something and brainstorming.  Having multiple returns in the mix is good, but I&#39;d like to see something that&#39;s at least as good as what other languages have.</description>
+    
+    <lastBuildDate>Mon, 04 Oct 2021 22:11:29 +0000</lastBuildDate>
+    <category>Errors</category>
+    <atom:link href="https://forum.rebol.info/t/the-need-to-rethink-error/1371.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Need To Rethink ERROR!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>Thoughts on CALL And Errors</h2>
+<p>In <a class="mention" href="/u/gchiu">@gchiu</a>'s small pharmac script, there are a <a href="https://github.com/gchiu/pharmac/blob/master/scripts/grab-pdfs.reb#L122">couple of uses of CALL</a> that run ghostscript (gs):</p>
+<pre><code>call [
+    gs -sDEVICE=pngmono -o (join root "-%02d.png") -r600 (pdfname)
+]
+
+call [
+    gs -sDEVICE=eps2write -sPAPERSIZE=a4
+        -o (join root "-%02d.eps") (pdfname)
+]
+</code></pre>
+<p><strong>But if either of these calls fail, the script will keep running.</strong>  That is because CALL is not checking the result code...and in OS terms, any process that returns a nonzero value had an error.</p>
+<p><strong>I think the default behavior of CALL should be to raise an error on a nonzero result.</strong></p>
+<p>The best strategy seems that if you request the exit status explicitly, then it would assume you were going to handle it.</p>
+<pre><code>[# status]: call [...]
+</code></pre>
+<p>What makes this a little bit weird is that there doesn't seem to be any particularly great return result from CALL besides the integer return value.  So there'd be a ~none~ return result by default, and this status would be the secondary result.</p>
+<p>This doesn't exactly fit the pattern of my "distinguished error" result, because the status is an integer... not an ERROR!.  Though if you don't ask for the status and it raises an error because of that you could see it that way:</p>
+<pre><code>[#].err: call [...]
+</code></pre>
+<h2>Could a Function Tell If You "Use" Its Primary Return Result?</h2>
+<p>It's hard to say what "using" would mean.</p>
+<p>For instance, imagine this scenario:</p>
+<pre><code>&gt;&gt; call [rm nonexistentfile.txt] print "nocheck"
+** Error: CALL returned exitstatus 1
+** Near: rm nonexistentfile.txt
+</code></pre>
+<p>So I'm proposing that would raise an error in a script.  But what if you wrote:</p>
+<pre><code>&gt;&gt; call [rm nonexistentfile.txt]
+== 1
+</code></pre>
+<p>The value 1 got "used" in the sense that it was reported by the console.  Should that count as suppressing the error, since someone took the result?</p>
+<p>What about:</p>
+<pre><code>&gt;&gt; elide call [rm nonexistentfile.txt]
+</code></pre>
+<p>The ELIDE consumed the result, but threw it away.  It doesn't seem that should suppress errors.</p>
+<p>Really only multiple-returns are set up to be explicitly thought of as "requested" vs. not.  We could argue that explicit setting to a word is different:</p>
+<pre><code>status: call [rm nonexistentfile.txt]
+</code></pre>
+<p>And then CALL could be told whether there was an explicit assignment or not.  But the way that multi-returns are checked is if their argument names are null or not...and the RETURN argument isn't named right now (it's just the RETURN: in the spec).</p>
+<p>Overall I am wary of trying to do anything detection-wise with the main return, and keep that for multi-returns...which are really just syntactic sugar over refinements.  That has this weird implication for CALL not having the exitstatus as its primary return.  Oh well.</p>
+<h2>Thoughts on CALL and Asynchronousness</h2>
+<aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1371">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Another key contributor to exception unpopularity is <strong>exceptions don't work well with asynchronous programming</strong>. Code that triggered a request can be off the stack while a handler is running. So there is nowhere to put a <code>catch {}</code> above the stack for the problem.</p>
+</blockquote>
+</aside>
+<p>In the model I'm pushing for asynchronousness, this argument isn't as applicable...because the error can be received by the callsite.</p>
+<p>What you'd want to do to make CALL asynchronous would be to just spawn it off on a separate "goroutine"-like thing.</p>
+<p>If you didn't care about the result, you could just do something like this:</p>
+<pre><code> go [call [echo "I'm being printed by the OS"]]
+ print "This could print before the echo executes."
+</code></pre>
+<p>But if you wanted to coordinate, you'd make something like a "channel" and have the goroutine transmit updates on it.</p>
+<pre><code>let c: make-channel
+go [
+    send-channel c &lt;start&gt;
+    call [echo "I'm being printed by the OS"]
+    send-channel c &lt;finish&gt;
+    close-channel c
+]
+while [msg: receive-channel c] [
+   print ["Got signal from channel:" msg]
+]
+print "Channel has been closed"
+</code></pre>
+<p>That would be one strategy.  But a different strategy would be used if you wanted to communicate with the input and receive the output, in a streaming fashion.</p>
+          <p><a href="https://forum.rebol.info/t/the-need-to-rethink-error/1371/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-need-to-rethink-error/1371/2</link>
+        <pubDate>Mon, 04 Oct 2021 22:00:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1371-2</guid>
+        <source url="https://forum.rebol.info/t/the-need-to-rethink-error/1371.rss">The Need To Rethink ERROR!</source>
+      </item>
+      <item>
+        <title>The Need To Rethink ERROR!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Looking around at how people deal with failure conditions, <em>there's a pretty strong trend against exceptions--a trend which has grown stronger in the last batch of popular languages</em>.</p>
+<p>Exceptions operate on a dubious principle: that a trigger condition originating transitively in a deep stack of code can be meaningfully handled when passed up through intermediary stacks.  There's an uncomfortable violation of abstraction: you are no longer dealing with a return result that was clearly formalized in the contract between caller-and-callee.  <em>"The function you called couldn't handle an error... but you're trying to do it without even knowing what that function called that failed...?"</em></p>
+<p>Even exception advocates agree that they should not be used lightly...the name suggests it is only for "exceptional" circumstances.  So things that are very reasonable to expect to occur during operation--like a filesystem API trying to open the file and it not being there--should fit into the normal return results.  This is a slippery slope and subject to what your program considers "normal"...but the intent is that it's supposed to be more for things like "ran out of memory" or "network cable was unplugged during transfer".</p>
+<p>But there are many who are against exceptions.  e.g. Google's is against them: <a href="https://google.github.io/styleguide/cppguide.html#Exceptions"><em>"We do not use C++ exceptions."</em></a>  When the pros and cons are weighed, they think it's just not worth it.</p>
+<p>Rebol code that uses TRAP (old TRY) or ATTEMPT frequently shows that Rebol has an even greater weakness of the approach than usual: any arbitrary typo inside the executing code can be interpreted as the wrong kind of failure.  Conflating a syntax error with something like file-not-found is much too easy.</p>
+<p>Another key contributor to exception unpopularity is <strong>exceptions don't work well with asynchronous programming</strong>.  Code that triggered a request can be off the stack while a handler is running.  So there is nowhere to put a <code>catch {}</code> above the stack for the problem.</p>
+<h2>Emergent Pattern: Branching Returns</h2>
+<p>Across languages you see a consistent pattern of functions formalizing the return of a branched result: either a "successful" return or an "error" return...and labeling the return value as such.</p>
+<ul>
+<li>
+<p>Haskell has "the <a href="https://wiki.haskell.org/Handling_errors_in_Haskell#Error_using_the_Either_type"><code>Either</code></a> monad"...which bundles a value with a label of "left" and "right".  By convention, if the value is labeled "left" it is an error value...and if it is labeled "right" it is a successful return.  There is no "umbrella" error datatype--so strings labeled "left" or other common tuples are typically used.</p>
+</li>
+<li>
+<p>Haskell-inspired Rust has <a href="https://doc.rust-lang.org/stable/rust-by-example/error/result.html"><code>result</code></a>, which has a similar labeling scheme...though it specializes the purpose and gives the labels the names "Ok" and "Err".  It suggests (but does not enforce) that Err-labeled values be instances of the <a href="https://doc.rust-lang.org/std/error/trait.Error.html"><code>std::error::Error</code></a> datatype...which meets the basic expectations of what an error should be able to do (e.g. print itself out, show a call stack of where it originated).</p>
+</li>
+<li>
+<p>JavaScript ES6 handles asynchronous scenarios by making it so that <code>async</code> functions don't return their result with <code>return</code>, but with either <code>resolve()</code> or <code>reject()</code>.  If resolve is called, then callsites will trigger <code>then()</code> handling, otherwise they will trigger <code>catch()</code> handling.  If <code>await</code> is used vs. then/catch, a failed promise will resort to throwing the error (e.g. an exception).</p>
+</li>
+<li>
+<p>Node.js used the <a href="https://nodejs.org/en/knowledge/errors/what-are-the-error-conventions/">"callback convention"</a> where asynchronous functions return errors as the first parameter to a callback, and if that is null the other arguments are assumed valid...but this is now typically <a href="https://medium.com/better-programming/converting-callbacks-to-promises-like-a-pro-in-node-js-f5d4d466a1a7">converted into ES6 promises</a> where errors produce</p>
+</li>
+<li>
+<p>Go uses <a href="https://www.digitalocean.com/community/tutorials/handling-errors-in-go#:~:text=When%20a%20function%20returns%20multiple,value%20to%20a%20zero%20value.">multiple return values for errors</a>, with a convention that the <em>last</em> value in the return sequence is the error...with all other values being "zero values" of their type.</p>
+</li>
+</ul>
+<p>So if your own unsatisfying experiences with "throw/catch" and "fail/trap" solutions isn't enough to convince you...there's a pretty strong batch of added evidence.</p>
+<h2>Using The Parts In The Box Effectively</h2>
+<p>Something I had in the back of my mind ever since THEN could conveniently take a parameter value via lambdas, was what if ELSE could too.</p>
+<p>At the moment ELSE only triggers on NULL.  But what might happen if THEN didn't take ERROR!s or nulls, but ELSE did.  Something like:</p>
+<pre><code> (make error! "how about this?") then value -&gt; [
+     print ["This would not run:" value]
+ ] else error -&gt; [
+     print ["This would run:" error]
+ ]
+</code></pre>
+<p>But that crude sketch shows a weak basis for doing error handling:</p>
+<ul>
+<li>
+<p>It operates in the "single return result" realm...so to use it, you'd have to conflate ERROR! values in with a function's ordinary return values.  That would be tricky to avoid including ERROR! itself, if it can return ANY-VALUE! (e.g. you can PICK an ERROR! out of an array)</p>
+</li>
+<li>
+<p>There's nothing guaranteeing you handle an error...you could just forget and leave off the ELSE  (The "good" versions of the branched error approaches make sure you never accidentally ignore them, you have to consciously throw them away.)</p>
+</li>
+<li>
+<p>It may be (probably is?) a bad fit to fold this into ELSE...which isn't really about error handling, but whether branches are taken.</p>
+</li>
+</ul>
+<p>Using SET-BLOCK! for <a href="https://forum.rebol.info/t/forward-to-multiple-return-values-and-return-value-forwarding/1271">multiple return values</a> wedged open the door for being more effective in this space.  But we can think through this some more.</p>
+<p>One thing I notice in JavaScript and Go is that the error result is distinguished, but positioning is set by convention instead of by name.  As a random sample thought, we could syntactically push errors out somehow, e.g. with a TUPLE!</p>
+<pre><code>; function that returns 3 values and a possible error
+;
+[a b c].err: some-func arg1 arg2 arg3
+</code></pre>
+<p>I didn't say it was a great idea--just pointing out a degree of freedom.</p>
+<h2>Could We Get More Mileage Out Of ERROR!</h2>
+<p>Rebol2's ERROR! had an interesting aspect to it, as being an "ornery" value...like a VOID!...that you couldn't inspect normally.  You had to DISARM it and view it as an object in order to pick apart its properties.</p>
+<p>R3-Alpha's ERROR! was neutered and became just another flavor of OBJECT!.  It carries a bit of standardized information about what line and location it originated from...but arguably this could be a useful feature for any value <em>(internally to the system for debugging, I have functions like Touch() which will tag a value with the last place that modified it...and it comes in handy a lot)</em>.</p>
+<p>Maybe it's all right as it is... and what we're missing is more like Rust's <strong><code>result</code></strong>.  But I can't help but feel that in a universe of possible designs...that "OBJECT! that reports a different type" is weak.</p>
+<p>Again: I don't have any great ideas right now.  This is just noticing something and brainstorming.  Having multiple returns in the mix is good, but I'd like to see something that's at least as good as what other languages have.</p>
+          <p><a href="https://forum.rebol.info/t/the-need-to-rethink-error/1371/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-need-to-rethink-error/1371/1</link>
+        <pubDate>Fri, 23 Oct 2020 07:48:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1371-1</guid>
+        <source url="https://forum.rebol.info/t/the-need-to-rethink-error/1371.rss">The Need To Rethink ERROR!</source>
+      </item>
+  </channel>
+</rss>

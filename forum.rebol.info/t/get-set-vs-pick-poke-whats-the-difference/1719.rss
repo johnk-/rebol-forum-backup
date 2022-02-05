@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>GET+SET vs PICK+POKE - What&#39;s The Difference?</title>
+    <link>https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719</link>
+    <description>Historically, GET could not get a path:
+
+    rebol2&gt;&gt; obj: make object! [x: 10]
+
+    rebol2&gt;&gt; get &#39;obj/x
+    ** Script Error: get expected word argument of type: any-word object none
+
+That changed in R3-Alpha.  Red followed suit:
+
+    r3-alpha/red&gt;&gt; get &#39;obj/x
+    == 10
+
+Which seems like an improvement...but opened the door to something I&#39;ve complained about: GET having side-effects, such as:
+
+    red&gt;&gt; path: &#39;obj/(print &quot;Boo!&quot; &#39;x)
+    == obj/(print &quot;Boo!&quot; &#39;x)
+
+    red&gt;&gt; get path
+    Boo!
+    == 10
+
+When you say that two sequential GETs can get something completely different even when nothing has changed, that really pulls the rug out from under any generic code that wants to build upon what a GET is.  Similar issues apply to SET.
+
+## How Do Pick and Poke Compare?
+
+PICK and POKE add an extra parameter of a location to pick or poke from.  But then they still have a &quot;picker&quot; of some kind.
+
+This leads one to wonder if this would work, but it doesn&#39;t:
+
+    r3-alpha&gt;&gt; outer: make object! [inner: make object! [x: 10]]
+
+    r3-alpha&gt;&gt; pick outer &#39;inner/x
+    ** Script error: pick does not allow object! for its aggregate argument
+
+But there are two possible interpretations.  If OUTER is something like a MAP, it could be looking up the PATH! **inner/x** as the key in the map.  Or it could be looking up the key **inner**, fetching the thing in the map, and then picking **x** out of that.
+
+MAP!s don&#39;t allow PATH! in R3-Alpha or Red, but if they did...we&#39;d assume it would interpret **inner/x** as the key.
+
+## So Historical PICK and POKE are Strictly Less Powerful?
+
+This makes it seem like GET and SET have the ability to do anything that a PATH! or SET-PATH! can do.  But PICK and POKE can only go the last mile and ask one container about its response to one key.
+
+Could we make a synonym for PICK, if we just GET a PATH! that we make up?  Let&#39;s try that in Red:
+
+    red&gt;&gt; pick2: func [series index] [
+              get make path! reduce [&#39;series to paren! reduce [&#39;quote index]]
+          ]
+
+    red&gt;&gt; m: make map! [a 10 b 20]
+
+    red&gt;&gt; pick2 m &#39;a
+    == 10
+
+    red&gt;&gt; b: [x 30 y 40]
+
+    red&gt;&gt; pick2 b &#39;y
+    == 40
+
+**It appears to work, but the issue is that I&#39;m sure these are completely different code paths.**  So you&#39;ll see subtly different behaviors for PICK vs. pathing where they&#39;ll be the same *most* of the time, but then not.
+
+It would only make sense to have two codebases if someone could articulate what&#39;s different about &quot;picking&quot; and &quot;pathing&quot;.  Outside of function call dispatch with refinements I can&#39;t think of a good argument for a difference.  And Ren-C uses TUPLE! instead of PATH! for conventional picks, so the tuple-based picking could truly be the same.
+
+## Not Easy To Reason About
+
+This is all made-up stuff with really imaginary semantics.  And I&#39;ve come up against the hard questions like trying to make this work:
+
+     item.(expression): default [...]
+
+If you GET that SET-PATH! on the left to check to see if there&#39;s a value in it or not, and there isn&#39;t, then you decide to run the right hand side.  Then you want to SET the SET-PATH! on the left...but without some alternate mechanism, you&#39;ll be evaluating the expression twice.
+
+Being able to turn that `item.(expression)` into some sort of reusable currency that you can GET and SET multiple times without side effects is ideal.  Once this was done by COMPOSE&#39;ing that PATH!, but paths are now more restrictive in what they can have as members...so it would have to be turned into a block.</description>
+    
+    <lastBuildDate>Tue, 07 Dec 2021 19:16:03 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>GET+SET vs PICK+POKE - What&#39;s The Difference?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1719">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>So Historical PICK and POKE are Strictly Less Powerful?</p>
+</blockquote>
+</aside>
+<p>In trying to think about what the fundamental pieces of this system really are, I've crept toward the idea that PICK and POKE are fundamentally cell-based operations... <em>with no path processing</em>.</p>
+<p>This would mean that all path processing logic is actually driven by GET and SET, which implements itself on top of PICK and POKE.</p>
+<p>To give you an idea of what I mean by that... let's look at a hypothetical poke of an immediate value:</p>
+<pre><code>&gt;&gt; obj: make object! [d: 21-Nov-2021/18:56:45-5:00]
+
+&gt;&gt; poke obj.d 'time 12:00  ; poke receives cell bits but *not* an address
+== 21-Nov-2021/12:00-5:00
+
+&gt;&gt; obj
+== make object! [
+    d: 21-Nov-2021/18:56:45-5:00  ; no change to stored cell
+]
+</code></pre>
+<p>So we see POKE has the smarts to be given the immediate value of a DATE! (which fits in 4 platform pointers), and some field (e.g. time) to produce a new DATE!.  But it wasn't equipped to be able to change that original value.</p>
+<p><strong>It may be that this specific case should give an error if you use it without a flag showing that you know you're not changing anything.</strong></p>
+<pre><code>&gt;&gt; poke obj.d 'time 12:00
+** Error: DATE! will not be mutated via POKE, use /IMMEDIATE if this is ok
+
+&gt;&gt; poke/immediate obj.d 'time 12:00
+== 21-Nov-2021/12:00-5:00
+</code></pre>
+<p>But the idea would be that when you use a SET-WORD! or a SET, the translation is different:</p>
+<pre><code>obj.d.time: 12:00  -or-  set 'obj.d.time 12:00
+=&gt;
+poke obj 'd (poke (pick obj 'd) 'time 12:00)
+</code></pre>
+<p>So in other words, it's SET that drives the process--breaking it down into atomic PICK and POKE, taking on the burden of writing back any changed cells.  <em>But a lone POKE itself would not be able to do any writeback of an immediate...as it received only a cell and not an address.</em></p>
+<h2>How Does This Relate To <a href="https://forum.rebol.info/t/date-time-datetime-or-timestamp/1765">"Subcell Addressing"</a>
+</h2>
+<p>I talk about cases like <strong>date.time.hour: xxx</strong> because it gives a case where <code>date.time</code> synthesizes a TIME! value which does not have a source cell of its own...so it has to be poked back.</p>
+<p>It may not be too hard to accommodate such cases.  The real problem would be things like an FFI abstraction, like:</p>
+<pre><code>&gt;&gt; struct.million_ints_field.10: 20
+</code></pre>
+<p>If the clause <strong><code>struct.million_ints_field</code></strong> generates a BLOCK! of a million integers out of the compressed form, and then you change the 10th one to 20...and then write the million integers back... that's a pretty inefficient way.</p>
+<p><strong>I've mentioned that this is not made up.</strong>  Shixin's FFI tried to parrot the methodology of GOB! with its compressed size field, so that the struct would be able to tell it was being asked for (<strong>million_ints_field.10</strong>), and be able to do a GET or SET of that without blowing up into a BLOCK! of a million integers.</p>
+<p><strong>Trying to generalize this complicates the system immensely, and we are probably better off asking the datatypes which want such granularity to not expect the field selection mechanic to bear the design burden.</strong>  Perhaps you write instead:</p>
+<pre><code>&gt;&gt; struct.[million_ints_field 10]: 20
+</code></pre>
+<p>This puts a bit of a syntax burden on those using custom datatypes.  But having tried to legitimize Carl's GOB! trick / Shixin's FFI trick has led to what I consider to be more of a mess than it is actually worth.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1719">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I think GET, SET, PICK, POKE, PATH!, and SET-PATH! should all be running on the same basic hook. <a href="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704">I've explained why that hook being recursive makes sense for POKE </a>.</p>
+</blockquote>
+</aside>
+<p>What I'm saying here is that the "recursive" nature instead becomes a backpropagation in SET.  So it can just linearly go backwards across the path it has processed.</p>
+          <p><a href="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719/3</link>
+        <pubDate>Tue, 07 Dec 2021 15:31:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1719-3</guid>
+        <source url="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719.rss">GET+SET vs PICK+POKE - What&#39;s The Difference?</source>
+      </item>
+      <item>
+        <title>GET+SET vs PICK+POKE - What&#39;s The Difference?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1719">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Being able to turn that <code>item.(expression)</code> into some sort of reusable currency that you can GET and SET multiple times without side effects is ideal. Once this was done by COMPOSE'ing that PATH!, but paths are now more restrictive in what they can have as members...so it would have to be turned into a block.</p>
+</blockquote>
+</aside>
+<h1>...A Grand Unifying Theory??</h1>
+<p>I think GET, SET, PICK, POKE, PATH!, and SET-PATH! should all be running on the same basic hook.  <a href="https://forum.rebol.info/t/the-pathing-and-picking-predicament-pans-out/1704">I've explained why that hook being recursive makes sense for POKE</a>.</p>
+<p><strong>What if a GET which requests an additional output parameter (e.g. STEPS) is allowed to evaluate groups in PATH!...killing two birds with one stone?</strong></p>
+<pre><code>&gt;&gt; obj: make object! [x: 10]
+
+&gt;&gt; tuple: obj.(print "!! SIDE EFFECT !!", 'x)
+
+&gt;&gt; get tuple
+** Error: Use GET with STEPS: output to evaluate sequences with GROUP!
+
+&gt;&gt; [result steps]: get tuple
+!! SIDE EFFECT !!
+== 10
+
+&gt;&gt; steps
+== [obj x]
+</code></pre>
+<p>We have a new option now that GET and SET no longer accept BLOCK! to mean "get a block of variables" or "set a block of variables" <em><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634">(see UNPACK)</a></em>.  It means that GET and SET can interpret a block as steps... basically a TUPLE! that has had its group elements processed (and hence may contain elements not typically legal in tuple).</p>
+<pre><code>&gt;&gt; get steps
+== 10
+
+&gt;&gt; set steps 20
+== 20
+
+&gt;&gt; obj.x
+== 20
+</code></pre>
+<p>If you want to run a tuple with GROUP!s in it, you can just "opt-in" to the steps without naming them:</p>
+<pre><code>&gt;&gt; [# #]: get tuple
+!! SIDE EFFECT !!
+== 20
+</code></pre>
+<h2>Preliminary Tests Of This Idea Look Promising <img src="https://forum.rebol.info/images/emoji/twitter/star2.png?v=9" title=":star2:" class="emoji" alt=":star2:">
+</h2>
+<p>There's still a lot to mull over with this, but it's the cleanest-looking angle I've come up with yet.</p>
+<p>Errors are still a bit of a puzzle.  Once you've converted a TUPLE!/PATH! into one of these "steps blocks" then you've gone away from the source level of what the user wrote.  The later SETs and GETs will only have the block--presumably not the path.</p>
+<p><em>(Note: Though you could save it and pass it in?  Maybe the original path could be cached as part of the block, as a kind of commentary used in error delivery?)</em></p>
+<p>In any case, when you use the steps later you have less odds of erroring since the initial path access that returned the steps block worked.  We'll have to see how it pans out.</p>
+          <p><a href="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719/2</link>
+        <pubDate>Thu, 16 Sep 2021 23:25:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1719-2</guid>
+        <source url="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719.rss">GET+SET vs PICK+POKE - What&#39;s The Difference?</source>
+      </item>
+      <item>
+        <title>GET+SET vs PICK+POKE - What&#39;s The Difference?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Historically, GET could not get a path:</p>
+<pre><code>rebol2&gt;&gt; obj: make object! [x: 10]
+
+rebol2&gt;&gt; get 'obj/x
+** Script Error: get expected word argument of type: any-word object none
+</code></pre>
+<p>That changed in R3-Alpha.  Red followed suit:</p>
+<pre><code>r3-alpha/red&gt;&gt; get 'obj/x
+== 10
+</code></pre>
+<p>Which seems like an improvement...but opened the door to something I've complained about: GET having side-effects, such as:</p>
+<pre><code>red&gt;&gt; path: 'obj/(print "Boo!" 'x)
+== obj/(print "Boo!" 'x)
+
+red&gt;&gt; get path
+Boo!
+== 10
+</code></pre>
+<p>When you say that two sequential GETs can get something completely different even when nothing has changed, that really pulls the rug out from under any generic code that wants to build upon what a GET is.  Similar issues apply to SET.</p>
+<h2>How Do Pick and Poke Compare?</h2>
+<p>PICK and POKE add an extra parameter of a location to pick or poke from.  But then they still have a "picker" of some kind.</p>
+<p>This leads one to wonder if this would work, but it doesn't:</p>
+<pre><code>r3-alpha&gt;&gt; outer: make object! [inner: make object! [x: 10]]
+
+r3-alpha&gt;&gt; pick outer 'inner/x
+** Script error: pick does not allow object! for its aggregate argument
+</code></pre>
+<p>But there are two possible interpretations.  If OUTER is something like a MAP, it could be looking up the PATH! <strong>inner/x</strong> as the key in the map.  Or it could be looking up the key <strong>inner</strong>, fetching the thing in the map, and then picking <strong>x</strong> out of that.</p>
+<p>MAP!s don't allow PATH! in R3-Alpha or Red, but if they did...we'd assume it would interpret <strong>inner/x</strong> as the key.</p>
+<h2>So Historical PICK and POKE are Strictly Less Powerful?</h2>
+<p>This makes it seem like GET and SET have the ability to do anything that a PATH! or SET-PATH! can do.  But PICK and POKE can only go the last mile and ask one container about its response to one key.</p>
+<p>Could we make a synonym for PICK, if we just GET a PATH! that we make up?  Let's try that in Red:</p>
+<pre><code>red&gt;&gt; pick2: func [series index] [
+          get make path! reduce ['series to paren! reduce ['quote index]]
+      ]
+
+red&gt;&gt; m: make map! [a 10 b 20]
+
+red&gt;&gt; pick2 m 'a
+== 10
+
+red&gt;&gt; b: [x 30 y 40]
+
+red&gt;&gt; pick2 b 'y
+== 40
+</code></pre>
+<p><strong>It appears to work, but the issue is that I'm sure these are completely different code paths.</strong>  So you'll see subtly different behaviors for PICK vs. pathing where they'll be the same <em>most</em> of the time, but then not.</p>
+<p>It would only make sense to have two codebases if someone could articulate what's different about "picking" and "pathing".  Outside of function call dispatch with refinements I can't think of a good argument for a difference.  And Ren-C uses TUPLE! instead of PATH! for conventional picks, so the tuple-based picking could truly be the same.</p>
+<h2>Not Easy To Reason About</h2>
+<p>This is all made-up stuff with really imaginary semantics.  And I've come up against the hard questions like trying to make this work:</p>
+<pre><code> item.(expression): default [...]
+</code></pre>
+<p>If you GET that SET-PATH! on the left to check to see if there's a value in it or not, and there isn't, then you decide to run the right hand side.  Then you want to SET the SET-PATH! on the left...but without some alternate mechanism, you'll be evaluating the expression twice.</p>
+<p>Being able to turn that <code>item.(expression)</code> into some sort of reusable currency that you can GET and SET multiple times without side effects is ideal.  Once this was done by COMPOSE'ing that PATH!, but paths are now more restrictive in what they can have as members...so it would have to be turned into a block.</p>
+          <p><a href="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719/1</link>
+        <pubDate>Thu, 16 Sep 2021 18:51:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1719-1</guid>
+        <source url="https://forum.rebol.info/t/get-set-vs-pick-poke-whats-the-difference/1719.rss">GET+SET vs PICK+POKE - What&#39;s The Difference?</source>
+      </item>
+  </channel>
+</rss>

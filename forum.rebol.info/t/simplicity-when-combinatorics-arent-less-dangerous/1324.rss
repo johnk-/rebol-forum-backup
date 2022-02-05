@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Simplicity When Combinatorics Aren&#39;t Less Dangerous</title>
+    <link>https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324</link>
+    <description>In case I haven&#39;t said it enough (mostly to myself), I&#39;ll say it one (?) more time: **calling API functions which splice in values is very much like DO COMPOSE**.
+
+     REBVAL *result = rebValue(&quot;some code&quot;, value1, &quot;more code&quot;, value2);
+
+acts like:
+
+     result: do compose [some code (value1) more code (value2)]
+
+This sets you up for pain when value1/value2 are evaluative types and you did not intend them to be evaluated.
+
+When using COMPOSE in the language, we&#39;re lucky these days to have nice generic quoting.  If value1 is an ACTION! you want to run, and value2 is a WORD! you want to pass by value... you can apply the quotes where you want them:
+
+     result: do compose [some code (value1) more code &#39;(value2)]
+
+Writing this in the API, you can use `rebQ()`:
+
+     REBVAL *result = rebValue(&quot;some code&quot;, value1, &quot;more code&quot;, rebQ(value2));
+
+
+## Do We Need both rebValue and rebValueQ?
+
+The most foundational and pure API to give people is one that does what they asked.  If you wanted a quote, you ask for it.  If you don&#39;t, the value is left as-is.  If it&#39;s in a context where you didn&#39;t want it to be evaluative and it evaluates...that&#39;s just a bug and you need to fix it.
+
+[I resolved](https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095/) to make operations like **rebValue**, **rebElide**, **rebUnboxInteger** etc. not add quotes for this reason.  But to try and be &quot;helpful&quot;, I thought to introduce auto-quoting versions like **rebValueQ**, **rebElideQ**, and **rebUnboxIntegerQ** that quote unless you explicitly ask for the quote to be removed with **rebU()**.
+
+If you had a lot of rebQ() calls in a given invocation, there was a performance advantage to making the Q-version of the call.  And visually you weren&#39;t taking up as much space on a line.
+
+But I&#39;m on the fence looking at it in practice.  This doubles a lot of the API interface, and now it doubles the doubling because there&#39;s C++ wrappers and C wrappers.  *In an API that was designed to be minimal and elegant, it undermines that elegance by **appearing** redundant.*
+
+**One problem is that it adds an element of choice, which is a tax.**  Every time you make a call you wonder if you used the right one.  And when you&#39;re in the middle of looking at a line of arguments you always have to scan back and wonder &quot;is this in a Q call or a non-Q call&quot;.
+
+
+## Is removing rebValueQ and friends the right move?
+
+There&#39;s a perceptual cost to making the API look larger and more cryptic.  There&#39;s already a lot to learn, and then this cost is something anyone looking at the API or code samples will have to pay.
+
+The performance advantage is fairly negligible compared to the overall cost of scanning/binding an API call.  In cases that have no text portions to scan or bind, there&#39;s nearly zero advantage (for esoteric technical reasons I won&#39;t go into).
+
+I&#39;m not convinced the pain is reduced by *that* much by offering the alternatives.  The main pain you are saved from is that when you have a lot of parameters you want to quote, you&#39;re saving characters.
+
+If it seems too verbose to use Q a lot, there&#39;s always even more abbreviated shorthands:
+
+    #define Q rebQ
+
+    REBVAL *result = rebValue(&quot;some code&quot;, value1, &quot;more code&quot;, Q(value2));
+
+And the function of rebQ() actually is not to quote a single item, but to be able to enter &quot;quoting mode&quot; for an arbitrary number of items.  It applies to splices, not loaded code from c strings.  So if you need it rarely, you could say:
+
+    REBVAL *result = rebValue(rebQ(&quot;some code&quot;, value1, &quot;more code&quot;, value2));
+ 
+Obviously I have some conflicted feelings about this, or they wouldn&#39;t exist.  **But I&#39;m leaning toward killing off the rebValueQ, rebElideQ, etc. variants.**  Mostly because I think it will make the API and callsites appear more orthogonal to those reading it.</description>
+    
+    <lastBuildDate>Sat, 15 May 2021 11:48:49 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Simplicity When Combinatorics Aren&#39;t Less Dangerous</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1324">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Do We Need both rebValue and rebValueQ?</p>
+</blockquote>
+</aside>
+<p><strong>If the new @ operator and its family of inerts work out, I think this need can often be replaced with @.</strong></p>
+<pre><code>&gt;&gt; @foo
+== @foo  ; THE-WORD! (maybe, to go along with THE?)
+
+&gt;&gt; @ foo  ; standalone version acting as an operator
+== foo
+
+&gt;&gt; type of @
+== the!  ; maybe? just pondering the concept out loud...
+</code></pre>
+<p>Anyway, if you have code like this fragment from the console:</p>
+<pre><code>    else if (rebDidQ("word?", e)) {  // recognized "virtual key"
+        uint32_t c = rebUnboxChar(
+            "switch", rebQ(e), "[",
+                "'escape [#E]",
+
+                "'up [#U]",
+</code></pre>
+<p>You could instead say:</p>
+<pre><code>    else if (rebDid("word? @", e)) {  // recognized "virtual key"
+        uint32_t c = rebUnboxChar(
+            "switch @", e, "[",
+                "'escape [#E]",
+
+                "'up [#U]",
+</code></pre>
+<p><em>It only works in evaluative slots</em>... since it doesn't actually get involved in adding quote levels on anything.  But it would be fast, on par with rebQ().  And this is what most rebQ() are used for, so I think it's a good option.  It calls attention to it well enough that you can see something is going on, and is easier to read IMO.</p>
+<p><strong>I think this points to another sign that the rebValueQ() routines are going away.</strong>  There were some developments in Sea of Words pointing to the idea that rebArg() and rebArgR() would be going away... replaced by native functions actually searching their parameter list by name.</p>
+<p>Design....takes...time.  <img src="https://forum.rebol.info/images/emoji/twitter/mantelpiece_clock.png?v=9" title=":mantelpiece_clock:" class="emoji" alt=":mantelpiece_clock:"></p>
+          <p><a href="https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324/3</link>
+        <pubDate>Sat, 15 May 2021 11:48:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1324-3</guid>
+        <source url="https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324.rss">Simplicity When Combinatorics Aren&#39;t Less Dangerous</source>
+      </item>
+      <item>
+        <title>Simplicity When Combinatorics Aren&#39;t Less Dangerous</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>As is often the case, I write something that explains a motivation to be worth it to try something... <em>then</em> I try it...</p>
+<p><strong>The biggest practical issue with this pertains to dealing with NULL in the API.</strong>  One area that NULL now comes up a lot in is unused refinements.  So if you're looking at JavaScript code like:</p>
+<pre><code>replpad-write-js: js-awaiter [
+    return: [&lt;opt&gt; void!]
+    param [&lt;blank&gt; text!]
+    /html
+]{
+    let html = reb.DidQ(reb.ArgR('html'))
+</code></pre>
+<p>That's just trying to tell if a refinement was used.  It's already a bit of a mouthful...it's actually a shorthand for:</p>
+<pre><code>    let html = reb.DidQ(reb.R(reb.Arg('html')))
+</code></pre>
+<p>This is a way of saying that you're not actually interested in getting an API handle for the argument value, you want to (R)elease it as soon as you examine it with reb.Did.</p>
+<p><em>(This points out that JavaScript is extra noisy, because we have to put the declarations inside a module, so <code>reb</code> has a dot after it.)</em></p>
+<p>You might think that since it's a JavaScript NULL you could avoid the Did() test entirely...</p>
+<pre><code>let html = reb.Arg('html');
+if (html) {  // e.g. testing for null
+    ...
+}
+</code></pre>
+<p>But now you're leaking API handles.  You'd have to write:</p>
+<pre><code>let html = reb.Arg('html');
+if (html) {  // e.g. testing for null
+    rebRelease(html);
+    ...
+}
+</code></pre>
+<p>Anyway, back to the original problem...now we're talking about no more "Q" functions, so:</p>
+<pre><code>    let html = reb.Did(reb.Q(reb.ArgR('html')))
+</code></pre>
+<p>The reason the Q is needed in the first place is that you can't use NULL in the API.  e.g. you can't write:</p>
+<pre><code>  REBVAL *value = nullptr;
+  bool is_null = rebDid("null?", value);
+</code></pre>
+<p><em>It has to be quoted.</em>  If you wonder why that is: imagine that code transformed into a BLOCK! when it wants to show you where the error is.  But you <em>can't</em> imagine it.... because you can't put nulls in blocks.  e.g. the above is not valid as a stream of code.  In the DO COMPOSE [...] example the NULL would just vaporize, which would be very confusing if we did that here.</p>
+<p>If you try to be lax about this, it's a house of cards.  Things break.</p>
+<p><strong>It's better to identify common cases and make some kind of macro for them than to break things foundationally.</strong></p>
+<p>So maybe something like <strong>reb.HasArg('html')</strong> in the API?  or <strong>reb.IsArgUsed('html')</strong>?  The latter is more obvious, I suppose, since the refinement must be present on the function for the arg lookup to not error.</p>
+<p>This can be tested a bit just by writing it in usermode:</p>
+<pre><code> reb.IsArgUsed = function(name) {
+     let arg = reb.Arg(name) 
+     if (!arg)
+         return false
+     reb.Release(arg)
+     return true
+ }
+</code></pre>
+<p>What I consider most important is that people have a complete set of tools for writing what they need, that works coherently and doesn't have blind spots...vs. having necessarily the "friendliest" API in the core.</p>
+          <p><a href="https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324/2</link>
+        <pubDate>Sun, 30 Aug 2020 13:04:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1324-2</guid>
+        <source url="https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324.rss">Simplicity When Combinatorics Aren&#39;t Less Dangerous</source>
+      </item>
+      <item>
+        <title>Simplicity When Combinatorics Aren&#39;t Less Dangerous</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>In case I haven't said it enough (mostly to myself), I'll say it one (?) more time: <strong>calling API functions which splice in values is very much like DO COMPOSE</strong>.</p>
+<pre><code> REBVAL *result = rebValue("some code", value1, "more code", value2);
+</code></pre>
+<p>acts like:</p>
+<pre><code> result: do compose [some code (value1) more code (value2)]
+</code></pre>
+<p>This sets you up for pain when value1/value2 are evaluative types and you did not intend them to be evaluated.</p>
+<p>When using COMPOSE in the language, we're lucky these days to have nice generic quoting.  If value1 is an ACTION! you want to run, and value2 is a WORD! you want to pass by value... you can apply the quotes where you want them:</p>
+<pre><code> result: do compose [some code (value1) more code '(value2)]
+</code></pre>
+<p>Writing this in the API, you can use <code>rebQ()</code>:</p>
+<pre><code> REBVAL *result = rebValue("some code", value1, "more code", rebQ(value2));
+</code></pre>
+<h2>Do We Need both rebValue and rebValueQ?</h2>
+<p>The most foundational and pure API to give people is one that does what they asked.  If you wanted a quote, you ask for it.  If you don't, the value is left as-is.  If it's in a context where you didn't want it to be evaluative and it evaluates...that's just a bug and you need to fix it.</p>
+<p><a href="https://forum.rebol.info/t/beta-one-quoting-in-the-api-decision-rebvalue-and-rebvalueq/1095/">I resolved</a> to make operations like <strong>rebValue</strong>, <strong>rebElide</strong>, <strong>rebUnboxInteger</strong> etc. not add quotes for this reason.  But to try and be "helpful", I thought to introduce auto-quoting versions like <strong>rebValueQ</strong>, <strong>rebElideQ</strong>, and <strong>rebUnboxIntegerQ</strong> that quote unless you explicitly ask for the quote to be removed with <strong>rebU()</strong>.</p>
+<p>If you had a lot of rebQ() calls in a given invocation, there was a performance advantage to making the Q-version of the call.  And visually you weren't taking up as much space on a line.</p>
+<p>But I'm on the fence looking at it in practice.  This doubles a lot of the API interface, and now it doubles the doubling because there's C++ wrappers and C wrappers.  <em>In an API that was designed to be minimal and elegant, it undermines that elegance by <strong>appearing</strong> redundant.</em></p>
+<p><strong>One problem is that it adds an element of choice, which is a tax.</strong>  Every time you make a call you wonder if you used the right one.  And when you're in the middle of looking at a line of arguments you always have to scan back and wonder "is this in a Q call or a non-Q call".</p>
+<h2>Is removing rebValueQ and friends the right move?</h2>
+<p>There's a perceptual cost to making the API look larger and more cryptic.  There's already a lot to learn, and then this cost is something anyone looking at the API or code samples will have to pay.</p>
+<p>The performance advantage is fairly negligible compared to the overall cost of scanning/binding an API call.  In cases that have no text portions to scan or bind, there's nearly zero advantage (for esoteric technical reasons I won't go into).</p>
+<p>I'm not convinced the pain is reduced by <em>that</em> much by offering the alternatives.  The main pain you are saved from is that when you have a lot of parameters you want to quote, you're saving characters.</p>
+<p>If it seems too verbose to use Q a lot, there's always even more abbreviated shorthands:</p>
+<pre><code>#define Q rebQ
+
+REBVAL *result = rebValue("some code", value1, "more code", Q(value2));
+</code></pre>
+<p>And the function of rebQ() actually is not to quote a single item, but to be able to enter "quoting mode" for an arbitrary number of items.  It applies to splices, not loaded code from c strings.  So if you need it rarely, you could say:</p>
+<pre><code>REBVAL *result = rebValue(rebQ("some code", value1, "more code", value2));
+</code></pre>
+<p>Obviously I have some conflicted feelings about this, or they wouldn't exist.  <strong>But I'm leaning toward killing off the rebValueQ, rebElideQ, etc. variants.</strong>  Mostly because I think it will make the API and callsites appear more orthogonal to those reading it.</p>
+          <p><a href="https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324/1</link>
+        <pubDate>Sun, 30 Aug 2020 07:33:56 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1324-1</guid>
+        <source url="https://forum.rebol.info/t/simplicity-when-combinatorics-arent-less-dangerous/1324.rss">Simplicity When Combinatorics Aren&#39;t Less Dangerous</source>
+      </item>
+  </channel>
+</rss>

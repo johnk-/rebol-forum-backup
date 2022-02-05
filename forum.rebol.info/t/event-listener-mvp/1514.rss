@@ -1,0 +1,507 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Event Listener MVP</title>
+    <link>https://forum.rebol.info/t/event-listener-mvp/1514</link>
+    <description>I&#39;m attempting to create a minimum event loop handler that works from ReplPad (and presumably other Ren-C applications).
+
+[Here&#39;s what I have so far](https://gist.github.com/rgchris/ad5f071380653155d96b966df598df96/):
+
+```plain
+do https://gist.githubusercontent.com/rgchris/ad5f071380653155d96b966df598df96/raw/
+```
+
+Not a loop at this point, but is able to discern events from different sources.</description>
+    
+    <lastBuildDate>Wed, 24 Feb 2021 01:48:12 +0000</lastBuildDate>
+    <category>Web</category>
+    <atom:link href="https://forum.rebol.info/t/event-listener-mvp/1514.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="11" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>it seems if you click it fast enough, often enough, the interpreter bombs.</p>
+</blockquote>
+</aside>
+<p>The problem here is that you are not restricting the click handling to whether or not there is an await "in flight"</p>
+<p>Try this change, which will make it more clear you can only do one resolve() call per promise:</p>
+<pre><code>await: js-awaiter [] {
+    return new Promise(
+        function(resolve, reject) {
+            ReplPad.wake = function(text) {
+                ReplPad.wake = function(text) { alert("Stale resolve") }
+                resolve(text)
+            }
+        }
+    )
+}
+</code></pre>
+<p>Getting "stale resolve" matches the failing cases.</p>
+<p>So even though this is single-threaded...there's a race condition here where clicking fast enough means you can trigger a resolve when it's already resolved and there's no promise in effect.  It seems by contract that <a href="https://stackoverflow.com/a/18218542/211160">additional calls to resolve() on a promise are no-ops</a>, hence the handle you are allocating and passing will not be consumed.</p>
+<p>You basically can't have the click functionality enabled unless you are in the waiting state.  It has to be made a no-op or something...so think about how you can do a mitigation instead of this alert.  Example:</p>
+<pre><code>await: js-awaiter [] {
+    return new Promise(
+        function(resolve, reject) {
+            ReplPad.wake = function(text) {
+                ReplPad.wake = function(text) {
+                    console.log("Stale resolve(), dropping click on floor")
+                    reb.Release(text)
+                }
+                resolve(text)
+            }
+        }
+    )
+}
+</code></pre>
+<p><em>(Note: Crashing the interpreter is more strict than we particularly need to be when handles are leaked.  <a href="https://forum.rebol.info/t/managed-unmanaged-expectations-in-the-javascript-api/1144">I've written separately on that topic.</a>  I think in cases like this it's actually sort of good, because it helps us know when things are amiss...but long term, being more forgiving unless you are in a diagnostic mode would probably be the better idea.)</em></p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/14">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/14</link>
+        <pubDate>Wed, 24 Feb 2021 01:34:12 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-14</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>Tried another approach and seems even more brittle:</p>
+<p>First set up a queue with an initial promise.</p>
+<pre><code class="lang-javascript">ReplPad.queue = []
+ReplPad.wakes = []
+
+ReplPad.queue.push(
+    new Promise(
+        function(wake, warn) {
+            ReplPad.wakes.push(wake)
+        }
+    )
+)
+</code></pre>
+<p>AWAIT takes the oldest Promise from the queue.</p>
+<pre><code class="lang-nohighlight">await: js-awaiter [] {
+    return ReplPad.queue.shift()
+}
+</code></pre>
+<p>Finally, within the actor—add a new Promise to the queue and invoke the oldest Wake function.</p>
+<pre><code class="lang-javascript">ReplPad.queue.push(
+    new Promise(
+        function(wake, warn) {
+            ReplPad.wakes.push(
+                wake
+            )
+        }
+    )
+)
+
+let wake = ReplPad.wakes.shift()
+
+wake(
+    reb.Text(response)
+)
+</code></pre>
+<p>I had presumed that this would divorce the creation of promises from the AWAIT function, and would instead be event-driven. I'm not saying this was a good thought, but I didn't think it would be any worse.</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/12">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/12</link>
+        <pubDate>Tue, 23 Feb 2021 20:08:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-12</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>I've updated <a href="https://gist.github.com/rgchris/ad5f071380653155d96b966df598df96">%await.reb</a> as I try to grapple with the idea of promises. I've moved one step closer (I think) to reducing the operative code, which seems to be fine. Note that I've been working a little with naming to try and better describe the pattern.</p>
+<hr>
+<p>AWAIT is slimmed down a little to just creating the Promise as before and now hands off the resolution to ReplPad.wake</p>
+<pre><code class="lang-nohighlight">await: js-awaiter [] {
+    return new Promise(
+        function(resolve, reject) {
+            ReplPad.wake = resolve
+        }
+    )
+}
+</code></pre>
+<p>ReplPad.wake is called from the ReplPad.actor function which in turn is added as a click listener to our two DIVs</p>
+<pre><code class="lang-javascript">ReplPad.actor = function(event) {
+    ...  // reduce click event to clicker: 'red' or 'green'
+
+    ReplPad.wake(
+        reb.Text(clicker)
+    )
+}
+</code></pre>
+<p>Thus, whenever one of our DIVs is clicked, we fire ReplPad.wake and thus fulfill the Promise.</p>
+<p>Finally, with a loop at our conclusion, we keep refreshing ReplPad.wake until the red DIV is clicked:</p>
+<pre><code class="lang-nohighlight">until [
+    await = "red"
+]
+</code></pre>
+<p>I'm getting closer to actually understanding Promises—most articles seems to be: <em>we take this incomprehensible code, rearrange into Promises and now you have slightly less incomprehensible code, except for the part explaining what a Promise is</em>. Understanding what a Promise <em>might</em> look like in Rebol would go a ways to understanding it.</p>
+<hr>
+<p>Caveat: now that you can click the green DIV as often as you'd like, it seems if you click it fast enough, often enough, the interpreter bombs. I'd like to fill a bug report on that, but am not quite sure how to reduce it to a minimal, reproducible example. If anyone is able to confirm/help on that score.</p>
+<pre><code class="lang-nohighlight">do https://gist.githubusercontent.com/rgchris/ad5f071380653155d96b966df598df96/raw
+</code></pre>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/0bdf34a05ca951b9c2f1fff388e69024ea04c59f.jpeg" data-download-href="https://forum.rebol.info/uploads/default/0bdf34a05ca951b9c2f1fff388e69024ea04c59f" title="replpad"><img src="https://forum.rebol.info/uploads/default/optimized/1X/0bdf34a05ca951b9c2f1fff388e69024ea04c59f_2_669x500.jpeg" alt="replpad" data-base62-sha1="1H1t0DplrWur3Louci95D0GHTSD" width="669" height="500" srcset="https://forum.rebol.info/uploads/default/optimized/1X/0bdf34a05ca951b9c2f1fff388e69024ea04c59f_2_669x500.jpeg, https://forum.rebol.info/uploads/default/original/1X/0bdf34a05ca951b9c2f1fff388e69024ea04c59f.jpeg 1.5x, https://forum.rebol.info/uploads/default/original/1X/0bdf34a05ca951b9c2f1fff388e69024ea04c59f.jpeg 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/0bdf34a05ca951b9c2f1fff388e69024ea04c59f_2_10x10.png"><div class="meta"><svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">replpad</span><span class="informations">761×568 91.3 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg></div></a></div></p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/11</link>
+        <pubDate>Mon, 22 Feb 2021 18:51:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-11</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="9" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Didn't say there was a problem. Just a bit of keeping myself from trying to steer you toward what I think are the "right" focus points...</p>
+</blockquote>
+</aside>
+<p>Ok, the emphasis appeared to connote something more pointed.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="9" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>to where I have to read about Shadow and Virtual DOMs today</p>
+</blockquote>
+</aside>
+<p>I fear this is something that will need to be addressed—unless they do institute a way of accessing the DOM from WASM, which from snippets I encounter doesn't seem likely—if more of the UI is going to fall under the purview of Ren-C. I don't know that it needs to be addressed today, I'm just laying out the challenge as I see it. I get that you see it differently, I need to process that.</p>
+<p>Also, I think Shadow DOM might be a thing that exists and is something else. I'm thinking of replicating the DOM as-it-should-be in memory in Ren-C and piping to JS as a dumb replicant.</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/10</link>
+        <pubDate>Thu, 18 Feb 2021 17:37:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-10</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="8" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>I'm not so much trying to make an impression, rather find ways to apply the language beyond academic interest within the bounds of the language's core tenets. That's why I use the language—why is that a problem?</p>
+</blockquote>
+</aside>
+<p>Didn't say there was a problem.  Just a bit of keeping myself from trying to steer you toward what I think are the "right" focus points...and in turn reminding myself to stick to what I think needs doing, instead of trying to stretch my picture of the web build too much more...to where I have to read about Shadow and Virtual DOMs today.</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/9</link>
+        <pubDate>Thu, 18 Feb 2021 17:31:44 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-9</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="7" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Is your "limited to a primitive value" complaint about not being able to make libRebol calls while a JS-AWAITER is suspended on the stack?</p>
+</blockquote>
+</aside>
+<p>No, or at least I don't think so—certainly not a complaint, just a survey of the constraints in sharing JS&lt;-&gt;WASM in-memory structures as presented. The DOM (again, as I understand it) is just a collection of JavaScript objects with <em>a lot</em> of circular references and internal methods. It's not complex of itself, just that there's no easy way to represent it in a message as opposed to having access to the whole thing. I can't think of any conceivable way to recreate any such derived object for the purposes of passing the target of an event to manipulate in shadow within Ren-C.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="7" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I'm glad you're looking at all of it. I hope you can appreciate that what is there did not happen overnight...</p>
+</blockquote>
+</aside>
+<p>I similarly hope you don't assume that this all suddenly occurred to me yesterday. If I wasn't following this project, this wouldn't exist. This is one of a number of things I've been turning over in my mind for some time.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="7" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>And by and large, doing what impresses <em>you</em>...</p>
+</blockquote>
+</aside>
+<p>I mean—yes, I'm going to engage the parts of the project I understand and given that I'm not on the clock parts of the project I have an interest in. I'm not so much trying to make an impression, rather find ways to apply the language beyond academic interest within the bounds of the language's core tenets. That's why I use the language—why is that a problem?</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/8</link>
+        <pubDate>Thu, 18 Feb 2021 17:26:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-8</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="6" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>How do you even begin to replicate anything nearly that elementary when your conduit to the UI elements is a two-way communication channel limited to primitive value (lets say JSON).</p>
+</blockquote>
+</aside>
+<p>Is your "limited to a primitive value" complaint about not being able to make libRebol calls while a JS-AWAITER is suspended on the stack?</p>
+<p>If so, I've mentioned that is something stackless aims to address.  You would be able to re-enter the evaluator.</p>
+<p>If not, please clarify what this means.</p>
+<aside class="quote no-group" data-username="rgchris" data-post="6" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>Do you maintain a shadow and true DOM in Ren-C then either rebuild with every SHOW or HIDE? That seems bad.</p>
+</blockquote>
+</aside>
+<p>It may be inevitable I'll have to at some point learn enough about shadow/virtual DOM use case scenarios to make decisions that involve it.  But I'm going to put it off as long as possible.  :-/</p>
+<p>If what we make is coherent and clear and empowers outside contributors to go "Oh, I see what you did there!" then they can probably come in and answer some of these questions for us.  But they'll not be able to do that for binding etc.  So that's going to stay my emphasis.</p>
+<p>I'm glad you're looking at all of it.  I hope you can appreciate that what is there did not happen overnight...I believe this is a somewhat unique form of mash-up for the world of programming right now.  Small examples taken one step at a time is likely the continued best strategy.</p>
+<p>And by and large, doing what impresses <em>you</em>...</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/7</link>
+        <pubDate>Thu, 18 Feb 2021 16:53:31 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-7</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="5" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Desirable or not, it should be <em>able</em> to work in a micromanaged way...running the same code...if it wanted to. So it makes a good test.</p>
+</blockquote>
+</aside>
+<p>Not going to argue with that.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="5" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>That's the hard problem: making it so your configuration and keyboard shortcuts do magic equally on the desktop and on the web.</p>
+</blockquote>
+</aside>
+<p>Then there's the issue of mapping the DOM. Whatever your feelings of the Rebol 2 View system, the ease of manipulating objects mapped to UI elements was fairly intuitive. How do you even begin to replicate anything nearly that elementary when your conduit to the UI elements is a two-way communication channel limited to primitive value (lets say JSON).</p>
+<p>Do you maintain a shadow and true DOM in Ren-C then either rebuild with every SHOW or HIDE? That seems bad. Or have some way to pass deltas back and forth.</p>
+<p>One thought was when preparing an event to send to AWAIT, place the event target in a map and pass a reference allowing Ren-C in turn respond by asking questions using that reference (I imagine that's kind of how Ren-C values are currently handled in JavaScript and converted with the <code>reb.Spell()</code> [or other] method). Seems as if that could get very messy very quickly.</p>
+<p>Anyways, I figure it's better to have these thoughts out loud.</p>
+<p>Another thought is XPath, but that seems a messy road too...</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/6</link>
+        <pubDate>Thu, 18 Feb 2021 16:30:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-6</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="rgchris" data-post="3" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>I notice that R3/Alpha didn't have a <code>system/console</code> object—not sure if it was yourself, Saphirion or Atronix that restored it, however it doesn't appear to have history:</p>
+</blockquote>
+</aside>
+<p><a class="mention" href="/u/draegtun">@draegtun</a> made the objects <a href="https://github.com/r3n/reboldocs/wiki/User-and-Console">and the hooks (docs)</a>... I've done the general architecture, in particular pushing as much as possible into usermode code vs. C.  Also to make errors that occur while running the input processing hooks cause it to fall back on the default console, rather than put you in a situation where you cannot debug your hooks.</p>
+<aside class="quote no-group" data-username="rgchris" data-post="3" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>As I understand it (please do correct me) such a scheme on the terminal micromanages every event—every keypress, etc.. I'm not sure that is desirable on the web build</p>
+</blockquote>
+</aside>
+<p>Windows was originally done through one atomic ReadLine call that could not be interrupted.  This is provided by the Windows API, but it is a very limited call.  There is no customization possible...you'd hand control to Windows and it would not give back control until a line of input was obtained.  So its history was whatever the windows console happened to give you.</p>
+<p>There is no comparable API on POSIX.  There is GNU's libReadline library which Rebol could have been linked to...but it is a bit bulky by Rebol standards and also GPL, so it was not used.  So terminal interaction code was written in C that handled it in a "micromanaged" way.  It was very poor, and R3-Alpha demonstrates how limited it was.  But since no history was available as in the Windows console case, it made the reading of lines linked with its own mechanism.</p>
+<p>What I did was to morph the POSIX version of the code bit by bit in a way that it could be common with Windows, and switched Windows to provide the more granular events to match.  <a href="https://github.com/metaeducation/ren-c/blob/780c754d994665822fbeab7b8c7a5a0c80b52f99/extensions/stdio/p-stdio.c#L46">The history actually is a BLOCK!</a> (of strings), it's just not exposed outside of the C.</p>
+<p><em>(I'd like to see the history be more intelligent with respect to command groupings; I want to page through full commands, not lines...however that could be made to work.)</em></p>
+<aside class="quote no-group" data-username="rgchris" data-post="3" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>I'm not sure that is desirable on the web build</p>
+</blockquote>
+</aside>
+<p>Desirable or not, it should be <em>able</em> to work in a micromanaged way...running the same code...if it wanted to.  So it makes a good test.</p>
+<p>What granularity you cut in at should be able to vary.  If you want a multi-line edit box to gather the code, that should be a possible response...but if your terminal is dumb, it defaults to a dumb behavior.</p>
+<aside class="quote no-group" data-username="rgchris" data-post="4" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>I would posit the same goes for the Console scheme—it matters less if it shares an implementation, just that it behaves the same way.</p>
+</blockquote>
+</aside>
+<p>I think being <em>able</em> to share an implementation is important enough that's a good start.  If I want key granularity and draw the terminal interface one character at a time, I should be able to have key granularity and draw the terminal one character at a time.</p>
+<p>That's the hard problem: making it so your configuration and keyboard shortcuts do magic equally on the desktop and on the web.  Splicing in a hack here and there to take advantage of better mechanisms when available isn't nearly as difficult.</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/5</link>
+        <pubDate>Thu, 18 Feb 2021 16:03:22 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-5</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Larger point just being that maybe the console could be a good first target for an eventing overhaul, though this would require some machinery on the C side to let you write code in a common style</p>
+</blockquote>
+</aside>
+<p>I'm not certain what the possibilities are with C, but an adjunct to our discussion on schemes—while I don't think precise consistency is essential from scheme to scheme, I do think that a particular scheme should be consistent across platforms. That's what I was aiming for with my ReplPad schemes—HTTP(S) works the way it does on desktop even if some features aren't supported; as does the FILE scheme. I would posit the same goes for the Console scheme—it matters less if it shares an implementation, just that it behaves the same way.</p>
+<hr>
+<p><em>Rebol 3 (in any flavour) has not implemented a <code>system/ports/output</code> at any point, but in Rebol 2 the Console scheme (when not in shell mode) was both input and output (got a little awkward if you changed <code>system/ports/output</code> to a file scheme).</em></p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/4</link>
+        <pubDate>Thu, 18 Feb 2021 15:50:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-4</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>If I understand the implications of what you are shooting for here, it is the kind of thing that could be applied to being able to run a network request while waiting at a console prompt.</p>
+</blockquote>
+</aside>
+<p>Yes, I'm almost certain that's the case. I'm pretty sure there's more than a few implications I haven't considered, I just want the events!</p>
+<p>My motivation is on the UI side where you can pass handling of any UI events to Ren-C, on which score there's a few challenges such as identifying an event target in a way that our event handler knows who it is—easy when an element has an ID, not so easy otherwise. This could equally (and without prejudice) apply to network event handling.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Ideally we can put something together for eventing that is consistent between the desktop and web builds.</p>
+</blockquote>
+</aside>
+<p>Yes! My next step was to create and dispatch events from the return of AWAIT—value mapping issues aside.</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="2" data-topic="1514">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>A step toward this would be to generalize the console event handling code, such that features like the command history are common across the desktop and web builds.</p>
+</blockquote>
+</aside>
+<p>I don't know how it worked exactly, but the abstract interface was the Console scheme. As I understand it (please do correct me) such a scheme on the terminal micromanages every event—every keypress, etc.. I'm not sure that is desirable on the web build where you trust the browser to paint letters after each keypress (though such a scheme <em>could</em> handle tab completion). Much of the Console state sits in <code>system/console</code> which in Rebol 2 had a block for history:</p>
+<pre><code class="lang-nohighlight">SYSTEM/CONSOLE is an object of value: 
+   history         block!    length: 15 
+   keys            none!     none 
+   prompt          string!   {^[[31m^[[5D&gt;&gt;^[[0m^[[4D } 
+   result          string!   {^[[32m^[[5D== ^[[34m^[[5D} 
+   escape          string!   {^[[44m^[[5D^[[37m^[[5D(escape)^[[0m^[[4D } 
+   busy            string!   "|/-\" 
+   tab-size        integer!  4 
+   break           logic!    true 
+   lookup          function! Console filename completion lookup.
+</code></pre>
+<p>(with terminal colours!)</p>
+<p>I notice that R3/Alpha didn't have a <code>system/console</code> object—not sure if it was yourself, Saphirion or Atronix that restored it, however it doesn't appear to have history:</p>
+<pre><code class="lang-nohighlight">SYSTEM/CONSOLE is an object! of value:
+   name            text!     "default"
+   repl            logic!    true
+   is-loaded       logic!    false
+   was-updated     logic!    false
+   last-result     blank!    _
+   prompt          text!     "&gt;&gt;"
+   result          text!     "=="
+   warning         text!     "!!"
+   error           text!     "**"
+   info            text!     "ⓘ"
+   greeting        blank!    _
+   print-prompt    action!   [ return: [void!] ]
+   print-result    action!   [ return: [void!] v [&lt;opt&gt; any-value!] ]
+   print-warning   action!   [ s ]
+   print-error     action!   [ e [error!] ]
+   print-halted    action!   []
+   print-info      action!   [ s ]
+   print-greeting  action!   []
+   print-gap       action!   []
+   input-hook      action!   Receives line input, parse/transform, send ba...
+   dialect-hook    action!   Receives code block, parse/transform, send ba...
+   shortcuts       object!   [d h q dt dp list-shortcuts changes topics]
+   add-shortcut    action!   Add/Change console shortcut
+</code></pre>
+<p>(from the R3C build)</p>
+<hr>
+<p><em>Aside: ReplPad seems to use <code>system/console/prompt</code> without escaping, thus you can emulate those terminal codes:</em></p>
+<p><code>&gt;&gt; system/console/prompt: "&lt;i style='color: #800; background: #fde'&gt;&amp;gt;&amp;gt;&lt;/i&gt;"</code></p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/3</link>
+        <pubDate>Thu, 18 Feb 2021 15:29:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-3</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>If I understand the implications of what you are shooting for here, it is the kind of thing that could be applied to being able to run a network request while waiting at a console prompt.</p>
+<p>Ideally we can put something together for eventing that is consistent between the desktop and web builds.  A basic demo that prints out a count every 5 seconds without disturbing in-progress input in the console prompt would be very neat. (Of course that's the <em>apparent</em> effect...the real effect on the screen has to erase the input temporarily, then output the number, then repaint the console prompt)</p>
+<p>A step toward this would be to generalize the console event handling code, such that features like the command history are common across the desktop and web builds.</p>
+<p>This would mean having a way to wire it up so that events like "Up Arrow Pressed" are emitted by some abstract layer (we might call it the "terminal" layer?) and they bubble up to the console layer (less ambiguously the "repl" layer, but repl is a kind of annoying term in the first place).</p>
+<p>I've slowly laid the foundations for this.  There is Windows code for <a href="https://github.com/metaeducation/ren-c/blob/780c754d994665822fbeab7b8c7a5a0c80b52f99/extensions/stdio/readline-windows.c#L634">"Try_Get_One_Console_Event()"</a>, which has a <a href="https://github.com/metaeducation/ren-c/blob/780c754d994665822fbeab7b8c7a5a0c80b52f99/extensions/stdio/readline-posix.c#L444">corresponding implementation in POSIX</a>.</p>
+<p>Today this is all driven by a loop in C, but that loop is very clearly taking advantage of the ever-creeping usermode nature of expressing the events as values:</p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/780c754d994665822fbeab7b8c7a5a0c80b52f99/extensions/stdio/p-stdio.c#L82">%p-stdio.c</a></p>
+<p>That value <em>could</em> be an EVENT!.  The main idea behind event is that when you're processing things like mouse moves you don't want each mouse move to generate garbage for the GC, e.g. with OBJECT! or BLOCK!.  But I'm increasingly thinking that lowering the GC tax is probably best done by making GC smarter using reference counting, which would offer systemic benefits.  Looking at it.</p>
+<p>But...anyway, you can see that right now I'm just using characters and strings and words, e.g. control b is signaled with the word <strong><code>ctrl-b</code></strong>.  Imperfect, but it moved toward the idea of being able to make the loop use Rebol code for processing.</p>
+<p>Larger point just being that maybe the console could be a good first target for an eventing overhaul, though this would require some machinery on the C side to let you write code in a common style.</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/2</link>
+        <pubDate>Thu, 18 Feb 2021 15:00:40 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-2</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+      <item>
+        <title>Event Listener MVP</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm attempting to create a minimum event loop handler that works from ReplPad (and presumably other Ren-C applications).</p>
+<p><a href="https://gist.github.com/rgchris/ad5f071380653155d96b966df598df96/">Here's what I have so far</a>:</p>
+<pre><code class="lang-nohighlight">do https://gist.githubusercontent.com/rgchris/ad5f071380653155d96b966df598df96/raw/
+</code></pre>
+<p>Not a loop at this point, but is able to discern events from different sources.</p>
+          <p><a href="https://forum.rebol.info/t/event-listener-mvp/1514/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/event-listener-mvp/1514/1</link>
+        <pubDate>Thu, 18 Feb 2021 13:31:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1514-1</guid>
+        <source url="https://forum.rebol.info/t/event-listener-mvp/1514.rss">Event Listener MVP</source>
+      </item>
+  </channel>
+</rss>

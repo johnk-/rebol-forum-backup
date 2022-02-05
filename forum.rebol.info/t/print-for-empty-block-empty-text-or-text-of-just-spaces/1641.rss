@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>PRINT for empty BLOCK!, empty TEXT!, or Text of Just Spaces</title>
+    <link>https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641</link>
+    <description>I just wrote something I thought was kind of neat, a way to do indentation via COLLECT:
+
+    print [collect [repeat indent [keep tab]]], &quot;some indented stuff&quot;]
+
+So if INDENT were 3 this would act as:
+
+    print [[#&quot;^-&quot; #&quot;^-&quot; #&quot;^-&quot;] &quot;some indented stuff&quot;]
+
+**This made me feel like the historical answer of PRINT treating a BLOCK! of material as if it were a set of already-reduced and calculated parts was probably a good answer.**  In the past I&#39;ve questioned it, but I think the value is demonstrated right there.
+
+*(I&#39;ll also point out that with GET-BLOCK!, we&#39;ll have a nice way of asking to reduce the block first... **`print [&quot;For instance:&quot; :[your vars here]]`**...this lets you mix up spaced and unspaced parts easily!)*
+
+But then I noticed it was screwing up in the base case of zero indentation, e.g.
+
+    ren-c&gt;&gt; print [[] &quot;some stuff&quot;]
+     some stuff
+
+There&#39;s an extra leading space there.  :(  Checking Red, it does the same thing:
+
+    red&gt;&gt; print [[] &quot;some stuff&quot;]
+     some stuff
+
+It made me wonder, does Rebol2 do this?
+
+    rebol2&gt;&gt; print [[] &quot;some stuff&quot;]
+    some stuff
+
+Oddly no.  Did R3-Alpha?
+
+    r3-alpha&gt;&gt; print [[] &quot;some stuff&quot;]
+    some stuff
+
+Again no.  Is it putting spacing around non-empty blocks?
+
+    r3-alpha&gt;&gt; print [[&quot;test&quot;] &quot;some stuff&quot;]
+    test some stuff
+
+Well, yes.  But what if that string were empty?
+
+    r3-alpha&gt;&gt; print [[&quot;&quot;] &quot;some stuff&quot;]     
+    some stuff
+
+*The reason Red and Ren-C have the extra space is because there&#39;s a generic handling of turning values into strings that adds spacing even if a string is empty.*
+
+But waitasec: **How does Rebol2 know psychically in advance whether a molding operation is going to produce content or not?**  It would have to use a separate buffer, and I can&#39;t imagine Carl doing that.
+
+So let&#39;s try something else:
+
+    rebol2&gt;&gt; print [&quot;here&#39;s&quot; [] &quot;some stuff&quot;]
+    here&#39;s  some stuff
+
+There&#39;s the extra space, due to not being psychic.
+
+We see some weird exception was made regarding empty strings that didn&#39;t have a holistic answer.  Red and Ren-C both lack that broken weird exception.
+
+So what can we do to get desirable results in a non-broken way?
+
+## Empty BLOCK! Should Act The Same As NULL
+
+I&#39;ve been firm on the &quot;detail&quot; that NULL vaporization really means it&#39;s as if it weren&#39;t there, and the spacing acts appropriately:
+
+    &gt;&gt; print [&quot;here&#39;s&quot; if false [&quot;!!!&quot;] &quot;some stuff&quot;]
+    here&#39;s some stuff
+
+That&#39;s one of my non-negotiables.  Now I&#39;m going to add another to the list:
+
+    &gt;&gt; print [&quot;here&#39;s&quot; [] &quot;some stuff&quot;]
+    here&#39;s some stuff
+
+It&#39;s tempting to add another one, which is to not put spacing around empty strings:
+
+    &gt;&gt; print [&quot;here&#39;s&quot; {} &quot;some stuff&quot;]
+    here&#39;s some stuff
+
+The reasoning is that I don&#39;t see why robotically putting spacing around an empty string would ever be useful.  But this is a slippery slope.  What if the string contains just spaces, let&#39;s say 4?
+
+    &gt;&gt; print [&quot;here&#39;s&quot; {    } &quot;some stuff&quot;]
+    here&#39;s    some stuff
+
+Should there be 4 spaces in that gap?  5 spaces?  6?
+
+Mechanically the easiest answer would be 6...which is to say that it&#39;s agnostic about the string contents and just puts one space before and one space after.  Doing anything else requires analyzing the molded content, which is methodized in the general case.
+
+*But the empty string case doesn&#39;t really require you to analyze the molded contents.*  It just requires you to notice how much the pre-delimiter added to the molding buffer...and then if the buffer didn&#39;t get any longer during the molding operation, backtrack the buffer index behind the now-superfluous delimiter.
+
+**To my mind it&#39;s worth it to just make the exemption that empty moldings do not get delimited.**  It&#39;s a more useful behavior and puts Ren-C once again in the clear lead for usage sanity.  :-)</description>
+    
+    <lastBuildDate>Sat, 31 Jul 2021 16:51:33 +0000</lastBuildDate>
+    <category>Console</category>
+    <atom:link href="https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>PRINT for empty BLOCK!, empty TEXT!, or Text of Just Spaces</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1641">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>The reasoning is that I don't see why robotically putting spacing around an empty string would ever be useful. But this is a slippery slope.</p>
+</blockquote>
+</aside>
+<p>Okay, I take this particular bit (empty string) back.</p>
+<p>Imagine the delimiter is not a space, but say... a colon.</p>
+<pre><code>&gt;&gt; field1: "one"
+&gt;&gt; field2: ""
+&gt;&gt; field3: "three"
+&gt;&gt; delimit ":" [field1 field2 field3]
+== [one::three]
+</code></pre>
+<p>You want that second colon there.  And technically speaking there's no reason you couldn't use spaces as a delimiter for a format that required spaces to be escaped in the content (or not allowed at all).</p>
+<p><em>But I'm going to say an empty block with no contents has more in common with null than an empty string.</em></p>
+<p>If you are unhappy that empty strings are giving you two spaces, then use nulls/blanks like you are supposed to.</p>
+          <p><a href="https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641/2</link>
+        <pubDate>Sat, 31 Jul 2021 16:36:30 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1641-2</guid>
+        <source url="https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641.rss">PRINT for empty BLOCK!, empty TEXT!, or Text of Just Spaces</source>
+      </item>
+      <item>
+        <title>PRINT for empty BLOCK!, empty TEXT!, or Text of Just Spaces</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I just wrote something I thought was kind of neat, a way to do indentation via COLLECT:</p>
+<pre><code>print [collect [repeat indent [keep tab]]], "some indented stuff"]
+</code></pre>
+<p>So if INDENT were 3 this would act as:</p>
+<pre><code>print [[#"^-" #"^-" #"^-"] "some indented stuff"]
+</code></pre>
+<p><strong>This made me feel like the historical answer of PRINT treating a BLOCK! of material as if it were a set of already-reduced and calculated parts was probably a good answer.</strong>  In the past I've questioned it, but I think the value is demonstrated right there.</p>
+<p><em>(I'll also point out that with GET-BLOCK!, we'll have a nice way of asking to reduce the block first... <strong><code>print ["For instance:" :[your vars here]]</code></strong>...this lets you mix up spaced and unspaced parts easily!)</em></p>
+<p>But then I noticed it was screwing up in the base case of zero indentation, e.g.</p>
+<pre><code>ren-c&gt;&gt; print [[] "some stuff"]
+ some stuff
+</code></pre>
+<p>There's an extra leading space there.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  Checking Red, it does the same thing:</p>
+<pre><code>red&gt;&gt; print [[] "some stuff"]
+ some stuff
+</code></pre>
+<p>It made me wonder, does Rebol2 do this?</p>
+<pre><code>rebol2&gt;&gt; print [[] "some stuff"]
+some stuff
+</code></pre>
+<p>Oddly no.  Did R3-Alpha?</p>
+<pre><code>r3-alpha&gt;&gt; print [[] "some stuff"]
+some stuff
+</code></pre>
+<p>Again no.  Is it putting spacing around non-empty blocks?</p>
+<pre><code>r3-alpha&gt;&gt; print [["test"] "some stuff"]
+test some stuff
+</code></pre>
+<p>Well, yes.  But what if that string were empty?</p>
+<pre><code>r3-alpha&gt;&gt; print [[""] "some stuff"]     
+some stuff
+</code></pre>
+<p><em>The reason Red and Ren-C have the extra space is because there's a generic handling of turning values into strings that adds spacing even if a string is empty.</em></p>
+<p>But waitasec: <strong>How does Rebol2 know psychically in advance whether a molding operation is going to produce content or not?</strong>  It would have to use a separate buffer, and I can't imagine Carl doing that.</p>
+<p>So let's try something else:</p>
+<pre><code>rebol2&gt;&gt; print ["here's" [] "some stuff"]
+here's  some stuff
+</code></pre>
+<p>There's the extra space, due to not being psychic.</p>
+<p>We see some weird exception was made regarding empty strings that didn't have a holistic answer.  Red and Ren-C both lack that broken weird exception.</p>
+<p>So what can we do to get desirable results in a non-broken way?</p>
+<h2>Empty BLOCK! Should Act The Same As NULL</h2>
+<p>I've been firm on the "detail" that NULL vaporization really means it's as if it weren't there, and the spacing acts appropriately:</p>
+<pre><code>&gt;&gt; print ["here's" if false ["!!!"] "some stuff"]
+here's some stuff
+</code></pre>
+<p>That's one of my non-negotiables.  Now I'm going to add another to the list:</p>
+<pre><code>&gt;&gt; print ["here's" [] "some stuff"]
+here's some stuff
+</code></pre>
+<p>It's tempting to add another one, which is to not put spacing around empty strings:</p>
+<pre><code>&gt;&gt; print ["here's" {} "some stuff"]
+here's some stuff
+</code></pre>
+<p>The reasoning is that I don't see why robotically putting spacing around an empty string would ever be useful.  But this is a slippery slope.  What if the string contains just spaces, let's say 4?</p>
+<pre><code>&gt;&gt; print ["here's" {    } "some stuff"]
+here's    some stuff
+</code></pre>
+<p>Should there be 4 spaces in that gap?  5 spaces?  6?</p>
+<p>Mechanically the easiest answer would be 6...which is to say that it's agnostic about the string contents and just puts one space before and one space after.  Doing anything else requires analyzing the molded content, which is methodized in the general case.</p>
+<p><em>But the empty string case doesn't really require you to analyze the molded contents.</em>  It just requires you to notice how much the pre-delimiter added to the molding buffer...and then if the buffer didn't get any longer during the molding operation, backtrack the buffer index behind the now-superfluous delimiter.</p>
+<p><strong>To my mind it's worth it to just make the exemption that empty moldings do not get delimited.</strong>  It's a more useful behavior and puts Ren-C once again in the clear lead for usage sanity.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641/1</link>
+        <pubDate>Sat, 31 Jul 2021 13:37:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1641-1</guid>
+        <source url="https://forum.rebol.info/t/print-for-empty-block-empty-text-or-text-of-just-spaces/1641.rss">PRINT for empty BLOCK!, empty TEXT!, or Text of Just Spaces</source>
+      </item>
+  </channel>
+</rss>

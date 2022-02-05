@@ -1,0 +1,315 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>GET-BLOCK!, GET, and REDUCE</title>
+    <link>https://forum.rebol.info/t/get-block-get-and-reduce/1183</link>
+    <description>R3-Alpha had what I had thought was a bizarre behavior:
+
+    r3-alpha&gt;&gt; get 5 + 5
+    == 10
+
+If something wasn&#39;t a WORD! or PATH! it would fall through.  Unless it was an OBJECT!, in which case it would get the values of the object vs. the OBJECT! itself.
+
+Then it could SET a block, but it didn&#39;t symmetrically GET one...the BLOCK! was just one of the miscellaneous things that fell out:
+
+     r3-alpha&gt;&gt; set [x y] [10 20]
+     == [10 20]
+
+     r3-alpha&gt;&gt; reduce [x y]
+     == [10 20]
+
+     r3-alpha&gt;&gt; get [x y]
+     == [x y]  ; one of the as-is types, Red/Rebol2 error on this
+
+I realized that if GET of a BLOCK! worked, then the GET of an OBJECT! behavior could just be **get words of obj**, which seemed more clear and generalized.  So I changed GET of a BLOCK! to work symmetrically to set.
+
+     ren-c&gt;&gt; x: 10
+
+     ren-c&gt;&gt; y: 20
+
+     ren-c&gt;&gt; get [x y]
+     == [10 20]
+
+## And then along came GET-BLOCK! and SET-BLOCK!
+
+The most sensible seeming behavior for **:[...whatever...]** would seem to be the same as **get [...whatever...]**.  So at first I decided a shorthand for REDUCE was likely more useful.  It seems you want to REDUCE blocks more often than you GET them (which is especially true since Redbol couldn&#39;t GET blocks at all).
+
+But this raised a question: **should GET of a BLOCK! reduce it**?  If R3-Alpha&#39;s odd behavior of letting you GET inert quantities was preserved you&#39;d be *almost* there.
+
+    r3-alpha&gt;&gt; get 5 + 5
+    == 10  ; the weird behavior mentioned before
+
+    &gt;&gt; get [x y 5 + 5]
+    == [10 20 10]  ; potential extension of this
+
+On the surface this would seem to offer an advantage of a shorter word than REDUCE, along with a symmetry between GET-BLOCK! and GET of a BLOCK!.  But the symmetries break down because you expect GET of a WORD! that looks up to a function to give you the function back by value and not apply it.  :frowning:
+
+    &gt;&gt; get &#39;add
+    == #[action! ...]
+
+    &gt;&gt; :add
+    == #[action]
+
+    &gt;&gt; get [add]
+    ** Error: ADD is missing its value1 argument   ; uh oh
+
+This was the reason that GET-BLOCK! behavior was changed away from REDUCE.  Which I forgot when [writing up my idea last night](https://forum.rebol.info/t/cutting-out-only-could-we-make-append-find-etc-only-accept-blocks/1182).
+
+## Alternate ideas?
+
+Even if GET of a word looking up to an ACTION! gives an action directly, one could allow GET of a GROUP!:
+
+     &gt;&gt; get &#39;(add 1 2)
+     == 3
+
+     &gt;&gt; get [add (add 1 2)]
+     == [#[action! ...] 3]
+
+This could mean a GET-BLOCK! could be *almost* as powerful as REDUCE.  It&#39;s just that REDUCE wouldn&#39;t need parentheses around function calls.  But having something that&#39;s almost-reduce-but-not-quite might just be asking for trouble, and having the weird **get 5 + 5** working could just be a slippery slope of luring people into misunderstandings.
+
+I think it&#39;s kind of non-negotiable psychologically for GET of a BLOCK! to do the same thing as a GET-BLOCK!.  Allowing that to be REDUCE seems to pack some power, but it would mess with things like:
+
+    set words of obj1 get words of obj2
+
+If any of those words were functions, you&#39;d wind up running them.
+
+Hmmm.</description>
+    
+    <lastBuildDate>Thu, 05 Aug 2021 14:10:05 +0000</lastBuildDate>
+    <category>Datatypes</category>
+    <atom:link href="https://forum.rebol.info/t/get-block-get-and-reduce/1183.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>GET-BLOCK!, GET, and REDUCE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="6" data-topic="1183">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I have restored the behavior that GET-BLOCK! acts as REDUCE</p>
+</blockquote>
+</aside>
+<p>And the best keeps getting better:</p>
+<pre><code>&gt;&gt; if true :[elide print "YES" 1 + 2 3 + 4] else :[elide print "NO" 10 + 20]
+YES
+== [3 7]
+</code></pre>
+<p>So GET-BLOCK! branches now reduce.  <em>And they only do the reduce if the branch should be taken.</em></p>
+<pre><code>if condition :[...] &lt;=&gt; if condition [reduce [...]]
+</code></pre>
+<p>A small but nice convenience!  If you have a bit of material you may or may not want to splice in a COMPOSE, for example:</p>
+<pre><code>&gt;&gt; obj: make object! [word1: 'orange, word2: 'pear]
+
+&gt;&gt; compose [apple banana ((if obj :[obj.word1 obj.word2]))]
+== [apple banana orange pear]
+</code></pre>
+<hr>
+<p><em>(Note: I still prefer non-splicing as the default for COMPOSE, and I feel the <strong>(( ))</strong> helps to hint at the potential for multiple splices in a visually suggestive way.  The only thing that has me a bit bummed is the casualness with which NULL is tolerated for vaporization when it errors other places.  Both plain <strong>( )</strong> and <strong>(( ))</strong> allow the composed clause to vaporize via NULL...still turning this around in my head a bit.  I'm wondering if you might have to use <strong>(( ))</strong> if you want things to vaporize, to suggest the number of things spliced is flexible...not just potentially many, but also potentially 0?)</em></p>
+          <p><a href="https://forum.rebol.info/t/get-block-get-and-reduce/1183/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-block-get-and-reduce/1183/7</link>
+        <pubDate>Thu, 05 Aug 2021 13:59:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1183-7</guid>
+        <source url="https://forum.rebol.info/t/get-block-get-and-reduce/1183.rss">GET-BLOCK!, GET, and REDUCE</source>
+      </item>
+      <item>
+        <title>GET-BLOCK!, GET, and REDUCE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>I have restored the behavior that GET-BLOCK! acts as REDUCE</h2>
+<pre><code>&gt;&gt; :[1 + 2 10 + 20]
+== [3 30]
+</code></pre>
+<p>This means that if you're dealing with a literal block, you can avoid functions like REPEND.</p>
+<pre><code>&gt;&gt; append [a b c] :[1 + 2 10 + 20]
+== [a b c 3 30]
+</code></pre>
+<p>And I think it means we can be happy enough defining JOIN as not reducing by default:</p>
+<pre><code>&gt;&gt; data: [a b c]
+
+&gt;&gt; join data [1 + 2 10 + 20]
+== [a b c 1 + 2 10 + 20]
+
+&gt;&gt; data
+== [a b c]
+</code></pre>
+<p>If you want to reduce, you ask for it:</p>
+<pre><code>&gt;&gt; data: [a b c]
+
+&gt;&gt; join data :[1 + 2 10 + 20]
+== [a b c 3 30]
+
+&gt;&gt; data
+== [a b c]
+</code></pre>
+<p><em>This case of literal information actually comes up rather often.</em>  For those who prefer writing out the word REDUCE even in literal cases, no problem.</p>
+<h2>What about SET and GET natives and BLOCK?!</h2>
+<p>The thing I had been fretting about was if SET of BLOCK! and a GET of BLOCK! didn't do the same thing as a SET-BLOCK! and GET-BLOCK! would.</p>
+<p>Yet today know that SET-BLOCK! has the behavior of multi-return, and that's been a huge win.  It's not possible to unify that behavior for what it means to combine the SET native and a BLOCK! value.</p>
+<p>And as I've mentioned, historical Rebol2 and Red do not have meaning for a GET of a BLOCK!, it's an error:</p>
+<pre><code>red&gt;&gt; a: 10
+red&gt;&gt; b: 20
+red&gt;&gt; get [a b]
+*** Script Error: get does not allow block! for its word argument
+</code></pre>
+<p>So it's not <strong>[10 20]</strong> as one might expect (though you might argue it's just an oversight and they'll add it some day).</p>
+<p>But I don't like these operations and I've explained why: <em>not all variable states can be put into block elements</em>.  You can't put NULL and you can't put BAD-WORD! isotopes.</p>
+<p><strong><a href="https://forum.rebol.info/t/a-lot-to-unpack-replacing-the-set-of-reduce-block-idiom/1634">The workaround I came up with is called UNPACK</a></strong> and I think it really sorts out the various problems that GET and SET of BLOCK!s invariably introduce.</p>
+<h2>A Remaining Question: Should NULL Vaporize in REDUCE ?</h2>
+<p>An interesting thing about the mechanics of UNPACK is that it uses REDUCE-EACH, and not REDUCE.  This means it doesn't get bit by being unable to represent the states it wants to assign in a block because it never generates the block of fetches...it just assigns as it goes.</p>
+<p>So does that mean we're free of worry?  Are all remaining REDUCE cases non-positional?</p>
+<p>I think there needs to be more data on this.  Certainly SET was the largest application, but we should keep our eyes open.</p>
+          <p><a href="https://forum.rebol.info/t/get-block-get-and-reduce/1183/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-block-get-and-reduce/1183/6</link>
+        <pubDate>Sat, 31 Jul 2021 20:44:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1183-6</guid>
+        <source url="https://forum.rebol.info/t/get-block-get-and-reduce/1183.rss">GET-BLOCK!, GET, and REDUCE</source>
+      </item>
+      <item>
+        <title>GET-BLOCK!, GET, and REDUCE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>A post was merged into an existing topic: <a href="/t/dots-and-slashes-the-hyphen-and-colon-disruption/1497/3">Dots and Slashes: The Hyphen and Colon Disruption</a></p>
+          <p><a href="https://forum.rebol.info/t/get-block-get-and-reduce/1183/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-block-get-and-reduce/1183/4</link>
+        <pubDate>Sat, 31 Jul 2021 17:21:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1183-4</guid>
+        <source url="https://forum.rebol.info/t/get-block-get-and-reduce/1183.rss">GET-BLOCK!, GET, and REDUCE</source>
+      </item>
+      <item>
+        <title>GET-BLOCK!, GET, and REDUCE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="2" data-topic="1183">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>But I'm questioning this assumption. Having <strong>:[x + 1 y * 2]</strong> act as <strong>reduce [x + 1 y * 2]</strong> seems much more useful.<br>
+...<br>
+I've also suggested higher purposes in the evaluator for SET-BLOCK!, for <a href="https://forum.rebol.info/t/multiple-return-values/1134">multiple return values</a>. Hmm.</p>
+</blockquote>
+</aside>
+<p><a href="https://forum.rebol.info/t/forward-to-multiple-return-values-and-return-value-forwarding/1271/2">My "suggested higher purposes" won out</a>, and I'm pretty psyched about it.</p>
+<p>To me this clinches the idea that <strong>:[what ever]</strong> does not need to mean the same thing as <strong>get [what ever]</strong> (if that means anything at all).  As with the idea of doing element-wise assignment via something other than SET (e.g. ASSIGN), there could be some other analogous thing.  (It's kind of like a form of REDUCE that just refuses to run functions... a kind of REDUCE/ONLY or REDUCE/SAFE?)</p>
+<p>In fact... what if the old notion of "GET BLOCK!" is instead just a parameterized COPY that does an GET on each position?  Avoiding the fact that there's <a href="https://forum.rebol.info/t/brave-switch-new-world-skippable-predicates/1045">no good syntax for "predicates" yet</a>, imagine being able to provide an arbitrary function that transforms each item during a COPY?</p>
+<pre><code> &gt;&gt; copy /negate [1 -2]
+ == [-1 2]
+
+ &gt;&gt; x: 10
+ &gt;&gt; y: 20
+
+ &gt;&gt; copy /get [x y]
+ == [10 20]
+</code></pre>
+<p>Though you can imagine predicates that wanted to operate by position ("like a FORALL") as opposed to one item at a time ("like a FOREACH").  Perhaps that could be the difference between COPY and REDUCE, in that REDUCE has the ability to give you a smaller set of things than you started with?</p>
+<pre><code>&gt;&gt; reduce /(p =&gt; [p/1 &gt; p/2]) [1 2 4 3]  ; 4 items
+== [#[true] #[false]]  ; 2 items
+</code></pre>
+<p><strong>Regardless of the specifics of these decisions I think the win of having :[...] mean REDUCE is very high.  Having accepted multiple return values for [...]: instead of member-wise assignment clears up the concern I mention in this thread; it's not worth worrying about, there are better answers.</strong></p>
+<p>The most useful variant of REDUCE for this meaning is likely one where NULLs vanish, as opposed to turning into BLANK! or VOID! in order to not have extra slots.  Getting the other variation might be <strong>reduce /try [...]</strong></p>
+<hr>
+<p><em>So long as we are on the subject, think about how you'd feel if code said <strong>copy .get [x y]</strong> or <strong>reduce .try [...]</strong> instead.  Too subtle, or "just right?"</em></p>
+          <p><a href="https://forum.rebol.info/t/get-block-get-and-reduce/1183/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-block-get-and-reduce/1183/3</link>
+        <pubDate>Fri, 05 Jun 2020 20:36:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1183-3</guid>
+        <source url="https://forum.rebol.info/t/get-block-get-and-reduce/1183.rss">GET-BLOCK!, GET, and REDUCE</source>
+      </item>
+      <item>
+        <title>GET-BLOCK!, GET, and REDUCE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1183">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>This was the reason that GET-BLOCK! behavior was changed away from REDUCE.</p>
+</blockquote>
+</aside>
+<p>It turns out it hadn't actually been changed yet, just written up that it should be changed to match GET of a BLOCK!.</p>
+<p>But I'm questioning this assumption.  Having <strong>:[x + 1 y * 2]</strong> act as <strong>reduce [x + 1 y * 2]</strong> seems much more useful.</p>
+<p>I'm not sure how to reconcile this with not wanting GET of a BLOCK! to be a REDUCE.  :-/  Rebol2, R3-Alpha, and Red all have no behavior for trying to get a block...it's an error.  Maybe it's worth it to keep it that way so that there isn't a flagrant inconsistency?</p>
+<p>I've also suggested higher purposes in the evaluator for SET-BLOCK!, for <a href="https://forum.rebol.info/t/multiple-return-values/1134">multiple return values</a>.  Hmm.</p>
+          <p><a href="https://forum.rebol.info/t/get-block-get-and-reduce/1183/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-block-get-and-reduce/1183/2</link>
+        <pubDate>Thu, 01 Aug 2019 08:57:03 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1183-2</guid>
+        <source url="https://forum.rebol.info/t/get-block-get-and-reduce/1183.rss">GET-BLOCK!, GET, and REDUCE</source>
+      </item>
+      <item>
+        <title>GET-BLOCK!, GET, and REDUCE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>R3-Alpha had what I had thought was a bizarre behavior:</p>
+<pre><code>r3-alpha&gt;&gt; get 5 + 5
+== 10
+</code></pre>
+<p>If something wasn't a WORD! or PATH! it would fall through.  Unless it was an OBJECT!, in which case it would get the values of the object vs. the OBJECT! itself.</p>
+<p>Then it could SET a block, but it didn't symmetrically GET one...the BLOCK! was just one of the miscellaneous things that fell out:</p>
+<pre><code> r3-alpha&gt;&gt; set [x y] [10 20]
+ == [10 20]
+
+ r3-alpha&gt;&gt; reduce [x y]
+ == [10 20]
+
+ r3-alpha&gt;&gt; get [x y]
+ == [x y]  ; one of the as-is types, Red/Rebol2 error on this
+</code></pre>
+<p>I realized that if GET of a BLOCK! worked, then the GET of an OBJECT! behavior could just be <strong>get words of obj</strong>, which seemed more clear and generalized.  So I changed GET of a BLOCK! to work symmetrically to set.</p>
+<pre><code> ren-c&gt;&gt; x: 10
+
+ ren-c&gt;&gt; y: 20
+
+ ren-c&gt;&gt; get [x y]
+ == [10 20]
+</code></pre>
+<h2>And then along came GET-BLOCK! and SET-BLOCK!</h2>
+<p>The most sensible seeming behavior for <strong>:[...whatever...]</strong> would seem to be the same as <strong>get [...whatever...]</strong>.  So at first I decided a shorthand for REDUCE was likely more useful.  It seems you want to REDUCE blocks more often than you GET them (which is especially true since Redbol couldn't GET blocks at all).</p>
+<p>But this raised a question: <strong>should GET of a BLOCK! reduce it</strong>?  If R3-Alpha's odd behavior of letting you GET inert quantities was preserved you'd be <em>almost</em> there.</p>
+<pre><code>r3-alpha&gt;&gt; get 5 + 5
+== 10  ; the weird behavior mentioned before
+
+&gt;&gt; get [x y 5 + 5]
+== [10 20 10]  ; potential extension of this
+</code></pre>
+<p>On the surface this would seem to offer an advantage of a shorter word than REDUCE, along with a symmetry between GET-BLOCK! and GET of a BLOCK!.  But the symmetries break down because you expect GET of a WORD! that looks up to a function to give you the function back by value and not apply it.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:"></p>
+<pre><code>&gt;&gt; get 'add
+== #[action! ...]
+
+&gt;&gt; :add
+== #[action]
+
+&gt;&gt; get [add]
+** Error: ADD is missing its value1 argument   ; uh oh
+</code></pre>
+<p>This was the reason that GET-BLOCK! behavior was changed away from REDUCE.  Which I forgot when <a href="https://forum.rebol.info/t/cutting-out-only-could-we-make-append-find-etc-only-accept-blocks/1182">writing up my idea last night</a>.</p>
+<h2>Alternate ideas?</h2>
+<p>Even if GET of a word looking up to an ACTION! gives an action directly, one could allow GET of a GROUP!:</p>
+<pre><code> &gt;&gt; get '(add 1 2)
+ == 3
+
+ &gt;&gt; get [add (add 1 2)]
+ == [#[action! ...] 3]
+</code></pre>
+<p>This could mean a GET-BLOCK! could be <em>almost</em> as powerful as REDUCE.  It's just that REDUCE wouldn't need parentheses around function calls.  But having something that's almost-reduce-but-not-quite might just be asking for trouble, and having the weird <strong>get 5 + 5</strong> working could just be a slippery slope of luring people into misunderstandings.</p>
+<p>I think it's kind of non-negotiable psychologically for GET of a BLOCK! to do the same thing as a GET-BLOCK!.  Allowing that to be REDUCE seems to pack some power, but it would mess with things like:</p>
+<pre><code>set words of obj1 get words of obj2
+</code></pre>
+<p>If any of those words were functions, you'd wind up running them.</p>
+<p>Hmmm.</p>
+          <p><a href="https://forum.rebol.info/t/get-block-get-and-reduce/1183/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/get-block-get-and-reduce/1183/1</link>
+        <pubDate>Mon, 22 Jul 2019 14:26:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1183-1</guid>
+        <source url="https://forum.rebol.info/t/get-block-get-and-reduce/1183.rss">GET-BLOCK!, GET, and REDUCE</source>
+      </item>
+  </channel>
+</rss>

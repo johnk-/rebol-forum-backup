@@ -1,0 +1,354 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</title>
+    <link>https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653</link>
+    <description>Though I understand anyone being skeptical given the amount of debate: *I do honestly think I am zeroing in on &quot;an answer&quot; regarding the core ergonomics for things like APPEND*.  But it doesn&#39;t feel quite there yet.
+
+The biggest point of discomfort relates to what I mentioned about WORD!s, which is proving to be a bigger deal in practice than I first realized:
+
+[quote=&quot;hostilefork, post:8, topic:1332&quot;]
+**The most obvious side-effect is that you won&#39;t be able to append WORD!s/PATH!s/etc. without making them quoted.**
+
+    &gt;&gt; append [a b c] &#39;d
+    ** Error: evaluative value must be QUOTED! to append
+[/quote]
+
+*(Remember of course that APPEND is not receiving **&#39;d** in this case.  The **&#39;** suppresses the evaluation and &quot;vaporizes&quot; so that APPEND winds up receiving the **d**.  To get APPEND to receive a QUOTED! value you&#39;d have to have said **&#39;&#39;d** or **the &#39;d** or **just d** or some other such construction.)*
+
+Of course, we can just say &quot;screw it&quot; and allow it...and be no worse off than history (better, really).  But that&#39;s small comfort, as I think history was bad!
+
+Quick refresher:
+
+    rebol2&gt;&gt; value: first [d/e]
+    == d/e
+    rebol2&gt;&gt; append [a b c] value
+    == [a b c d e]
+         ; ^-- not [a b c d/e]
+
+    rebol2&gt;&gt; value: first [(d e)]
+    == (d e)
+    rebol2&gt;&gt; append [a b c] value
+    == [a b c d e]
+         ; ^-- not [a b c (d e)]
+
+    rebol2&gt;&gt; value: first [&#39;d]
+    == &#39;d
+    rebol2&gt;&gt; append [a b c] value
+    == [a b c d]
+        ; ^-- not for the Ren-C reason... LIT-WORD! decay on WORD!-fetch
+    rebol2&gt;&gt; append [a b c] first [&#39;d]
+    == [a b c &#39;d]
+        ; ^-- see what I mean?  yes this is all kinds of ridiculous
+
+*(Note: Red at least doesn&#39;t do that last one, there is no LIT-WORD! decay on word fetches.)*
+
+Point being: **I want people to keep in mind just how crappy history was, in understanding why the search for better is worthwhile...especially if it kills off /ONLY.**
+
+## Back To the WORD! Pain Point
+
+Among the places I&#39;m finding it painful to not be able to just pass a WORD!, let&#39;s look at FIND.  You&#39;ll see code like:
+
+    if not find data &#39;d [append data &#39;d]
+
+The readability suffers a bit if you change this to BLOCK!.  In this example in particular, it gets harder to see the branch:
+
+    if not find data [d] [append data [d]]
+
+If you use double quotes it seems confusing:
+
+    if not find data &#39;&#39;d [append data &#39;&#39;d]
+
+It&#39;s likely similarly strange to most readers to wonder why you have to &quot;quote twice&quot; when you use the word QUOTE, but it&#39;s the generic substitute for /ONLY:
+
+    if not find data quote &#39;d [append data quote &#39;d]
+
+And then there&#39;s JUST, which reads well but hides a lot of mechanics (it&#39;s QUOTE THE):
+
+    if not find data just d [append data just d]
+
+I don&#39;t think this is any less learnable than /ONLY when you add it all up, and it has a mechanical rationale behind it.  But there&#39;s something else...
+
+## Bigger Problem: What About OBJECT!
+
+If you take operations like FIND and SELECT they&#39;ve historically been willing to operate on BLOCK! or OBJECT!.  Should the rules about not taking evaluative types apply to them, too?  :-/
+
+    &gt;&gt; obj: make object! [a: 10 b: 20]
+
+    &gt;&gt; select obj &#39;a
+    ** Error: SELECT can&#39;t take evaluative types, use QUOTED!
+
+    &gt;&gt; select obj &#39;&#39;a
+    == 10
+
+    &gt;&gt; select obj [a]
+    == 10   ; ???
+
+So that&#39;s not good.
+
+**But again, on the whole: there are some things going right here with the QUOTED! behavior...and some things going wrong here with the WORD! behavior...so it&#39;s important to stop and think.**
+
+## One Weird Thought: What About `@WORD` ?
+
+Today, the &quot;evaluator inert doesn&#39;t need a quote&quot; rule means that the `@xxx` types--which are inert--append as-is:
+
+    &gt;&gt; append [a b c] @d
+    == [a b c @d]  ; today&#39;s behavior, whereas appending a `d` WORD! errors
+
+But since there are some types like BLOCK! or BLANK! or QUOTED! that are called out as &quot;special&quot; in terms of behavior w.r.t. the likes of APPEND, what if the inert @ types were treated like QUOTED!?
+
+    &gt;&gt; append [a b c] @d
+    == [a b c d]  ; since appending [d] and &#39;d are special, why not @d too?
+
+This doesn&#39;t really help you if you&#39;re trying to append SET-WORD!s or other parts to the block, because there&#39;s no **`@foo:`** type (for instance).  But in the specific case of words, it helps...and that&#39;s the case where we have the issue with object keys.
+
+How far would this go?  Would `@word` become the universal sign of the key?  Might it be what&#39;s offered as the key in FOR-EACH loops?
+
+    &gt;&gt; obj: make object! [a: 10 b: 20]
+    &gt;&gt; for-each [key val] obj [print [mold key mold val]]
+    @a 10
+    @b 20
+
+I&#39;ll point out that there are some benefits to these non-evaluative types taking on a bigger role.  When you COMPOSE or use them in the API, plain WORD! can be very inconvenient to handle...you&#39;re always having to throw in quotes to suppress their evaluation.  Remember that when you write **&#39;a** you&#39;re getting a pass on that being inert for just that one evaluation...whoever receives it still has to treat it as a hot potato.
+
+**I&#39;m just throwing out an idea, here.**  But really, I don&#39;t know.  I think making QUOTED! types append their quoted argument as-is is a winner, and I believe it&#39;s fundamental to Rebol&#39;s DNA that BLOCK! splice by default.  Yet I think the safety net of catching evaluative types is a way of saying *&quot;oh, you&#39;re putting together something that could be CODE!&quot;* where you can catch cases where values might be splicing blocks or throwing away their quotes on accident.
+
+---
+
+**And of course we can wuss out and just say WORD! is special.**  After all, QUOTED! is an evaluative type and it&#39;s given special meaning in APPEND.  (But that is sort of the point--since it has special meaning, we try to protect usages of the other evaluative types from being misinterpreted.)
+
+I don&#39;t really think there&#39;s any particular value in saying that the `@xxx` types are uniquely able to be appended as-is since they are inert, so it kind of feels like a nice option to let them mean append themselves minus the `@`.  However that implies that ^[...] and @[...] would act the same for APPEND... via different mechanisms.
+
+    &gt;&gt; append [a b c] @d
+    == [a b c d]
+
+    &gt;&gt; append [a b c] @d/e
+    == [a b c d/e]
+
+    &gt;&gt; append [a b c] @d.e
+    == [a b c d.e]
+
+    &gt;&gt; append [a b c] @(d e)
+    == [a b c (d e)]
+
+    &gt;&gt; append [a b c] @[d e]
+    == [a b c [d e]]  ; due to internal logic of APPEND with @
+
+    &gt;&gt; append [a b c] ^[d e]  ; -&gt; append [a b c] the &#39;[d e]
+    == [a b c [d e]]  ; due to internal logic of APPEND with QUOTED!
+
+## Or we can fully wuss out and say there&#39;s no protection
+
+    &gt;&gt; append [a b c] &#39;d
+    == [a b c d]
+
+    &gt;&gt; append [a b c] &#39;&#39;d
+    == [a b c d]
+
+    &gt;&gt; append [a b c] [d]
+    == [a b c d]
+
+    &gt;&gt; append [a b c] &#39;[d]
+    == [a b c d]
+
+    &gt;&gt; append [a b c] &#39;&#39;[d]
+    == [a b c [d]]
+
+    &gt;&gt; append [a b c] quote [d]
+    == [a b c [d]]
+
+    &gt;&gt; append [a b c] ^[d]
+    == [a b c [d]]
+
+But I think this should be considered carefully.</description>
+    
+    <lastBuildDate>Fri, 13 Aug 2021 17:46:50 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>Query (at this time) is at most a few hundred lines of unsophisticated script. I think you should make whatever changes are necessary for the language and I will incorporate them as needed. I welcome it. I already need to rework every parse expression for uparse.</p>
+          <p><a href="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653/4</link>
+        <pubDate>Fri, 13 Aug 2021 17:46:50 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1653-4</guid>
+        <source url="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653.rss">The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</source>
+      </item>
+      <item>
+        <title>The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I'm actually satisfied with the idea that evaluative types must be quoted to do APPEND/INSERT/CHANGE mechanics.  But it seems the FIND still throws me, on account of it being too related to SELECT at this time, and needing to take plain WORD! for OBJECT!.</p>
+<p>Because I want to go ahead and push forward on <a class="mention" href="/u/blackattr">@BlackATTR</a>'s QUERY without trashing all of his FIND calls, I've put back the ability to FIND a WORD!--specifically--in BLOCK!s for now.  Other evaluative types require to be put in blocks or quoted, etc.</p>
+<p>This is all going to take some philosophical reckoning on what the language is and what it's actually trying to achieve... <strong>and I think UPARSE is becoming a really good lens for asking that question.</strong>  It's a pretty amazing piece of usermode code; I think it's probably the most epic language showcase there is so far in the Redbol universe.</p>
+<p>Hopefully we can make QUERY be another one.  <img src="https://forum.rebol.info/images/emoji/twitter/slight_smile.png?v=9" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+          <p><a href="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653/3</link>
+        <pubDate>Fri, 13 Aug 2021 04:08:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1653-3</guid>
+        <source url="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653.rss">The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</source>
+      </item>
+      <item>
+        <title>The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</title>
+        <dc:creator><![CDATA[IngoHohmann]]></dc:creator>
+        <description><![CDATA[
+            <p>Looking at it in isolation, the splicing of paths and tuples into blocks looks wrong.</p>
+<p>But if it is the right thing to do, then the @-forns look best for appending as-is.</p>
+          <p><a href="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653/2</link>
+        <pubDate>Wed, 11 Aug 2021 21:34:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1653-2</guid>
+        <source url="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653.rss">The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</source>
+      </item>
+      <item>
+        <title>The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Though I understand anyone being skeptical given the amount of debate: <em>I do honestly think I am zeroing in on "an answer" regarding the core ergonomics for things like APPEND</em>.  But it doesn't feel quite there yet.</p>
+<p>The biggest point of discomfort relates to what I mentioned about WORD!s, which is proving to be a bigger deal in practice than I first realized:</p>
+<aside class="quote no-group" data-username="hostilefork" data-post="8" data-topic="1332">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"><a href="https://forum.rebol.info/t/every-thought-on-array-splicing-has-been-had/1332/8">Every Thought On Array Splicing Has Been Had <img width="20" height="20" src="https://forum.rebol.info/images/emoji/twitter/exploding_head.png?v=9" title="exploding_head" alt="exploding_head" class="emoji"></a>
+</div>
+<blockquote>
+<p><strong>The most obvious side-effect is that you won't be able to append WORD!s/PATH!s/etc. without making them quoted.</strong></p>
+<pre><code>&gt;&gt; append [a b c] 'd
+** Error: evaluative value must be QUOTED! to append
+</code></pre>
+</blockquote>
+</aside>
+<p><em>(Remember of course that APPEND is not receiving <strong>'d</strong> in this case.  The <strong>'</strong> suppresses the evaluation and "vaporizes" so that APPEND winds up receiving the <strong>d</strong>.  To get APPEND to receive a QUOTED! value you'd have to have said <strong>''d</strong> or <strong>the 'd</strong> or <strong>just d</strong> or some other such construction.)</em></p>
+<p>Of course, we can just say "screw it" and allow it...and be no worse off than history (better, really).  But that's small comfort, as I think history was bad!</p>
+<p>Quick refresher:</p>
+<pre><code>rebol2&gt;&gt; value: first [d/e]
+== d/e
+rebol2&gt;&gt; append [a b c] value
+== [a b c d e]
+     ; ^-- not [a b c d/e]
+
+rebol2&gt;&gt; value: first [(d e)]
+== (d e)
+rebol2&gt;&gt; append [a b c] value
+== [a b c d e]
+     ; ^-- not [a b c (d e)]
+
+rebol2&gt;&gt; value: first ['d]
+== 'd
+rebol2&gt;&gt; append [a b c] value
+== [a b c d]
+    ; ^-- not for the Ren-C reason... LIT-WORD! decay on WORD!-fetch
+rebol2&gt;&gt; append [a b c] first ['d]
+== [a b c 'd]
+    ; ^-- see what I mean?  yes this is all kinds of ridiculous
+</code></pre>
+<p><em>(Note: Red at least doesn't do that last one, there is no LIT-WORD! decay on word fetches.)</em></p>
+<p>Point being: <strong>I want people to keep in mind just how crappy history was, in understanding why the search for better is worthwhile...especially if it kills off /ONLY.</strong></p>
+<h2>Back To the WORD! Pain Point</h2>
+<p>Among the places I'm finding it painful to not be able to just pass a WORD!, let's look at FIND.  You'll see code like:</p>
+<pre><code>if not find data 'd [append data 'd]
+</code></pre>
+<p>The readability suffers a bit if you change this to BLOCK!.  In this example in particular, it gets harder to see the branch:</p>
+<pre><code>if not find data [d] [append data [d]]
+</code></pre>
+<p>If you use double quotes it seems confusing:</p>
+<pre><code>if not find data ''d [append data ''d]
+</code></pre>
+<p>It's likely similarly strange to most readers to wonder why you have to "quote twice" when you use the word QUOTE, but it's the generic substitute for /ONLY:</p>
+<pre><code>if not find data quote 'd [append data quote 'd]
+</code></pre>
+<p>And then there's JUST, which reads well but hides a lot of mechanics (it's QUOTE THE):</p>
+<pre><code>if not find data just d [append data just d]
+</code></pre>
+<p>I don't think this is any less learnable than /ONLY when you add it all up, and it has a mechanical rationale behind it.  But there's something else...</p>
+<h2>Bigger Problem: What About OBJECT!</h2>
+<p>If you take operations like FIND and SELECT they've historically been willing to operate on BLOCK! or OBJECT!.  Should the rules about not taking evaluative types apply to them, too?  :-/</p>
+<pre><code>&gt;&gt; obj: make object! [a: 10 b: 20]
+
+&gt;&gt; select obj 'a
+** Error: SELECT can't take evaluative types, use QUOTED!
+
+&gt;&gt; select obj ''a
+== 10
+
+&gt;&gt; select obj [a]
+== 10   ; ???
+</code></pre>
+<p>So that's not good.</p>
+<p><strong>But again, on the whole: there are some things going right here with the QUOTED! behavior...and some things going wrong here with the WORD! behavior...so it's important to stop and think.</strong></p>
+<h2>One Weird Thought: What About <code>@WORD</code> ?</h2>
+<p>Today, the "evaluator inert doesn't need a quote" rule means that the <code>@xxx</code> types--which are inert--append as-is:</p>
+<pre><code>&gt;&gt; append [a b c] @d
+== [a b c @d]  ; today's behavior, whereas appending a `d` WORD! errors
+</code></pre>
+<p>But since there are some types like BLOCK! or BLANK! or QUOTED! that are called out as "special" in terms of behavior w.r.t. the likes of APPEND, what if the inert @ types were treated like QUOTED!?</p>
+<pre><code>&gt;&gt; append [a b c] @d
+== [a b c d]  ; since appending [d] and 'd are special, why not @d too?
+</code></pre>
+<p>This doesn't really help you if you're trying to append SET-WORD!s or other parts to the block, because there's no <strong><code>@foo:</code></strong> type (for instance).  But in the specific case of words, it helps...and that's the case where we have the issue with object keys.</p>
+<p>How far would this go?  Would <code>@word</code> become the universal sign of the key?  Might it be what's offered as the key in FOR-EACH loops?</p>
+<pre><code>&gt;&gt; obj: make object! [a: 10 b: 20]
+&gt;&gt; for-each [key val] obj [print [mold key mold val]]
+@a 10
+@b 20
+</code></pre>
+<p>I'll point out that there are some benefits to these non-evaluative types taking on a bigger role.  When you COMPOSE or use them in the API, plain WORD! can be very inconvenient to handle...you're always having to throw in quotes to suppress their evaluation.  Remember that when you write <strong>'a</strong> you're getting a pass on that being inert for just that one evaluation...whoever receives it still has to treat it as a hot potato.</p>
+<p><strong>I'm just throwing out an idea, here.</strong>  But really, I don't know.  I think making QUOTED! types append their quoted argument as-is is a winner, and I believe it's fundamental to Rebol's DNA that BLOCK! splice by default.  Yet I think the safety net of catching evaluative types is a way of saying <em>"oh, you're putting together something that could be CODE!"</em> where you can catch cases where values might be splicing blocks or throwing away their quotes on accident.</p>
+<hr>
+<p><strong>And of course we can wuss out and just say WORD! is special.</strong>  After all, QUOTED! is an evaluative type and it's given special meaning in APPEND.  (But that is sort of the point--since it has special meaning, we try to protect usages of the other evaluative types from being misinterpreted.)</p>
+<p>I don't really think there's any particular value in saying that the <code>@xxx</code> types are uniquely able to be appended as-is since they are inert, so it kind of feels like a nice option to let them mean append themselves minus the <code>@</code>.  However that implies that ^[...] and @[...] would act the same for APPEND... via different mechanisms.</p>
+<pre><code>&gt;&gt; append [a b c] @d
+== [a b c d]
+
+&gt;&gt; append [a b c] @d/e
+== [a b c d/e]
+
+&gt;&gt; append [a b c] @d.e
+== [a b c d.e]
+
+&gt;&gt; append [a b c] @(d e)
+== [a b c (d e)]
+
+&gt;&gt; append [a b c] @[d e]
+== [a b c [d e]]  ; due to internal logic of APPEND with @
+
+&gt;&gt; append [a b c] ^[d e]  ; -&gt; append [a b c] the '[d e]
+== [a b c [d e]]  ; due to internal logic of APPEND with QUOTED!
+</code></pre>
+<h2>Or we can fully wuss out and say there's no protection</h2>
+<pre><code>&gt;&gt; append [a b c] 'd
+== [a b c d]
+
+&gt;&gt; append [a b c] ''d
+== [a b c d]
+
+&gt;&gt; append [a b c] [d]
+== [a b c d]
+
+&gt;&gt; append [a b c] '[d]
+== [a b c d]
+
+&gt;&gt; append [a b c] ''[d]
+== [a b c [d]]
+
+&gt;&gt; append [a b c] quote [d]
+== [a b c [d]]
+
+&gt;&gt; append [a b c] ^[d]
+== [a b c [d]]
+</code></pre>
+<p>But I think this should be considered carefully.</p>
+          <p><a href="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653/1</link>
+        <pubDate>Tue, 10 Aug 2021 23:55:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1653-1</guid>
+        <source url="https://forum.rebol.info/t/the-thorn-of-word-usage-with-append-select-find-etc/1653.rss">The Thorn of WORD! Usage with APPEND, SELECT, FIND, etc.</source>
+      </item>
+  </channel>
+</rss>

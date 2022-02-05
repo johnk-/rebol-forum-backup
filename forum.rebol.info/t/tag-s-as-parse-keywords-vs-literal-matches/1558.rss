@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>TAG!s as PARSE keywords vs. Literal Matches</title>
+    <link>https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558</link>
+    <description>Previously I brought up the idea of &quot;TAG! combinators&quot;.  Here&#39;s what I said, moved from another thread where it was kind of a tangent:
+
+&gt; [I saw Haskell...] uses EOF instead of END.  END is literate, but one often wants to call variables things like &quot;begin&quot; or &quot;end&quot;, or &quot;start&quot; and &quot;end&quot;.
+&gt;
+&gt; This makes me wonder if perhaps we should be a bit more creative in the use of datatypes.  If you want to match a WORD! in a dialect, you have to use a tick mark.  What if you had to use a tick mark to match TAG!s, and then an ordinary TAG! could have meaning as a rule...such as **`&lt;end&gt;`**?
+&gt;
+&gt;     parse &quot;aaa&quot; [data: copy to &lt;end&gt;]
+&gt;
+&gt;     parse &quot;&lt;div&gt;stuff&lt;/div&gt;&quot; [x: between &#39;&lt;div&gt; &#39;&lt;/div&gt;]
+&gt;
+&gt; Anyway, that could open up a whole new category of combinators... tag combinators.  Maybe **`&lt;here&gt;`** is another example, or perhaps **`&lt;input&gt;`** if you want to pass the original input position through to a function.
+&gt;
+&gt; A unifying concept here could be that you&#39;d use it for properties that you don&#39;t want to have collide with the names of variables.  Consider for example if PARSE tracks the line number, you might want to say something like **`line: &lt;line&gt;`** in the middle of a rule.
+&gt;
+&gt; If you want to match tags by their stringness, it&#39;s not like it&#39;s all that hard to just say **`&quot;&lt;div&gt;&quot;`** in the first place.  But quoting is even briefer.  Remember that being inert in typical evaluation is not enough in PARSE to mean it&#39;s not a rule... INTEGER!, BLOCK!, BLANK! (previously NONE!) and now LOGIC! all have to be quoted to mean their actual literal thing.  And quotes are needed on things like WORD!, GROUP!, GET-WORD!, SET-WORD!...and much more. 
+&gt;
+&gt; So is it worth it to get another dialect part, by making you have to quote your tags if you want them to match literally?  I kind of feel like it would be.  Of course, the concept with UPARSE is that people could disagree and make entirely different answers...
+&gt;
+&gt; *(Note: a downside here is that since TAG!s are strings and not symbols, the comparison costs could be (slightly) higher.  However, I&#39;ve been thinking that to speed up string comparisons they might cache a symbol as part of the comparison process...and clear the symbol cache on each mutation.  Then comparisons of strings to symbols could become very fast...so long as the string isn&#39;t changing.  Wouldn&#39;t help if it were looked up in a map, but the optimized native version could do a fast check before hitting the map.)*
+
+## I&#39;ve decided this is too good an idea to pass on.
+
+I particularly like that it makes a new namespace for nouns.  It&#39;s mean to take away words like &quot;end&quot; from &quot;start/end&quot; or &quot;begin/end&quot; that people might want to use for variables.
+
+**So TAG! will not match string content in PARSE/UPARSE**.  If you want to literally match a tag in a block, use QUOTED! (as you would for other types):
+
+    &gt;&gt; uparse [&lt;a&gt; &lt;a&gt; &lt;a&gt;] [some &#39;&lt;a&gt;]
+    == &lt;a&gt;  ; remember, rules like SOME don&#39;t synthesize anything
+
+    &gt;&gt; uparse [&lt;a&gt; &lt;a&gt; &lt;a&gt;] [copy some &#39;&lt;a&gt;]
+    == [&lt;a&gt; &lt;a&gt; &lt;a&gt;]
+ 
+There&#39;s no particular reason not to have it work in strings too for finding the molded form.  But in a string, you can use it in quotes.
+
+    &gt;&gt; uparse &quot;&lt;a&gt;stuff&lt;/a&gt;&quot; [between &quot;&lt;a&gt;&quot; &quot;&lt;/a&gt;&quot;]
+    == &quot;stuff&quot;
+
+*Isn&#39;t that block-result-is-the-result-of-UPARSE convention awesome?*
+
+## Remember that Combinators are Customizable
+
+If you don&#39;t like this idea, you can change it...but I think the TAG!-as-parsing-NOUN concept is something we&#39;ll get mileage from.
+
+I mention **`&lt;line&gt;`** and **`&lt;file&gt;`**.  It&#39;s nice to have these kinds of things not competing.
+
+And I think it likely is going to look better for the likes of **`&lt;end&gt;`**.  I&#39;m sympathetic that **`to &lt;end&gt;`** is a bit more typing than **to end** but it seems pretty good.
+
+## Maybe a good name for SKIP (matching any token) is **`&lt;any&gt;`** ?
+
+    &gt;&gt; uparse? [xxx &quot;what about this?&quot; yyy] [&#39;xxx, item: &lt;any&gt;, &#39;yyy]
+    == #[true]
+
+    &gt;&gt; item
+    == &quot;what about this?&quot;
+
+It&#39;s a little bit more typing, but I&#39;ve been pretty displeased with the weakness of symbols like **`?`** and **`*`**.
+
+And now that the ANY =&gt; WHILE transition is done we can kind of go back to reclaiming ANY for its natural sense.
+
+**Power users will be able to override all of this.**
+
+    uparse: specialize :uparse [
+        ;
+        ; Ugly way of extending a MAP!, there should be nicer ways.
+        ;
+        combinators: append copy default-combinators reduce [
+            &#39;end :default-combinators/&lt;end&gt;
+            &#39;* :default-combinators/&lt;any&gt;
+        ]
+    ]
+
+    &gt;&gt; uparse [&#39;x &quot;y&quot; #z . . .] [word!, demo: *, issue!, to end]
+    &gt;&gt; demo
+    == &quot;y&quot;
+
+But let&#39;s try starting to use it.  [**Here are the changes to the tests to get an idea of how this looks.**](https://github.com/metaeducation/ren-c/commit/cb33e2b4d66d22a71c3d735580717801087d849e#diff-f5e0f7cccc2957408dafb743a9ce12ae24df6fd55494d0391e692090514f93acL8).  I&#39;ve left the old END and HERE and SKIP in for now, but I think we should move in this direction.
+
+I also think getting `&lt;line&gt;` and `&lt;column&gt;` are pretty important, so that should get worked on...</description>
+    
+    <lastBuildDate>Mon, 29 Nov 2021 07:17:59 +0000</lastBuildDate>
+    <category>Parsing</category>
+    <atom:link href="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>TAG!s as PARSE keywords vs. Literal Matches</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1558">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>I particularly like that it makes a new namespace for nouns. It's mean to take away words like "end" from "start/end" or "begin/end" that people might want to use for variables.</p>
+</blockquote>
+</aside>
+<p>In <a class="mention" href="/u/rgchris">@rgchris</a>'s JSON parser, he actually uses HERE as the name of a marked location.</p>
+<p>With TAG! combinators, you can do that.</p>
+<pre><code>here: &lt;here&gt; (...code that uses here...)
+</code></pre>
+<p>But I actually hadn't retrofitted R3-Alpha parse to support the tags, just using the keyword HERE.  This reaffirms my belief that tag combinators are the right way to handle these nounish things.</p>
+<p>I am doing the retrofit now...which will also turn END to <code>&lt;end&gt;</code>...but I'm defining a PARSE2 mode of the old native parse to make it easier to do bootstrapping.  There will be a UPARSE2 as well, so people can tinker with the combinators to their liking (if that's the old way, then fine).</p>
+          <p><a href="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558/5</link>
+        <pubDate>Mon, 29 Nov 2021 05:25:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1558-5</guid>
+        <source url="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558.rss">TAG!s as PARSE keywords vs. Literal Matches</source>
+      </item>
+      <item>
+        <title>TAG!s as PARSE keywords vs. Literal Matches</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <h2>This Has Turned Out To Be Gold</h2>
+<p>Across the board it is good.  <code>&lt;any&gt;</code> has replaced SKIP, and <strong><code>item: &lt;any&gt;</code></strong> makes much more sense than <strong><code>item: skip</code></strong>.  <em>(If you're skipping it, why would you be assigning it?)</em></p>
+<blockquote>
+<p>Note: There were some detours with other considerations.  <code>&lt;?&gt;</code> seemed to work better than a lot of things:</p>
+<pre><code>&gt;&gt; uparse [1 2] [x: &lt;?&gt;, y: &lt;?&gt;]
+&gt;&gt; x 
+== 1
+</code></pre>
+<p>RegEx-style dot was also considered.</p>
+<pre><code>&gt;&gt; uparse [1 2] [x: &lt;.&gt;, y: &lt;.&gt;]
+&gt;&gt; x 
+== 1
+</code></pre>
+<p>But <code>&lt;any&gt;</code> won out for its literacy.  You can still override it, and make your own combinator aliases... like Topaz uses <strong><code>*</code></strong> for it.</p>
+</blockquote>
+<h2>Quoting TAG!s To Match Literally Is No Hassle</h2>
+<p>There would still be the option of matching TAG!s with quoted tags, as with other quoted types.</p>
+<pre><code>uparse [&lt;a&gt; &lt;a&gt;] [some '&lt;a&gt;]
+</code></pre>
+<p>You already have to do this with WORD!s, INTEGER!s, etc.  So the minor inconvenience of quoting another type is nothing compared to the value of opening up a new space for parsing keywords.</p>
+<p>I think strings being the exception is good, it provides coverage for pretty much other types...when all you are doing with it is stringification anyway:</p>
+<pre><code>uparse "&lt;a&gt;&lt;/a&gt;" [{&lt;a&gt;} {&lt;/a&gt;}]
+</code></pre>
+<h2>The Lazy Crowd Will Still Have Options...</h2>
+<aside class="quote no-group" data-username="BlackATTR" data-post="2" data-topic="1558">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p>I confess I’m lazy and don’t like that I need to click SHiFT + for the angle brackets.</p>
+</blockquote>
+</aside>
+<p>I have removed the non-TAG! variations from the default.</p>
+<p>But it is currently looking like all you need to say is:</p>
+<pre><code>end: &lt;end&gt;
+</code></pre>
+<p>And it will work in your file.  Right now any plain WORD! that isn't a combinator is looked up as a rule, and if that rule takes no arguments it will work.</p>
+<p>That rules out INTEGER! (since the INTEGER! combinator takes a rule as an argument to repeat).  So you have to say:</p>
+<pre><code>&gt;&gt; num: 3
+
+&gt;&gt; uparse "aaa" [repeat (num) "a"]
+== "a"
+</code></pre>
+<p>...as opposed to just <strong>[num "a"]</strong>.  But for the moment, only rules which take arguments are forbidden to be looked up via WORD!.</p>
+<p>In any case: I think that opening up TAG! as a whole category of subdispatched combinator is a winning idea, which will serve in the long run.</p>
+          <p><a href="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558/3</link>
+        <pubDate>Sat, 07 Aug 2021 12:17:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1558-3</guid>
+        <source url="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558.rss">TAG!s as PARSE keywords vs. Literal Matches</source>
+      </item>
+      <item>
+        <title>TAG!s as PARSE keywords vs. Literal Matches</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>TAG!s are a good visual cue, but I confess I’m lazy and don’t like that I need to click SHiFT + for the angle brackets.</p>
+          <p><a href="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558/2</link>
+        <pubDate>Sun, 14 Mar 2021 13:14:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1558-2</guid>
+        <source url="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558.rss">TAG!s as PARSE keywords vs. Literal Matches</source>
+      </item>
+      <item>
+        <title>TAG!s as PARSE keywords vs. Literal Matches</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Previously I brought up the idea of "TAG! combinators".  Here's what I said, moved from another thread where it was kind of a tangent:</p>
+<blockquote>
+<p>[I saw Haskell...] uses EOF instead of END.  END is literate, but one often wants to call variables things like "begin" or "end", or "start" and "end".</p>
+<p>This makes me wonder if perhaps we should be a bit more creative in the use of datatypes.  If you want to match a WORD! in a dialect, you have to use a tick mark.  What if you had to use a tick mark to match TAG!s, and then an ordinary TAG! could have meaning as a rule...such as <strong><code>&lt;end&gt;</code></strong>?</p>
+<pre><code>parse "aaa" [data: copy to &lt;end&gt;]
+
+parse "&lt;div&gt;stuff&lt;/div&gt;" [x: between '&lt;div&gt; '&lt;/div&gt;]
+</code></pre>
+<p>Anyway, that could open up a whole new category of combinators... tag combinators.  Maybe <strong><code>&lt;here&gt;</code></strong> is another example, or perhaps <strong><code>&lt;input&gt;</code></strong> if you want to pass the original input position through to a function.</p>
+<p>A unifying concept here could be that you'd use it for properties that you don't want to have collide with the names of variables.  Consider for example if PARSE tracks the line number, you might want to say something like <strong><code>line: &lt;line&gt;</code></strong> in the middle of a rule.</p>
+<p>If you want to match tags by their stringness, it's not like it's all that hard to just say <strong><code>"&lt;div&gt;"</code></strong> in the first place.  But quoting is even briefer.  Remember that being inert in typical evaluation is not enough in PARSE to mean it's not a rule... INTEGER!, BLOCK!, BLANK! (previously NONE!) and now LOGIC! all have to be quoted to mean their actual literal thing.  And quotes are needed on things like WORD!, GROUP!, GET-WORD!, SET-WORD!...and much more.</p>
+<p>So is it worth it to get another dialect part, by making you have to quote your tags if you want them to match literally?  I kind of feel like it would be.  Of course, the concept with UPARSE is that people could disagree and make entirely different answers...</p>
+<p><em>(Note: a downside here is that since TAG!s are strings and not symbols, the comparison costs could be (slightly) higher.  However, I've been thinking that to speed up string comparisons they might cache a symbol as part of the comparison process...and clear the symbol cache on each mutation.  Then comparisons of strings to symbols could become very fast...so long as the string isn't changing.  Wouldn't help if it were looked up in a map, but the optimized native version could do a fast check before hitting the map.)</em></p>
+</blockquote>
+<h2>I've decided this is too good an idea to pass on.</h2>
+<p>I particularly like that it makes a new namespace for nouns.  It's mean to take away words like "end" from "start/end" or "begin/end" that people might want to use for variables.</p>
+<p><strong>So TAG! will not match string content in PARSE/UPARSE</strong>.  If you want to literally match a tag in a block, use QUOTED! (as you would for other types):</p>
+<pre><code>&gt;&gt; uparse [&lt;a&gt; &lt;a&gt; &lt;a&gt;] [some '&lt;a&gt;]
+== &lt;a&gt;  ; remember, rules like SOME don't synthesize anything
+
+&gt;&gt; uparse [&lt;a&gt; &lt;a&gt; &lt;a&gt;] [copy some '&lt;a&gt;]
+== [&lt;a&gt; &lt;a&gt; &lt;a&gt;]
+</code></pre>
+<p>There's no particular reason not to have it work in strings too for finding the molded form.  But in a string, you can use it in quotes.</p>
+<pre><code>&gt;&gt; uparse "&lt;a&gt;stuff&lt;/a&gt;" [between "&lt;a&gt;" "&lt;/a&gt;"]
+== "stuff"
+</code></pre>
+<p><em>Isn't that block-result-is-the-result-of-UPARSE convention awesome?</em></p>
+<h2>Remember that Combinators are Customizable</h2>
+<p>If you don't like this idea, you can change it...but I think the TAG!-as-parsing-NOUN concept is something we'll get mileage from.</p>
+<p>I mention <strong><code>&lt;line&gt;</code></strong> and <strong><code>&lt;file&gt;</code></strong>.  It's nice to have these kinds of things not competing.</p>
+<p>And I think it likely is going to look better for the likes of <strong><code>&lt;end&gt;</code></strong>.  I'm sympathetic that <strong><code>to &lt;end&gt;</code></strong> is a bit more typing than <strong>to end</strong> but it seems pretty good.</p>
+<h2>Maybe a good name for SKIP (matching any token) is <strong><code>&lt;any&gt;</code></strong> ?</h2>
+<pre><code>&gt;&gt; uparse? [xxx "what about this?" yyy] ['xxx, item: &lt;any&gt;, 'yyy]
+== #[true]
+
+&gt;&gt; item
+== "what about this?"
+</code></pre>
+<p>It's a little bit more typing, but I've been pretty displeased with the weakness of symbols like <strong><code>?</code></strong> and <strong><code>*</code></strong>.</p>
+<p>And now that the ANY =&gt; WHILE transition is done we can kind of go back to reclaiming ANY for its natural sense.</p>
+<p><strong>Power users will be able to override all of this.</strong></p>
+<pre><code>uparse: specialize :uparse [
+    ;
+    ; Ugly way of extending a MAP!, there should be nicer ways.
+    ;
+    combinators: append copy default-combinators reduce [
+        'end :default-combinators/&lt;end&gt;
+        '* :default-combinators/&lt;any&gt;
+    ]
+]
+
+&gt;&gt; uparse ['x "y" #z . . .] [word!, demo: *, issue!, to end]
+&gt;&gt; demo
+== "y"
+</code></pre>
+<p>But let's try starting to use it.  <a href="https://github.com/metaeducation/ren-c/commit/cb33e2b4d66d22a71c3d735580717801087d849e#diff-f5e0f7cccc2957408dafb743a9ce12ae24df6fd55494d0391e692090514f93acL8"><strong>Here are the changes to the tests to get an idea of how this looks.</strong></a>.  I've left the old END and HERE and SKIP in for now, but I think we should move in this direction.</p>
+<p>I also think getting <code>&lt;line&gt;</code> and <code>&lt;column&gt;</code> are pretty important, so that should get worked on...</p>
+          <p><a href="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558/1</link>
+        <pubDate>Sun, 14 Mar 2021 04:35:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1558-1</guid>
+        <source url="https://forum.rebol.info/t/tag-s-as-parse-keywords-vs-literal-matches/1558.rss">TAG!s as PARSE keywords vs. Literal Matches</source>
+      </item>
+  </channel>
+</rss>

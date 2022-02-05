@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Promises, Promises: Should THEN and ELSE be used for them?</title>
+    <link>https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734</link>
+    <description>Tinkering with JavaScript again after some years of being blissfully ignorant, I notice that a style of programming which used to be popular there has caught on even more.  These are &quot;Promises&quot;--which I&#39;ve seen under other names like &quot;Futures&quot;.
+
+They&#39;ve become so ingrained that they&#39;re now in the JavaScript language itself:
+
+https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise
+
+*(Note: Worth pointing out is that there&#39;s a fundamental feature missing from the built-in promises, namely [cancellation](https://stackoverflow.com/a/30235261/211160).  Kind of makes you roll your eyes when you see someone deploy a major language feature to a worldwide audience--as if it&#39;s &quot;the future of asynchronous programming and network requests&quot;--when there&#39;s no way to cancel.)*
+
+When you have a promise in your hand, you can hook it up to clauses that will run if it succeeds, and clauses to run if it fails.  You hook them together with successive function calls...where the THEN clauses are the successes, and the CATCH clauses are the failures:
+
+    some_promise.then(
+        function(val) {
+            log.insertAdjacentHTML(&#39;beforeend&#39;, val +
+                &#39;) Promise fulfilled (&lt;small&gt;Async code terminated&lt;/small&gt;)&lt;br/&gt;&#39;);
+        }).catch(
+        // Log the rejection reason
+       (reason) =&gt; {
+            console.log(&#39;Handle rejected promise (&#39;+reason+&#39;) here.&#39;);
+        });
+
+You can make loooong chains out of these.  Steps can be triggered by callbacks, or even by just an ordinary non-promise value falling through immediately from the previous step.  It may help to look at a big example *(from [this article](https://medium.com/javascript-scene/master-the-javascript-interview-what-is-a-promise-27fc71e77261), if it looks weird with `const` and `=&gt;` remember that JavaScript has changed a bit, and this stuff is in it now)*:
+
+    const wait = time =&gt; new Promise(
+       res =&gt; setTimeout(() =&gt; res(), time)
+    );
+
+    wait(200)
+       // onFulfilled() can return a new promise, `x`
+      .then(() =&gt; new Promise(res =&gt; res(&#39;foo&#39;)))
+      // the next promise will assume the state of `x`
+      .then(a =&gt; a)
+      // Above we returned the unwrapped value of `x`
+      // so `.then()` above returns a fulfilled promise
+      // with that value:
+      .then(b =&gt; console.log(b)) // &#39;foo&#39;
+      // Note that `null` is a valid promise value:
+      .then(() =&gt; null)
+      .then(c =&gt; console.log(c)) // null
+      // The following error is not reported yet:
+      .then(() =&gt; {throw new Error(&#39;foo&#39;);})
+      // Instead, the returned promise is rejected
+      // with the error as the reason:
+      .then(
+        // Nothing is logged here due to the error above:
+        d =&gt; console.log(`d: ${ d }`),
+        // Now we handle the error (rejection reason)
+        e =&gt; console.log(e)) // [Error: foo]
+      // With the previous exception handled, we can continue:
+      .then(f =&gt; console.log(`f: ${ f }`)) // f: undefined
+      // The following doesn&#39;t log. e was already handled,
+      // so this handler doesn&#39;t get called:
+      .catch(e =&gt; console.log(e))
+      .then(() =&gt; { throw new Error(&#39;bar&#39;); })
+      // When a promise is rejected, success handlers get skipped.
+      // Nothing logs here because of the &#39;bar&#39; exception:
+      .then(g =&gt; console.log(`g: ${ g }`))
+      .catch(h =&gt; console.log(h)) // [Error: bar]
+    ;
+
+This resembles the kind of chaining done with enfix, so...
+
+## ...might THEN and ELSE be promise-aware?
+
+JavaScript uses the name THEN here to mean &quot;do this thing on the right *if the left happens*&quot; or &quot;*if the left is fulfilled*&quot;.  You can get a &quot;false&quot; result back from a promise:
+
+    var falsify = new Promise(
+       resolve =&gt; {
+           resolve(false) // calling resolve will fulfill the promise
+       }
+    );
+
+    falsify.then(x =&gt; console.log(x)) // this will print out false
+
+Seeing that concept as a meaning for THEN helped provoke me into pushing things around to [change THEN back to *not* being an enfix form of IF](https://forum.rebol.info/t/taking-then-back-as-the-rightful-complement-to-else/731).  It was a no-brainer to do that, once I realized that the blocking issue of **all [...] then [...]** was no longer blocking.
+
+But here we have to ask a question about what the rules are for the system.  If you see something like:
+
+    all [...] then [print &quot;done with all that stuff&quot;]
+    print &quot;moving on...&quot;
+
+Would you want the system to be based on a worldview where that could output:
+
+    &quot;moving on...&quot;
+    &quot;done with all that stuff&quot;
+
+If you have a PROMISE! datatype in the picture, then programs which use them will become asynchronous even if they don&#39;t appear to be written in an asynchronous style.  The more automatic it is, the greater the risks become.
+
+JavaScript&#39;s promises involve very little system support.  Not only were most promise library designs done before the language supported them at all, one of the most popular implementations [doesn&#39;t even use the new JS built-in promises](http://bluebirdjs.com/docs/getting-started.html)...but cooks up its own using functions and objects.
+
+So this is different from what Gabriele was suggesting when he brought up promises [as a likely path forward for PORT!s](https://forum.rebol.info/t/places-to-look-for-port-prior-art/621/3) in his Topaz design notes.  He&#39;s suggesting that a PROMISE! would be an active datatype, where if you merely said **data: read url** and got a promise back, then **length of data**, it would automatically wait until the length was known.  You wouldn&#39;t have to explicitly WAIT on it (or have a THEN, as suggested above).
+
+It&#39;s trying to suggest a synchronous client of READ could go on their merry way using it just as if they got bytes back, or tactically drill in with promise-aware constructs on an as-needed basis.  As nice as that sounds it&#39;s *not realistic*.  What you&#39;d need to accomplish such a goal more or less asks the runtime support for lazy evaluation, and the restrictions that brings in would push back to where the user&#39;s style of programming would have to morph into something much more like Haskell than like Rebol/JavaScript/etc.
+
+JavaScript&#39;s answer is to quarantine down the promise-aware constructs of the language to more or less *zero*.  Their if() treats them as truthy, not &quot;wait on them asynchronously and see if the result was truthy, or falsey if an error&quot;.  Things like .then() are methods on the promise itself, not generic language operators.
+
+As I&#39;ve pointed out that people aren&#39;t even necessarily with the built-in promises of JavaScript--enough to continue using libraries that cobble the protocols together out of objects and functions--it may suggest that zero is not a good sweet spot for language support.  To really be compelling enough for pervasive use there may need to be some special sauce you don&#39;t get elsewhere (including, I&#39;d have to say, cancellation).
+
+I do wonder if conditionals could be a place where it might be good to synchronize a promise.  Or if ANY and ALL could imply WAITs.  But certainly it seems like it would be appealing if THEN and ELSE could be used...so I guess that&#39;s what I&#39;ll put out there for a starting thought.</description>
+    
+    <lastBuildDate>Thu, 12 Jul 2018 14:16:59 +0000</lastBuildDate>
+    <category>Foreign Inspiration</category>
+    <atom:link href="https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Promises, Promises: Should THEN and ELSE be used for them?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="2" data-topic="734">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/asampal/40/3_2.png" class="avatar"> asampal:</div>
+<blockquote>
+<p>Would something similar make sense for Ren-C?</p>
+</blockquote>
+</aside>
+<p>Okay, well that revises the number of native JavaScript keywords for promises to, like, two.</p>
+<p><a href="https://javascript.info/async-await" rel="nofollow noopener"><code>https://javascript.info/async-await</code></a></p>
+<p>So yes, in Rebol it would make sense to assign that to WAIT.  I was talking about that kind of thing, but also whether there are <em>implicit</em> waits in the system, or if it's always explicit.</p>
+<p>We have sort of idealized being able to write things like:</p>
+<pre><code>if parse read http://example.com [...] [
+    ...
+]
+</code></pre>
+<p>But complexity rears its head and you start saying "well, how does it know if you want the UTF-8 bytes or if you want it to decode the URL as an IMAGE!" or whatever.  Is READ always bytes, and LOAD is higher level?  READ/STRING is certainly very limited and weird...refinements don't seem like an answer.</p>
+<p>So maybe READ is byte-oriented, so that's LOAD which is higher level and does more sniffing to check the content-type.  But now, we ask if the asynchronous situation is such that synchronous clients have to say:</p>
+<pre><code>if parse wait load http://example.com [...] [
+    ...
+]
+</code></pre>
+<p>Questions we start pushing around in our head is whether or not a synchronous client should have to put an extra word in there or not.  WAIT is a short word and keeps things explicit--it's not as far-out-there as Gabriele's imagining.  In this scenario, if you forget the WAIT then PARSE just says it doesn't know how to parse promises (whatever their implementation is).</p>
+<p>But the principal question I'm throwing in here for starters is if it's comfortable having THEN and ELSE serve a dualistic purpose of these promise handlings, as well as their current function.  I imagine it is.</p>
+<hr>
+<p>One thing that has to be confronted is that Rebol is not very efficient with:</p>
+<pre><code> some-promise then function [x] [...lots of code...]
+ some-promise then x =&gt; [...lots of code...]
+</code></pre>
+<p>Each time at source-level you make a function like that, it goes through the motions of creating a new ACTION! object, relativizing the body, etc.  Making matters even worse, it will do this whole process whether the function is used or not.</p>
+<p>While this looks terribly inefficient and lame for a static scenario, what makes it interesting is all the flexibility it permits with dynamically creating that function.  Not having that dynamism sucks.  You can avoid it with constructs you might offer people to use at an outer level in a prepass:</p>
+<pre><code>composeIII [
+    ...
+    ...
+    some-promise then (((x =&gt; [...lots of code...])))
+    ...
+    ...
+]
+</code></pre>
+<p>But if you need to capture things from the environment that won't work.  This does make something like an await/WAIT better from an efficiency standpoint.</p>
+<p>Anyway, there's a lot of stuff to contemplate, so if people want to work through examples and make lists and do analysis that would be helpful.</p>
+          <p><a href="https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734/3</link>
+        <pubDate>Thu, 12 Jul 2018 14:16:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-734-3</guid>
+        <source url="https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734.rss">Promises, Promises: Should THEN and ELSE be used for them?</source>
+      </item>
+      <item>
+        <title>Promises, Promises: Should THEN and ELSE be used for them?</title>
+        <dc:creator><![CDATA[asampal]]></dc:creator>
+        <description><![CDATA[
+            <p>Not sure if you looked at JavaScript's <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function" rel="nofollow noopener">async/await</a> notation as a "nicer" (or synchronous-looking) way to use promises or asynchronous operations. Would something similar make sense for Ren-C? I mentioned these in the chat, I think, but you didn't comment.</p>
+          <p><a href="https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734/2</link>
+        <pubDate>Thu, 12 Jul 2018 13:49:08 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-734-2</guid>
+        <source url="https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734.rss">Promises, Promises: Should THEN and ELSE be used for them?</source>
+      </item>
+      <item>
+        <title>Promises, Promises: Should THEN and ELSE be used for them?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Tinkering with JavaScript again after some years of being blissfully ignorant, I notice that a style of programming which used to be popular there has caught on even more.  These are "Promises"--which I've seen under other names like "Futures".</p>
+<p>They've become so ingrained that they're now in the JavaScript language itself:</p>
+<aside class="onebox allowlistedgeneric">
+  <header class="source">
+      <img src="https://developer.mozilla.org/static/img/favicon32.7f3da72dcea1.png" class="site-icon" width="32" height="32">
+      <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise" target="_blank" rel="noopener">MDN Web Docs</a>
+  </header>
+  <article class="onebox-body">
+    <img src="https://developer.mozilla.org/static/img/opengraph-logo.72382e605ce3.png" class="thumbnail onebox-avatar" width="500" height="500">
+
+<h3><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise" target="_blank" rel="noopener">Promise</a></h3>
+
+<p>The Promise object represents the eventual completion (or failure) of an asynchronous operation and its resulting value.</p>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p><em>(Note: Worth pointing out is that there's a fundamental feature missing from the built-in promises, namely <a href="https://stackoverflow.com/a/30235261/211160">cancellation</a>.  Kind of makes you roll your eyes when you see someone deploy a major language feature to a worldwide audience--as if it's "the future of asynchronous programming and network requests"--when there's no way to cancel.)</em></p>
+<p>When you have a promise in your hand, you can hook it up to clauses that will run if it succeeds, and clauses to run if it fails.  You hook them together with successive function calls...where the THEN clauses are the successes, and the CATCH clauses are the failures:</p>
+<pre><code>some_promise.then(
+    function(val) {
+        log.insertAdjacentHTML('beforeend', val +
+            ') Promise fulfilled (&lt;small&gt;Async code terminated&lt;/small&gt;)&lt;br/&gt;');
+    }).catch(
+    // Log the rejection reason
+   (reason) =&gt; {
+        console.log('Handle rejected promise ('+reason+') here.');
+    });
+</code></pre>
+<p>You can make loooong chains out of these.  Steps can be triggered by callbacks, or even by just an ordinary non-promise value falling through immediately from the previous step.  It may help to look at a big example <em>(from <a href="https://medium.com/javascript-scene/master-the-javascript-interview-what-is-a-promise-27fc71e77261">this article</a>, if it looks weird with <code>const</code> and <code>=&gt;</code> remember that JavaScript has changed a bit, and this stuff is in it now)</em>:</p>
+<pre><code>const wait = time =&gt; new Promise(
+   res =&gt; setTimeout(() =&gt; res(), time)
+);
+
+wait(200)
+   // onFulfilled() can return a new promise, `x`
+  .then(() =&gt; new Promise(res =&gt; res('foo')))
+  // the next promise will assume the state of `x`
+  .then(a =&gt; a)
+  // Above we returned the unwrapped value of `x`
+  // so `.then()` above returns a fulfilled promise
+  // with that value:
+  .then(b =&gt; console.log(b)) // 'foo'
+  // Note that `null` is a valid promise value:
+  .then(() =&gt; null)
+  .then(c =&gt; console.log(c)) // null
+  // The following error is not reported yet:
+  .then(() =&gt; {throw new Error('foo');})
+  // Instead, the returned promise is rejected
+  // with the error as the reason:
+  .then(
+    // Nothing is logged here due to the error above:
+    d =&gt; console.log(`d: ${ d }`),
+    // Now we handle the error (rejection reason)
+    e =&gt; console.log(e)) // [Error: foo]
+  // With the previous exception handled, we can continue:
+  .then(f =&gt; console.log(`f: ${ f }`)) // f: undefined
+  // The following doesn't log. e was already handled,
+  // so this handler doesn't get called:
+  .catch(e =&gt; console.log(e))
+  .then(() =&gt; { throw new Error('bar'); })
+  // When a promise is rejected, success handlers get skipped.
+  // Nothing logs here because of the 'bar' exception:
+  .then(g =&gt; console.log(`g: ${ g }`))
+  .catch(h =&gt; console.log(h)) // [Error: bar]
+;
+</code></pre>
+<p>This resembles the kind of chaining done with enfix, so...</p>
+<h2>...might THEN and ELSE be promise-aware?</h2>
+<p>JavaScript uses the name THEN here to mean "do this thing on the right <em>if the left happens</em>" or "<em>if the left is fulfilled</em>".  You can get a "false" result back from a promise:</p>
+<pre><code>var falsify = new Promise(
+   resolve =&gt; {
+       resolve(false) // calling resolve will fulfill the promise
+   }
+);
+
+falsify.then(x =&gt; console.log(x)) // this will print out false
+</code></pre>
+<p>Seeing that concept as a meaning for THEN helped provoke me into pushing things around to <a href="https://forum.rebol.info/t/taking-then-back-as-the-rightful-complement-to-else/731">change THEN back to <em>not</em> being an enfix form of IF</a>.  It was a no-brainer to do that, once I realized that the blocking issue of <strong>all [...] then [...]</strong> was no longer blocking.</p>
+<p>But here we have to ask a question about what the rules are for the system.  If you see something like:</p>
+<pre><code>all [...] then [print "done with all that stuff"]
+print "moving on..."
+</code></pre>
+<p>Would you want the system to be based on a worldview where that could output:</p>
+<pre><code>"moving on..."
+"done with all that stuff"
+</code></pre>
+<p>If you have a PROMISE! datatype in the picture, then programs which use them will become asynchronous even if they don't appear to be written in an asynchronous style.  The more automatic it is, the greater the risks become.</p>
+<p>JavaScript's promises involve very little system support.  Not only were most promise library designs done before the language supported them at all, one of the most popular implementations <a href="http://bluebirdjs.com/docs/getting-started.html">doesn't even use the new JS built-in promises</a>...but cooks up its own using functions and objects.</p>
+<p>So this is different from what Gabriele was suggesting when he brought up promises <a href="https://forum.rebol.info/t/places-to-look-for-port-prior-art/621/3">as a likely path forward for PORT!s</a> in his Topaz design notes.  He's suggesting that a PROMISE! would be an active datatype, where if you merely said <strong>data: read url</strong> and got a promise back, then <strong>length of data</strong>, it would automatically wait until the length was known.  You wouldn't have to explicitly WAIT on it (or have a THEN, as suggested above).</p>
+<p>It's trying to suggest a synchronous client of READ could go on their merry way using it just as if they got bytes back, or tactically drill in with promise-aware constructs on an as-needed basis.  As nice as that sounds it's <em>not realistic</em>.  What you'd need to accomplish such a goal more or less asks the runtime support for lazy evaluation, and the restrictions that brings in would push back to where the user's style of programming would have to morph into something much more like Haskell than like Rebol/JavaScript/etc.</p>
+<p>JavaScript's answer is to quarantine down the promise-aware constructs of the language to more or less <em>zero</em>.  Their if() treats them as truthy, not "wait on them asynchronously and see if the result was truthy, or falsey if an error".  Things like .then() are methods on the promise itself, not generic language operators.</p>
+<p>As I've pointed out that people aren't even necessarily with the built-in promises of JavaScript--enough to continue using libraries that cobble the protocols together out of objects and functions--it may suggest that zero is not a good sweet spot for language support.  To really be compelling enough for pervasive use there may need to be some special sauce you don't get elsewhere (including, I'd have to say, cancellation).</p>
+<p>I do wonder if conditionals could be a place where it might be good to synchronize a promise.  Or if ANY and ALL could imply WAITs.  But certainly it seems like it would be appealing if THEN and ELSE could be used...so I guess that's what I'll put out there for a starting thought.</p>
+          <p><a href="https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734/1</link>
+        <pubDate>Thu, 12 Jul 2018 08:34:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-734-1</guid>
+        <source url="https://forum.rebol.info/t/promises-promises-should-then-and-else-be-used-for-them/734.rss">Promises, Promises: Should THEN and ELSE be used for them?</source>
+      </item>
+  </channel>
+</rss>

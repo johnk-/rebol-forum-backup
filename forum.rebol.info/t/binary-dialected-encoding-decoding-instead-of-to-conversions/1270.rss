@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>BINARY! Dialected Encoding/Decoding instead of TO conversions?</title>
+    <link>https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270</link>
+    <description>Rebol2 had an asymmetrical sense of conversion for BINARY! and INTEGER!:
+
+    rebol2&gt;&gt; to binary! 32
+    == #{3332}  ; #{33} is ASCII &quot;3&quot;, #{32} is ASCII &quot;2&quot;
+
+    rebol2&gt;&gt; to integer! #{3332}
+    == 13106  ; 0x3332 is the internal big endian form of 13106
+
+R3-Alpha &quot;corrected&quot; this unusual behavior by changing TO BINARY!:
+
+    r3-alpha&gt;&gt; to binary! 32
+    == #{0000000000000020}  ; 0x20 is 32 in hexadecimal
+
+    r3-alpha&gt;&gt; to integer! #{0000000000000020}
+    == 32
+
+    r3-alpha&gt;&gt; to binary! to string! 32
+    == #{3332}  ; ...if you really wanted that
+
+The conventional wisdom seemed to be that  `TO BINARY! TO STRING!`  was not a common desire, but easy enough to express if you wanted it. The harder conversion for users (which was &quot;easy&quot; for Rebol to do) involved these internal byte representations of native C integers.
+
+While this might seem more sensible on the surface, it was awkward for users to get the *actual* INTEGER! &lt;&gt; BINARY! conversions they wanted...where details of signedness, byte-size, and byte ordering vary considerably.  99% of the time users didn&#39;t want 8 bytes...but fewer.  Taking the example of just two bytes, they might want #{FF00} to mean:
+
+* #{FF00} &lt;=&gt; big-endian unsigned 65280
+* #{FF00} &lt;=&gt; big-endian signed -256
+* #{FF00} &lt;=&gt; little-endian 255 (signed/unsigned)
+
+Getting these reversible transformations from a fixed 8-byte signed big-endian conversion was hard and error prone--try it if you like!! *(then as a bonus try writing code that works in Rebol2, Red, or R3-Alpha)*.  The confusing acrobatics are inefficient, and a pain for people working at the byte-level.  These are operations I saw invented over and over [see e.g. rebzip.r](https://github.com/metaeducation/ren-c/blob/master/scripts/unzip.reb#L60), in non-generic and inefficient ways.
+
+## Are Dialects the Answer for the Parameterized &quot;TO BINARY!&quot;?
+
+This seems to call for some kind of &quot;BINIFY&quot; or &quot;BINARIZE&quot; function that is dialected or parameterized.  Or maybe this is really something ENCODE and DECODE could do with a nice shorthand way of passing in parameterized codecs?
+
+**Here&#39;s a very draft proposal for how such a thing might work with two new operators, ENBIN and DEBIN:**  They take a BLOCK! describing the encoding or decoding of a binary to integer that is desired:
+
+    &gt;&gt; enbin [be + 4] 32
+    #{00000020}  ; big-endian, 4 byte, unsigned
+
+    &gt;&gt; enbin [le + 2] 32
+    #{2000}  ; little-endian, 2 byte, unsigned
+
+    &gt;&gt; enbin [le +/- 3] -2
+    == #{FEFFFF}  ; little-endian, 3 byte, signed
+
+    &gt;&gt; enbin [le + 3] 16777214
+    == #{FEFFFF}  ; little endian 3 byte, this time unsigned
+
+    &gt;&gt; enbin [le +/- 3] 16777214
+    ** Error: 16777214 aliases a negative value with signed
+         encoding of only 3 bytes
+
+DEBIN is ENBIN&#39;s complement which uses the same dialect but goes the
+other way:
+
+    &gt;&gt; debin [le + 3] #{FEFFFF}
+    == 16777214  ; reverse of the corresponding above example
+
+The dialect choice was made with the endianness first to possibly suggest compatibility with WORD!-based codecs and ENCODE/DECODE if they took a block (encode/decode are nicer words then enbin/debin, but this is just a test for now so not conflating them). The sign is in the
+middle because unlike ENBIN, DEBIN can guess the size accurately from the length of the input...and you can thus omit the third parameter if you wish.
+
+## What about TO BINARY! of INTEGER! (...was Rebol2 *right*??)
+
+Rebol2&#39;s &quot;weird&quot; decision to encode the ASCII bytes of the Base-10 representation of the integer has two interesting properties:
+
+1. **the number of bytes scale with the size of the number input** - This is important since Ren-C&#39;s goal is to [finesse the nature of immutable and mutable INTEGER!](https://forum.rebol.info/t/planning-ahead-for-bignum-arithmetic/623) to be &quot;BigNum-capable&quot;...yet still exploit integers that fit directly in cells where possible.
+
+2. **not all bytes are meaningful in the representation** - When you&#39;re using only bytes for the digits 0 to 9 (and a possible negative symbol), that means you can delimit the arbitrary-sized number with other bytes.  Maybe those are spaces, commas, #{00} bytes, or other delimiters.
+
+Seen in this light...maybe the only &quot;weird&quot; thing about it was that it wasn&#39;t reversible, and TO INTEGER! of BINARY! was using a fixed-size interpretation of the bytes.  R3-Alpha &quot;corrected&quot; it, but maybe in light of what I&#39;m saying here, that correction went in the wrong direction.
+
+Unfortunately, as future-proofing goes...this canonizes Base-10...which feels a bit &quot;arbitrary&quot;.  And considering the availability of more compact representations for arbitrary-precision numbers, it might seem to &quot;waste space&quot;.  But we&#39;re dealing with human parameters in other ways, like case-insensitivity and other things that a ten-fingered species takes for granted.  As standards for mathematics go, this is one that will probably have a longer life for a ten-fingered species than 8-byte big-endian values.
+
+The other &quot;futureproof&quot; option would have to be some kind of length-prefixed wire format, like [the &quot;Common Binary Object Format (CBOR)&quot; BigNum Encoding](https://tools.ietf.org/html/rfc7049#section-2.4.2).  That feels less in line with Rebol principles.
+
+So strangely I&#39;m feeling like **to binary! some-integer** is really an equivalent to **as binary! to text! some-integer** (as Rebol2 did) and that **to integer! some-binary** is the same as **to integer! as text! some-binary** (which Rebol2 did not).</description>
+    
+    <lastBuildDate>Mon, 30 Mar 2020 17:49:12 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>BINARY! Dialected Encoding/Decoding instead of TO conversions?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>So I wrote a prototype implementation of ENBIN and DEBIN.</strong>  I wanted to get the mechanical functionality straightened out and tested.  They are now being used in place of the impromptu conversions in codebases like rebzip, <a href="https://github.com/metaeducation/ren-c/pull/1061/files#diff-a73375ec2a43c300ad886fe2ebf390ceL60-L93" rel="nofollow noopener">and the improvements are clear!!!</a></p>
+<p>As usual, Ren-C proved malleable enough to implement and debug the proposal nearly as fast as it could be articulated.  It was done the same day I came up with it.  <img src="https://forum.rebol.info/images/emoji/twitter/zap.png?v=9" title=":zap:" class="emoji" alt=":zap:"></p>
+<p>I haven't changed anything about TO BINARY! or TO INTEGER! in Ren-C from how it has been running for a while, yet.  They are just implemented in terms of ENBIN and DEBIN guts, so that can be gotten right.</p>
+<h1>The Backstory on Ren-C's Attempted "Twist"</h1>
+<p>Ren-C hadn't yet changed R3-Alpha's 8-byte TO BINARY! of an INTEGER! behavior.  But it did change TO INTEGER! to interpret the sign from the high bit of the first byte:</p>
+<pre><code>ren-c&gt;&gt; to integer! #{7F}
+== 127
+
+ren-c&gt;&gt; to integer! #{80}
+== -128
+</code></pre>
+<p>One way around this if you wanted to force an unsigned interpretation would be to pad with a leading #{00} byte:</p>
+<pre><code>ren-c&gt;&gt; to integer! #{0080}
+== 128
+</code></pre>
+<p>Another would be to use TO-INTEGER...which wasn't a simple synonym for TO INTEGER!, but added an /UNSIGNED refinement:</p>
+<pre><code>ren-c&gt;&gt; to-integer/unsigned #{80}
+== 128
+</code></pre>
+<p>This strange behavior was part of a <a href="https://github.com/rebol/rebol-issues/issues/2064" rel="nofollow noopener">somewhat unusual proposal I made in 2013 for future-proofing</a>.  I wanted the property of having the number of bytes for TO BINARY! of INTEGER! scale to the size of the input (to generalize to BigNums), and then you would PAD or trim the result however you liked.  To deal with the issue of values having a sign, I assumed any positive integer would get a binary conversion that ensured the first byte didn't have the high-bit set (so it would add a leading #{00} if it had to).</p>
+<p>It's <em>kind of</em> a cool concept.  If all you have is a TO BINARY! with no parameters, this allows you to effectively add those "parameters" by means of post-processing operations.  You could force an unsigned interpretation of any byte sequence with <strong>to integer! join #{00} binary</strong>.  But it's more a funny thought experiment that leads to inefficient solutions "just because you could".  Realizing it was silly I'd already made TO-INTEGER a native with an added refinement /UNSIGNED to avoid such contortions for the sake of so-called "parameterless conversions" of signed integers of arbitrary size.  :-/</p>
+<p>So in practice, it sucks.  <strong>In my defense...</strong> the concept was inspired by a common response to the question of "why doesn't Rebol have a substring() operation".  That encouraged breaking operations into parts like COPY and AT which could be composed with very little syntax in more interesting ways.  I was going with that spirit...but it's not very useful here.  <strong>Dialecting is the more fundamental principle of Rebol to be exploiting, I believe.</strong></p>
+<h2>P.S... Red (as usual) Thumbs Its Nose At Invariants</h2>
+<p>Red adds its own unique "character" to the mix.  You get a 4-byte binary if the number fits in 32-bits, or an 8-byte binary if it doesn't:</p>
+<blockquote>
+<pre><code>red&gt;&gt; to binary! 1
+== #{00000001}
+
+red&gt;&gt; to binary! 100000
+== #{000186A0}
+
+red&gt;&gt; to binary! 10000000000000
+== #{42A2309CE5400000}
+</code></pre>
+</blockquote>
+<p>I would <em>guess</em> the motivation is compatibility over the range of values that Rebol2 would have accepted.  But it winds up being one of those wacky compromises that just leads to surprises and satisfying no one.  When are you working with 64-bit encodings that never cross to the 32-bit range?</p>
+<p>As it happens..my first exposure to Rebol's woes in binary conversion came while trying to convert the Red compiler from Rebol2 to R3-Alpha.  A lot needing changing, and it was a major pain--since Red was doing a lot of byte-level generation for executable and machine code formats (that were picky).  I'm old enough to have lived through all of the 8-bit =&gt; 16-bit =&gt; 32-bit =&gt; 64-bit transitions, and this reminded me we should have <em>some</em> way of not going through so much pain the next time.</p>
+<p>But this is the kind of thinking that just makes more pain.  I think ENBIN and DEBIN are on the right track, they just need some more dialect work.</p>
+          <p><a href="https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270/2</link>
+        <pubDate>Sun, 29 Mar 2020 12:35:07 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1270-2</guid>
+        <source url="https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270.rss">BINARY! Dialected Encoding/Decoding instead of TO conversions?</source>
+      </item>
+      <item>
+        <title>BINARY! Dialected Encoding/Decoding instead of TO conversions?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Rebol2 had an asymmetrical sense of conversion for BINARY! and INTEGER!:</p>
+<pre><code>rebol2&gt;&gt; to binary! 32
+== #{3332}  ; #{33} is ASCII "3", #{32} is ASCII "2"
+
+rebol2&gt;&gt; to integer! #{3332}
+== 13106  ; 0x3332 is the internal big endian form of 13106
+</code></pre>
+<p>R3-Alpha "corrected" this unusual behavior by changing TO BINARY!:</p>
+<pre><code>r3-alpha&gt;&gt; to binary! 32
+== #{0000000000000020}  ; 0x20 is 32 in hexadecimal
+
+r3-alpha&gt;&gt; to integer! #{0000000000000020}
+== 32
+
+r3-alpha&gt;&gt; to binary! to string! 32
+== #{3332}  ; ...if you really wanted that
+</code></pre>
+<p>The conventional wisdom seemed to be that  <code>TO BINARY! TO STRING!</code>  was not a common desire, but easy enough to express if you wanted it. The harder conversion for users (which was "easy" for Rebol to do) involved these internal byte representations of native C integers.</p>
+<p>While this might seem more sensible on the surface, it was awkward for users to get the <em>actual</em> INTEGER! &lt;&gt; BINARY! conversions they wanted...where details of signedness, byte-size, and byte ordering vary considerably.  99% of the time users didn't want 8 bytes...but fewer.  Taking the example of just two bytes, they might want #{FF00} to mean:</p>
+<ul>
+<li>#{FF00} &lt;=&gt; big-endian unsigned 65280</li>
+<li>#{FF00} &lt;=&gt; big-endian signed -256</li>
+<li>#{FF00} &lt;=&gt; little-endian 255 (signed/unsigned)</li>
+</ul>
+<p>Getting these reversible transformations from a fixed 8-byte signed big-endian conversion was hard and error prone--try it if you like!! <em>(then as a bonus try writing code that works in Rebol2, Red, or R3-Alpha)</em>.  The confusing acrobatics are inefficient, and a pain for people working at the byte-level.  These are operations I saw invented over and over <a href="https://github.com/metaeducation/ren-c/blob/master/scripts/unzip.reb#L60" rel="nofollow noopener">see e.g. rebzip.r</a>, in non-generic and inefficient ways.</p>
+<h2>Are Dialects the Answer for the Parameterized "TO BINARY!"?</h2>
+<p>This seems to call for some kind of "BINIFY" or "BINARIZE" function that is dialected or parameterized.  Or maybe this is really something ENCODE and DECODE could do with a nice shorthand way of passing in parameterized codecs?</p>
+<p><strong>Here's a very draft proposal for how such a thing might work with two new operators, ENBIN and DEBIN:</strong>  They take a BLOCK! describing the encoding or decoding of a binary to integer that is desired:</p>
+<pre><code>&gt;&gt; enbin [be + 4] 32
+#{00000020}  ; big-endian, 4 byte, unsigned
+
+&gt;&gt; enbin [le + 2] 32
+#{2000}  ; little-endian, 2 byte, unsigned
+
+&gt;&gt; enbin [le +/- 3] -2
+== #{FEFFFF}  ; little-endian, 3 byte, signed
+
+&gt;&gt; enbin [le + 3] 16777214
+== #{FEFFFF}  ; little endian 3 byte, this time unsigned
+
+&gt;&gt; enbin [le +/- 3] 16777214
+** Error: 16777214 aliases a negative value with signed
+     encoding of only 3 bytes
+</code></pre>
+<p>DEBIN is ENBIN's complement which uses the same dialect but goes the<br>
+other way:</p>
+<pre><code>&gt;&gt; debin [le + 3] #{FEFFFF}
+== 16777214  ; reverse of the corresponding above example
+</code></pre>
+<p>The dialect choice was made with the endianness first to possibly suggest compatibility with WORD!-based codecs and ENCODE/DECODE if they took a block (encode/decode are nicer words then enbin/debin, but this is just a test for now so not conflating them). The sign is in the<br>
+middle because unlike ENBIN, DEBIN can guess the size accurately from the length of the input...and you can thus omit the third parameter if you wish.</p>
+<h2>What about TO BINARY! of INTEGER! (...was Rebol2 <em>right</em>??)</h2>
+<p>Rebol2's "weird" decision to encode the ASCII bytes of the Base-10 representation of the integer has two interesting properties:</p>
+<ol>
+<li>
+<p><strong>the number of bytes scale with the size of the number input</strong> - This is important since Ren-C's goal is to <a href="https://forum.rebol.info/t/planning-ahead-for-bignum-arithmetic/623">finesse the nature of immutable and mutable INTEGER!</a> to be "BigNum-capable"...yet still exploit integers that fit directly in cells where possible.</p>
+</li>
+<li>
+<p><strong>not all bytes are meaningful in the representation</strong> - When you're using only bytes for the digits 0 to 9 (and a possible negative symbol), that means you can delimit the arbitrary-sized number with other bytes.  Maybe those are spaces, commas, #{00} bytes, or other delimiters.</p>
+</li>
+</ol>
+<p>Seen in this light...maybe the only "weird" thing about it was that it wasn't reversible, and TO INTEGER! of BINARY! was using a fixed-size interpretation of the bytes.  R3-Alpha "corrected" it, but maybe in light of what I'm saying here, that correction went in the wrong direction.</p>
+<p>Unfortunately, as future-proofing goes...this canonizes Base-10...which feels a bit "arbitrary".  And considering the availability of more compact representations for arbitrary-precision numbers, it might seem to "waste space".  But we're dealing with human parameters in other ways, like case-insensitivity and other things that a ten-fingered species takes for granted.  As standards for mathematics go, this is one that will probably have a longer life for a ten-fingered species than 8-byte big-endian values.</p>
+<p>The other "futureproof" option would have to be some kind of length-prefixed wire format, like <a href="https://tools.ietf.org/html/rfc7049#section-2.4.2" rel="nofollow noopener">the "Common Binary Object Format (CBOR)" BigNum Encoding</a>.  That feels less in line with Rebol principles.</p>
+<p>So strangely I'm feeling like <strong>to binary! some-integer</strong> is really an equivalent to <strong>as binary! to text! some-integer</strong> (as Rebol2 did) and that <strong>to integer! some-binary</strong> is the same as <strong>to integer! as text! some-binary</strong> (which Rebol2 did not).</p>
+          <p><a href="https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270/1</link>
+        <pubDate>Sat, 28 Mar 2020 09:45:19 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1270-1</guid>
+        <source url="https://forum.rebol.info/t/binary-dialected-encoding-decoding-instead-of-to-conversions/1270.rss">BINARY! Dialected Encoding/Decoding instead of TO conversions?</source>
+      </item>
+  </channel>
+</rss>

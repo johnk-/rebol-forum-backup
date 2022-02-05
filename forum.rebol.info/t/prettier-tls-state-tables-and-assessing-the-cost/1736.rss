@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Prettier TLS State Tables (and Assessing the Cost)</title>
+    <link>https://forum.rebol.info/t/prettier-tls-state-tables-and-assessing-the-cost/1736</link>
+    <description>So the spec-driven TLS originally had this state table.  On the left are states and on the right is a block of the legal states you can transition to from that state (if any).
+
+Here are the states for a TLS read:
+
+    read-proto-states: [
+        client-hello [server-hello]
+        server-hello [certificate]
+        certificate [server-hello-done server-key-exchange]
+        server-key-exchange [server-hello-done]
+        server-hello-done [#complete]
+        finished [change-cipher-spec alert]
+        change-cipher-spec [encrypted-handshake]
+        encrypted-handshake [application #complete]
+        application [application alert #complete]
+        alert [#complete]
+        close-notify [alert]
+    ]
+
+*It seemed to me this wasn&#39;t exploiting the types all that well.*  We see an ISSUE! being used for #complete.  I imagined it would be better to move the issue annotation onto the state itself: **If a state was represented by an ISSUE!, then that meant the state could legally be transitioned to the completion state.**
+
+So instead of:
+
+    encrypted-handshake [application #complete]
+
+That would become:
+
+    #encrypted-handshake [#application]
+
+(Since the application state could be terminal as well.)
+
+Now you know just by looking at it that #encrypted-handshake is a *potentially-terminal state*...and that&#39;s everywhere that encrypted-handshake appears.  It&#39;s not that much more typing, since you have to put an apostrophe on most uses anyway...and it helps the state &quot;stand out&quot;.
+
+Plus making the non-terminal states stand out would be good, so I turned them into tags.
+
+**I also thought that the blocks looked a bit boring, and I didn&#39;t like having to put single elements into blocks just for the convenience of the implementation.**  I tried adding arrows and letting single elements stand alone on the mapped-to side:
+
+    read-proto-states: [
+        &lt;client-hello&gt;          -&gt; &lt;server-hello&gt;
+        &lt;server-hello&gt;          -&gt; &lt;certificate&gt;
+        &lt;certificate&gt;           -&gt; [#server-hello-done &lt;server-key-exchange&gt;]
+        &lt;server-key-exchange&gt;   -&gt; #server-hello-done
+        &lt;finished&gt;              -&gt; [&lt;change-cipher-spec&gt; #alert]
+        &lt;change-cipher-spec&gt;    -&gt; #encrypted-handshake
+        #encrypted-handshake    -&gt; #application
+        #application            -&gt; [#application #alert]
+        #alert                  -&gt; []
+        &lt;close-notify&gt;          -&gt; #alert
+    ]
+
+Of course, this needs to be parsed into a MAP!, so we need some code like:
+
+    transitions: make map! []  ; map from states to block of states
+    state-rule: [tag! | issue!]
+    uparse transdialect [
+        while [
+            left: state-rule &#39;-&gt; right: [
+                into block! [while state-rule, &lt;input&gt;]
+                | collect keep state-rule
+            ]
+            (append transitions :[left right])
+        ]
+    ]
+
+## Improvement...Or Dialecting For The Sake of Dialecting?
+
+The general question of whether or not to use things like ISSUE! and TAG! for states as opposed to the &quot;cleaner&quot; WORD!s is something that is a bit controversial.
+
+One issue is that there&#39;s traditionally a greater cost to comparing strings than there is to comparing words.  So **state = #encrypted-handshake** is slower than **state = &#39;encrypted-handshake**.  The worst case scenario is equality--because all the characters have to be compared to decide if they are equal.
+
+I&#39;d like to focus more on the qualities of the source representation than worry about the performance however.
+
+There&#39;s certainly a point of view where the original wasn&#39;t as &quot;noisy&quot;.  But if you take the extreme opinion of using WORD! for everything, then the code all blurs together.
+
+## Parsing Has The Benefit Of Validation
+
+When you stylize your input and do some processing of it to get it into a canonized form, that process of translating your input is a chance to check that the data is what you expect.
+
+Using a generic structure doesn&#39;t just keep you from throwing in &quot;superficial&quot; flourishes like **`-&gt;`**, but the generality usually goes with accepting anything.  Once you have a processing step that puts you in the position of being able to validate...which is a powerful thing.
+
+## I Think These Kinds of Things Are &quot;The Point&quot;
+
+I don&#39;t know if this particular example is the best example.  But I do think that this is what PARSE is meant for, and UPARSE is pushing things to a new level.  We should be looking for opportunities to show off this kind of idea, vs just doing what other languages do in a weird way.</description>
+    
+    <lastBuildDate>Sun, 03 Oct 2021 17:29:29 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/prettier-tls-state-tables-and-assessing-the-cost/1736.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Prettier TLS State Tables (and Assessing the Cost)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>So the spec-driven TLS originally had this state table.  On the left are states and on the right is a block of the legal states you can transition to from that state (if any).</p>
+<p>Here are the states for a TLS read:</p>
+<pre><code>read-proto-states: [
+    client-hello [server-hello]
+    server-hello [certificate]
+    certificate [server-hello-done server-key-exchange]
+    server-key-exchange [server-hello-done]
+    server-hello-done [#complete]
+    finished [change-cipher-spec alert]
+    change-cipher-spec [encrypted-handshake]
+    encrypted-handshake [application #complete]
+    application [application alert #complete]
+    alert [#complete]
+    close-notify [alert]
+]
+</code></pre>
+<p><em>It seemed to me this wasn't exploiting the types all that well.</em>  We see an ISSUE! being used for <span class="hashtag">#complete</span>.  I imagined it would be better to move the issue annotation onto the state itself: <strong>If a state was represented by an ISSUE!, then that meant the state could legally be transitioned to the completion state.</strong></p>
+<p>So instead of:</p>
+<pre><code>encrypted-handshake [application #complete]
+</code></pre>
+<p>That would become:</p>
+<pre><code>#encrypted-handshake [#application]
+</code></pre>
+<p>(Since the application state could be terminal as well.)</p>
+<p>Now you know just by looking at it that <span class="hashtag">#encrypted-handshake</span> is a <em>potentially-terminal state</em>...and that's everywhere that encrypted-handshake appears.  It's not that much more typing, since you have to put an apostrophe on most uses anyway...and it helps the state "stand out".</p>
+<p>Plus making the non-terminal states stand out would be good, so I turned them into tags.</p>
+<p><strong>I also thought that the blocks looked a bit boring, and I didn't like having to put single elements into blocks just for the convenience of the implementation.</strong>  I tried adding arrows and letting single elements stand alone on the mapped-to side:</p>
+<pre><code>read-proto-states: [
+    &lt;client-hello&gt;          -&gt; &lt;server-hello&gt;
+    &lt;server-hello&gt;          -&gt; &lt;certificate&gt;
+    &lt;certificate&gt;           -&gt; [#server-hello-done &lt;server-key-exchange&gt;]
+    &lt;server-key-exchange&gt;   -&gt; #server-hello-done
+    &lt;finished&gt;              -&gt; [&lt;change-cipher-spec&gt; #alert]
+    &lt;change-cipher-spec&gt;    -&gt; #encrypted-handshake
+    #encrypted-handshake    -&gt; #application
+    #application            -&gt; [#application #alert]
+    #alert                  -&gt; []
+    &lt;close-notify&gt;          -&gt; #alert
+]
+</code></pre>
+<p>Of course, this needs to be parsed into a MAP!, so we need some code like:</p>
+<pre><code>transitions: make map! []  ; map from states to block of states
+state-rule: [tag! | issue!]
+uparse transdialect [
+    while [
+        left: state-rule '-&gt; right: [
+            into block! [while state-rule, &lt;input&gt;]
+            | collect keep state-rule
+        ]
+        (append transitions :[left right])
+    ]
+]
+</code></pre>
+<h2>Improvement...Or Dialecting For The Sake of Dialecting?</h2>
+<p>The general question of whether or not to use things like ISSUE! and TAG! for states as opposed to the "cleaner" WORD!s is something that is a bit controversial.</p>
+<p>One issue is that there's traditionally a greater cost to comparing strings than there is to comparing words.  So <strong>state = <span class="hashtag">#encrypted-handshake</span></strong> is slower than <strong>state = 'encrypted-handshake</strong>.  The worst case scenario is equality--because all the characters have to be compared to decide if they are equal.</p>
+<p>I'd like to focus more on the qualities of the source representation than worry about the performance however.</p>
+<p>There's certainly a point of view where the original wasn't as "noisy".  But if you take the extreme opinion of using WORD! for everything, then the code all blurs together.</p>
+<h2>Parsing Has The Benefit Of Validation</h2>
+<p>When you stylize your input and do some processing of it to get it into a canonized form, that process of translating your input is a chance to check that the data is what you expect.</p>
+<p>Using a generic structure doesn't just keep you from throwing in "superficial" flourishes like <strong><code>-&gt;</code></strong>, but the generality usually goes with accepting anything.  Once you have a processing step that puts you in the position of being able to validate...which is a powerful thing.</p>
+<h2>I Think These Kinds of Things Are "The Point"</h2>
+<p>I don't know if this particular example is the best example.  But I do think that this is what PARSE is meant for, and UPARSE is pushing things to a new level.  We should be looking for opportunities to show off this kind of idea, vs just doing what other languages do in a weird way.</p>
+          <p><a href="https://forum.rebol.info/t/prettier-tls-state-tables-and-assessing-the-cost/1736/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/prettier-tls-state-tables-and-assessing-the-cost/1736/1</link>
+        <pubDate>Sun, 03 Oct 2021 17:29:29 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1736-1</guid>
+        <source url="https://forum.rebol.info/t/prettier-tls-state-tables-and-assessing-the-cost/1736.rss">Prettier TLS State Tables (and Assessing the Cost)</source>
+      </item>
+  </channel>
+</rss>

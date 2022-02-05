@@ -1,0 +1,300 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Fringe UDP Support Archiving</title>
+    <link>https://forum.rebol.info/t/fringe-udp-support-archiving/1730</link>
+    <description>UDP is supported by libuv, but it&#39;s different enough that code pertaining to it would need redoing.  Right now it&#39;s a distraction, so I&#39;m removing it.  Assuming everything else gets working, it shouldn&#39;t be too hard to add back.  But until more foundational things are working, it has to go.
+
+But in working on some code for messing with little $100 drones, we had added some functions they needed for UDP.  Here are two weird functions I&#39;m putting aside here for now, in case we someday need to remember what they were.
+
+    //
+    //  export set-udp-multicast: native [
+    //
+    //  {Join (or leave) an IPv4 multicast group}
+    //
+    //      return: &lt;none&gt;
+    //      port [port!]
+    //          {An open UDP port}
+    //      group [tuple!]
+    //          {Multicast group to join (224.0.0.0 to 239.255.255.255)}
+    //      member [tuple!]
+    //          {Member to add to multicast group (use 0.0.0.0 for INADDR_ANY)}
+    //      /drop
+    //          {Leave the group (default is to add)}
+    //  ]
+    //
+    REBNATIVE(set_udp_multicast)
+    //
+    // !!! This was originally the kind of thing that SET-MODES though of using
+    // RDC_MODIFY for.  But that was never standardized or implemented for
+    // R3-Alpha (nor was RDC_MODIFY written.  With the networking broken out to
+    // an extension, it is less of a concern to be including platform-specific
+    // network calls here (though sockets are abstracted across Windows and POSIX,
+    // one still doesn&#39;t want it in the interpreter core...e.g. when the WASM
+    // build doesn&#39;t use it at all.)
+    {
+        NETWORK_INCLUDE_PARAMS_OF_SET_UDP_MULTICAST;
+
+        SOCKREQ *sock = Sock_Of_Port(ARG(port));
+
+        if (not (sock-&gt;transport == TRANSPORT_UDP))  // !!! other checks?
+            rebJumps(&quot;fail {SET-UDP-MULTICAST used on non-UDP port}&quot;);
+
+        struct ip_mreq mreq;
+        Get_Tuple_Bytes(&amp;mreq.imr_multiaddr.s_addr, ARG(group), 4);
+        Get_Tuple_Bytes(&amp;mreq.imr_interface.s_addr, ARG(member), 4);
+
+        int result = setsockopt(
+            sock-&gt;fd,
+            IPPROTO_IP,
+            REF(drop) ? IP_DROP_MEMBERSHIP : IP_ADD_MEMBERSHIP,
+            cast(char*, &amp;mreq),
+            sizeof(mreq)
+        );
+
+        if (result &lt; 0)
+            rebFail_OS (result);
+
+        return rebNone();
+    }
+
+
+    //
+    //  export set-udp-ttl: native [
+    //
+    //  {Set the TTL of a UDP port}
+    //
+    //      return: &lt;none&gt;
+    //      port [port!]
+    //          {An open UDP port}
+    //      ttl [integer!]
+    //          {0 = local machine only, 1 = subnet (default), or up to 255}
+    //  ]
+    //
+    REBNATIVE(set_udp_ttl)
+    //
+    // !!! See notes on SET_UDP_MULTICAST
+    {
+        NETWORK_INCLUDE_PARAMS_OF_SET_UDP_TTL;
+
+        SOCKREQ *sock = Sock_Of_Port(ARG(port));
+
+        if (not (sock-&gt;transport == TRANSPORT_UDP))  // !!! other checks?
+            rebJumps(&quot;fail {SET-UDP-TTL used on non-UDP port}&quot;);
+
+        int ttl = VAL_INT32(ARG(ttl));
+        int result = setsockopt(
+            sock-&gt;fd,
+            IPPROTO_IP,
+            IP_TTL,
+            cast(char*, &amp;ttl),
+            sizeof(ttl)
+        );
+
+        if (result &lt; 0)
+            rebFail_OS (result);
+
+        return rebNone();
+    }
+
+There&#39;s also this comment on why UDP sockets go through the &quot;listening&quot; process, which is really just to bind...this is more obvious in libuv:
+
+        // !!! This modification was made to support a UDP application which
+        // wanted to listen on a UDP port, as well as make packets appear to
+        // come from the same port it was listening on when writing to another
+        // UDP port.  But the only way to make packets appear to originate
+        // from a specific port is using bind:
+        //
+        // https://stackoverflow.com/q/9873061
+        //
+        // So a second socket can&#39;t use bind() to listen on that same port.
+        // Hence, a single socket has to be used for both writing and for
+        // listening.  This tries to accomplish that for UDP by going ahead
+        // and making a port that can both listen and send.  That processing
+        // is done during CONNECT.
+
+I&#39;ll mention also that I don&#39;t know what this is about; removing it unless a good example comes up:
+
+    // Prevent sendmsg/write raising SIGPIPE the TCP socket is closed:
+    // https://stackoverflow.com/q/108183/
+    // Linux does not support SO_NOSIGPIPE
+    //
+    #ifndef MSG_NOSIGNAL
+        #define MSG_NOSIGNAL 0
+    #endif
+
+    #if defined(SO_NOSIGPIPE)
+      //
+      // Prevent sendmsg/write raising SIGPIPE if the TCP socket is closed:
+      // https://stackoverflow.com/q/108183/
+      //
+      int on = 1;
+      if (setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &amp;on, sizeof(on)) &lt; 0) {
+          return false;
+      }
+    #endif
+
+    // Set non-blocking mode. Return TRUE if no error.
+    #ifdef FIONBIO
+      unsigned long mode = 1;
+      return IOCTL(sock, FIONBIO, &amp;mode) == 0;
+    #else
+       int flags;
+       flags = fcntl(sock, F_GETFL, 0);
+       flags |= O_NONBLOCK;
+       return fcntl(sock, F_SETFL, flags) &gt;= 0;
+    #endif</description>
+    
+    <lastBuildDate>Fri, 01 Oct 2021 19:29:15 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/fringe-udp-support-archiving/1730.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Fringe UDP Support Archiving</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>UDP is supported by libuv, but it's different enough that code pertaining to it would need redoing.  Right now it's a distraction, so I'm removing it.  Assuming everything else gets working, it shouldn't be too hard to add back.  But until more foundational things are working, it has to go.</p>
+<p>But in working on some code for messing with little $100 drones, we had added some functions they needed for UDP.  Here are two weird functions I'm putting aside here for now, in case we someday need to remember what they were.</p>
+<pre><code>//
+//  export set-udp-multicast: native [
+//
+//  {Join (or leave) an IPv4 multicast group}
+//
+//      return: &lt;none&gt;
+//      port [port!]
+//          {An open UDP port}
+//      group [tuple!]
+//          {Multicast group to join (224.0.0.0 to 239.255.255.255)}
+//      member [tuple!]
+//          {Member to add to multicast group (use 0.0.0.0 for INADDR_ANY)}
+//      /drop
+//          {Leave the group (default is to add)}
+//  ]
+//
+REBNATIVE(set_udp_multicast)
+//
+// !!! This was originally the kind of thing that SET-MODES though of using
+// RDC_MODIFY for.  But that was never standardized or implemented for
+// R3-Alpha (nor was RDC_MODIFY written.  With the networking broken out to
+// an extension, it is less of a concern to be including platform-specific
+// network calls here (though sockets are abstracted across Windows and POSIX,
+// one still doesn't want it in the interpreter core...e.g. when the WASM
+// build doesn't use it at all.)
+{
+    NETWORK_INCLUDE_PARAMS_OF_SET_UDP_MULTICAST;
+
+    SOCKREQ *sock = Sock_Of_Port(ARG(port));
+
+    if (not (sock-&gt;transport == TRANSPORT_UDP))  // !!! other checks?
+        rebJumps("fail {SET-UDP-MULTICAST used on non-UDP port}");
+
+    struct ip_mreq mreq;
+    Get_Tuple_Bytes(&amp;mreq.imr_multiaddr.s_addr, ARG(group), 4);
+    Get_Tuple_Bytes(&amp;mreq.imr_interface.s_addr, ARG(member), 4);
+
+    int result = setsockopt(
+        sock-&gt;fd,
+        IPPROTO_IP,
+        REF(drop) ? IP_DROP_MEMBERSHIP : IP_ADD_MEMBERSHIP,
+        cast(char*, &amp;mreq),
+        sizeof(mreq)
+    );
+
+    if (result &lt; 0)
+        rebFail_OS (result);
+
+    return rebNone();
+}
+
+
+//
+//  export set-udp-ttl: native [
+//
+//  {Set the TTL of a UDP port}
+//
+//      return: &lt;none&gt;
+//      port [port!]
+//          {An open UDP port}
+//      ttl [integer!]
+//          {0 = local machine only, 1 = subnet (default), or up to 255}
+//  ]
+//
+REBNATIVE(set_udp_ttl)
+//
+// !!! See notes on SET_UDP_MULTICAST
+{
+    NETWORK_INCLUDE_PARAMS_OF_SET_UDP_TTL;
+
+    SOCKREQ *sock = Sock_Of_Port(ARG(port));
+
+    if (not (sock-&gt;transport == TRANSPORT_UDP))  // !!! other checks?
+        rebJumps("fail {SET-UDP-TTL used on non-UDP port}");
+
+    int ttl = VAL_INT32(ARG(ttl));
+    int result = setsockopt(
+        sock-&gt;fd,
+        IPPROTO_IP,
+        IP_TTL,
+        cast(char*, &amp;ttl),
+        sizeof(ttl)
+    );
+
+    if (result &lt; 0)
+        rebFail_OS (result);
+
+    return rebNone();
+}
+</code></pre>
+<p>There's also this comment on why UDP sockets go through the "listening" process, which is really just to bind...this is more obvious in libuv:</p>
+<pre><code>    // !!! This modification was made to support a UDP application which
+    // wanted to listen on a UDP port, as well as make packets appear to
+    // come from the same port it was listening on when writing to another
+    // UDP port.  But the only way to make packets appear to originate
+    // from a specific port is using bind:
+    //
+    // https://stackoverflow.com/q/9873061
+    //
+    // So a second socket can't use bind() to listen on that same port.
+    // Hence, a single socket has to be used for both writing and for
+    // listening.  This tries to accomplish that for UDP by going ahead
+    // and making a port that can both listen and send.  That processing
+    // is done during CONNECT.
+</code></pre>
+<p>I'll mention also that I don't know what this is about; removing it unless a good example comes up:</p>
+<pre><code>// Prevent sendmsg/write raising SIGPIPE the TCP socket is closed:
+// https://stackoverflow.com/q/108183/
+// Linux does not support SO_NOSIGPIPE
+//
+#ifndef MSG_NOSIGNAL
+    #define MSG_NOSIGNAL 0
+#endif
+
+#if defined(SO_NOSIGPIPE)
+  //
+  // Prevent sendmsg/write raising SIGPIPE if the TCP socket is closed:
+  // https://stackoverflow.com/q/108183/
+  //
+  int on = 1;
+  if (setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &amp;on, sizeof(on)) &lt; 0) {
+      return false;
+  }
+#endif
+
+// Set non-blocking mode. Return TRUE if no error.
+#ifdef FIONBIO
+  unsigned long mode = 1;
+  return IOCTL(sock, FIONBIO, &amp;mode) == 0;
+#else
+   int flags;
+   flags = fcntl(sock, F_GETFL, 0);
+   flags |= O_NONBLOCK;
+   return fcntl(sock, F_SETFL, flags) &gt;= 0;
+#endif</code></pre>
+          <p><a href="https://forum.rebol.info/t/fringe-udp-support-archiving/1730/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/fringe-udp-support-archiving/1730/1</link>
+        <pubDate>Fri, 01 Oct 2021 18:27:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1730-1</guid>
+        <source url="https://forum.rebol.info/t/fringe-udp-support-archiving/1730.rss">Fringe UDP Support Archiving</source>
+      </item>
+  </channel>
+</rss>

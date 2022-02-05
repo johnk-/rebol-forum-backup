@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Enfix Arity 0: A Puzzle From 2017, Now Believed to be Solved!</title>
+    <link>https://forum.rebol.info/t/enfix-arity-0-a-puzzle-from-2017-now-believed-to-be-solved/1251</link>
+    <description>&gt; Here&#39;s the kind of question @salotz may find informative, in light of the [&quot;how can we model the evaluator in a minimal way&quot;](https://forum.rebol.info/t/make-a-rebol-minimum-viable-rebol-interpreters/1245)...where putting the evaluator on one sheet of paper like a lambda calculus or Lisp is simply not the objective.  Maybe this helps illustrate the difference?
+
+---
+ 
+In 2017 while trying to formalize some code I faced a question: **How should the evaluator deal with a function that is marked as getting its first argument from the left (e.g. &quot;enfix&quot;) if that operation takes no arguments?**
+
+R3-Alpha only had arity-2 infix functions, and didn&#39;t allow you to make your own.  Red lets you make your own, but keeps the rule:
+
+    red&gt;&gt; foo: func [x] [print mold x]
+    == func [x][print mold x]
+
+    red&gt;&gt; bar: make op! :foo
+    *** Script Error: making an op! requires a function with only 2 arguments
+
+But Ren-C took a different tack, trying to generalize the mechanic so that &quot;enfix&quot; functions could take any number of arguments...and it only spoke to the question of how they got their first.  You might make a ternary operator where the condition was on the left and the branches on the right.  Or you might make a postfix operator which took a single argument--punctuating an evaluation.
+
+We have some of those today.  SO is an interesting variation on ASSERT that just validates its left hand expression:
+
+    &gt;&gt; 2 + 1 = 3 so print &quot;No problem.&quot;
+    No problem
+
+    &gt;&gt; 1020 - 304 = 421 so print &quot;Math is broken&quot;
+    ** Script Error: assertion failure: [#[false] so]
+    ** Where: so console
+    ** Near: [... = 421 so ~~ print &quot;Math is broken&quot;]
+
+But what--if anything--should happen when you make an enfix function which takes no arguments?  How is that different from a *non*-enfix function with no arguments?
+
+I remember where I was when writing down that issue.  It was at one of a number of chains of a coffee place called [&quot;Koffe&quot;, but this one in South Palm Springs](https://www.kofficoffee.com/pages/locations).  And [it has sat around as Issue #581](https://github.com/metaeducation/ren-c/issues/581) for a long while.
+
+But with the passage of time, I think the answer to this has become clear.  An enfix 0-arity function is simply sequenced in the *same evaluator step as the left hand side*.
+
+[If you want to see some cool tests that show the nuances, look here.](https://github.com/metaeducation/ren-c/blob/fb5e29d593e650b2dbc02963a93348c2ac862b22/tests/functions/enfix.test.reb#L198-L332)  But the issue sums up the general gist:
+
+    &gt;&gt; bar: func [] [&lt;bar&gt;]
+    &gt;&gt; enbar: enfixed func [] [&lt;enbar&gt;]
+
+    &gt;&gt; evaluate @var [1020 bar 304]
+    == [bar 304]  ; one step, did not run bar yet, still pending
+
+    ; Note: I&#39;m not totally thrilled with the @var skippable method of telling
+    ; EVALUATE where to put the value if you care.  I&#39;m thinking we probably should
+    ; be biting the bullet and figuring out a smarter multiple-return-value idea.
+
+    &gt;&gt; var
+    == 1020
+
+    &gt;&gt; evaluate @var [1020 enbar 304]
+    == [304]  ; one step, ran enbar during that step besides being arity-0
+
+    &gt;&gt; var
+    == &lt;enbar&gt;
+
+One nuance is how enfix functions which have arguments to their left which are marked `&lt;skip&gt;` will effectively degrade to becoming non-enfix and run in the next step.  [Without that, the clever DEFAULT operation would not work.](https://forum.rebol.info/t/default-now-usable-in-case-switch/739)  I&#39;m open to the idea that there might be a use case for a left-hand-skipping operation that runs in the same step as the left even when it skips.  But... since I can&#39;t think of any--and I know DEFAULT needs otherwise--I&#39;ll wait until someone points out a need before getting too concerned about it.
+
+---
+
+**These edge cases really shed light on the big picture.**  I&#39;ve said time and again that you don&#39;t do yourself any favors in language design by throwing yourself softballs.  You should be looking for pathological cases and if you can&#39;t solve them, building a rationale behind why--and articulating the shape of the things you *can* solve.
+
+On Ren-C I&#39;ve been chipping away at these issues a little at a time, and it feels good to see this old one get closed.  I&#39;m pretty sure that people using the evaluator to invent cool things will appreciate that it bends (to the extent coherence will allow it to!)</description>
+    
+    <lastBuildDate>Thu, 12 Dec 2019 06:56:13 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/enfix-arity-0-a-puzzle-from-2017-now-believed-to-be-solved/1251.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Enfix Arity 0: A Puzzle From 2017, Now Believed to be Solved!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p>Here's the kind of question <a class="mention" href="/u/salotz">@salotz</a> may find informative, in light of the <a href="https://forum.rebol.info/t/make-a-rebol-minimum-viable-rebol-interpreters/1245">"how can we model the evaluator in a minimal way"</a>...where putting the evaluator on one sheet of paper like a lambda calculus or Lisp is simply not the objective.  Maybe this helps illustrate the difference?</p>
+</blockquote>
+<hr>
+<p>In 2017 while trying to formalize some code I faced a question: <strong>How should the evaluator deal with a function that is marked as getting its first argument from the left (e.g. "enfix") if that operation takes no arguments?</strong></p>
+<p>R3-Alpha only had arity-2 infix functions, and didn't allow you to make your own.  Red lets you make your own, but keeps the rule:</p>
+<pre><code>red&gt;&gt; foo: func [x] [print mold x]
+== func [x][print mold x]
+
+red&gt;&gt; bar: make op! :foo
+*** Script Error: making an op! requires a function with only 2 arguments
+</code></pre>
+<p>But Ren-C took a different tack, trying to generalize the mechanic so that "enfix" functions could take any number of arguments...and it only spoke to the question of how they got their first.  You might make a ternary operator where the condition was on the left and the branches on the right.  Or you might make a postfix operator which took a single argument--punctuating an evaluation.</p>
+<p>We have some of those today.  SO is an interesting variation on ASSERT that just validates its left hand expression:</p>
+<pre><code>&gt;&gt; 2 + 1 = 3 so print "No problem."
+No problem
+
+&gt;&gt; 1020 - 304 = 421 so print "Math is broken"
+** Script Error: assertion failure: [#[false] so]
+** Where: so console
+** Near: [... = 421 so ~~ print "Math is broken"]
+</code></pre>
+<p>But what--if anything--should happen when you make an enfix function which takes no arguments?  How is that different from a <em>non</em>-enfix function with no arguments?</p>
+<p>I remember where I was when writing down that issue.  It was at one of a number of chains of a coffee place called <a href="https://www.kofficoffee.com/pages/locations" rel="nofollow noopener">"Koffe", but this one in South Palm Springs</a>.  And <a href="https://github.com/metaeducation/ren-c/issues/581" rel="nofollow noopener">it has sat around as Issue #581</a> for a long while.</p>
+<p>But with the passage of time, I think the answer to this has become clear.  An enfix 0-arity function is simply sequenced in the <em>same evaluator step as the left hand side</em>.</p>
+<p><a href="https://github.com/metaeducation/ren-c/blob/fb5e29d593e650b2dbc02963a93348c2ac862b22/tests/functions/enfix.test.reb#L198-L332" rel="nofollow noopener">If you want to see some cool tests that show the nuances, look here.</a>  But the issue sums up the general gist:</p>
+<pre><code>&gt;&gt; bar: func [] [&lt;bar&gt;]
+&gt;&gt; enbar: enfixed func [] [&lt;enbar&gt;]
+
+&gt;&gt; evaluate @var [1020 bar 304]
+== [bar 304]  ; one step, did not run bar yet, still pending
+
+; Note: I'm not totally thrilled with the @var skippable method of telling
+; EVALUATE where to put the value if you care.  I'm thinking we probably should
+; be biting the bullet and figuring out a smarter multiple-return-value idea.
+
+&gt;&gt; var
+== 1020
+
+&gt;&gt; evaluate @var [1020 enbar 304]
+== [304]  ; one step, ran enbar during that step besides being arity-0
+
+&gt;&gt; var
+== &lt;enbar&gt;
+</code></pre>
+<p>One nuance is how enfix functions which have arguments to their left which are marked <code>&lt;skip&gt;</code> will effectively degrade to becoming non-enfix and run in the next step.  <a href="https://forum.rebol.info/t/default-now-usable-in-case-switch/739">Without that, the clever DEFAULT operation would not work.</a>  I'm open to the idea that there might be a use case for a left-hand-skipping operation that runs in the same step as the left even when it skips.  But... since I can't think of any--and I know DEFAULT needs otherwise--I'll wait until someone points out a need before getting too concerned about it.</p>
+<hr>
+<p><strong>These edge cases really shed light on the big picture.</strong>  I've said time and again that you don't do yourself any favors in language design by throwing yourself softballs.  You should be looking for pathological cases and if you can't solve them, building a rationale behind why--and articulating the shape of the things you <em>can</em> solve.</p>
+<p>On Ren-C I've been chipping away at these issues a little at a time, and it feels good to see this old one get closed.  I'm pretty sure that people using the evaluator to invent cool things will appreciate that it bends (to the extent coherence will allow it to!)</p>
+          <p><a href="https://forum.rebol.info/t/enfix-arity-0-a-puzzle-from-2017-now-believed-to-be-solved/1251/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/enfix-arity-0-a-puzzle-from-2017-now-believed-to-be-solved/1251/1</link>
+        <pubDate>Thu, 12 Dec 2019 06:56:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1251-1</guid>
+        <source url="https://forum.rebol.info/t/enfix-arity-0-a-puzzle-from-2017-now-believed-to-be-solved/1251.rss">Enfix Arity 0: A Puzzle From 2017, Now Believed to be Solved!</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Advancements In Information-Hiding: Sealed FRAME! Members</title>
+    <link>https://forum.rebol.info/t/advancements-in-information-hiding-sealed-frame-members/1396</link>
+    <description>**Having local variables be invisible to the outside of a function is something that has been important in Ren-C since the beginning.**
+
+Superficially, we want to protect against the following kind of bug, e.g. that Red has inherited from Rebol2 and R3-Alpha:
+
+    red&gt;&gt; maybe-format-drive: func [user password /local permissions] [
+             if check-supervisor user password [
+                  permissions: &lt;supervisor&gt;
+             ]
+             if permissions = &lt;supervisor&gt; [
+                  print &quot;Formatting hard drive&quot;
+             ]
+        ]
+
+The code above is assuming that permissions will default to NONE!.  But the problem is that you can slip the permissions in via the /LOCAL refinement:
+
+    red&gt;&gt; maybe-format-hard-drive/local &quot;mallory&quot; &quot;password&quot; &lt;supervisor&gt;
+
+**This is why Ren-C makes sure all true locals are set to `~undefined~` when a function runs.**  While being undefined makes them more prickly than BLANK! or NULL, you can default them using DEFAULT.
+
+## But Wanting To Hide Things has More Motivation Than That
+
+Clearly we&#39;re not dealing with a very &quot;secure&quot; language model.  So there&#39;s a bigger reason.
+
+It&#39;s important for us to contractually establish that the locals are none of the caller&#39;s business.  Because once we have this information hiding, *it offers the potential for name reuse*.
+
+[Remember **AUGMENT**?](https://forum.rebol.info/t/augment-add-parameters-and-refinements-after-the-fact/1216)  It lets you add parameters to a function frame.  This lets you do things like make a version of SWITCH that has /DEFAULT but inherits the interface of SWITCH and runs all in the same memory block.
+
+But what if just incidentally, the implementation of SWITCH used a local variable called &quot;default&quot;?  Then you&#39;d wind up with a frame with two keys with the same name.
+
+Having a frame with two keys that have the same name sounds like a pretty big problem for binding...*unless there were some way to tell which names were in effect for a FRAME! based on which phase of a function composition it was in.*
+
+**This is where frame phasing comes in.**
+
+## Quick Demo of FRAME! Phasing
+
+    foo: func [public &lt;local&gt; private] [
+        private: 304
+        return binding of &#39;public  ; return a FRAME! with the internal view
+    ]
+
+    &gt;&gt; f-outside: make frame! :foo
+    == make frame! [
+        public: ~undefined~   ; from the outside, you don&#39;t see `private` 
+    ]
+
+    &gt;&gt; f-outside/public: 1020
+
+    &gt;&gt; f-inside: do f-outside   ; Note: DO kills the outside view, unless you copy
+    == make frame! [
+        return: &#39;make action! [[@value /vanishable] [...]]
+        public: 1020
+        private: 304
+    ]
+
+We&#39;re seeing **two different views of the same memory**.  The outside view is unaware of the locals.  The inside view reveals them.
+
+Important to observe is that what view we see doesn&#39;t depend on which stack level we&#39;re at, but the bits of the value in our hand.
+
+Now, how about that augmentation?  Let&#39;s add a /PRIVATE refinement to a layer on top of FOO that uses the same frame:
+
+    &gt;&gt; f-prelude: null
+
+    &gt;&gt; bar: adapt augment &#39;foo [/private [tag!]] [
+           f-prelude: binding of &#39;private
+       ]        
+
+    &gt;&gt; f-outside: make frame! :bar
+    &gt;&gt; f-outside/public: 1020
+    &gt;&gt; f-outside/private: &lt;different!&gt;
+
+    &gt;&gt; f-inside: do f-outside
+    == make frame! [
+        return: &#39;make action! [[@value /vanishable] [...]]
+        public: 1020
+        private: 304
+    ]
+
+    &gt;&gt; f-prelude
+    == make frame! [
+        public: 1020
+        private: &lt;different!&gt;
+    ]
+
+**`f-inside` and `f-prelude` (and `f-outside`) are all the same frame, which reveal a different PRIVATE field based on the phase.**
+
+**[This addresses Ren-C&#39;s oldest open issue, from Feb 2017.](https://github.com/metaeducation/ren-c/issues/393)**  Which I hope to be able to close shortly.
+
+## How Does It Work?
+
+I&#39;ve said time and again that a value cell is the size of 4 platform-pointers.  That&#39;s a rule of the game.
+
+1. Like all cells, a FRAME! cell needs to give up one of those for the header...to say (among other things) that it&#39;s a frame and not an integer, etc.
+
+2. Next you have a binding.  This binding is important for instance when you MAKE a FRAME! for a RETURN function.  It needs to know where to return to.
+
+3. Then you need to have a &quot;varlist&quot;, to point at the list of values that the frame&#39;s variables currently hold.
+
+4. The final slot is either a **frame phase** or a **frame label**
+
+If the phase slot is a label, you assume that the FRAME! value you are looking at has no special privileges to see locals or anything.  It gets its keylist from the archetype of the frame...e.g. the pointer held by the varlist itself.  In this particular no-phase case, all locals and specialized-out values are hidden from the phase.
+
+If the phase slot is not a label, then that&#39;s the phase...and the parameters of the action are used as the keylist.  Locals are counted since there is a phase...but &quot;sealed&quot; variables are not (these are what would have been considered &quot;local&quot; by the function that this phase derived from.)
+
+The upshot of this is that many operations which used to just be able to take a varlist now need to take a whole ANY-CONTEXT! value, so the phase information is present.  Which fields are in play due to the phase is important not just for molding, but also for binding and lookup.</description>
+    
+    <lastBuildDate>Mon, 09 Nov 2020 20:56:13 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/advancements-in-information-hiding-sealed-frame-members/1396.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Advancements In Information-Hiding: Sealed FRAME! Members</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p><strong>Having local variables be invisible to the outside of a function is something that has been important in Ren-C since the beginning.</strong></p>
+<p>Superficially, we want to protect against the following kind of bug, e.g. that Red has inherited from Rebol2 and R3-Alpha:</p>
+<pre><code>red&gt;&gt; maybe-format-drive: func [user password /local permissions] [
+         if check-supervisor user password [
+              permissions: &lt;supervisor&gt;
+         ]
+         if permissions = &lt;supervisor&gt; [
+              print "Formatting hard drive"
+         ]
+    ]
+</code></pre>
+<p>The code above is assuming that permissions will default to NONE!.  But the problem is that you can slip the permissions in via the /LOCAL refinement:</p>
+<pre><code>red&gt;&gt; maybe-format-hard-drive/local "mallory" "password" &lt;supervisor&gt;
+</code></pre>
+<p><strong>This is why Ren-C makes sure all true locals are set to <code>~undefined~</code> when a function runs.</strong>  While being undefined makes them more prickly than BLANK! or NULL, you can default them using DEFAULT.</p>
+<h2>But Wanting To Hide Things has More Motivation Than That</h2>
+<p>Clearly we're not dealing with a very "secure" language model.  So there's a bigger reason.</p>
+<p>It's important for us to contractually establish that the locals are none of the caller's business.  Because once we have this information hiding, <em>it offers the potential for name reuse</em>.</p>
+<p><a href="https://forum.rebol.info/t/augment-add-parameters-and-refinements-after-the-fact/1216">Remember <strong>AUGMENT</strong>?</a>  It lets you add parameters to a function frame.  This lets you do things like make a version of SWITCH that has /DEFAULT but inherits the interface of SWITCH and runs all in the same memory block.</p>
+<p>But what if just incidentally, the implementation of SWITCH used a local variable called "default"?  Then you'd wind up with a frame with two keys with the same name.</p>
+<p>Having a frame with two keys that have the same name sounds like a pretty big problem for binding...<em>unless there were some way to tell which names were in effect for a FRAME! based on which phase of a function composition it was in.</em></p>
+<p><strong>This is where frame phasing comes in.</strong></p>
+<h2>Quick Demo of FRAME! Phasing</h2>
+<pre><code>foo: func [public &lt;local&gt; private] [
+    private: 304
+    return binding of 'public  ; return a FRAME! with the internal view
+]
+
+&gt;&gt; f-outside: make frame! :foo
+== make frame! [
+    public: ~undefined~   ; from the outside, you don't see `private` 
+]
+
+&gt;&gt; f-outside/public: 1020
+
+&gt;&gt; f-inside: do f-outside   ; Note: DO kills the outside view, unless you copy
+== make frame! [
+    return: 'make action! [[@value /vanishable] [...]]
+    public: 1020
+    private: 304
+]
+</code></pre>
+<p>We're seeing <strong>two different views of the same memory</strong>.  The outside view is unaware of the locals.  The inside view reveals them.</p>
+<p>Important to observe is that what view we see doesn't depend on which stack level we're at, but the bits of the value in our hand.</p>
+<p>Now, how about that augmentation?  Let's add a /PRIVATE refinement to a layer on top of FOO that uses the same frame:</p>
+<pre><code>&gt;&gt; f-prelude: null
+
+&gt;&gt; bar: adapt augment 'foo [/private [tag!]] [
+       f-prelude: binding of 'private
+   ]        
+
+&gt;&gt; f-outside: make frame! :bar
+&gt;&gt; f-outside/public: 1020
+&gt;&gt; f-outside/private: &lt;different!&gt;
+
+&gt;&gt; f-inside: do f-outside
+== make frame! [
+    return: 'make action! [[@value /vanishable] [...]]
+    public: 1020
+    private: 304
+]
+
+&gt;&gt; f-prelude
+== make frame! [
+    public: 1020
+    private: &lt;different!&gt;
+]
+</code></pre>
+<p><strong><code>f-inside</code> and <code>f-prelude</code> (and <code>f-outside</code>) are all the same frame, which reveal a different PRIVATE field based on the phase.</strong></p>
+<p><strong><a href="https://github.com/metaeducation/ren-c/issues/393">This addresses Ren-C's oldest open issue, from Feb 2017.</a></strong>  Which I hope to be able to close shortly.</p>
+<h2>How Does It Work?</h2>
+<p>I've said time and again that a value cell is the size of 4 platform-pointers.  That's a rule of the game.</p>
+<ol>
+<li>
+<p>Like all cells, a FRAME! cell needs to give up one of those for the header...to say (among other things) that it's a frame and not an integer, etc.</p>
+</li>
+<li>
+<p>Next you have a binding.  This binding is important for instance when you MAKE a FRAME! for a RETURN function.  It needs to know where to return to.</p>
+</li>
+<li>
+<p>Then you need to have a "varlist", to point at the list of values that the frame's variables currently hold.</p>
+</li>
+<li>
+<p>The final slot is either a <strong>frame phase</strong> or a <strong>frame label</strong></p>
+</li>
+</ol>
+<p>If the phase slot is a label, you assume that the FRAME! value you are looking at has no special privileges to see locals or anything.  It gets its keylist from the archetype of the frame...e.g. the pointer held by the varlist itself.  In this particular no-phase case, all locals and specialized-out values are hidden from the phase.</p>
+<p>If the phase slot is not a label, then that's the phase...and the parameters of the action are used as the keylist.  Locals are counted since there is a phase...but "sealed" variables are not (these are what would have been considered "local" by the function that this phase derived from.)</p>
+<p>The upshot of this is that many operations which used to just be able to take a varlist now need to take a whole ANY-CONTEXT! value, so the phase information is present.  Which fields are in play due to the phase is important not just for molding, but also for binding and lookup.</p>
+          <p><a href="https://forum.rebol.info/t/advancements-in-information-hiding-sealed-frame-members/1396/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/advancements-in-information-hiding-sealed-frame-members/1396/1</link>
+        <pubDate>Mon, 09 Nov 2020 20:56:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1396-1</guid>
+        <source url="https://forum.rebol.info/t/advancements-in-information-hiding-sealed-frame-members/1396.rss">Advancements In Information-Hiding: Sealed FRAME! Members</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,318 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>(Archival) Notes on Network Event Handling</title>
+    <link>https://forum.rebol.info/t/archival-notes-on-network-event-handling/163</link>
+    <description>&gt; *From May 2017*
+&gt; *This is just to record the documents I have written in the past on the subject.*
+
+---
+
+When working with a network, we have to deal with a flow of data across a (half duplex) network port. To initiate that flow we can open, write and read the port. These actions are defined in the C code and interact with the network stack provided by the operating system. Once we complete such an action, a network EVENT is generated, and needs to be processed by user code so that the flow of data can continue.
+
+Network events are associated with a port, and are handled by a function that is assigned to the awake field of the port. This is known as the awake handler and takes a form like this:
+
+```
+awake-handler: func [event /local tcp-port] [
+    print [&quot;=== RH Client event:&quot; event/type]
+    tcp-port: event/port
+    switch/default event/type [
+        error [
+            print &quot;error event received&quot;
+            tcp-port/spec/port-state: &#39;error
+            true
+        ]
+        lookup [
+            open tcp-port
+            false
+        ]
+        connect [
+            tcp-port/spec/port-state: &#39;ready
+            print &quot;reading from port&quot;
+            read tcp-port
+            false
+        ]
+        read [
+            print [&quot;^\Read Handler read:&quot; length tcp-port/data]
+            tcp-port/spec/data: copy tcp-port/data
+            clear tcp-port/data
+            true
+        ]
+        wrote [
+            read tcp-port
+            false
+        ]
+        close [
+            print &quot;closed on us!&quot;
+            tcp-port/spec/port-state: _
+            close tcp-port
+            true
+        ]
+    ] [true]
+]    
+```
+
+As you can see the EVENT has a field which contains the PORT where the EVENT was generated. The events are kept in an event queue and they are passed to their respective ports and awake handlers during a WAIT.
+
+```
+unless port? wait [tcp-port port/spec/timeout] [
+        FAIL &quot;timeout on tcp-port&quot;
+]
+```
+
+So here WAIT takes the block of a port, and a timeout value. If an event is not generated for that port within the timeout period, it returns _ and an error is created. Otherwise a port is returned, and the port? function is satisfied.
+
+The awake handler can use the PORT field to extract the TCP subport associated with this EVENT.
+
+```
+tcp-port: event/port
+```
+
+Now once we connect to the remote host what we do next depends on what the remote host does on a connection. If the remote host is a SMTP server, or a POP3 server, then they will send some form of greeting text. So, in our CONNECT event we need to do a read on the port to see what that text is, and to make sure that the remote host is ready.
+
+```
+        connect [
+            tcp-port/spec/port-state: &#39;ready
+            print &quot;reading from port&quot;
+            read tcp-port
+            false
+        ]
+```
+
+But when connecting to a web server, there is no greeting. So, instead on CONNECT we do a write to the host and this is usually in the form of our HTTP request
+
+```
+        connect [
+            tcp-port/spec/port-state: &#39;ready
+            print &quot;writing to port&quot;
+            write tcp-port to binary! {GET / ... rest of request}
+            false
+        ]
+```
+
+If you look at each EVENT, you will see it ends in a boolean value.
+
+```
+        close [
+            print &quot;closed on us!&quot;
+            tcp-port/spec/port-state: _
+            close tcp-port
+            true
+        ]
+```
+
+That value is returned by the awake function, and if the value is true ( i.e. not false or blank) then the WAIT function exits and the event queue is no longer processed. To restart processing new events, you have to WAIT again on the port, which is still connected. WAIT is done outside the awake handler not inside otherwise you risk recursion and a stack overflow.
+
+So the question arises, how do you decide when to exit with a TRUE, and when to exit with a FALSE.
+
+The CLOSE event is clearly one you need to exit with a TRUE since the remote port is not going to send you any more events.
+
+In the other above examples, we don&#39;t exit a CONNECT event because on receipt of that event we either wrote a request and expect data to be returned, or, we read the greeting from the port, and want to send something to the server such as a login sequence. When data is received we get a READ (should be RECEIVED as READ is confusing) event, and when we have completed a write, we get a WROTE event. We can then decide inside those EVENTs whether we need to keep reading (eg. downloading a large email), or keep writing (sending a large file upload to our web server).
+
+So, looking at our POP3 protocol, we see how a READ is handled.
+
+```
+read [
+    print [&quot;^\Write Handler read:&quot; length tcp-port/data]
+    append tcp-port/spec/data copy tcp-port/data
+    clear tcp-port/data
+    ; now decide if we need to exit the write-awake-handler
+    case [
+        tcp-port/spec/cmd = &#39;RETR 
+        [
+            either findeofpop tcp-port/spec/data [
+                tcp-port/spec/cmd: _
+                true
+            ][
+                read tcp-port
+                false
+            ]
+        ]
+        true [true]
+    ]
+]
+```
+
+We don&#39;t know if we have a 1 Kb email being downloaded, or a 10 Mb email. So, what we do here is first copy the data that has arrived in the common read/write buffer (tcp-port/data) so that it&#39;s safe. Now we know that pretty much every read will have all the data returned in one read event. But that&#39;s not the case when we retrieve an email. So, we have a placed a &#39;RETR flag in tcp-port/spec/cmd, and if we&#39;re in that state, then we need to see if the end of the email has arrived (signified by a trailing 5 octet CRLF . CRLF sequence). If we find that sequence, we return true. Otherwise, we keeping doing a read on the port, and return false so that more events will be processed by the awake handler.
+
+Note that exiting the awake handler after each read event, checking to see if we have the end of email sequence, and if not, doing another WAIT with a read tcp-port has the dual problems of being inefficient and not working.
+
+In summary, we can say that after the initial open and connect sequences we are basically in a write data, and receive a response sequence. So, we only exit the awake function with a true after a READ event, and only when we have decided we have received all the data that we are expecting. The only other times to exit the awake handler is after an ERROR or CLOSE event.
+
+One additional point needs mentioning. The remote host can close their side of the connection at any time even when we are in the middle of a read or write operation. If we receive a CLOSE event, it won&#39;t be processed until after we have finished our eg. write and this is going to cause an error.
+
+*A lost connection at the socket level is detected by recv() or by a send() error.*
+
+So, therefore to improve the robustness of our software, we need to trap both network reads and writes.
+
+```
+    wrote [
+        either empty? port/locals [
+            close port
+        ][
+            if trap? [send-chunk port][
+                print [&quot;Closed in wrote event &quot; now/precise]
+                close port
+            ]
+        ]
+    ]
+```
+
+So, in this example from a tiny [webserver](https://github.com/r3n/renclib/blob/master/scripts/mini-shttpd.reb) we are sending out 32 kb chunks of data. We introduce the trap? check to make that the remote connection has not closed since we last wrote out some data.
+
+Notes: A lower level explanation of the write and read functions are found in the list below.
+
+Links:
+
+* [TCP Port details](https://github.com/revault/rebol-wiki/wiki/TCP-Port-Details)
+* [TCP Port examples](https://github.com/revault/rebol-wiki/wiki/TCP-Port-Examples)
+* [TCP Port open details](https://github.com/revault/rebol-wiki/wiki/TCP-Port-Open-Issue)
+&gt; Correction from [Shixin](http://chat.stackoverflow.com/transcript/message/36724050#36724050): If the awake of any port returns true, the port is added to waked list, which makes awake of system port return true, and then Awake_System returns 1, Wait_Ports then stops waiting and returns true‌​, finally, WAIT returns the waked port</description>
+    
+    <lastBuildDate>Mon, 16 Aug 2021 04:02:45 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/archival-notes-on-network-event-handling/163.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>(Archival) Notes on Network Event Handling</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <blockquote>
+<p><em>From May 2017</em><br>
+<em>This is just to record the documents I have written in the past on the subject.</em></p>
+</blockquote>
+<hr>
+<p>When working with a network, we have to deal with a flow of data across a (half duplex) network port. To initiate that flow we can open, write and read the port. These actions are defined in the C code and interact with the network stack provided by the operating system. Once we complete such an action, a network EVENT is generated, and needs to be processed by user code so that the flow of data can continue.</p>
+<p>Network events are associated with a port, and are handled by a function that is assigned to the awake field of the port. This is known as the awake handler and takes a form like this:</p>
+<pre><code class="lang-auto">awake-handler: func [event /local tcp-port] [
+    print ["=== RH Client event:" event/type]
+    tcp-port: event/port
+    switch/default event/type [
+        error [
+            print "error event received"
+            tcp-port/spec/port-state: 'error
+            true
+        ]
+        lookup [
+            open tcp-port
+            false
+        ]
+        connect [
+            tcp-port/spec/port-state: 'ready
+            print "reading from port"
+            read tcp-port
+            false
+        ]
+        read [
+            print ["^\Read Handler read:" length tcp-port/data]
+            tcp-port/spec/data: copy tcp-port/data
+            clear tcp-port/data
+            true
+        ]
+        wrote [
+            read tcp-port
+            false
+        ]
+        close [
+            print "closed on us!"
+            tcp-port/spec/port-state: _
+            close tcp-port
+            true
+        ]
+    ] [true]
+]    
+</code></pre>
+<p>As you can see the EVENT has a field which contains the PORT where the EVENT was generated. The events are kept in an event queue and they are passed to their respective ports and awake handlers during a WAIT.</p>
+<pre><code class="lang-auto">unless port? wait [tcp-port port/spec/timeout] [
+        FAIL "timeout on tcp-port"
+]
+</code></pre>
+<p>So here WAIT takes the block of a port, and a timeout value. If an event is not generated for that port within the timeout period, it returns _ and an error is created. Otherwise a port is returned, and the port? function is satisfied.</p>
+<p>The awake handler can use the PORT field to extract the TCP subport associated with this EVENT.</p>
+<pre><code class="lang-auto">tcp-port: event/port
+</code></pre>
+<p>Now once we connect to the remote host what we do next depends on what the remote host does on a connection. If the remote host is a SMTP server, or a POP3 server, then they will send some form of greeting text. So, in our CONNECT event we need to do a read on the port to see what that text is, and to make sure that the remote host is ready.</p>
+<pre><code class="lang-auto">        connect [
+            tcp-port/spec/port-state: 'ready
+            print "reading from port"
+            read tcp-port
+            false
+        ]
+</code></pre>
+<p>But when connecting to a web server, there is no greeting. So, instead on CONNECT we do a write to the host and this is usually in the form of our HTTP request</p>
+<pre><code class="lang-auto">        connect [
+            tcp-port/spec/port-state: 'ready
+            print "writing to port"
+            write tcp-port to binary! {GET / ... rest of request}
+            false
+        ]
+</code></pre>
+<p>If you look at each EVENT, you will see it ends in a boolean value.</p>
+<pre><code class="lang-auto">        close [
+            print "closed on us!"
+            tcp-port/spec/port-state: _
+            close tcp-port
+            true
+        ]
+</code></pre>
+<p>That value is returned by the awake function, and if the value is true ( i.e. not false or blank) then the WAIT function exits and the event queue is no longer processed. To restart processing new events, you have to WAIT again on the port, which is still connected. WAIT is done outside the awake handler not inside otherwise you risk recursion and a stack overflow.</p>
+<p>So the question arises, how do you decide when to exit with a TRUE, and when to exit with a FALSE.</p>
+<p>The CLOSE event is clearly one you need to exit with a TRUE since the remote port is not going to send you any more events.</p>
+<p>In the other above examples, we don't exit a CONNECT event because on receipt of that event we either wrote a request and expect data to be returned, or, we read the greeting from the port, and want to send something to the server such as a login sequence. When data is received we get a READ (should be RECEIVED as READ is confusing) event, and when we have completed a write, we get a WROTE event. We can then decide inside those EVENTs whether we need to keep reading (eg. downloading a large email), or keep writing (sending a large file upload to our web server).</p>
+<p>So, looking at our POP3 protocol, we see how a READ is handled.</p>
+<pre><code class="lang-auto">read [
+    print ["^\Write Handler read:" length tcp-port/data]
+    append tcp-port/spec/data copy tcp-port/data
+    clear tcp-port/data
+    ; now decide if we need to exit the write-awake-handler
+    case [
+        tcp-port/spec/cmd = 'RETR 
+        [
+            either findeofpop tcp-port/spec/data [
+                tcp-port/spec/cmd: _
+                true
+            ][
+                read tcp-port
+                false
+            ]
+        ]
+        true [true]
+    ]
+]
+</code></pre>
+<p>We don't know if we have a 1 Kb email being downloaded, or a 10 Mb email. So, what we do here is first copy the data that has arrived in the common read/write buffer (tcp-port/data) so that it's safe. Now we know that pretty much every read will have all the data returned in one read event. But that's not the case when we retrieve an email. So, we have a placed a 'RETR flag in tcp-port/spec/cmd, and if we're in that state, then we need to see if the end of the email has arrived (signified by a trailing 5 octet CRLF . CRLF sequence). If we find that sequence, we return true. Otherwise, we keeping doing a read on the port, and return false so that more events will be processed by the awake handler.</p>
+<p>Note that exiting the awake handler after each read event, checking to see if we have the end of email sequence, and if not, doing another WAIT with a read tcp-port has the dual problems of being inefficient and not working.</p>
+<p>In summary, we can say that after the initial open and connect sequences we are basically in a write data, and receive a response sequence. So, we only exit the awake function with a true after a READ event, and only when we have decided we have received all the data that we are expecting. The only other times to exit the awake handler is after an ERROR or CLOSE event.</p>
+<p>One additional point needs mentioning. The remote host can close their side of the connection at any time even when we are in the middle of a read or write operation. If we receive a CLOSE event, it won't be processed until after we have finished our eg. write and this is going to cause an error.</p>
+<p><em>A lost connection at the socket level is detected by recv() or by a send() error.</em></p>
+<p>So, therefore to improve the robustness of our software, we need to trap both network reads and writes.</p>
+<pre><code class="lang-auto">    wrote [
+        either empty? port/locals [
+            close port
+        ][
+            if trap? [send-chunk port][
+                print ["Closed in wrote event " now/precise]
+                close port
+            ]
+        ]
+    ]
+</code></pre>
+<p>So, in this example from a tiny <a href="https://github.com/r3n/renclib/blob/master/scripts/mini-shttpd.reb">webserver</a> we are sending out 32 kb chunks of data. We introduce the trap? check to make that the remote connection has not closed since we last wrote out some data.</p>
+<p>Notes: A lower level explanation of the write and read functions are found in the list below.</p>
+<p>Links:</p>
+<ul>
+<li><a href="https://github.com/revault/rebol-wiki/wiki/TCP-Port-Details">TCP Port details</a></li>
+<li><a href="https://github.com/revault/rebol-wiki/wiki/TCP-Port-Examples">TCP Port examples</a></li>
+<li><a href="https://github.com/revault/rebol-wiki/wiki/TCP-Port-Open-Issue">TCP Port open details</a></li>
+</ul>
+<blockquote>
+<p>Correction from <a href="http://chat.stackoverflow.com/transcript/message/36724050#36724050">Shixin</a>: If the awake of any port returns true, the port is added to waked list, which makes awake of system port return true, and then Awake_System returns 1, Wait_Ports then stops waiting and returns true‌​, finally, WAIT returns the waked port</p>
+</blockquote>
+          <p><a href="https://forum.rebol.info/t/archival-notes-on-network-event-handling/163/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/archival-notes-on-network-event-handling/163/1</link>
+        <pubDate>Tue, 27 Jun 2017 05:54:53 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-163-1</guid>
+        <source url="https://forum.rebol.info/t/archival-notes-on-network-event-handling/163.rss">(Archival) Notes on Network Event Handling</source>
+      </item>
+  </channel>
+</rss>

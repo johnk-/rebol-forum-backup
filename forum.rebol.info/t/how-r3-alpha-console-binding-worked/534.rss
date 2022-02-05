@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>How R3-Alpha Console Binding Worked</title>
+    <link>https://forum.rebol.info/t/how-r3-alpha-console-binding-worked/534</link>
+    <description>Load up an R3-Alpha session and try this:
+
+    &gt;&gt; print mold words-of bind? &#39;foobar
+    [system print mold words-of bind? foobar]
+
+We&#39;ve called out a &quot;non-built-in&quot; LIT-WORD! (`&#39;foobar`), and are asking it to show us the keys of the object to which it is bound.  It gives us back the so-called &quot;user context&quot;.
+
+It&#39;s a small-looking context (for now), which has the word `system` along with &quot;magically&quot; all of the words we just typed in.  This may seem strange, because foobar aside...aren&#39;t print/mold/bind?/words-of known to live in the  `lib` context?  Shouldn&#39;t those words be bound into lib?
+
+But consider this: if PRINT living in the lib context would make WORD! bindings go directly there, what should SET-WORD!s do?  For instance, **print: func [x] [write-stdout reverse copy x]**.  If that overwrote the FUNCTION! value of PRINT in lib, it would be gone...and a lot of lower-level and mezzanine functions would be broken because of this whimsical reassignment.
+
+So it would seem the rules are:
+
+* If the input uses an ANY-WORD! that&#39;s in the user context already, bind it there and continue
+* If not already in the user context, but found in the lib context, create a new key/value in the user context which copies the existing value from lib, and bind the word to that new variable
+* If the above two fail, bind to a new unset value in the user context
+
+Let&#39;s look for something like that.
+
+## The Code
+
+The R3-Alpha console code loop just took that string you typed in and [passed it to RL_Do_String()](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/os/host-main.c#L184):
+
+    while (TRUE) {
+         Put_Str(PROMPT_STR);
+         if ((line = Get_Str())) {
+             RL_Do_String(line, 0, 0);
+             RL_Print_TOS(0, RESULT_STR);
+             OS_Free(line);
+        }
+        else break; // EOS
+    }
+
+`RL_Do_String` merely calls over to [Do_String()](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-do.c#L1655).  This code would set up a kind of &quot;exception handler&quot; to trap errors.  Then it would turn the textual source into structural code (via `Scan_Source()`), bind it, and execute it.
+
+The code that handled the console&#39;s binding looked like this:
+
+    rc = VAL_OBJ_FRAME(Get_System(SYS_CONTEXTS, CTX_USER));
+    len = rc-&gt;tail;
+    Bind_Block(rc, BLK_HEAD(code), BIND_ALL | BIND_DEEP);
+    SET_INTEGER(&amp;vali, len);
+    Resolve_Context(rc, Lib_Context, &amp;vali, FALSE, 0);
+
+So the &quot;context to be resolved&quot; (rc) is the user context.  Considering *only the user context*, `Bind_Block` walks the passed in code from the console deeply (`BIND_DEEP`), looking for ANY-WORD! (`BIND_ALL`).  It creates new bindings for anything not found already.
+
+However--before any of that binding happened--it took a note of how many variables were already in the context.  This way it can tell the difference between those that already had an entry in the user context but were unset, vs. those that weren&#39;t in the user context at all before this binding.
+
+That information is taken advantage of by the `Resolve_Context` operation, which is passed the Lib_Context to use to fill any of the *new* unset things that happen to have entries in the Lib_Context.  The code for resolving [looks a bit complicated](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-frame.c#L679).  But really it&#39;s just trying to efficiently deal with the indexes of words in the lib context:
+
+    &gt;&gt; index? find (words-of lib) &#39;print
+    == 262
+
+Code being loaded will make mention of a lot of declarations from lib.  Yet the list of new words is being tacked onto the end of the user context in no particular order...all of which want to be searched *by word* in the lib context.  So all of lib is walked to put into a hash table mapping words to indices in lib, and then the new declarations are walked and checked against that table.  If there&#39;s a significant number of words, then this is faster than linear searching to find each word.
+
+So the actual mechanism is:
+
+* Remember what words are already in the user context...even the unset ones
+* If the input uses an ANY-WORD! that&#39;s in the user context already, bind it there and continue, else add a new unset value
+* For the lib context, build a table mapping word names to their variable index in lib
+* For all *new* unset values, see if they&#39;re in the mapping table, and if so bind them to lib at that index
+* Any of the new unset values that don&#39;t look up in lib are left unset
+* Uninitialize the mapping table
+
+## Clutter?
+
+This might strike one as being a lot of clutter.  You&#39;re ending up with every ANY-WORD!--that is seen in scanned source--getting a binding in the user context.  This happens even if that binding will remain unset indefinitely, because its intent was always to be bound again in an object or function.
+
+But you don&#39;t see that clutter in the lib context.  Let&#39;s just randomly pick a local from R3-Alpha&#39;s `minimum-of` mezzanine... the [/local spot](https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/mezz-math.r#L67):
+
+    &gt;&gt; find lib &#39;minimum-of
+    == true
+
+    &gt;&gt; find lib &#39;spot
+    == none
+
+But try the following in a fresh R3-Alpha session, and you&#39;ll see `local` and `spot`:
+
+    &gt;&gt; my-function: func [/local spot] []
+
+    &gt;&gt; words-of bind? &#39;my-function
+    == [system my-function func local spot words-of bind?]
+
+The code that produces `lib` doesn&#39;t get this extra junk, because %base-xxx.r, %sys-xxx.r, and %mezz-xxx.r files are processed using a method that&#39;s a bit more like how objects are defined.  They are scanned for *top-level* SET-WORD!s first.</description>
+    
+    <lastBuildDate>Mon, 14 Sep 2020 13:01:16 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/how-r3-alpha-console-binding-worked/534.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>How R3-Alpha Console Binding Worked</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Load up an R3-Alpha session and try this:</p>
+<pre><code>&gt;&gt; print mold words-of bind? 'foobar
+[system print mold words-of bind? foobar]
+</code></pre>
+<p>We've called out a "non-built-in" LIT-WORD! (<code>'foobar</code>), and are asking it to show us the keys of the object to which it is bound.  It gives us back the so-called "user context".</p>
+<p>It's a small-looking context (for now), which has the word <code>system</code> along with "magically" all of the words we just typed in.  This may seem strange, because foobar aside...aren't print/mold/bind?/words-of known to live in the  <code>lib</code> context?  Shouldn't those words be bound into lib?</p>
+<p>But consider this: if PRINT living in the lib context would make WORD! bindings go directly there, what should SET-WORD!s do?  For instance, <strong>print: func [x] [write-stdout reverse copy x]</strong>.  If that overwrote the FUNCTION! value of PRINT in lib, it would be gone...and a lot of lower-level and mezzanine functions would be broken because of this whimsical reassignment.</p>
+<p>So it would seem the rules are:</p>
+<ul>
+<li>If the input uses an ANY-WORD! that's in the user context already, bind it there and continue</li>
+<li>If not already in the user context, but found in the lib context, create a new key/value in the user context which copies the existing value from lib, and bind the word to that new variable</li>
+<li>If the above two fail, bind to a new unset value in the user context</li>
+</ul>
+<p>Let's look for something like that.</p>
+<h2>The Code</h2>
+<p>The R3-Alpha console code loop just took that string you typed in and <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/os/host-main.c#L184" rel="nofollow noopener">passed it to RL_Do_String()</a>:</p>
+<pre><code>while (TRUE) {
+     Put_Str(PROMPT_STR);
+     if ((line = Get_Str())) {
+         RL_Do_String(line, 0, 0);
+         RL_Print_TOS(0, RESULT_STR);
+         OS_Free(line);
+    }
+    else break; // EOS
+}
+</code></pre>
+<p><code>RL_Do_String</code> merely calls over to <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-do.c#L1655" rel="nofollow noopener">Do_String()</a>.  This code would set up a kind of "exception handler" to trap errors.  Then it would turn the textual source into structural code (via <code>Scan_Source()</code>), bind it, and execute it.</p>
+<p>The code that handled the console's binding looked like this:</p>
+<pre><code>rc = VAL_OBJ_FRAME(Get_System(SYS_CONTEXTS, CTX_USER));
+len = rc-&gt;tail;
+Bind_Block(rc, BLK_HEAD(code), BIND_ALL | BIND_DEEP);
+SET_INTEGER(&amp;vali, len);
+Resolve_Context(rc, Lib_Context, &amp;vali, FALSE, 0);
+</code></pre>
+<p>So the "context to be resolved" (rc) is the user context.  Considering <em>only the user context</em>, <code>Bind_Block</code> walks the passed in code from the console deeply (<code>BIND_DEEP</code>), looking for ANY-WORD! (<code>BIND_ALL</code>).  It creates new bindings for anything not found already.</p>
+<p>However--before any of that binding happened--it took a note of how many variables were already in the context.  This way it can tell the difference between those that already had an entry in the user context but were unset, vs. those that weren't in the user context at all before this binding.</p>
+<p>That information is taken advantage of by the <code>Resolve_Context</code> operation, which is passed the Lib_Context to use to fill any of the <em>new</em> unset things that happen to have entries in the Lib_Context.  The code for resolving <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/core/c-frame.c#L679" rel="nofollow noopener">looks a bit complicated</a>.  But really it's just trying to efficiently deal with the indexes of words in the lib context:</p>
+<pre><code>&gt;&gt; index? find (words-of lib) 'print
+== 262
+</code></pre>
+<p>Code being loaded will make mention of a lot of declarations from lib.  Yet the list of new words is being tacked onto the end of the user context in no particular order...all of which want to be searched <em>by word</em> in the lib context.  So all of lib is walked to put into a hash table mapping words to indices in lib, and then the new declarations are walked and checked against that table.  If there's a significant number of words, then this is faster than linear searching to find each word.</p>
+<p>So the actual mechanism is:</p>
+<ul>
+<li>Remember what words are already in the user context...even the unset ones</li>
+<li>If the input uses an ANY-WORD! that's in the user context already, bind it there and continue, else add a new unset value</li>
+<li>For the lib context, build a table mapping word names to their variable index in lib</li>
+<li>For all <em>new</em> unset values, see if they're in the mapping table, and if so bind them to lib at that index</li>
+<li>Any of the new unset values that don't look up in lib are left unset</li>
+<li>Uninitialize the mapping table</li>
+</ul>
+<h2>Clutter?</h2>
+<p>This might strike one as being a lot of clutter.  You're ending up with every ANY-WORD!--that is seen in scanned source--getting a binding in the user context.  This happens even if that binding will remain unset indefinitely, because its intent was always to be bound again in an object or function.</p>
+<p>But you don't see that clutter in the lib context.  Let's just randomly pick a local from R3-Alpha's <code>minimum-of</code> mezzanine... the <a href="https://github.com/rebol/rebol/blob/25033f897b2bd466068d7663563cd3ff64740b94/src/mezz/mezz-math.r#L67" rel="nofollow noopener">/local spot</a>:</p>
+<pre><code>&gt;&gt; find lib 'minimum-of
+== true
+
+&gt;&gt; find lib 'spot
+== none
+</code></pre>
+<p>But try the following in a fresh R3-Alpha session, and you'll see <code>local</code> and <code>spot</code>:</p>
+<pre><code>&gt;&gt; my-function: func [/local spot] []
+
+&gt;&gt; words-of bind? 'my-function
+== [system my-function func local spot words-of bind?]
+</code></pre>
+<p>The code that produces <code>lib</code> doesn't get this extra junk, because %base-xxx.r, %sys-xxx.r, and %mezz-xxx.r files are processed using a method that's a bit more like how objects are defined.  They are scanned for <em>top-level</em> SET-WORD!s first.</p>
+          <p><a href="https://forum.rebol.info/t/how-r3-alpha-console-binding-worked/534/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/how-r3-alpha-console-binding-worked/534/1</link>
+        <pubDate>Sun, 18 Feb 2018 21:31:21 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-534-1</guid>
+        <source url="https://forum.rebol.info/t/how-r3-alpha-console-binding-worked/534.rss">How R3-Alpha Console Binding Worked</source>
+      </item>
+  </channel>
+</rss>

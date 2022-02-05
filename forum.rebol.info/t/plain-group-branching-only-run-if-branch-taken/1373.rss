@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Plain GROUP! &amp; Branching: Only Run If Branch Taken?</title>
+    <link>https://forum.rebol.info/t/plain-group-branching-only-run-if-branch-taken/1373</link>
+    <description>Something that came up early on was the question of parity in how CASE dealt with GROUP! branches and how IF dealt with GROUP! branches.
+
+Because IF evaluated its arguments, the GROUP! would always run...even if the condition ruled out the BLOCK! that was evaluated to running:
+
+     rebol2&gt;&gt; if true (print &quot;in group&quot; [print &quot;in block&quot;])
+     in group
+     in block
+
+     rebol2&gt;&gt; if false (print &quot;in group&quot; [print &quot;in block&quot;])
+     in group  ; ...still printed...just no &quot;in block&quot;
+
+But with CASE, the branches lived inside a block passed in...making them effectively quoted.  Which meant not only *could* they be skipped, but they *were* skipped:
+
+    rebol2&gt;&gt; case [true (print &quot;in group&quot; [print &quot;in block&quot;])]
+    in group
+    in block
+
+    rebol2&gt;&gt; case [false (print &quot;in group&quot; [print &quot;in block&quot;])]
+    == none  ; didn&#39;t say &quot;in group&quot; this time
+
+Sensing something was amiss, Ren-C brought these two situations into sync...but biased to the IF behavior.  When a CASE saw a GROUP! in a branch slot it would run it, just as an IF would...regardless of whether that branch would run.
+
+    ren-c&gt;&gt; case [false (print &quot;in group&quot; [print &quot;in block&quot;])]
+    in group
+    ; null
+
+It wasn&#39;t really a question of which was the more -useful- behavior.  *Choosing it this way was because it was perceived as the only option.*  There was no way to stop the GROUP!s from running in IF, so long as the branches were evaluative, this was the only way to get parity...
+
+## Suppressing Evaluation Considered for @(gr o up)
+
+When trying to figure out what it was that @(...) did, one potential feature was to remedy this unwanted execution.  It would be like (...) but only run if the branch executed.
+
+     &gt;&gt; branchy: func [flag] [either flag &#39;[&lt;a&gt;] &#39;[&lt;b&gt;]]
+
+     &gt;&gt; either true (print &quot;a&quot; branchy true) (print &quot;b&quot; branchy false)
+     a
+     b
+     == &lt;a&gt;
+
+    &gt;&gt; either true @(print &quot;a&quot; branchy true) @(print &quot;b&quot; branchy false)
+    a
+    == &lt;a&gt;
+
+Useful.  But then @(...) became desired for other purposes...namely to request the result of the branch *as-is*.  e.g. no voidification.
+
+## Should Plain GROUP!s Only Run If The Branch Is Taken?
+
+What if the branching constructs quoted the GROUP!s too, and ran them to generate branches only if the condition matched?
+
+     &gt;&gt; branchy: func [flag] [either flag &#39;[&lt;a&gt;] &#39;[&lt;b&gt;]]
+
+     &gt;&gt; either true (print &quot;a&quot; branchy true) (print &quot;b&quot; branchy false)
+     a
+     == &lt;a&gt;
+
+    &gt;&gt; case [false (print &quot;in group&quot; [print &quot;in block&quot;])]
+    ; null
+
+I imagine if you conducted a poll, you&#39;d find a fair number of people who&#39;d say they&#39;d prefer that behavior...and would prefer this to using @(...) to get it.
+
+Other people might say it rocks the boat to have a GROUP! at a callsite that doesn&#39;t execute unconditionally.  But branch slots are already rocking the boat...they&#39;re not evaluative, so they can see quotes:
+
+     &gt;&gt; if true &#39;&lt;foo&gt;
+     == &lt;foo&gt;
+
+*(You can read all about it with [Soft-Quoted Branching](https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020)...if you&#39;ve forgotten)*
+
+## What Would This Inhibit?
+
+For most cases, not running the group unless the branch runs is better.  Even if your branch-making code has no side-effects, it&#39;s better for performance not to run it unless you have to.  Lambdas are a good example...if you wanted to say **switch x [...] then (x -&gt; [...])** you could avoid an entire function generation just by having it in a GROUP! like this.
+
+But if you imagine something like a &quot;branch generator&quot; that generates branches in a certain order, and you wanted to position them using that order...you&#39;d need to use a COMPOSE:
+
+     do compose [either (branch-gen) (branch-gen)]
+
+I don&#39;t think that&#39;s too much of a tax to pay for that intent.  It looks fine and conveys exactly what it is...clearly running both branch generations for the COMPOSE step prior to the EITHER.
+
+What I&#39;m more hesitant about is that hard-quoting behavior for branches to not run GROUP!s at the callsites is a fairly early curveball.
+
+But maybe it&#39;s just an example of the language being fluid.
+
+## Drat!  A Mechanical Foil
+
+*(I&#39;m not sure if the practice of writing out the reasoning before trying experiments is a good one, because I usually find some issue pretty quickly when I try them...but...)*
+
+So the feature of [Lambdas for Branches](https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361) relies on something that is tied to non-hard-quoting semantics.
+
+Rightly or wrongly... the decision was that in an &quot;escapable&quot; quoting slot (e.g. one that would accept a GROUP! and evaluate code)...that escapable slot was also willing to accept something produced by a left-quoting construct on the right hand side.
+
+I&#39;m not too keen on coming up with another parameter convention that is &quot;hard quoted unless a lambda decides it wants to evaluate and put something there&quot;.  So that sort of kills this idea...so long as it&#39;s plain GROUP! that is considered to be what defeats quoting.
+
+**But there are still avenues of attack...**
+
+One might be that GET-GROUP! is the &quot;sneaky quoting defeater&quot; instead of plain GROUP!.  When you think about it, if **X** and **X/Y** are quoted by soft quotes but **:X** and **:X/Y** aren&#39;t... why wouldn&#39;t it be **:(FOO BAR)** instead of **(FOO BAR)** to undermine a quoting site...with ordinary GROUP!s quoted normally?
+
+So like this:
+
+    &gt;&gt; either true (print &quot;a&quot; [&lt;a&gt;]) (print &quot;b&quot; [&lt;b&gt;])
+    a
+    == &lt;a&gt;
+
+    &gt;&gt; either true :(print &quot;a&quot; [&lt;a&gt;]) :(print &quot;b&quot; [&lt;b&gt;])
+    a
+    b
+    == &lt;a&gt;
+
+To me, that feels more natural...that the colon is asking for subversion of the quote.
+
+Interestingly, you could mix and match...here, seen getting it out of order:
+
+    &gt;&gt; either true (print &quot;a&quot; [&lt;a&gt;]) :(print &quot;b&quot; [&lt;b&gt;])
+    b
+    a
+    == &lt;a&gt;
+
+If it were done this way, then it suggests that GROUP! is acceptable as a parameter from direct quoting...but what if you got a GROUP! produced by the subverted quoting? 
+
+    &gt;&gt; if true :(print &quot;a&quot; &#39;(print &quot;b&quot; [&lt;c&gt;]))
+    a
+    b
+    == &lt;c&gt;
+
+That&#39;s just what would naturally happen.  Seems all right to me, but it&#39;s not clear how you would stop it if you wanted to (as in today&#39;s situation, you wouldn&#39;t know as the recipient of an escaped quote if what you got was generated by an escape or not.)  So if this bothered you, you couldn&#39;t use escaping and would have to hard quote it.
+
+[**This idea feels rather appealing, but it suggests a different semiotics for arguments.**  e.g. an escapable quoted parameter would be **:x** or **`&#39;:x`**... not **`&#39;(x)`**](https://forum.rebol.info/t/get-word-for-loop-vars-function-args-mean-allow-action-s/1303/2?u=hostilefork)
+
+Anyway, what this really does is raise some questions about how people feel about the quoting of groups and branching.
+
+I am finding myself leaning pretty heavily on the side of saying that it is most convenient if a plain GROUP! in a branch slot does not run its branch generation behavior unless the branch is taken. 
+ Which is a bit of a shift for me...as I&#39;d favored &quot;normal&quot; evaluation semantics more often.  But it&#39;s just seeming that practically speaking it&#39;s cleaner to leverage the quoting.</description>
+    
+    <lastBuildDate>Mon, 26 Oct 2020 10:23:33 +0000</lastBuildDate>
+    <category>Dialects/DSLs</category>
+    <atom:link href="https://forum.rebol.info/t/plain-group-branching-only-run-if-branch-taken/1373.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Plain GROUP! &amp; Branching: Only Run If Branch Taken?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Something that came up early on was the question of parity in how CASE dealt with GROUP! branches and how IF dealt with GROUP! branches.</p>
+<p>Because IF evaluated its arguments, the GROUP! would always run...even if the condition ruled out the BLOCK! that was evaluated to running:</p>
+<pre><code> rebol2&gt;&gt; if true (print "in group" [print "in block"])
+ in group
+ in block
+
+ rebol2&gt;&gt; if false (print "in group" [print "in block"])
+ in group  ; ...still printed...just no "in block"
+</code></pre>
+<p>But with CASE, the branches lived inside a block passed in...making them effectively quoted.  Which meant not only <em>could</em> they be skipped, but they <em>were</em> skipped:</p>
+<pre><code>rebol2&gt;&gt; case [true (print "in group" [print "in block"])]
+in group
+in block
+
+rebol2&gt;&gt; case [false (print "in group" [print "in block"])]
+== none  ; didn't say "in group" this time
+</code></pre>
+<p>Sensing something was amiss, Ren-C brought these two situations into sync...but biased to the IF behavior.  When a CASE saw a GROUP! in a branch slot it would run it, just as an IF would...regardless of whether that branch would run.</p>
+<pre><code>ren-c&gt;&gt; case [false (print "in group" [print "in block"])]
+in group
+; null
+</code></pre>
+<p>It wasn't really a question of which was the more -useful- behavior.  <em>Choosing it this way was because it was perceived as the only option.</em>  There was no way to stop the GROUP!s from running in IF, so long as the branches were evaluative, this was the only way to get parity...</p>
+<h2>Suppressing Evaluation Considered for @(gr o up)</h2>
+<p>When trying to figure out what it was that @(...) did, one potential feature was to remedy this unwanted execution.  It would be like (...) but only run if the branch executed.</p>
+<pre><code> &gt;&gt; branchy: func [flag] [either flag '[&lt;a&gt;] '[&lt;b&gt;]]
+
+ &gt;&gt; either true (print "a" branchy true) (print "b" branchy false)
+ a
+ b
+ == &lt;a&gt;
+
+&gt;&gt; either true @(print "a" branchy true) @(print "b" branchy false)
+a
+== &lt;a&gt;
+</code></pre>
+<p>Useful.  But then @(...) became desired for other purposes...namely to request the result of the branch <em>as-is</em>.  e.g. no voidification.</p>
+<h2>Should Plain GROUP!s Only Run If The Branch Is Taken?</h2>
+<p>What if the branching constructs quoted the GROUP!s too, and ran them to generate branches only if the condition matched?</p>
+<pre><code> &gt;&gt; branchy: func [flag] [either flag '[&lt;a&gt;] '[&lt;b&gt;]]
+
+ &gt;&gt; either true (print "a" branchy true) (print "b" branchy false)
+ a
+ == &lt;a&gt;
+
+&gt;&gt; case [false (print "in group" [print "in block"])]
+; null
+</code></pre>
+<p>I imagine if you conducted a poll, you'd find a fair number of people who'd say they'd prefer that behavior...and would prefer this to using @(...) to get it.</p>
+<p>Other people might say it rocks the boat to have a GROUP! at a callsite that doesn't execute unconditionally.  But branch slots are already rocking the boat...they're not evaluative, so they can see quotes:</p>
+<pre><code> &gt;&gt; if true '&lt;foo&gt;
+ == &lt;foo&gt;
+</code></pre>
+<p><em>(You can read all about it with <a href="https://forum.rebol.info/t/soft-quoted-branching-light-elegant-fast/1020">Soft-Quoted Branching</a>...if you've forgotten)</em></p>
+<h2>What Would This Inhibit?</h2>
+<p>For most cases, not running the group unless the branch runs is better.  Even if your branch-making code has no side-effects, it's better for performance not to run it unless you have to.  Lambdas are a good example...if you wanted to say <strong>switch x [...] then (x -&gt; [...])</strong> you could avoid an entire function generation just by having it in a GROUP! like this.</p>
+<p>But if you imagine something like a "branch generator" that generates branches in a certain order, and you wanted to position them using that order...you'd need to use a COMPOSE:</p>
+<pre><code> do compose [either (branch-gen) (branch-gen)]
+</code></pre>
+<p>I don't think that's too much of a tax to pay for that intent.  It looks fine and conveys exactly what it is...clearly running both branch generations for the COMPOSE step prior to the EITHER.</p>
+<p>What I'm more hesitant about is that hard-quoting behavior for branches to not run GROUP!s at the callsites is a fairly early curveball.</p>
+<p>But maybe it's just an example of the language being fluid.</p>
+<h2>Drat!  A Mechanical Foil</h2>
+<p><em>(I'm not sure if the practice of writing out the reasoning before trying experiments is a good one, because I usually find some issue pretty quickly when I try them...but...)</em></p>
+<p>So the feature of <a href="https://forum.rebol.info/t/the-most-vexing-evaluation-lambda-meets-then-else/1361">Lambdas for Branches</a> relies on something that is tied to non-hard-quoting semantics.</p>
+<p>Rightly or wrongly... the decision was that in an "escapable" quoting slot (e.g. one that would accept a GROUP! and evaluate code)...that escapable slot was also willing to accept something produced by a left-quoting construct on the right hand side.</p>
+<p>I'm not too keen on coming up with another parameter convention that is "hard quoted unless a lambda decides it wants to evaluate and put something there".  So that sort of kills this idea...so long as it's plain GROUP! that is considered to be what defeats quoting.</p>
+<p><strong>But there are still avenues of attack...</strong></p>
+<p>One might be that GET-GROUP! is the "sneaky quoting defeater" instead of plain GROUP!.  When you think about it, if <strong>X</strong> and <strong>X/Y</strong> are quoted by soft quotes but <strong>:X</strong> and <strong>:X/Y</strong> aren't... why wouldn't it be <strong>:(FOO BAR)</strong> instead of <strong>(FOO BAR)</strong> to undermine a quoting site...with ordinary GROUP!s quoted normally?</p>
+<p>So like this:</p>
+<pre><code>&gt;&gt; either true (print "a" [&lt;a&gt;]) (print "b" [&lt;b&gt;])
+a
+== &lt;a&gt;
+
+&gt;&gt; either true :(print "a" [&lt;a&gt;]) :(print "b" [&lt;b&gt;])
+a
+b
+== &lt;a&gt;
+</code></pre>
+<p>To me, that feels more natural...that the colon is asking for subversion of the quote.</p>
+<p>Interestingly, you could mix and match...here, seen getting it out of order:</p>
+<pre><code>&gt;&gt; either true (print "a" [&lt;a&gt;]) :(print "b" [&lt;b&gt;])
+b
+a
+== &lt;a&gt;
+</code></pre>
+<p>If it were done this way, then it suggests that GROUP! is acceptable as a parameter from direct quoting...but what if you got a GROUP! produced by the subverted quoting?</p>
+<pre><code>&gt;&gt; if true :(print "a" '(print "b" [&lt;c&gt;]))
+a
+b
+== &lt;c&gt;
+</code></pre>
+<p>That's just what would naturally happen.  Seems all right to me, but it's not clear how you would stop it if you wanted to (as in today's situation, you wouldn't know as the recipient of an escaped quote if what you got was generated by an escape or not.)  So if this bothered you, you couldn't use escaping and would have to hard quote it.</p>
+<p><a href="https://forum.rebol.info/t/get-word-for-loop-vars-function-args-mean-allow-action-s/1303/2"><strong>This idea feels rather appealing, but it suggests a different semiotics for arguments.</strong>  e.g. an escapable quoted parameter would be <strong>:x</strong> or <strong><code>':x</code></strong>... not <strong><code>'(x)</code></strong></a></p>
+<p>Anyway, what this really does is raise some questions about how people feel about the quoting of groups and branching.</p>
+<p>I am finding myself leaning pretty heavily on the side of saying that it is most convenient if a plain GROUP! in a branch slot does not run its branch generation behavior unless the branch is taken.<br>
+Which is a bit of a shift for me...as I'd favored "normal" evaluation semantics more often.  But it's just seeming that practically speaking it's cleaner to leverage the quoting.</p>
+          <p><a href="https://forum.rebol.info/t/plain-group-branching-only-run-if-branch-taken/1373/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/plain-group-branching-only-run-if-branch-taken/1373/1</link>
+        <pubDate>Mon, 26 Oct 2020 07:15:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1373-1</guid>
+        <source url="https://forum.rebol.info/t/plain-group-branching-only-run-if-branch-taken/1373.rss">Plain GROUP! &amp; Branching: Only Run If Branch Taken?</source>
+      </item>
+  </channel>
+</rss>

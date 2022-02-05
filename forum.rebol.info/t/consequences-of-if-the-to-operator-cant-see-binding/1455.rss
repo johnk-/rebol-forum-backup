@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Consequences of if the TO Operator Can&#39;t See Binding</title>
+    <link>https://forum.rebol.info/t/consequences-of-if-the-to-operator-cant-see-binding/1455</link>
+    <description>R3-Alpha (and Red) see value cells as a single data type.  It doesn&#39;t matter what kind of code you have inside the interpreter, it always has the same level of privilege.
+
+That&#39;s mostly true of the C build of Ren-C, too...with the exception of the C `const` attribute.  It compiles everything down to just one type, the REBVAL.
+
+But the C++ build offers more granular views:
+
+* A RELVAL is a cell which cannot have its binding looked up unless you have a &quot;specifier&quot; to couple it with.
+
+* A REBCEL is a view of a value without its quoting level -or- its binding.
+
+*(Note: I&#39;m likely going to replace these with the branding-agnostic names **`VALUE`**, **`CELL`**, and **`CELL0`**...)*
+
+What&#39;s neat is that since these are really just views of the same memory, all the C++ checks are doing is stopping you from calling methods you shouldn&#39;t on each type.  This doesn&#39;t cost anything extra at runtime (in the release build).
+
+## Methods Can Receive Different Views
+
+As an example, the MOLD mechanics for each type only receive a REBCEL.  The higher-level of Mold_Value() takes care of outputting the right number of tick marks, and then the value is supposed to output based just on the cell contents.
+
+Besides not being able to react to the quoting, it means a MOLD can&#39;t look up a WORD! it is being asked to mold, and decide how to render it based on what it looks up to.  Is that a good rule?  I&#39;m pretty sure that it is.  While someone might want a way of generating string output from source that does take bindings into account, that would likely *use* MOLD in its implementation.  But I believe it&#39;s safer (and faster) to say that MOLD is constrained in its definition to operate just on the cell structure without being able to look up bindings...or render something differently based on how many quote marks it has in front of it.
+
+## Could the View Given to TO Help Define It?
+
+When examining qualitative differences between MAKE and TO (and AS and CAST and ALIAS and anything else)...it seemed to me that it was best if TO remained very &quot;surface-level&quot;.
+
+We could phrase this in terms of general rules like &quot;a TO can&#39;t THROW&quot;.  So with that, we might say that it seems sensible that a TO doesn&#39;t REDUCE its input.  Further stepping in the definitional sphere, we could say that TO can&#39;t dereference or GET a WORD! in its input at all.
+
+*(Note: This isn&#39;t to be confused with saying that a usermode methodization of TO couldn&#39;t REDUCE code or use GET in its implementation.  It just couldn&#39;t react to anything about the binding of the *input* that it was receiving.)*
+
+## Not Reducing During a TO Seems Uncontroversial
+
+Rebol2 wouldn&#39;t let you do TO an OBJECT!:
+
+    &gt;&gt; to object! [a: 1 + 2 b: 3 + 4]
+    *** Script Error: to does not allow object for its type argument
+
+*(NOTE: Not that I think it&#39;s necessarily a great idea to make TO do this...but I will point out that CONSTRUCT was an idea of being able to make objects without evaluation...so you might imagine TO of a BLOCK! doing that behavior under this model.)*
+
+R3-Alpha and Red&#39;s &quot;TO MAP! didn&#39;t reduce the contents:
+
+    r3-alpha/red&gt;&gt; to map! [a: 1 + 2 b: 3 + 4]
+    == #(
+        a: 1
+        +: 4
+        b: 3
+    )
+
+So saying that TO shouldn&#39;t have access to the bindings of variables seems like a solid rule.
+
+## The TO BLOCK! and TO GROUP! Idiom Would Need To Change
+
+While the TO itself may not use bindings, conversions between arrays have historically preserved them.
+
+So... what if TO stripped off bindings?  Would that be bad?
+
+It doesn&#39;t seem too inconsistent to say that the results of a TO are not bound.  For instance, look at the historical behavior of TO BLOCK! of a string:
+
+    rebol2&gt;&gt; x: 10
+
+    rebol2&gt;&gt; b: to block! &quot;x + 20&quot;
+    == [x + 20]
+
+    &gt;&gt; do b
+    ** Script Error: x word has no context
+
+We can also notice that an aliasing operator (like let&#39;s say **AS**) has the benefit of not making a copy if you don&#39;t want it.  So not only can you keep the bindings by saying **copy as group! block**, but your awareness is drawn to **as group! block** to be used if you didn&#39;t need that copy.
+
+## Mechanical Problem: TO is not DEEP
+
+Historically you do not get a deep copy from TO.
+
+    rebol2&gt;&gt; block: [a [b c]]
+
+    rebol2&gt;&gt; group: to paren! block  ; ugh, remember PAREN!?  ugly name!
+    == (a [b c])
+
+    rebol2&gt;&gt; append second block &#39;d
+    rebol2&gt;&gt; block
+    == [a [b c d]]
+
+    rebol2&gt;&gt; group
+    == (a [b c d])  ; copy was shallow, change to original block reflected
+
+But if you&#39;re shallow copying the contents, that means you&#39;re reusing arrays from the original.  How do you reuse their memory without also reusing their binding?
+
+Well... we have one possible tool, with **virtual unbinding**.  We throw in a virtual binding patch that says &quot;stop all binding here&quot; and the only bindings that apply are those that are layered on top of the unbinding patch.  What this would mean is that even though the TO methods only have `RELVAL*`, we&#39;d offer a combinator for getting a `REBVAL*` back even though you don&#39;t have a specifier...it would be by letting you manufacture a virtual binding specifier that worked to resolve any RELVAL as unbound.  All nice and tidy, and solved precisely with the type system.  Neat, eh?
+
+But right now, virtual binds are const.  This would mean that if you used TO BLOCK! to get a block and inherited its nested arrays, trying to run a mutable BIND/DEEP would fail on those nested arrays...because it would want to protect you from mutating the embedded blocks with aliased binding.  You wouldn&#39;t necessarily get the effects you wanted (you&#39;d be changing the view as seen by the original block...the virtual one would stay unbound).
+
+This would mean you could only use a shallow mutable BIND on the result of such a TO, or more virtual binding.
+
+## Would Anyone Use This TO of BLOCK! or GROUP! ?
+
+A lot of places that have been using TO really wanted to use AS (or whatever the aliasing operator would be that says &quot;use the same array memory, just view it as a different type).
+
+How often do you want a copy that also happens to be shallow?  On those few occasions that you do, isn&#39;t **copy as group! ...** more explicit, along with being easily changed to **copy/deep as group! ...**, which you can&#39;t do with TO?
+
+The real value here is just driving a stake in the ground of what a TO operator *is*...which has been a very slippery question.  If we can agree that whatever it is that it can&#39;t see or act on the bindings of what you give it--and enforce that through compiler checks and rules--then we&#39;ve gotten a little tiny step forward in being able to say what is and what is not...</description>
+    
+    <lastBuildDate>Tue, 05 Jan 2021 22:54:14 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/consequences-of-if-the-to-operator-cant-see-binding/1455.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Consequences of if the TO Operator Can&#39;t See Binding</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>R3-Alpha (and Red) see value cells as a single data type.  It doesn't matter what kind of code you have inside the interpreter, it always has the same level of privilege.</p>
+<p>That's mostly true of the C build of Ren-C, too...with the exception of the C <code>const</code> attribute.  It compiles everything down to just one type, the REBVAL.</p>
+<p>But the C++ build offers more granular views:</p>
+<ul>
+<li>
+<p>A RELVAL is a cell which cannot have its binding looked up unless you have a "specifier" to couple it with.</p>
+</li>
+<li>
+<p>A REBCEL is a view of a value without its quoting level -or- its binding.</p>
+</li>
+</ul>
+<p><em>(Note: I'm likely going to replace these with the branding-agnostic names <strong><code>VALUE</code></strong>, <strong><code>CELL</code></strong>, and <strong><code>CELL0</code></strong>...)</em></p>
+<p>What's neat is that since these are really just views of the same memory, all the C++ checks are doing is stopping you from calling methods you shouldn't on each type.  This doesn't cost anything extra at runtime (in the release build).</p>
+<h2>Methods Can Receive Different Views</h2>
+<p>As an example, the MOLD mechanics for each type only receive a REBCEL.  The higher-level of Mold_Value() takes care of outputting the right number of tick marks, and then the value is supposed to output based just on the cell contents.</p>
+<p>Besides not being able to react to the quoting, it means a MOLD can't look up a WORD! it is being asked to mold, and decide how to render it based on what it looks up to.  Is that a good rule?  I'm pretty sure that it is.  While someone might want a way of generating string output from source that does take bindings into account, that would likely <em>use</em> MOLD in its implementation.  But I believe it's safer (and faster) to say that MOLD is constrained in its definition to operate just on the cell structure without being able to look up bindings...or render something differently based on how many quote marks it has in front of it.</p>
+<h2>Could the View Given to TO Help Define It?</h2>
+<p>When examining qualitative differences between MAKE and TO (and AS and CAST and ALIAS and anything else)...it seemed to me that it was best if TO remained very "surface-level".</p>
+<p>We could phrase this in terms of general rules like "a TO can't THROW".  So with that, we might say that it seems sensible that a TO doesn't REDUCE its input.  Further stepping in the definitional sphere, we could say that TO can't dereference or GET a WORD! in its input at all.</p>
+<p><em>(Note: This isn't to be confused with saying that a usermode methodization of TO couldn't REDUCE code or use GET in its implementation.  It just couldn't react to anything about the binding of the <em>input</em> that it was receiving.)</em></p>
+<h2>Not Reducing During a TO Seems Uncontroversial</h2>
+<p>Rebol2 wouldn't let you do TO an OBJECT!:</p>
+<pre><code>&gt;&gt; to object! [a: 1 + 2 b: 3 + 4]
+*** Script Error: to does not allow object for its type argument
+</code></pre>
+<p><em>(NOTE: Not that I think it's necessarily a great idea to make TO do this...but I will point out that CONSTRUCT was an idea of being able to make objects without evaluation...so you might imagine TO of a BLOCK! doing that behavior under this model.)</em></p>
+<p>R3-Alpha and Red's "TO MAP! didn't reduce the contents:</p>
+<pre><code>r3-alpha/red&gt;&gt; to map! [a: 1 + 2 b: 3 + 4]
+== #(
+    a: 1
+    +: 4
+    b: 3
+)
+</code></pre>
+<p>So saying that TO shouldn't have access to the bindings of variables seems like a solid rule.</p>
+<h2>The TO BLOCK! and TO GROUP! Idiom Would Need To Change</h2>
+<p>While the TO itself may not use bindings, conversions between arrays have historically preserved them.</p>
+<p>So... what if TO stripped off bindings?  Would that be bad?</p>
+<p>It doesn't seem too inconsistent to say that the results of a TO are not bound.  For instance, look at the historical behavior of TO BLOCK! of a string:</p>
+<pre><code>rebol2&gt;&gt; x: 10
+
+rebol2&gt;&gt; b: to block! "x + 20"
+== [x + 20]
+
+&gt;&gt; do b
+** Script Error: x word has no context
+</code></pre>
+<p>We can also notice that an aliasing operator (like let's say <strong>AS</strong>) has the benefit of not making a copy if you don't want it.  So not only can you keep the bindings by saying <strong>copy as group! block</strong>, but your awareness is drawn to <strong>as group! block</strong> to be used if you didn't need that copy.</p>
+<h2>Mechanical Problem: TO is not DEEP</h2>
+<p>Historically you do not get a deep copy from TO.</p>
+<pre><code>rebol2&gt;&gt; block: [a [b c]]
+
+rebol2&gt;&gt; group: to paren! block  ; ugh, remember PAREN!?  ugly name!
+== (a [b c])
+
+rebol2&gt;&gt; append second block 'd
+rebol2&gt;&gt; block
+== [a [b c d]]
+
+rebol2&gt;&gt; group
+== (a [b c d])  ; copy was shallow, change to original block reflected
+</code></pre>
+<p>But if you're shallow copying the contents, that means you're reusing arrays from the original.  How do you reuse their memory without also reusing their binding?</p>
+<p>Well... we have one possible tool, with <strong>virtual unbinding</strong>.  We throw in a virtual binding patch that says "stop all binding here" and the only bindings that apply are those that are layered on top of the unbinding patch.  What this would mean is that even though the TO methods only have <code>RELVAL*</code>, we'd offer a combinator for getting a <code>REBVAL*</code> back even though you don't have a specifier...it would be by letting you manufacture a virtual binding specifier that worked to resolve any RELVAL as unbound.  All nice and tidy, and solved precisely with the type system.  Neat, eh?</p>
+<p>But right now, virtual binds are const.  This would mean that if you used TO BLOCK! to get a block and inherited its nested arrays, trying to run a mutable BIND/DEEP would fail on those nested arrays...because it would want to protect you from mutating the embedded blocks with aliased binding.  You wouldn't necessarily get the effects you wanted (you'd be changing the view as seen by the original block...the virtual one would stay unbound).</p>
+<p>This would mean you could only use a shallow mutable BIND on the result of such a TO, or more virtual binding.</p>
+<h2>Would Anyone Use This TO of BLOCK! or GROUP! ?</h2>
+<p>A lot of places that have been using TO really wanted to use AS (or whatever the aliasing operator would be that says "use the same array memory, just view it as a different type).</p>
+<p>How often do you want a copy that also happens to be shallow?  On those few occasions that you do, isn't <strong>copy as group! ...</strong> more explicit, along with being easily changed to <strong>copy/deep as group! ...</strong>, which you can't do with TO?</p>
+<p>The real value here is just driving a stake in the ground of what a TO operator <em>is</em>...which has been a very slippery question.  If we can agree that whatever it is that it can't see or act on the bindings of what you give it--and enforce that through compiler checks and rules--then we've gotten a little tiny step forward in being able to say what is and what is not...</p>
+          <p><a href="https://forum.rebol.info/t/consequences-of-if-the-to-operator-cant-see-binding/1455/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/consequences-of-if-the-to-operator-cant-see-binding/1455/1</link>
+        <pubDate>Mon, 04 Jan 2021 14:44:49 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1455-1</guid>
+        <source url="https://forum.rebol.info/t/consequences-of-if-the-to-operator-cant-see-binding/1455.rss">Consequences of if the TO Operator Can&#39;t See Binding</source>
+      </item>
+  </channel>
+</rss>

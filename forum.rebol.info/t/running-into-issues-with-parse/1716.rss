@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Running into issues with PARSE</title>
+    <link>https://forum.rebol.info/t/running-into-issues-with-parse/1716</link>
+    <description>Hi. I&#39;m new to Ren-C and have been trying to get this simple parser to work.
+
+(For context, `MOCK_DATA.csv` contains 1000 rows of &quot;First Name, Last Name, Email, Date of Birth&quot;.)
+
+![2021-09-12_22-23|690x196](upload://yZDwIV9AxGIyq4mlMnwWFR32k1e.png) 
+
+The questions I have are:
+1) How do I read this error?
+2) Where should I be looking for valid words/syntax?
+
+Thanks in advance.</description>
+    
+    <lastBuildDate>Mon, 13 Sep 2021 13:59:02 +0000</lastBuildDate>
+    <category>First Steps</category>
+    <atom:link href="https://forum.rebol.info/t/running-into-issues-with-parse/1716.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Running into issues with PARSE</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Hello, and welcome.</p>
+<p>What you've hit above is a bug in the trick that is used to make "old style" PARSE synthesize a value.  You typically write with a variable to assign to, like this:</p>
+<pre><code>parse [1] [x: collect [keep integer!]]
+</code></pre>
+<p>But in order to get the overall result to be the collect result <em>for the following particular stylistic case</em>:</p>
+<pre><code>parse ... [collect [...]]
+</code></pre>
+<p>It was effectively transforming it to:</p>
+<pre><code>let temp
+parse ... [temp: collect [...]]
+temp
+</code></pre>
+<p>This has the problem that if your rule fails, then <code>temp</code> never got set.</p>
+<p>I've fixed the bug:</p>
+<p><strong><a href="https://github.com/metaeducation/ren-c/commit/2101783e3155700ddb68e36e9c95bad9caf3d8c3">Make COLLECT trick work if rule fails</a></strong></p>
+<h2>But Why Is The Rule Failing</h2>
+<p>Your rule is failing, because it's not reaching the end of the input.  (This is different from Red, which doesn't check for reaching the end of input when you use COLLECT.)  You'd need to say:</p>
+<pre><code>some [keep field-rule ["," | end]]
+</code></pre>
+<p>Otherwise it will expect a comma after every element--even the last.</p>
+<h2>Why Wasn't The Bug Found Earlier?</h2>
+<p>PARSE is being overhauled, and that idea (of a COLLECT being the return result of the parse overall) was never how it worked.  Initially you had to name a variable, like:</p>
+<pre><code>parse ... [collect var [...rule...]]
+</code></pre>
+<p>We are evolving to a completely new model in which every rule can synthesize a result, and they are set with SET-WORD!:</p>
+<pre><code>parse ... [var: collect [...rule...]]
+</code></pre>
+<p>The longer goal is that the overall return result of the parse operation is whatever is synthesized by the rule.  WHILE and SOME just return the result of their last successful iteration.</p>
+<p>Here you can see that with the new UPARSE prototype:</p>
+<pre><code>&gt;&gt; uparse "aab" [while ["a" (10) | "b" (20)]]
+== 20
+</code></pre>
+<p>Note literal rules evaluate to themselves, which can also be useful:</p>
+<pre><code>&gt;&gt; uparse "aab" [while ["a" | "b"]]
+== "b"
+</code></pre>
+<p>So what you saw was just a little very recent patch onto the old PARSE (being called PARSE3 for Parse R3-Alpha) to try and make it act a little more like UPARSE.  It was tested superficially, but as you discovered it hadn't been tested on failure.</p>
+<h2>Best Place To Look For Information</h2>
+<blockquote>
+<p>Where should I be looking for valid words/syntax?</p>
+</blockquote>
+<p>The PARSE story here right now is that UPARSE combinator-based design is the focus:</p>
+<p><a href="https://forum.rebol.info/t/introducing-uparse-the-hackable-usermode-parse/1529" class="inline-onebox">Introducing UPARSE: The Hackable Usermode PARSE</a></p>
+<p>It's a work in progress, and being usermode glacially slow...but it will be rewritten once the design is pinned down.</p>
+<p>The tests folder has per-combinator tests, but the newer a feature is the more likely it will be changed:</p>
+<p><a href="https://github.com/metaeducation/ren-c/tree/master/tests/parse">https://github.com/metaeducation/ren-c/tree/master/tests/parse</a></p>
+<h2>Interestingness Abounds</h2>
+<p>Just a small point on how interesting things are... I mentioned that Red's parse won't check that you reached the end of the input:</p>
+<pre><code>red&gt;&gt; parse [1 2 3 &lt;foo&gt;] [collect [some keep integer!]]
+== [1 2 3]
+</code></pre>
+<p>But that UPARSE would:</p>
+<pre><code>ren-c&gt;&gt; uparse [1 2 3 &lt;foo&gt;] [collect [some keep integer!]]
+; null
+</code></pre>
+<p>Ren-C however has something called ELIDE.  It's like comment, but it vanishes fully:</p>
+<pre><code>ren-c&gt;&gt; 300 + 4 elide x: 1000 + 20
+== 304
+
+ren-c&gt;&gt; x
+== 1020
+</code></pre>
+<p>There is an ELIDE combinator in PARSE as well.  It means "match this, and fail if it doesn't match, but don't affect the accumulated product".</p>
+<pre><code>ren-c&gt;&gt; uparse [1 2 3 &lt;foo&gt;] [collect [some keep integer!] elide tag!]
+== [1 2 3]
+</code></pre>
+<p>You could also be more generic and elide everything to the end (TAG!s are used in UPARSE for things like <code>&lt;end&gt;</code> to keep words like END free for variables:</p>
+<pre><code>ren-c&gt;&gt; uparse [1 2 3 &lt;foo&gt;] [collect [some keep integer!] elide to &lt;end&gt;]
+== [1 2 3]
+</code></pre>
+<h2>Further Reading on Differences from Red</h2>
+<p>Here's some remarks I made while going through Red's PARSE tests:</p>
+<p><a href="https://forum.rebol.info/t/dead-red-redemption-starting-uparse-on-the-right-foot/1649" class="inline-onebox">Dead Red Redemption: Starting UPARSE on the Right Foot</a></p>
+          <p><a href="https://forum.rebol.info/t/running-into-issues-with-parse/1716/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/running-into-issues-with-parse/1716/2</link>
+        <pubDate>Mon, 13 Sep 2021 13:35:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1716-2</guid>
+        <source url="https://forum.rebol.info/t/running-into-issues-with-parse/1716.rss">Running into issues with PARSE</source>
+      </item>
+      <item>
+        <title>Running into issues with PARSE</title>
+        <dc:creator><![CDATA[RayMPerry]]></dc:creator>
+        <description><![CDATA[
+            <p>Hi. I'm new to Ren-C and have been trying to get this simple parser to work.</p>
+<p>(For context, <code>MOCK_DATA.csv</code> contains 1000 rows of "First Name, Last Name, Email, Date of Birth".)</p>
+<p><div class="lightbox-wrapper"><a class="lightbox" href="https://forum.rebol.info/uploads/default/original/1X/f541999fd2a7af1257d0701a8d2ceb52c3e9bf5c.png" data-download-href="https://forum.rebol.info/uploads/default/f541999fd2a7af1257d0701a8d2ceb52c3e9bf5c" title="2021-09-12_22-23"><img src="https://forum.rebol.info/uploads/default/optimized/1X/f541999fd2a7af1257d0701a8d2ceb52c3e9bf5c_2_690x196.png" alt="2021-09-12_22-23" data-base62-sha1="yZDwIV9AxGIyq4mlMnwWFR32k1e" width="690" height="196" srcset="https://forum.rebol.info/uploads/default/optimized/1X/f541999fd2a7af1257d0701a8d2ceb52c3e9bf5c_2_690x196.png, https://forum.rebol.info/uploads/default/optimized/1X/f541999fd2a7af1257d0701a8d2ceb52c3e9bf5c_2_1035x294.png 1.5x, https://forum.rebol.info/uploads/default/optimized/1X/f541999fd2a7af1257d0701a8d2ceb52c3e9bf5c_2_1380x392.png 2x" data-small-upload="https://forum.rebol.info/uploads/default/optimized/1X/f541999fd2a7af1257d0701a8d2ceb52c3e9bf5c_2_10x10.png"><div class="meta">
+<svg class="fa d-icon d-icon-far-image svg-icon" aria-hidden="true"><use xlink:href="#far-image"></use></svg><span class="filename">2021-09-12_22-23</span><span class="informations">1604×456 56.2 KB</span><svg class="fa d-icon d-icon-discourse-expand svg-icon" aria-hidden="true"><use xlink:href="#discourse-expand"></use></svg>
+</div></a></div></p>
+<p>The questions I have are:</p>
+<ol>
+<li>How do I read this error?</li>
+<li>Where should I be looking for valid words/syntax?</li>
+</ol>
+<p>Thanks in advance.</p>
+          <p><a href="https://forum.rebol.info/t/running-into-issues-with-parse/1716/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/running-into-issues-with-parse/1716/1</link>
+        <pubDate>Mon, 13 Sep 2021 03:28:41 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1716-1</guid>
+        <source url="https://forum.rebol.info/t/running-into-issues-with-parse/1716.rss">Running into issues with PARSE</source>
+      </item>
+  </channel>
+</rss>

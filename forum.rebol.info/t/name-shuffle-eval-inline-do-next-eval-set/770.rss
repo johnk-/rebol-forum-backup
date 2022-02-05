@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Name shuffle: EVAL =&gt; INLINE, DO/NEXT =&gt; EVAL/SET</title>
+    <link>https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770</link>
+    <description>The [re-imagining of DO/NEXT](https://forum.rebol.info/t/re-imagining-do-next-or-next-do-or-whatever/767/1) is on its way to working.  But we clearly don&#39;t want to call it DO/NEXT anymore.  *(I&#39;m not as much concerned about changing the meaning of DO/NEXT in an incompatible way as I am that I don&#39;t like one version of DO returning an evaluation product, while another returns a series position--that&#39;s confusing.)*
+
+The old parameterization of DO/NEXT--where it puts the updated series position into a variable passed by reference and returns the evaluation product--has to die.  It&#39;s an incomplete interface in a world with &quot;invisibles&quot;.  We don&#39;t want it.
+
+What I think the best idea to do is to call the routine EVAL.  *&quot;A DO of a BLOCK! is the result of several successive single EVAL steps in the evaluator.&quot;*  That seems nice.
+
+Concept here is that plain EVAL won&#39;t give you a result, it will just run code and toss the evaluative by-product:
+
+    &gt;&gt; code: [print &quot;hi&quot; 1 + 2]
+
+    &gt;&gt; eval code
+    hi
+    == [1 + 2]
+
+    &gt;&gt; eval code
+    == []
+
+    &gt;&gt; eval code
+    ;-- null
+
+If you want the evaluative result, you&#39;d use EVAL/SET.  So a typical DO loop might look like:
+
+    while [block: try eval/set block &#39;var] [
+        ...
+    ]    
+
+*(Remember, you are responsible with pre-loading var with a value--or null--that you want to correspond to what var would be if it happens to never successfully run an eval/set.  Sometimes this is best to be #[void], sometimes null, or whatever the circumstance calls for.)*
+
+But the current EVAL also exposes a single evaluator step.  It&#39;s a weird interface that runs &quot;inline&quot;... it takes one ordinary argument that&#39;s the head of the evaluation, and then gets its arguments from the callsite:
+
+    &gt;&gt; eval :add 1 2 ;-- historical EVAL
+    == 3
+
+    &gt;&gt; eval quote x: 100 ;-- historical EVAL
+    &gt;&gt; print x
+    100
+
+I&#39;ve been wondering though if maybe we should call this INLINE.  Because really that&#39;s what you&#39;re asking it to do...it isn&#39;t so much that the EVAL function is taking arguments and &quot;running a single evaluator step&quot;.  It is splicing the material into the stream of execution.
+
+    &gt;&gt; x: quote foo:
+    &gt;&gt; inline x 100
+    &gt;&gt; foo
+    == 100
+
+A little bit quirky but it seems to make sense.  And it offers the advantage of DO/NEXT not being a parameterization that has to accept everything DO does.  (Does `do/next http://example.com/script.reb &#39;pos` actually make sense?  Can everything that offers a DO interface guarantee that it meaningfully can give back a position into the thing that was done?  Or that it even should--it may violate encapsulation...)</description>
+    
+    <lastBuildDate>Thu, 02 Aug 2018 20:43:59 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Name shuffle: EVAL =&gt; INLINE, DO/NEXT =&gt; EVAL/SET</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Hm.  One thing I don't like about changing EVAL is the API effect.</p>
+<p>Right now there are <code>rebEval()</code> and <code>rebUneval()</code> which are a nice pairing for bringing an "inert" value cell to life.</p>
+<pre><code> REBVAL *word = rebRun("quote foo", rebEND);
+ rebElide("print", word, rebEND);
+</code></pre>
+<p>By default, that would just print <code>foo</code> the word.  Because values are inert...for practical purposes in the API you consider the "word lookup" parallel to be the step that the C code does to get <code>foo</code> out of the <code>word</code> variable.  It would feel like double-evaluation if you were to then have the <code>foo</code> get looked up as a word <em>again</em>.</p>
+<p>There's been a convenience in the API, rebEval() for this:</p>
+<pre><code>rebElide("print", rebEval(word), rebEND);
+</code></pre>
+<p>It's common enough I was thinking it might even become <code>rebE()</code> for short.</p>
+<p>If it gets changed to <code>rebInline()</code>, then that's longer and a bit more awkward.  Also <code>rebI()</code> is taken as the shorthand for auto-disposed integer constants.</p>
+<p>But furthermore, the complementary operation is rebUneval(), which generates "unevaluated versions" of values...e.g. something that when evaluated will give you the value back.  This allows you to put things like NULLs--which aren't legal in BLOCK!s, into blocks as <code>null</code> the word...or functions as <code>(quote :add)</code>, etc.</p>
+<p>UNEVAL strikes me as a nice name for that.  UNINLINE or OUTLINE or other things seem not as good.</p>
+<p>So maybe the thing I want to call EVAL above needs another name.  GROK?  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>Both techniques can make sort of an argument of being a single evaluator step.  Since Rebol likes full words, it could be EVALUATE is the actual full exposure of the evaluator:</p>
+<pre><code>while [block: try evaluate/set block 'var] [
+    ...
+]    
+</code></pre>
+<p>That's not <em>terrible</em>.  8 characters isn't the end of the world (consider that even SET-WORD! is 9).</p>
+          <p><a href="https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770/2</link>
+        <pubDate>Thu, 02 Aug 2018 20:43:59 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-770-2</guid>
+        <source url="https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770.rss">Name shuffle: EVAL =&gt; INLINE, DO/NEXT =&gt; EVAL/SET</source>
+      </item>
+      <item>
+        <title>Name shuffle: EVAL =&gt; INLINE, DO/NEXT =&gt; EVAL/SET</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The <a href="https://forum.rebol.info/t/re-imagining-do-next-or-next-do-or-whatever/767/1">re-imagining of DO/NEXT</a> is on its way to working.  But we clearly don't want to call it DO/NEXT anymore.  <em>(I'm not as much concerned about changing the meaning of DO/NEXT in an incompatible way as I am that I don't like one version of DO returning an evaluation product, while another returns a series position--that's confusing.)</em></p>
+<p>The old parameterization of DO/NEXT--where it puts the updated series position into a variable passed by reference and returns the evaluation product--has to die.  It's an incomplete interface in a world with "invisibles".  We don't want it.</p>
+<p>What I think the best idea to do is to call the routine EVAL.  <em>"A DO of a BLOCK! is the result of several successive single EVAL steps in the evaluator."</em>  That seems nice.</p>
+<p>Concept here is that plain EVAL won't give you a result, it will just run code and toss the evaluative by-product:</p>
+<pre><code>&gt;&gt; code: [print "hi" 1 + 2]
+
+&gt;&gt; eval code
+hi
+== [1 + 2]
+
+&gt;&gt; eval code
+== []
+
+&gt;&gt; eval code
+;-- null
+</code></pre>
+<p>If you want the evaluative result, you'd use EVAL/SET.  So a typical DO loop might look like:</p>
+<pre><code>while [block: try eval/set block 'var] [
+    ...
+]    
+</code></pre>
+<p><em>(Remember, you are responsible with pre-loading var with a value--or null--that you want to correspond to what var would be if it happens to never successfully run an eval/set.  Sometimes this is best to be #[void], sometimes null, or whatever the circumstance calls for.)</em></p>
+<p>But the current EVAL also exposes a single evaluator step.  It's a weird interface that runs "inline"... it takes one ordinary argument that's the head of the evaluation, and then gets its arguments from the callsite:</p>
+<pre><code>&gt;&gt; eval :add 1 2 ;-- historical EVAL
+== 3
+
+&gt;&gt; eval quote x: 100 ;-- historical EVAL
+&gt;&gt; print x
+100
+</code></pre>
+<p>I've been wondering though if maybe we should call this INLINE.  Because really that's what you're asking it to do...it isn't so much that the EVAL function is taking arguments and "running a single evaluator step".  It is splicing the material into the stream of execution.</p>
+<pre><code>&gt;&gt; x: quote foo:
+&gt;&gt; inline x 100
+&gt;&gt; foo
+== 100
+</code></pre>
+<p>A little bit quirky but it seems to make sense.  And it offers the advantage of DO/NEXT not being a parameterization that has to accept everything DO does.  (Does <code>do/next http://example.com/script.reb 'pos</code> actually make sense?  Can everything that offers a DO interface guarantee that it meaningfully can give back a position into the thing that was done?  Or that it even should--it may violate encapsulation...)</p>
+          <p><a href="https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770/1</link>
+        <pubDate>Thu, 02 Aug 2018 19:29:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-770-1</guid>
+        <source url="https://forum.rebol.info/t/name-shuffle-eval-inline-do-next-eval-set/770.rss">Name shuffle: EVAL =&gt; INLINE, DO/NEXT =&gt; EVAL/SET</source>
+      </item>
+  </channel>
+</rss>

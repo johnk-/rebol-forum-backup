@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>New datatype idea: SINK!</title>
+    <link>https://forum.rebol.info/t/new-datatype-idea-sink/944</link>
+    <description>Right now the only way you can get handles back from the API is as return results.  This means if you want to extract N values, you have to make N calls:
+
+    REBVAL *a = rebRun(&quot;select&quot;, obj, &quot;&#39;a&quot;);
+    REBVAL *b = rebRun(&quot;select&quot;, obj, &quot;&#39;b&quot;);
+
+But what if you could target API handle pointers directly, to get something *like* a SET-WORD!, except that the evaluator would *write into an API handle pointer instead of an ordinary variable*:
+
+     REBVAL *a;
+     REBVAL *b;
+     rebRun(
+         rebSink(&amp;a), &quot;select&quot;, obj, &quot;&#39;a&quot;,
+         rebSink(&amp;b), &quot;select&quot;, obj, &quot;&#39;b&quot;
+     );
+
+## Why would this be useful?
+
+It&#39;s often tricky to tunnel the variable your code wants out of a complex expression.  Take the [upcoming change to TRAP](https://forum.rebol.info/t/should-trap-and-catch-return-null-if-no-fails-throws/940), for example.  The TRAP only gives back an ERROR!, but what if you want to write your error handling code in Rebol...tunneling your value out of the trap?
+
+    REBVAL *data = ...;
+    rebElide(&quot;trap [&quot;,
+        rebSink(&amp;data), &quot;inflate/max&quot;, data, &quot;uncompressed-size&quot;,
+    &quot;] then [&quot;,
+        &quot;info {^- -&gt; failed [deflate]^/}&quot;,
+        &quot;throw blank&quot;,
+    &quot;]&quot;);
+
+Note how this parallels `data: inflate/max data uncompressed-size`.  It&#39;s a lot easier than what you&#39;d have to do otherwise in the C.
+
+### This is difficult to do safely...
+
+One risk with something like this what happens if a SINK that&#39;s holding onto a pointer gets copied out somewhere and then used after that pointer is no longer valid.  Consider:
+
+     REBVAL *Make_Evil_Block() {
+          REBVAL *local;
+          return rebRun(&quot;[&quot;, rebSink(&amp;local), &quot;10]&quot;);
+     }
+
+     rebRun(&quot;do&quot;, Make_Evil_Block());
+
+What&#39;ll happen there is you get something parallel to **local: 10**, except it&#39;s writing to a local variable that&#39;s no longer on the stack when Make_Evil_Block() finishes.
+
+A possible way to address this would be to require the variable to already exist so that it could become managed.  So&#39;d you&#39;d pass a pointer to a REBVAL, not a pointer-to-a-pointer to a REBVAL:
+
+     REBVAL *Make_Evil_Block() {
+          REBVAL *local = rebBlank();
+          return rebRun(&quot;[&quot;, rebSink(local), &quot;10]&quot;);
+     }
+
+This would mean the GC would be responsible for making sure the API handle&#39;s memory slot remained valid until places it was referenced were gone.  Hence a rebRelease() call wouldn&#39;t actually release it.  That would mean the interpreter wouldn&#39;t crash if it hit a bad sink, it would just say C was done with that variable so you can&#39;t assign it.
+
+Unfortunately this rules out sinking nulls.  You&#39;d have to at least TRY anything you&#39;d sink, because from the API&#39;s point of view the only representation of a nulled cell is a nulled pointer.
+
+I think doing it unsafely would be too risky.  It&#39;s one thing to have a random C native someone wrote crash, and another to give the evaluator something it crashes on during an evaluation.  So if this were implemented, it would be one of the motivating cases for [mutable API handles](https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345/2), which has remained an open question.</description>
+    
+    <lastBuildDate>Thu, 13 Dec 2018 20:53:13 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/new-datatype-idea-sink/944.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>New datatype idea: SINK!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group quote-modified" data-post="1" data-topic="944">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Unfortunately this rules out sinking nulls. You’d have to at least TRY anything you’d sink, because from the API’s point of view the only representation of a nulled cell is a nulled pointer.</p>
+</blockquote>
+</aside>
+<p>Or, maybe it doesn't rule it out!  Imagine if the parameter to rebSink is an "in/out" pointer...it is passed by address and <em>may or may not change</em>.</p>
+<p>The key is you'd have to make sure it was initialized to some valid bit pattern:</p>
+<pre><code>REBVAL *a = nullptr; // nullptr is okay, initialized bits
+REBVAL *b = rebInteger(1020); // any other initialized value fine too
+rebElide(
+    rebS(&amp;a): "select", obj, "'a",
+    rebS(&amp;b): "select", obj, "'b"
+);
+</code></pre>
+<p>Then, if you sink a null into a cell that wasn't previously null before, it would rebRelease() the old cell.  If you sink a non-null cell into a cell that is null, it will allocate a new handle.</p>
+<p>There's still a lot of devils in the details here, but I believe it's both technically possible and quite desirable.</p>
+<h3>But what about JavaScript?</h3>
+<p>JavaScript doesn't have a notion of passing simple variables by reference.  This is another good argument for not making REBVAL* just plain integer pointers in the JS version of the API.  If you pass an object, then you can change its fields just by having a reference to it.</p>
+          <p><a href="https://forum.rebol.info/t/new-datatype-idea-sink/944/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-datatype-idea-sink/944/3</link>
+        <pubDate>Thu, 13 Dec 2018 20:53:13 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-944-3</guid>
+        <source url="https://forum.rebol.info/t/new-datatype-idea-sink/944.rss">New datatype idea: SINK!</source>
+      </item>
+      <item>
+        <title>New datatype idea: SINK!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I thought of a pretty silly syntax trick for sinks, which would allow using a colon in C.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:">  It twists the ternary operator up a bit:</p>
+<pre><code>#define rebS(slot) \
+    rebSink(slot), false ? nullptr
+</code></pre>
+<p>So then you can write:</p>
+<pre><code>REBVAL *foo = rebVoid();
+REBVAL *bar = rebVoid();
+rebElide(
+    rebS(foo): "1 + 2",
+    rebS(bar): "3 + 4
+);
+</code></pre>
+<p>Which preprocesses into:</p>
+<pre><code>REBVAL *foo = rebVoid();
+REBVAL *bar = rebVoid();
+rebElide(
+    rebSink(foo), false ? nullptr: "1 + 2",
+    rebSink(bar), false ? nullptr: "3 + 4
+);
+</code></pre>
+<p>It's just a sneaky way of throwing in a no-op ternary operator for the syntax purpose of getting a colon.  As unusual as it looks, it's quite standard C and C++, and I think it conveys what's going on more clearly.  With this syntax you'd have trouble putting sinks at the end of runs, since some piece of evaluator material has to come after the colon.  But there is rebEND if you really want to opt out of that.</p>
+<p>As tricks go, I think that's pretty awesome!  People who didn't want to use it can just use plain rebSink.</p>
+<aside class="quote no-group quote-modified" data-post="1" data-topic="944">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="//forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>Unfortunately this rules out sinking nulls. You’d have to at least TRY anything you’d sink, because from the API’s point of view the only representation of a nulled cell is a nulled pointer.</p>
+</blockquote>
+</aside>
+<p>If you try to write a null and "unset" a sink (impossible, it's an allocated cell, you can't turn it into a null) then it can just write void.  If doing this becomes common, it probably justifies a <code>rebDevoid()</code> API that turns voids to nulls and frees their API cells--or something of that sort.</p>
+          <p><a href="https://forum.rebol.info/t/new-datatype-idea-sink/944/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-datatype-idea-sink/944/2</link>
+        <pubDate>Wed, 12 Dec 2018 10:45:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-944-2</guid>
+        <source url="https://forum.rebol.info/t/new-datatype-idea-sink/944.rss">New datatype idea: SINK!</source>
+      </item>
+      <item>
+        <title>New datatype idea: SINK!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Right now the only way you can get handles back from the API is as return results.  This means if you want to extract N values, you have to make N calls:</p>
+<pre><code>REBVAL *a = rebRun("select", obj, "'a");
+REBVAL *b = rebRun("select", obj, "'b");
+</code></pre>
+<p>But what if you could target API handle pointers directly, to get something <em>like</em> a SET-WORD!, except that the evaluator would <em>write into an API handle pointer instead of an ordinary variable</em>:</p>
+<pre><code> REBVAL *a;
+ REBVAL *b;
+ rebRun(
+     rebSink(&amp;a), "select", obj, "'a",
+     rebSink(&amp;b), "select", obj, "'b"
+ );
+</code></pre>
+<h2>Why would this be useful?</h2>
+<p>It's often tricky to tunnel the variable your code wants out of a complex expression.  Take the <a href="https://forum.rebol.info/t/should-trap-and-catch-return-null-if-no-fails-throws/940">upcoming change to TRAP</a>, for example.  The TRAP only gives back an ERROR!, but what if you want to write your error handling code in Rebol...tunneling your value out of the trap?</p>
+<pre><code>REBVAL *data = ...;
+rebElide("trap [",
+    rebSink(&amp;data), "inflate/max", data, "uncompressed-size",
+"] then [",
+    "info {^- -&gt; failed [deflate]^/}",
+    "throw blank",
+"]");
+</code></pre>
+<p>Note how this parallels <code>data: inflate/max data uncompressed-size</code>.  It's a lot easier than what you'd have to do otherwise in the C.</p>
+<h3>This is difficult to do safely...</h3>
+<p>One risk with something like this what happens if a SINK that's holding onto a pointer gets copied out somewhere and then used after that pointer is no longer valid.  Consider:</p>
+<pre><code> REBVAL *Make_Evil_Block() {
+      REBVAL *local;
+      return rebRun("[", rebSink(&amp;local), "10]");
+ }
+
+ rebRun("do", Make_Evil_Block());
+</code></pre>
+<p>What'll happen there is you get something parallel to <strong>local: 10</strong>, except it's writing to a local variable that's no longer on the stack when Make_Evil_Block() finishes.</p>
+<p>A possible way to address this would be to require the variable to already exist so that it could become managed.  So'd you'd pass a pointer to a REBVAL, not a pointer-to-a-pointer to a REBVAL:</p>
+<pre><code> REBVAL *Make_Evil_Block() {
+      REBVAL *local = rebBlank();
+      return rebRun("[", rebSink(local), "10]");
+ }
+</code></pre>
+<p>This would mean the GC would be responsible for making sure the API handle's memory slot remained valid until places it was referenced were gone.  Hence a rebRelease() call wouldn't actually release it.  That would mean the interpreter wouldn't crash if it hit a bad sink, it would just say C was done with that variable so you can't assign it.</p>
+<p>Unfortunately this rules out sinking nulls.  You'd have to at least TRY anything you'd sink, because from the API's point of view the only representation of a nulled cell is a nulled pointer.</p>
+<p>I think doing it unsafely would be too risky.  It's one thing to have a random C native someone wrote crash, and another to give the evaluator something it crashes on during an evaluation.  So if this were implemented, it would be one of the motivating cases for <a href="https://forum.rebol.info/t/should-values-given-to-c-through-api-handles-be-mutable/345/2">mutable API handles</a>, which has remained an open question.</p>
+          <p><a href="https://forum.rebol.info/t/new-datatype-idea-sink/944/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/new-datatype-idea-sink/944/1</link>
+        <pubDate>Thu, 06 Dec 2018 18:37:35 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-944-1</guid>
+        <source url="https://forum.rebol.info/t/new-datatype-idea-sink/944.rss">New datatype idea: SINK!</source>
+      </item>
+  </channel>
+</rss>

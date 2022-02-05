@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Ideas from the Lab: ⚗️ Unbound SET-BLOCK! object keys?</title>
+    <link>https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333</link>
+    <description>The new-age TUPLE! and PATH! won&#39;t let you include types that would cause ambiguity.  For instance:
+
+    &gt;&gt; to path! [foo example.com]
+    == foo/example.com
+
+    &gt;&gt; to path! [foo _ example.com]
+    == foo//example.com
+
+    &gt;&gt; to path! [foo: _ example.com]
+    ** Error: can&#39;t put a SET-WORD! inside of a PATH!
+
+I&#39;m not sure exactly how many types to allow or disallow.  But suffice to say not everything will be supported.
+
+But among important things that will be supported are plain GROUP! and plain BLOCK!, at any position, including the head *(...which R3-Alpha and Red don&#39;t support in scanning or the evaluator, though you can build any path you like with any values...despite the enormous downsides).*
+
+We know pretty well what a GROUP! in a PATH! does.  But what should a BLOCK! in a path do?
+
+Today it acts the same as if it had been in a group:
+
+    m: make map! [[a b c] (1 2 3)]
+
+    &gt;&gt; key: [a b c]
+    == [a b c]
+
+    &gt;&gt; m/(key)
+    == (1 2 3)
+
+    &gt;&gt; m/[a b c]
+    == (1 2 3)
+
+    &gt;&gt; m/([a b c])
+    == (1 2 3)
+
+That looks reasonable, although it seems not to buy all that much on the surface.
+
+But looking closer at it, I noticed this makes maps a very tempting way to get names of things with spaces in them:
+
+    &gt;&gt; m: make map! compose [
+        [a cool name] &quot;some value&quot;
+        [&lt;crazy&gt; #name] (func [x] [print [x + 1]])
+    ]
+
+    &gt;&gt; m/[a cool name]
+    == &quot;some value&quot;
+
+    &gt;&gt; m/[&lt;crazy&gt; #name] 10
+    11
+
+And we&#39;re now talking about a smoother syntax with the tuples:
+
+    &gt;&gt; m.[a cool name]
+    == &quot;some value&quot;
+
+That&#39;s just kind of *nice*.  So you start to wonder...with the dawn of SET-BLOCK!, outside of efficiency, is there any real technical reason why objects couldn&#39;t allow BLOCK!s as keys...and be more competitive with JavaScript and the like?
+
+## The technical issues
+
+So one reason for saying that this should only be done with BLOCK! (as opposed to TAG! keys and such) is that BLOCK! has a SET-BLOCK! form.  This means an object might say:
+
+    obj: make object! [
+        [a cool name]: &quot;some value&quot;
+    ]
+
+Right now SET-BLOCK! is being used for multiple return values, but it could be done with SET-GROUP!...which actually might make more sense in light of recent semantic thinking about groups...
+
+    (x y): some-multireturn-func a b c
+
+Obviously you don&#39;t want a block on its own to invoke a function or evaluate to something else.  And there would be big performance and logistics problems if these tried to participate in the binding process.
+
+But what if they didn&#39;t participate in the binding process, and they were just names?  Putting things in a block could be a way of declaring data members that deliberately skip out on binding.
+
+The exception would be that when MAKE OBJECT! walked over the body and saw the SET-BLOCK!, it would have to inject a binding onto it...destroying any other binding bits it had.  So you&#39;d be talking about `a`, `cool`, and `name` all being unbound in that set block...in order to make room for the binding of the block to the object, making the set-block work.  I suppose GET-BLOCK! could work in a similar way when used in such a context, but you&#39;d not be able to dispatch functions from it.
+
+## This Once Again Calls into Question MAP! vs OBJECT!
+
+People have always been somewhat skeptical of why maps and objects are different, and what exactly the hard system requirements are that mandate OBJECT!s strictness.  I know how things work today but I think it&#39;s worth having a go-over to see if there might be a better angle.</description>
+    
+    <lastBuildDate>Sat, 26 Sep 2020 19:38:32 +0000</lastBuildDate>
+    <category>Binding</category>
+    <atom:link href="https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Ideas from the Lab: ⚗️ Unbound SET-BLOCK! object keys?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1333">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>We know pretty well what a GROUP! in a PATH! does. But what should a BLOCK! in a path do?</p>
+</blockquote>
+</aside>
+<p>I'll mention that for function calls, I was thinking it would be nice if it could name a refinement and a value.</p>
+<pre><code>&gt;&gt; data: '(a b c)
+&gt;&gt; append/[dup: 1 + 2] data &lt;foo&gt;
+== (a b c &lt;foo&gt; &lt;foo&gt; &lt;foo&gt;)
+</code></pre>
+<p>Given how common this would be, it's probably better to just use a WORD! instead of a SET-WORD! and people will get the idea, not expecting DUP to be a function call or something of that sort:</p>
+<pre><code>&gt;&gt; data: '(a b c)
+&gt;&gt; append/[dup 1 + 2] data &lt;foo&gt;
+== (a b c &lt;foo&gt; &lt;foo&gt; &lt;foo&gt;)
+</code></pre>
+<p>Or maybe this is a job for TUPLE?</p>
+<pre><code>&gt;&gt; data: '(a b c)
+&gt;&gt; append/dup.(1 + 2) data &lt;foo&gt;
+== (a b c &lt;foo&gt; &lt;foo&gt; &lt;foo&gt;)
+</code></pre>
+<p>Just more stuff too think about (!)</p>
+          <p><a href="https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333/2</link>
+        <pubDate>Mon, 21 Sep 2020 05:38:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1333-2</guid>
+        <source url="https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333.rss">Ideas from the Lab: ⚗️ Unbound SET-BLOCK! object keys?</source>
+      </item>
+      <item>
+        <title>Ideas from the Lab: ⚗️ Unbound SET-BLOCK! object keys?</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>The new-age TUPLE! and PATH! won't let you include types that would cause ambiguity.  For instance:</p>
+<pre><code>&gt;&gt; to path! [foo example.com]
+== foo/example.com
+
+&gt;&gt; to path! [foo _ example.com]
+== foo//example.com
+
+&gt;&gt; to path! [foo: _ example.com]
+** Error: can't put a SET-WORD! inside of a PATH!
+</code></pre>
+<p>I'm not sure exactly how many types to allow or disallow.  But suffice to say not everything will be supported.</p>
+<p>But among important things that will be supported are plain GROUP! and plain BLOCK!, at any position, including the head <em>(...which R3-Alpha and Red don't support in scanning or the evaluator, though you can build any path you like with any values...despite the enormous downsides).</em></p>
+<p>We know pretty well what a GROUP! in a PATH! does.  But what should a BLOCK! in a path do?</p>
+<p>Today it acts the same as if it had been in a group:</p>
+<pre><code>m: make map! [[a b c] (1 2 3)]
+
+&gt;&gt; key: [a b c]
+== [a b c]
+
+&gt;&gt; m/(key)
+== (1 2 3)
+
+&gt;&gt; m/[a b c]
+== (1 2 3)
+
+&gt;&gt; m/([a b c])
+== (1 2 3)
+</code></pre>
+<p>That looks reasonable, although it seems not to buy all that much on the surface.</p>
+<p>But looking closer at it, I noticed this makes maps a very tempting way to get names of things with spaces in them:</p>
+<pre><code>&gt;&gt; m: make map! compose [
+    [a cool name] "some value"
+    [&lt;crazy&gt; #name] (func [x] [print [x + 1]])
+]
+
+&gt;&gt; m/[a cool name]
+== "some value"
+
+&gt;&gt; m/[&lt;crazy&gt; #name] 10
+11
+</code></pre>
+<p>And we're now talking about a smoother syntax with the tuples:</p>
+<pre><code>&gt;&gt; m.[a cool name]
+== "some value"
+</code></pre>
+<p>That's just kind of <em>nice</em>.  So you start to wonder...with the dawn of SET-BLOCK!, outside of efficiency, is there any real technical reason why objects couldn't allow BLOCK!s as keys...and be more competitive with JavaScript and the like?</p>
+<h2>The technical issues</h2>
+<p>So one reason for saying that this should only be done with BLOCK! (as opposed to TAG! keys and such) is that BLOCK! has a SET-BLOCK! form.  This means an object might say:</p>
+<pre><code>obj: make object! [
+    [a cool name]: "some value"
+]
+</code></pre>
+<p>Right now SET-BLOCK! is being used for multiple return values, but it could be done with SET-GROUP!...which actually might make more sense in light of recent semantic thinking about groups...</p>
+<pre><code>(x y): some-multireturn-func a b c
+</code></pre>
+<p>Obviously you don't want a block on its own to invoke a function or evaluate to something else.  And there would be big performance and logistics problems if these tried to participate in the binding process.</p>
+<p>But what if they didn't participate in the binding process, and they were just names?  Putting things in a block could be a way of declaring data members that deliberately skip out on binding.</p>
+<p>The exception would be that when MAKE OBJECT! walked over the body and saw the SET-BLOCK!, it would have to inject a binding onto it...destroying any other binding bits it had.  So you'd be talking about <code>a</code>, <code>cool</code>, and <code>name</code> all being unbound in that set block...in order to make room for the binding of the block to the object, making the set-block work.  I suppose GET-BLOCK! could work in a similar way when used in such a context, but you'd not be able to dispatch functions from it.</p>
+<h2>This Once Again Calls into Question MAP! vs OBJECT!</h2>
+<p>People have always been somewhat skeptical of why maps and objects are different, and what exactly the hard system requirements are that mandate OBJECT!s strictness.  I know how things work today but I think it's worth having a go-over to see if there might be a better angle.</p>
+          <p><a href="https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333/1</link>
+        <pubDate>Mon, 21 Sep 2020 05:07:55 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1333-1</guid>
+        <source url="https://forum.rebol.info/t/ideas-from-the-lab-unbound-set-block-object-keys/1333.rss">Ideas from the Lab: ⚗️ Unbound SET-BLOCK! object keys?</source>
+      </item>
+  </channel>
+</rss>

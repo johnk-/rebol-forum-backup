@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Some questions about FFI (libuv)</title>
+    <link>https://forum.rebol.info/t/some-questions-about-ffi-libuv/440</link>
+    <description>I have two questions. I&#39;m trying to make a test binding to libuv ... I don&#39;t quite understand few things on the rebol and on c side.
+
+1) When c creates a struct and passes its address to a function that then sets its fields.
+
+    static struct sockaddr_in addr4;
+    uv_ip4_addr(address_ip4, port, &amp;addr4);
+
+What should I do on FFI side to achieve the same? I tried to just allocate some memory (via malloc) and pass a pointer to that instead but it doesn&#39;t seem to work. I also tried to create hopefully correct struct! and pass addr-of to func but it doesn&#39;t seem to get set. In first case I can&#39;t know for sure, since I can&#39;t see what the address holds after the call, but the later c function that uses the addr behaves as if it weren&#39;t correctly set.
+
+2) ... I have a function that you give pointer to char and it sets the string to it. Is there a way to get to the containing c-string on that address from rebol side after it sets it?
+
+    int uv_ip4_name(const struct sockaddr_in* src, char* dst, size_t size)</description>
+    
+    <lastBuildDate>Sat, 30 Dec 2017 19:58:06 +0000</lastBuildDate>
+    <category>Language Bridging</category>
+    <atom:link href="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Some questions about FFI (libuv)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Glad you're looking into this and are such a self-starter.  <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"></p>
+<p>I'm a little busy right now with New Years and travel to really be able to help the next few days.  But I will say my opinion that the way to go for most of these bindings/extensions is probably to avoid FFI, if you are comfortable with C.  The way we're leaning is to let you establish a module as some C code and some Rebol code.</p>
+<p>For example, look at how the ODBC is done.  You write a <code>REBNATIVE(your_function)</code> and you can embed the spec in C comments (spacing matters!):</p>
+<aside class="onebox githubblob">
+  <header class="source">
+      <a href="https://github.com/metaeducation/ren-c/blob/e28967c8f5c2482daf8824389345a438d5444d2c/src/extensions/odbc/mod-odbc.c#L246" target="_blank" rel="nofollow noopener">github.com</a>
+  </header>
+  <article class="onebox-body">
+    <h4><a href="https://github.com/metaeducation/ren-c/blob/e28967c8f5c2482daf8824389345a438d5444d2c/src/extensions/odbc/mod-odbc.c#L246" target="_blank" rel="nofollow noopener">metaeducation/ren-c/blob/e28967c8f5c2482daf8824389345a438d5444d2c/src/extensions/odbc/mod-odbc.c#L246</a></h4>
+<pre class="onebox"><code class="lang-c"><ol class="start lines" start="236" style="counter-reset: li-counter 235 ;">
+<li>static void cleanup_henv(const REBVAL *v) {</li>
+<li>    SQLHENV henv = cast(SQLHENV, VAL_HANDLE_VOID_POINTER(v));</li>
+<li>    if (henv == SQL_NULL_HANDLE)</li>
+<li>        return; // already cleared out by CLOSE-ODBC</li>
+<li>
+</li>
+<li>    SQLFreeHandle(SQL_HANDLE_ENV, henv);</li>
+<li>}</li>
+<li>
+</li>
+<li>
+</li>
+<li>//</li>
+<li class="selected">//  open-connection: native/export [</li>
+<li>//</li>
+<li>//      return: [logic!]</li>
+<li>//          {Always true if success}</li>
+<li>//      connection [object!]</li>
+<li>//          {Template object for HENV and HDBC handle fields to set}</li>
+<li>//      spec [string!]</li>
+<li>//          {ODBC connection string, e.g. commonly "Dsn=DatabaseName"}</li>
+<li>//  ]</li>
+<li>//  new-words: [henv hdbc]</li>
+<li>//</li>
+</ol></code></pre>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>Then, you put together any supporting Rebol code, the text of which is compressed and put in the DLL along with the compiled C:</p>
+<aside class="onebox githubblob">
+  <header class="source">
+      <a href="https://github.com/metaeducation/ren-c/blob/e28967c8f5c2482daf8824389345a438d5444d2c/src/extensions/odbc/ext-odbc-init.reb#L67" target="_blank" rel="nofollow noopener">github.com</a>
+  </header>
+  <article class="onebox-body">
+    <h4><a href="https://github.com/metaeducation/ren-c/blob/e28967c8f5c2482daf8824389345a438d5444d2c/src/extensions/odbc/ext-odbc-init.reb#L67" target="_blank" rel="nofollow noopener">metaeducation/ren-c/blob/e28967c8f5c2482daf8824389345a438d5444d2c/src/extensions/odbc/ext-odbc-init.reb#L67</a></h4>
+<pre class="onebox"><code class="lang-reb"><ol class="start lines" start="57" style="counter-reset: li-counter 56 ;">
+<li>]</li>
+<li>
+</li>
+<li>statement-prototype: context [</li>
+<li>    database: ;</li>
+<li>    hstmt: _ ; SQLHSTMT</li>
+<li>    string: _</li>
+<li>    titles: _</li>
+<li>    columns: _</li>
+<li>]</li>
+<li>
+</li>
+<li class="selected">sys/make-scheme [</li>
+<li>    name:  'odbc</li>
+<li>    title: "ODBC Open Database Connectivity Scheme"</li>
+<li>
+</li>
+<li>    actor: context [</li>
+<li>        open: function [</li>
+<li>            {Open a database port}</li>
+<li>            port [port!]</li>
+<li>                {WORD! spec then assume DSN, else BLOCK! DSN-less datasource}</li>
+<li>        ][</li>
+<li>            port/state: context [</li>
+</ol></code></pre>
+
+
+  </article>
+  <div class="onebox-metadata">
+    
+    
+  </div>
+  <div style="clear: both"></div>
+</aside>
+
+<p>While the ergonomics of the build system and the exact way this all fits together needs work (imo), the <em>idea</em> is on the right track.  There are a lot of advantages of going this route instead of trying to do FFI--your extension will not depend on the FFI (itself an extension, which is <em>mostly</em> factored out).  It will be a bit faster.  And you'll have a nicer time debugging directly with a C debugger.</p>
+<p>As I said, I'm a little busy at the moment.  But if this is a real focus for you and you're willing to make some amount of  commitment to working on it <img src="//forum.rebol.info/images/emoji/twitter/slight_smile.png?v=7" title=":slight_smile:" class="emoji" alt=":slight_smile:"> then I can get involved supporting you on it.</p>
+          <p><a href="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/6</link>
+        <pubDate>Sat, 30 Dec 2017 19:58:06 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-440-6</guid>
+        <source url="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440.rss">Some questions about FFI (libuv)</source>
+      </item>
+      <item>
+        <title>Some questions about FFI (libuv)</title>
+        <dc:creator><![CDATA[middayc]]></dc:creator>
+        <description><![CDATA[
+            <p>I wanted to play with libuv for a while already. It has more multiplatform functionalites than just networking. And since <a class="mention" href="/u/hostilefork">@hostilefork</a> said that rebol networking could be improved I wanted to see what style of API I would be getting to if I start from totally different perspective.</p>
+<p>Currently I get negative length at read callback, and can't figure out why. A special variant of question no. (2) is again actual for another case:</p>
+<pre><code>const char* uv_strerror(int err); 
+</code></pre>
+<p>returns the description of error as a pointer. How can I turn this to string to print it in rebol? "Values of" doesn't work on this. I tried to set return value to struct, "uv-err-name: make-routine libuv "uv_err_name" [ n [ int32 ] return: [ struct! [s [uint8 [128]]] ] ]" but I don't get what I would like to. I can't find in source code of libev what -105 should mean. It looks error codes aren't defined in classic way.</p>
+<p>The problem maybe starts one callback before: alloc-buffer is called before on_read like this:</p>
+<pre><code>void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+  buf-&gt;base = (char*) malloc(suggested_size);
+  buf-&gt;len = suggested_size;
+}
+</code></pre>
+<p>or like this</p>
+<pre><code>void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+  *buf = uv_buf_init((char*) malloc(suggested_size), suggested_size);
+}
+</code></pre>
+<p>I do it like this:</p>
+<pre><code>alloc-buffer: make-callback [
+  handle [ pointer ]
+  size [ int32 ]
+  buf [ struct! [ base [ pointer ] len [ int32 ] ] ]
+] [
+  buf/base: mem-alloc size
+  buf/len: size
+]</code></pre>
+          <p><a href="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/5</link>
+        <pubDate>Sat, 30 Dec 2017 00:42:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-440-5</guid>
+        <source url="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440.rss">Some questions about FFI (libuv)</source>
+      </item>
+      <item>
+        <title>Some questions about FFI (libuv)</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>Good to hear.</p>
+<p>What's the use case for using <code>libuv</code> given that we already have asynchronous networking in Ren-C?</p>
+          <p><a href="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/4</link>
+        <pubDate>Fri, 29 Dec 2017 23:49:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-440-4</guid>
+        <source url="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440.rss">Some questions about FFI (libuv)</source>
+      </item>
+      <item>
+        <title>Some questions about FFI (libuv)</title>
+        <dc:creator><![CDATA[middayc]]></dc:creator>
+        <description><![CDATA[
+            <p>I looked at the GTK example lately ( <a href="https://github.com/metaeducation/ren-c/blob/master/tests/misc/gtk.r" rel="nofollow noopener">https://github.com/metaeducation/ren-c/blob/master/tests/misc/gtk.r</a> ), since the one you linked was not up to date. make routine! doesn't work now for example - but make-routine.</p>
+<p>But I see some new things in your example about struct and a buffer which might help me understand this.</p>
+<p>... I figured out (2) at least in this case. the trick was making a buffer out of struct and a func I never saw before values of. Haven't figured out what reflect does, although I suspect. It creates a core dump when I try to use it.</p>
+<pre><code>name: make struct! [s [uint8 [128]]]
+uv-ip4-name addr-of addr addr-of name 128
+
+print name
+print to-string values of name
+</code></pre>
+<p>//edit<br>
+first problem is solved too. The problem was that ubuntu has old libuv .. I recompiled the latest one myself and now binding to port works.</p>
+          <p><a href="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/3</link>
+        <pubDate>Fri, 29 Dec 2017 22:22:17 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-440-3</guid>
+        <source url="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440.rss">Some questions about FFI (libuv)</source>
+      </item>
+      <item>
+        <title>Some questions about FFI (libuv)</title>
+        <dc:creator><![CDATA[gchiu]]></dc:creator>
+        <description><![CDATA[
+            <p>I don't know anything about C or the FFI but I presume that you've looked at the <a href="https://github.com/metaeducation/ren-c/blob/master/tests/atronix/test-ffi.r" rel="nofollow noopener">example</a> ?</p>
+          <p><a href="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/2</link>
+        <pubDate>Fri, 29 Dec 2017 22:03:57 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-440-2</guid>
+        <source url="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440.rss">Some questions about FFI (libuv)</source>
+      </item>
+      <item>
+        <title>Some questions about FFI (libuv)</title>
+        <dc:creator><![CDATA[middayc]]></dc:creator>
+        <description><![CDATA[
+            <p>I have two questions. I'm trying to make a test binding to libuv ... I don't quite understand few things on the rebol and on c side.</p>
+<ol>
+<li>
+<p>When c creates a struct and passes its address to a function that then sets its fields.</p>
+<p>static struct sockaddr_in addr4;<br>
+uv_ip4_addr(address_ip4, port, &amp;addr4);</p>
+</li>
+</ol>
+<p>What should I do on FFI side to achieve the same? I tried to just allocate some memory (via malloc) and pass a pointer to that instead but it doesn't seem to work. I also tried to create hopefully correct struct! and pass addr-of to func but it doesn't seem to get set. In first case I can't know for sure, since I can't see what the address holds after the call, but the later c function that uses the addr behaves as if it weren't correctly set.</p>
+<ol start="2">
+<li>
+<p>... I have a function that you give pointer to char and it sets the string to it. Is there a way to get to the containing c-string on that address from rebol side after it sets it?</p>
+<p>int uv_ip4_name(const struct sockaddr_in* src, char* dst, size_t size)</p>
+</li>
+</ol>
+          <p><a href="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/some-questions-about-ffi-libuv/440/1</link>
+        <pubDate>Fri, 29 Dec 2017 21:58:02 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-440-1</guid>
+        <source url="https://forum.rebol.info/t/some-questions-about-ffi-libuv/440.rss">Some questions about FFI (libuv)</source>
+      </item>
+  </channel>
+</rss>

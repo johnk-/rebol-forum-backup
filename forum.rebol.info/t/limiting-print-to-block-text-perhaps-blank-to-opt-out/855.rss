@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Limiting PRINT to BLOCK!, TEXT! (perhaps BLANK! to opt-out?)</title>
+    <link>https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855</link>
+    <description>I&#39;ve been uncomfortable with PRINT taking ANY-VALUE! for some time.
+
+The reasoning--as I explained--is that BLOCK!s are evaluated.  So if you try to use PRINT in a generic way, such as **print value** to do debug output, you don&#39;t know if that is going to do a single or double evaluation.   Code that appears to work fine outputting all other values will one day get a BLOCK!, and suddenly you have confusion and/or a serious security problem.
+
+    my-routine: func [value [any-value!]] [
+        ...
+        print value
+        ...
+    ]
+
+    ;-- Day 1
+    x: &lt;a tag&gt;
+    my-routine x ;-- no problem
+
+    ;-- Day 2
+    y: 6.28
+    my-routine y ;-- yup, fine
+
+    ;-- Day 304
+    z: [format hard drive]
+    my-routine z ;-- uh oh 
+
+*(Note: This strongly parallels why there was [backpedaling on non-block branches](https://forum.rebol.info/t/backpedaling-on-non-block-branches/476).)*
+
+I think that having it accept TEXT! and BLOCK! probably strikes a fair compromise.  This way, it&#39;s not treated as a fully generic &quot;any-value!&quot; routine, but it still covers the most common non-block case.  If people want to print a generic value they&#39;d have to say **print [value]**...and I think this makes a lot of sense.  (Though I can&#39;t say we&#39;re fully resolved on understanding what that should do, e.g. for instance when value is a BLOCK! itself, at least this is a step forward.)
+
+Bolstering this idea is the strong encouragement of [using symbolic routines to dump (--) and probe (??)](https://forum.rebol.info/t/theory-of-symbols-and-repurposing-and/834/4?u=hostilefork).  This is the proper way to get your debug output, and coverage for ANY-VALUE! with no surprise evaluations.  Plus, `--` gives evaluator invisibility, which is excellent...and PRINT wouldn&#39;t give you that (it returns void)
+
+A kind-of-weird idea would be to also allow CHAR!, and have it print the character without a newline.  Reason would be to be able to say **print newline** and have that mean just print literally one newline (not a newline and then a newline).  It comes up kind of often, and seems a shame to have to say **write-stdout newline** or something more drawn out.  But also worth pointing out you could get the same effect idiomatically with **print []** or **print {}** and avoid bringing in the extra type and &quot;curious&quot; behavior (that would really only ever be used with newline).  Or just `print-newline: specialize &#39;print [line: []]`
+
+The rule for accepting blank-in, and having null-out, generally applies only to functions without side-effects.  But a &quot;display side-effect&quot; is somewhat different from a data structure side effect.  It seems pretty useful here, to have print of blank! be a no-op...and also to be able to throw a THEN or ELSE clause onto that.</description>
+    
+    <lastBuildDate>Tue, 26 Mar 2019 19:15:04 +0000</lastBuildDate>
+    <category>Internals</category>
+    <atom:link href="https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Limiting PRINT to BLOCK!, TEXT! (perhaps BLANK! to opt-out?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="855">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>A kind-of-weird idea would be to also allow CHAR!, and have it print the character without a newline. Reason would be to be able to say <strong>print newline</strong> and have that mean just print literally one newline (not a newline and then a newline). It comes up kind of often, and seems a shame to have to say <strong>write-stdout newline</strong> or something more drawn out. But also worth pointing out you could get the same effect idiomatically with <strong>print []</strong> or <strong>print {}</strong></p>
+</blockquote>
+</aside>
+<p>I decided <code>print newline</code> was clearer.  It's the only character PRINT accepts (would be confusing otherwise as to whether it printed a single character or not).</p>
+<ul>
+<li>
+<code>print newline</code> prints a single newline (returns void)</li>
+<li>
+<code>print {}</code> does the same (returns void)</li>
+<li>
+<code>print _</code> prints nothing (returns null)</li>
+<li>
+<code>print []</code> will print nothing (returns null)</li>
+</ul>
+<p>If you look at the implementation of PRINT, it shows how the rules are lining up:</p>
+<pre><code>print: func [
+    {Textually output spaced line (evaluating elements if a block)}
+
+    return: "NULL if blank input or effectively empty block, otherwise VOID!"
+        [&lt;opt&gt; void!]
+    line "Line of text or block, blank or [] has NO output, newline allowed"
+        [&lt;blank&gt; char! text! block!]
+][
+    if char? line [
+        if not equal? line newline [
+            fail "PRINT only allows CHAR! of newline (see WRITE-STDOUT)"
+        ]
+        return write-stdout line
+    ]
+
+    (write-stdout try spaced line) then [write-stdout newline]
+]
+</code></pre>
+<p>Notice how SPACED of [] returns NULL, which TRY converts into blank, which WRITE-STDOUT takes to mean it should return NULL.  The THEN notices whether write-stdout returns null or not...if it returns non-null (including void) it will follow up with writing a newline.</p>
+<p>Because of the way that <code>&lt;blank&gt;</code> works (name still being thought about), this has a nice behavior w.r.t. performance.  A function receiving blank that has that parameter annotation won't even try to run.</p>
+          <p><a href="https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855/2</link>
+        <pubDate>Tue, 26 Mar 2019 19:15:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-855-2</guid>
+        <source url="https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855.rss">Limiting PRINT to BLOCK!, TEXT! (perhaps BLANK! to opt-out?)</source>
+      </item>
+      <item>
+        <title>Limiting PRINT to BLOCK!, TEXT! (perhaps BLANK! to opt-out?)</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I've been uncomfortable with PRINT taking ANY-VALUE! for some time.</p>
+<p>The reasoning--as I explained--is that BLOCK!s are evaluated.  So if you try to use PRINT in a generic way, such as <strong>print value</strong> to do debug output, you don't know if that is going to do a single or double evaluation.   Code that appears to work fine outputting all other values will one day get a BLOCK!, and suddenly you have confusion and/or a serious security problem.</p>
+<pre><code>my-routine: func [value [any-value!]] [
+    ...
+    print value
+    ...
+]
+
+;-- Day 1
+x: &lt;a tag&gt;
+my-routine x ;-- no problem
+
+;-- Day 2
+y: 6.28
+my-routine y ;-- yup, fine
+
+;-- Day 304
+z: [format hard drive]
+my-routine z ;-- uh oh 
+</code></pre>
+<p><em>(Note: This strongly parallels why there was <a href="https://forum.rebol.info/t/backpedaling-on-non-block-branches/476">backpedaling on non-block branches</a>.)</em></p>
+<p>I think that having it accept TEXT! and BLOCK! probably strikes a fair compromise.  This way, it's not treated as a fully generic "any-value!" routine, but it still covers the most common non-block case.  If people want to print a generic value they'd have to say <strong>print [value]</strong>...and I think this makes a lot of sense.  (Though I can't say we're fully resolved on understanding what that should do, e.g. for instance when value is a BLOCK! itself, at least this is a step forward.)</p>
+<p>Bolstering this idea is the strong encouragement of <a href="https://forum.rebol.info/t/theory-of-symbols-and-repurposing-and/834/4?u=hostilefork">using symbolic routines to dump (--) and probe (??)</a>.  This is the proper way to get your debug output, and coverage for ANY-VALUE! with no surprise evaluations.  Plus, <code>--</code> gives evaluator invisibility, which is excellent...and PRINT wouldn't give you that (it returns void)</p>
+<p>A kind-of-weird idea would be to also allow CHAR!, and have it print the character without a newline.  Reason would be to be able to say <strong>print newline</strong> and have that mean just print literally one newline (not a newline and then a newline).  It comes up kind of often, and seems a shame to have to say <strong>write-stdout newline</strong> or something more drawn out.  But also worth pointing out you could get the same effect idiomatically with <strong>print []</strong> or <strong>print {}</strong> and avoid bringing in the extra type and "curious" behavior (that would really only ever be used with newline).  Or just <code>print-newline: specialize 'print [line: []]</code></p>
+<p>The rule for accepting blank-in, and having null-out, generally applies only to functions without side-effects.  But a "display side-effect" is somewhat different from a data structure side effect.  It seems pretty useful here, to have print of blank! be a no-op...and also to be able to throw a THEN or ELSE clause onto that.</p>
+          <p><a href="https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855/1</link>
+        <pubDate>Fri, 12 Oct 2018 10:27:34 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-855-1</guid>
+        <source url="https://forum.rebol.info/t/limiting-print-to-block-text-perhaps-blank-to-opt-out/855.rss">Limiting PRINT to BLOCK!, TEXT! (perhaps BLANK! to opt-out?)</source>
+      </item>
+  </channel>
+</rss>

@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>The Weirdness of WAIT</title>
+    <link>https://forum.rebol.info/t/the-weirdness-of-wait/1703</link>
+    <description>I never understood R3-Alpha&#39;s EVENT! / WAIT / AWAKE functionality.
+
+The main reason for this is *it didn&#39;t make sense*.  Let me try and explain what I&#39;ve learned.
+
+# EVENT!
+
+The main concept of EVENT! centered around the idea of being able to avoid creating an OBJECT! in order to have a notification.
+
+Rebol cells were 4 platform pointers in size, and events packed in every bit you could use on a 32-bit system:
+
+* All cells have to surrender some of the first platform pointer for header bits (e.g. a byte to signal that it&#39;s a REB_EVENT, whether it has a new-line flag on it for when it&#39;s displayed in blocks, etc.)
+
+* EVENT! used one pointer for the *recipient* of the event...this was a pointer to a PORT! or a GOB! or whatever.
+
+* Just enough bits were used to store an integer in a table of event names for the event type (e.g. `make event! [type: &#39;lookup ...]`).  You couldn&#39;t put any name you wanted there for the type, only a fixed list of terms that were in a built-in list.
+
+* Every event had room for an X and Y coordinate (which may or may not be supplied) as well as a keycode and modifiers (Ctrl, Alt, etc.)
+
+When you tie all this back to something like an http PORT!, you notice that it&#39;s like most ports in that the only thing it can use out of all of this is that TYPE word.  Because the event that is sent to the port serves the purpose of saying which port the event is for...and if the port gets it, it knows &quot;that&#39;s me&quot;.
+
+## If EVENT! Carries One (limited) WORD!, Where&#39;s the Data?
+
+Good question.
+
+If the event label is WROTE (which should probably be called SENT), how do you know which write you&#39;re being notified about?  If it&#39;s asynchronous there could have been several.
+
+If the event label is READ (which should probably be called RECEIVED), how do you know which READ?
+
+It seems it would be nice if a READ event came along not just saying &quot;a read is done, and it was done on *you*, port!&quot; but carried.. *the data that was read*.  And some sort of labeling the caller was able to put on to identify the request, so they could know what the response was in regards to?
+
+But as it stood, the port has nowhere to look but itself.  The only thing you can do is hope the operations you submit on are guaranteed to run sequentially and report their results in order.  You&#39;ll be doing all the bookkeeping yourself...and EVENT! won&#39;t help you!
+
+In the case that your port operations aren&#39;t sequential or guaranteed to complete in the order you sent them, there&#39;s truly no way to manage it.
+
+## So What is &quot;WAIT-ing on a PORT!&quot;
+
+Okay now this raises a next big question in the semantic soup.  Let&#39;s say a port is asynchronous and I say:
+
+    write netport &quot;alpha&quot;  ; asynchronous, write notification coming later
+    read netport           ; also asynchronous, read notification coming later
+    write port &quot;beta&quot;      ; yet again asynchronous
+
+    wait port
+
+What is the WAIT actually waiting for?  One of the requests?  All three of them?
+
+The way it was working was that the wait actually was waiting on was a &quot;pending&quot; flag.  If you tried to call WAIT on a port that didn&#39;t have the pending flag set, it would be ignored entirely.
+
+The pending flag would become set whenever an asynchronous request was issued.  But it could be cleared by any awake processing on events...and it was haphazard as to whether or not the events would be processed partially and clear the pending flag with some still going...leading a WAIT to not process the pending queue.
+
+## Long Story Short: All Of This Is Getting Replaced
+
+For things to work, they have to have clear semantic models.  There has to be a way to line up requests with responses.  If you&#39;re going to WAIT on something, there has to be a sense of what it is you are waiting *for* and how you can meaningfully react to it.
+
+:man_shrugging:</description>
+    
+    <lastBuildDate>Fri, 03 Sep 2021 21:30:46 +0000</lastBuildDate>
+    <category>Ports</category>
+    <atom:link href="https://forum.rebol.info/t/the-weirdness-of-wait/1703.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>The Weirdness of WAIT</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I never understood R3-Alpha's EVENT! / WAIT / AWAKE functionality.</p>
+<p>The main reason for this is <em>it didn't make sense</em>.  Let me try and explain what I've learned.</p>
+<h1>EVENT!</h1>
+<p>The main concept of EVENT! centered around the idea of being able to avoid creating an OBJECT! in order to have a notification.</p>
+<p>Rebol cells were 4 platform pointers in size, and events packed in every bit you could use on a 32-bit system:</p>
+<ul>
+<li>
+<p>All cells have to surrender some of the first platform pointer for header bits (e.g. a byte to signal that it's a REB_EVENT, whether it has a new-line flag on it for when it's displayed in blocks, etc.)</p>
+</li>
+<li>
+<p>EVENT! used one pointer for the <em>recipient</em> of the event...this was a pointer to a PORT! or a GOB! or whatever.</p>
+</li>
+<li>
+<p>Just enough bits were used to store an integer in a table of event names for the event type (e.g. <code>make event! [type: 'lookup ...]</code>).  You couldn't put any name you wanted there for the type, only a fixed list of terms that were in a built-in list.</p>
+</li>
+<li>
+<p>Every event had room for an X and Y coordinate (which may or may not be supplied) as well as a keycode and modifiers (Ctrl, Alt, etc.)</p>
+</li>
+</ul>
+<p>When you tie all this back to something like an http PORT!, you notice that it's like most ports in that the only thing it can use out of all of this is that TYPE word.  Because the event that is sent to the port serves the purpose of saying which port the event is for...and if the port gets it, it knows "that's me".</p>
+<h2>If EVENT! Carries One (limited) WORD!, Where's the Data?</h2>
+<p>Good question.</p>
+<p>If the event label is WROTE (which should probably be called SENT), how do you know which write you're being notified about?  If it's asynchronous there could have been several.</p>
+<p>If the event label is READ (which should probably be called RECEIVED), how do you know which READ?</p>
+<p>It seems it would be nice if a READ event came along not just saying "a read is done, and it was done on <em>you</em>, port!" but carried.. <em>the data that was read</em>.  And some sort of labeling the caller was able to put on to identify the request, so they could know what the response was in regards to?</p>
+<p>But as it stood, the port has nowhere to look but itself.  The only thing you can do is hope the operations you submit on are guaranteed to run sequentially and report their results in order.  You'll be doing all the bookkeeping yourself...and EVENT! won't help you!</p>
+<p>In the case that your port operations aren't sequential or guaranteed to complete in the order you sent them, there's truly no way to manage it.</p>
+<h2>So What is "WAIT-ing on a PORT!"</h2>
+<p>Okay now this raises a next big question in the semantic soup.  Let's say a port is asynchronous and I say:</p>
+<pre><code>write netport "alpha"  ; asynchronous, write notification coming later
+read netport           ; also asynchronous, read notification coming later
+write port "beta"      ; yet again asynchronous
+
+wait port
+</code></pre>
+<p>What is the WAIT actually waiting for?  One of the requests?  All three of them?</p>
+<p>The way it was working was that the wait actually was waiting on was a "pending" flag.  If you tried to call WAIT on a port that didn't have the pending flag set, it would be ignored entirely.</p>
+<p>The pending flag would become set whenever an asynchronous request was issued.  But it could be cleared by any awake processing on events...and it was haphazard as to whether or not the events would be processed partially and clear the pending flag with some still going...leading a WAIT to not process the pending queue.</p>
+<h2>Long Story Short: All Of This Is Getting Replaced</h2>
+<p>For things to work, they have to have clear semantic models.  There has to be a way to line up requests with responses.  If you're going to WAIT on something, there has to be a sense of what it is you are waiting <em>for</em> and how you can meaningfully react to it.</p>
+<p><img src="https://forum.rebol.info/images/emoji/twitter/man_shrugging.png?v=9" title=":man_shrugging:" class="emoji only-emoji" alt=":man_shrugging:"></p>
+          <p><a href="https://forum.rebol.info/t/the-weirdness-of-wait/1703/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/the-weirdness-of-wait/1703/1</link>
+        <pubDate>Fri, 03 Sep 2021 21:30:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1703-1</guid>
+        <source url="https://forum.rebol.info/t/the-weirdness-of-wait/1703.rss">The Weirdness of WAIT</source>
+      </item>
+  </channel>
+</rss>

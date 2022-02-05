@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Taking Advantage of DELIMIT&#39;s BLOCK! Behavior and GET-BLOCK!</title>
+    <link>https://forum.rebol.info/t/taking-advantage-of-delimits-block-behavior-and-get-block/1679</link>
+    <description>I finally put my foot down and said that BLOCK! in DELIMIT has the behavior of ***don&#39;t evaluate, just squoosh everything together.***
+
+    &gt;&gt; spaced [&quot;abc&quot; [d e &quot;f&quot;] &quot;ghi&quot;]
+    == &quot;abc def ghi&quot;
+
+You can always REDUCE if you want evaluations, but there&#39;s also GET-BLOCK!...
+
+    &gt;&gt; spaced [&quot;abc&quot; :[&quot;something&quot; 1 + 2] &quot;ghi&quot;]
+    == &quot;abc something3 ghi&quot;
+
+And with the magic of GET-BLOCK! branches, you can even opt in or out of these things!  Don&#39;t forget to use COMMA! if you think it will look better...
+
+    &gt;&gt; spaced [&quot;abc&quot; if true :[&quot;something&quot; 1 + 2] &quot;ghi&quot;]
+    == &quot;abc something3 ghi&quot;
+
+    &gt;&gt; spaced [&quot;abc&quot;, if false :[&quot;something&quot; 1 + 2], &quot;ghi&quot;]
+    == &quot;abc ghi&quot;
+
+## Let&#39;s Look At What Old Code Had To Do
+
+Here&#39;s some code for making a log file name from pieces in the tests:
+
+    log-file: log-file-prefix
+
+    if code-checksum [
+        append log-file &quot;_&quot;
+        append log-file copy/part skip mold code-checksum 2 6
+    ]
+
+    append log-file &quot;_&quot;
+    append log-file copy/part skip mold test-checksum 2 6
+
+    append log-file &quot;.log&quot;
+    log-file: clean-path log-file
+
+How about we tidy that up?
+
+## Here Is What We Can Confidently Write In The New Way
+
+    log-file: clean-path unspaced [
+        log-file-prefix
+            if code-checksum :[&quot;_&quot;, copy/part (skip mold code-checksum 2) 6]
+            &quot;_&quot;, copy/part (skip mold test-checksum 2) 6, &quot;.log&quot;
+    ]
+
+**Not only is it cleaner, it&#39;s more efficient!**  This lets us build as we go along, without having to keep expanding string memory on each APPEND...fewer function calls.  It&#39;s better all around!
+
+I think we can make a JOIN using the &quot;REPEND&quot; replacement optimization equally efficient:
+
+    log-file: clean-path join log-file-prefix :[
+        if code-checksum :[&quot;_&quot;, copy/part (skip mold code-checksum 2) 6]
+        &quot;_&quot;, copy/part (skip mold test-checksum 2) 6, &quot;.log&quot;
+    ]
+
+
+## It Could Be Even More Efficient, If We Wanted...
+
+Given the GET-BLOCK! optimizations, a minor tweak could boost things:
+
+    log-file: clean-path unspaced [
+        log-file-prefix
+            if code-checksum &#39;:[&quot;_&quot;, copy/part (skip mold code-checksum 2) 6]
+            &quot;_&quot;, copy/part (skip mold test-checksum 2) 6, &quot;.log&quot;
+    ]
+
+It&#39;s a subtle difference, but we&#39;re having the IF statement evaluate to a GET-BLOCK!...instead of having a branch that evaluates a GET-BLOCK! to make a block.
+
+We can make DELIMIT evaluate get-blocks as it goes, folding them into the output without generating intermediate series...much like REPEND.
+
+This could be a little wild, in terms of performing evaluations when you didn&#39;t intend them:
+
+    data: [a b c :[format hard drive]]
+
+    ...
+
+    for-each item data [
+        print [&quot;The value is&quot; data]
+    ]
+
+But that&#39;s really just the tip of the iceberg on how many ways the system is not safe against injection attacks.  But if you&#39;re working in a secure situation, you could use a guarded layer whenever dealing with external data, to limit execution.  I think that concept (which I have called &quot;Build Your Own Safety&quot;) is likely what people who want to use the language in more secure scenarios would have to do.
+
+(After all, even the most secure programs have to at some point run on an &quot;insecure&quot; CPU.  A flexible and fast Ren-C could be the basis for designing a more secure language on top of it...)</description>
+    
+    <lastBuildDate>Mon, 23 Aug 2021 01:32:59 +0000</lastBuildDate>
+    <category>Show &amp; Tell</category>
+    <atom:link href="https://forum.rebol.info/t/taking-advantage-of-delimits-block-behavior-and-get-block/1679.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Taking Advantage of DELIMIT&#39;s BLOCK! Behavior and GET-BLOCK!</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>I finally put my foot down and said that BLOCK! in DELIMIT has the behavior of <em><strong>don't evaluate, just squoosh everything together.</strong></em></p>
+<pre><code>&gt;&gt; spaced ["abc" [d e "f"] "ghi"]
+== "abc def ghi"
+</code></pre>
+<p>You can always REDUCE if you want evaluations, but there's also GET-BLOCK!...</p>
+<pre><code>&gt;&gt; spaced ["abc" :["something" 1 + 2] "ghi"]
+== "abc something3 ghi"
+</code></pre>
+<p>And with the magic of GET-BLOCK! branches, you can even opt in or out of these things!  Don't forget to use COMMA! if you think it will look better...</p>
+<pre><code>&gt;&gt; spaced ["abc" if true :["something" 1 + 2] "ghi"]
+== "abc something3 ghi"
+
+&gt;&gt; spaced ["abc", if false :["something" 1 + 2], "ghi"]
+== "abc ghi"
+</code></pre>
+<h2>Let's Look At What Old Code Had To Do</h2>
+<p>Here's some code for making a log file name from pieces in the tests:</p>
+<pre><code>log-file: log-file-prefix
+
+if code-checksum [
+    append log-file "_"
+    append log-file copy/part skip mold code-checksum 2 6
+]
+
+append log-file "_"
+append log-file copy/part skip mold test-checksum 2 6
+
+append log-file ".log"
+log-file: clean-path log-file
+</code></pre>
+<p>How about we tidy that up?</p>
+<h2>Here Is What We Can Confidently Write In The New Way</h2>
+<pre><code>log-file: clean-path unspaced [
+    log-file-prefix
+        if code-checksum :["_", copy/part (skip mold code-checksum 2) 6]
+        "_", copy/part (skip mold test-checksum 2) 6, ".log"
+]
+</code></pre>
+<p><strong>Not only is it cleaner, it's more efficient!</strong>  This lets us build as we go along, without having to keep expanding string memory on each APPEND...fewer function calls.  It's better all around!</p>
+<p>I think we can make a JOIN using the "REPEND" replacement optimization equally efficient:</p>
+<pre><code>log-file: clean-path join log-file-prefix :[
+    if code-checksum :["_", copy/part (skip mold code-checksum 2) 6]
+    "_", copy/part (skip mold test-checksum 2) 6, ".log"
+]
+</code></pre>
+<h2>It Could Be Even More Efficient, If We Wanted...</h2>
+<p>Given the GET-BLOCK! optimizations, a minor tweak could boost things:</p>
+<pre><code>log-file: clean-path unspaced [
+    log-file-prefix
+        if code-checksum ':["_", copy/part (skip mold code-checksum 2) 6]
+        "_", copy/part (skip mold test-checksum 2) 6, ".log"
+]
+</code></pre>
+<p>It's a subtle difference, but we're having the IF statement evaluate to a GET-BLOCK!...instead of having a branch that evaluates a GET-BLOCK! to make a block.</p>
+<p>We can make DELIMIT evaluate get-blocks as it goes, folding them into the output without generating intermediate series...much like REPEND.</p>
+<p>This could be a little wild, in terms of performing evaluations when you didn't intend them:</p>
+<pre><code>data: [a b c :[format hard drive]]
+
+...
+
+for-each item data [
+    print ["The value is" data]
+]
+</code></pre>
+<p>But that's really just the tip of the iceberg on how many ways the system is not safe against injection attacks.  But if you're working in a secure situation, you could use a guarded layer whenever dealing with external data, to limit execution.  I think that concept (which I have called "Build Your Own Safety") is likely what people who want to use the language in more secure scenarios would have to do.</p>
+<p>(After all, even the most secure programs have to at some point run on an "insecure" CPU.  A flexible and fast Ren-C could be the basis for designing a more secure language on top of it...)</p>
+          <p><a href="https://forum.rebol.info/t/taking-advantage-of-delimits-block-behavior-and-get-block/1679/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/taking-advantage-of-delimits-block-behavior-and-get-block/1679/1</link>
+        <pubDate>Mon, 23 Aug 2021 01:10:45 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1679-1</guid>
+        <source url="https://forum.rebol.info/t/taking-advantage-of-delimits-block-behavior-and-get-block/1679.rss">Taking Advantage of DELIMIT&#39;s BLOCK! Behavior and GET-BLOCK!</source>
+      </item>
+  </channel>
+</rss>

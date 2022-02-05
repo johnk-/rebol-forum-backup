@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Moving Away From &quot;NULL termination&quot; (END!) of BLOCK!s</title>
+    <link>https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445</link>
+    <description>Ren-C preserved an idea from R3-Alpha...which was that there would be a cell type byte reserved to signal the end of an array.  This is a bit like how null terminators are used with C strings.  However, arrays also tracked their length.  So it was somewhat redundant information.
+
+In R3-Alpha, the special cells were given the END! datatype.  Sometimes you would see bugs that would leak the existence of this internal type to the user.  Ren-C hid it more effectively, by not making it an actual &quot;type&quot;.
+
+On the plus side, this provides a clean-looking way to walk through the values in an array:
+
+    REBVAL *item = ARR_HEAD(array);  // first cell pointer in the array
+    for (; NOT_END(item); ++item) {
+        ...
+    }
+
+However, there are several downsides:
+
+* **You have to pay for a dereference on each step.**  item is a pointer, and you have to follow that pointer to its memory location to read a byte there to see if you&#39;ve reached the end.  This probably isn&#39;t *that* bad, because odds are you are going to be working with that memory inside the loop anyway.  But maybe you aren&#39;t...and you certainly aren&#39;t going to be for the last cell.
+
+* **You typically wind up paying a cell&#39;s worth of cost for this convenience.**  If your array is empty, it still needs space for at least one cell.  If your array has one cell, it needs space for two.  If it has two it needs space for three, etc.  This isn&#39;t just an extra byte (as in C &#39;\0&#39; termination)...it&#39;s 4 platform pointers.  So 32 bytes of oft-wasted space on 64-bit platforms for a mostly empty cell.
+
+* **But rounding up by 1 is even worse than wasting one cell...** because it propagates to rounding up in the memory pool block size, and memory pools are sized in multiples of 2 (2, 4, 8, 16, etc).  So if what you really want is a two-cell array--e.g. enough for **a/b**, you move up to the next size and take a chunk from the 4-cell pool.  A 4-cell array needs to come from the 8-cell pool.  Etc.
+
+## Should We Scrap This Idea?
+
+It&#39;s bothered me for a while, but since it might make enumeration faster in some cases I&#39;ve let it hang around.  Having a terminator has helped catch out of bounds cases more easily.
+
+**But I think the time has come to demote termination to a debug-build-only practice.**  It&#39;s gotten in the way of too many interesting optimizations.
+
+Data point: Red doesn&#39;t do it.  They just store the pointer to the tail of the data (in the slot where R3-Alpha stored the length).  It works either way since you can calculate the length by subtracting the head from the tail...or calculate the tail by adding the length to the head.  I&#39;d imagine the tail is needed more often.
+
+The code isn&#39;t usually that much worse:
+
+    RELVAL *item = ARR_HEAD(array);  // &quot;relative value&quot;, vs. REBVAL*
+    RELVAL *tail = ARR_TAIL(array);
+    for (; item != tail; ++item) {
+        ...
+    }
+
+But sometimes there were cases that a function would be passed a RELVAL* resident in an array, without passing the array also.  And then it would enumerate that value forward until it reached an end.  Such routines aren&#39;t all that common, but a few do exist.  They&#39;d need to be revisited.
+
+It&#39;s not that huge a deal, and kind of trivial in the scheme of things.  But it would touch a lot of code.  :-(  But, as usual in Ren-C...the asserts can keep it running.
+
+## END cells would still exist
+
+The END cell type is important for other reasons.  It&#39;s used in rebEND as a terminator for C va_list arguments, and that&#39;s not going away.  There are other applications which are beyond the scope of this post to explain.
+
+And as I say, termination of some kind would probably continue in debug builds.  So they might over-allocate to have enough room at the tail to put an end cell, just to get errors to trigger if you went past the limit.
+
+So let&#39;s not malign the END marker too much.  It has been a valuable contributor.  :medal_sports:</description>
+    
+    <lastBuildDate>Sun, 14 Feb 2021 07:23:10 +0000</lastBuildDate>
+    <category>Optimization</category>
+    <atom:link href="https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>Moving Away From &quot;NULL termination&quot; (END!) of BLOCK!s</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="1" data-topic="1445">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p><strong>But I think the time has come to demote termination to a debug-build-only practice.</strong> It's gotten in the way of too many interesting optimizations.</p>
+</blockquote>
+</aside>
+<p>This is now in place.  It saves a decent amount of memory, as short series are pretty common (e.g. PATH!s like <code>a/1</code> have two cells in them, and it's better to be able to fit them in the 2 cell pool instead of needing to put them in the 4 cell pool).</p>
+<p>It's probably going to hit some bugs here or there for a while.  But still, the code continues to be fairly robust during such reorganizations.</p>
+          <p><a href="https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445/3</link>
+        <pubDate>Sun, 14 Feb 2021 07:23:10 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1445-3</guid>
+        <source url="https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445.rss">Moving Away From &quot;NULL termination&quot; (END!) of BLOCK!s</source>
+      </item>
+      <item>
+        <title>Moving Away From &quot;NULL termination&quot; (END!) of BLOCK!s</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>A post was split to a new topic: <a href="/t/should-there-be-distinct-debug-release-builds/1446">Should There Be Distinct Debug/Release Builds?</a></p>
+          <p><a href="https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445/2</link>
+        <pubDate>Wed, 30 Dec 2020 18:50:24 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1445-2</guid>
+        <source url="https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445.rss">Moving Away From &quot;NULL termination&quot; (END!) of BLOCK!s</source>
+      </item>
+      <item>
+        <title>Moving Away From &quot;NULL termination&quot; (END!) of BLOCK!s</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>Ren-C preserved an idea from R3-Alpha...which was that there would be a cell type byte reserved to signal the end of an array.  This is a bit like how null terminators are used with C strings.  However, arrays also tracked their length.  So it was somewhat redundant information.</p>
+<p>In R3-Alpha, the special cells were given the END! datatype.  Sometimes you would see bugs that would leak the existence of this internal type to the user.  Ren-C hid it more effectively, by not making it an actual "type".</p>
+<p>On the plus side, this provides a clean-looking way to walk through the values in an array:</p>
+<pre><code>REBVAL *item = ARR_HEAD(array);  // first cell pointer in the array
+for (; NOT_END(item); ++item) {
+    ...
+}
+</code></pre>
+<p>However, there are several downsides:</p>
+<ul>
+<li>
+<p><strong>You have to pay for a dereference on each step.</strong>  item is a pointer, and you have to follow that pointer to its memory location to read a byte there to see if you've reached the end.  This probably isn't <em>that</em> bad, because odds are you are going to be working with that memory inside the loop anyway.  But maybe you aren't...and you certainly aren't going to be for the last cell.</p>
+</li>
+<li>
+<p><strong>You typically wind up paying a cell's worth of cost for this convenience.</strong>  If your array is empty, it still needs space for at least one cell.  If your array has one cell, it needs space for two.  If it has two it needs space for three, etc.  This isn't just an extra byte (as in C '\0' termination)...it's 4 platform pointers.  So 32 bytes of oft-wasted space on 64-bit platforms for a mostly empty cell.</p>
+</li>
+<li>
+<p><strong>But rounding up by 1 is even worse than wasting one cell...</strong> because it propagates to rounding up in the memory pool block size, and memory pools are sized in multiples of 2 (2, 4, 8, 16, etc).  So if what you really want is a two-cell array--e.g. enough for <strong>a/b</strong>, you move up to the next size and take a chunk from the 4-cell pool.  A 4-cell array needs to come from the 8-cell pool.  Etc.</p>
+</li>
+</ul>
+<h2>Should We Scrap This Idea?</h2>
+<p>It's bothered me for a while, but since it might make enumeration faster in some cases I've let it hang around.  Having a terminator has helped catch out of bounds cases more easily.</p>
+<p><strong>But I think the time has come to demote termination to a debug-build-only practice.</strong>  It's gotten in the way of too many interesting optimizations.</p>
+<p>Data point: Red doesn't do it.  They just store the pointer to the tail of the data (in the slot where R3-Alpha stored the length).  It works either way since you can calculate the length by subtracting the head from the tail...or calculate the tail by adding the length to the head.  I'd imagine the tail is needed more often.</p>
+<p>The code isn't usually that much worse:</p>
+<pre><code>RELVAL *item = ARR_HEAD(array);  // "relative value", vs. REBVAL*
+RELVAL *tail = ARR_TAIL(array);
+for (; item != tail; ++item) {
+    ...
+}
+</code></pre>
+<p>But sometimes there were cases that a function would be passed a RELVAL* resident in an array, without passing the array also.  And then it would enumerate that value forward until it reached an end.  Such routines aren't all that common, but a few do exist.  They'd need to be revisited.</p>
+<p>It's not that huge a deal, and kind of trivial in the scheme of things.  But it would touch a lot of code.  <img src="https://forum.rebol.info/images/emoji/twitter/frowning.png?v=9" title=":frowning:" class="emoji" alt=":frowning:">  But, as usual in Ren-C...the asserts can keep it running.</p>
+<h2>END cells would still exist</h2>
+<p>The END cell type is important for other reasons.  It's used in rebEND as a terminator for C va_list arguments, and that's not going away.  There are other applications which are beyond the scope of this post to explain.</p>
+<p>And as I say, termination of some kind would probably continue in debug builds.  So they might over-allocate to have enough room at the tail to put an end cell, just to get errors to trigger if you went past the limit.</p>
+<p>So let's not malign the END marker too much.  It has been a valuable contributor.  <img src="https://forum.rebol.info/images/emoji/twitter/medal_sports.png?v=9" title=":medal_sports:" class="emoji" alt=":medal_sports:"></p>
+          <p><a href="https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445/1</link>
+        <pubDate>Wed, 30 Dec 2020 10:29:18 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1445-1</guid>
+        <source url="https://forum.rebol.info/t/moving-away-from-null-termination-end-of-block-s/1445.rss">Moving Away From &quot;NULL termination&quot; (END!) of BLOCK!s</source>
+      </item>
+  </channel>
+</rss>

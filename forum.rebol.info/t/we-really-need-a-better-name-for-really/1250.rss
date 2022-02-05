@@ -1,0 +1,517 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>We REALLY need a better name for... REALLY</title>
+    <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250</link>
+    <description>If I&#39;ve done my due diligence in [reasoning through a world where NULL is normalized](https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249), then being able to have your code assert places where you didn&#39;t expect a NULL is pretty important.
+
+&gt; **TL;DR**: [The construct that has been committed is called MUST](https://github.com/metaeducation/ren-c/commit/b185ba51b337dfa83d8a7233c0dc12c49775ea02)
+&gt;
+&gt;     &gt;&gt; must find &quot;abc&quot; &quot;b&quot;
+&gt;     == &quot;bc&quot;
+&gt;
+&gt;     &gt;&gt; must find &quot;abc&quot; &quot;q&quot;
+&gt;     ** Error: MUST requires argument to not be NULL    
+
+---
+
+Once upon a time, this was called ENSURE:
+
+    &gt;&gt; append x ensure select [a 10 b 20] &#39;c
+    ** Error: e.g. &quot;Couldn&#39;t ENSURE you had a value, it was NULL&quot;&quot;
+    ** Near: ensure ** select [a 10 ... (blah blah
+
+But that was retaken to be a 2-argument function: a variant of MATCH that triggers an error if the type doesn&#39;t match a type or set (e.g. `ensure [text! integer!] 1 + 2`).  It passes the value through if it matches, and raises an error if it does not.
+
+I used that all the time, whereas a single-arity function that checked against NULL seemed less useful.  So long as you were throwing in a check, was &quot;it&#39;s not null&quot; the only thing you knew about the data?  You could even say **ensure any-value! ...** if that was the case, and that wasn&#39;t too bad.
+
+Still...for the heck of it, I went ahead and made a non-null checker and called it... REALLY.  Yes, REALLY.
+
+    &gt;&gt; append x really select [a 10 b 20] &#39;c
+    ** Error: e.g. &quot;You REALLY wanted a value, but got back NULL&quot;
+    ** Near: really ** select [a 10 ... (blah blah
+
+I didn&#39;t like the name, and never used it.  Nulls caused enough problems in those days on their own. 
+ But with Sometimes-Too-Friendly Nulls, callsites could REALLY use this now.
+
+I&#39;d be willing to shuffle names around.  But ENSURE became quite entrenched.  I&#39;d be loathe to retake it unless a quite good replacement were found.
+
+So, what&#39;ve we got?
+
+## Hm, wait... GOT?
+
+I just wrote that and wondered if it could work:
+
+    &gt;&gt; append x got select [a 10 b 20] &#39;c
+    ** Error: e.g. &quot;Thought you GOT a value, but you got nothin&#39; (it was NULL)&quot;
+    ** Near: got ** select [a 10 ... (blah blah
+
+It&#39;s weird, and has a bit of that problem of looking at a word where it doesn&#39;t look like a word.  Then none of them do if you think too much.  Interesting term to know: **[&quot;semantic satiation&quot;](http://en.wikipedia.org/wiki/Semantic_satiation)**
+
+The idea that GOT is an assertion, a la &quot;I got this&quot;, is certainly odd.  My leaning is that maybe that suggests it&#39;s better as a version of GET that ensures the lookup was not NULL?  Otherwise you&#39;d wind up writing oddities like **got get**.  :-/
+
+So this may play a role here in code that wishes to be more cautious about NULLs, as **really get**.  That phrasing makes REALLY look a bit favorable.  :-/
+
+## TRY would be nice (but it&#39;s taken)
+
+I wish we had a short name like TRY available.  That would look good:
+
+    &gt;&gt; append x try select [a 10 b 20] &#39;c
+    ** Error: e.g. &quot;You TRY&#39;d but did not succeed, and got a NULL&quot;
+    ** Near: try ** select [a 10 ... (blah blah
+
+But right now it&#39;s what powers the [&quot;blank in, null out&quot; convention](https://github.com/rebol/rebol-issues/issues/1611#issuecomment-385719133) that helps long chains of expressions optimize yet gives error locality.  That&#39;s pretty solid stuff, IMO (quick recap):
+
+    &gt;&gt; data: [a [b 1]]
+
+    &gt;&gt; select select data &#39;a &#39;b
+    == 1
+
+    &gt;&gt; select select data &#39;x &#39;b
+    ** Script Error: select requires series argument to not be null
+    ** Near: [... select data &#39;x ~~ &#39;b]
+
+    &gt;&gt; select try select data &#39;x &#39;b
+    ; null
+
+This fits into the angle of how NULL is still error-causing in many slots, and must be defused into blanks to be accepted in most parameters...(that aren&#39;t refinements!)
+
+When it was an UNSET!=&gt;NONE! converter, BrianH suggested TO-VALUE (which I independently proposed when I wanted the operation), and he also proposed DEFANG (weird, and also less appropriate in light of the premise here that NULL is fairly mild).
+
+I don&#39;t know what decent name TRY could be pushed to in order to retake it.  DENULL sucks.  BLANKIFY sucks.  REIFY is awfully grandiose.
+
+What&#39;s nice about TRY here i.m.o. is how it reads at the callsite.  You don&#39;t have to know that it turns nulls into blanks, you just sort of see it in a chain mitigating an error.  There is MAYBE:
+
+    &gt;&gt; select maybe select data &#39;x &#39;b
+    ; null
+
+I don&#39;t like it as much for this, and think the MAYBE operation is a lot cooler for [what it does right now](https://trello.com/c/XnDsvsM0).
+
+## DID would also be nice (but also taken)
+
+    &gt;&gt; append x did select [a 10 b 20] &#39;c
+    ** Error: Thought you DID get a value, but you didn&#39;t, it was NULL
+    ** Near: try ** select [a 10 ... (blah blah
+
+DID is serving a good purpose as a complement to NOT, and I&#39;m quite attached to it.  It has also made it into the C sources (replacing [the `!!` &quot;operator&quot;](https://stackoverflow.com/questions/10307281/c-operator-is-a-two-not))
+
+## We Never Figured Out The `?` Operator
+
+Maybe this is common enough that the ? operator could be taken for it...
+
+    &gt;&gt; append x ? select [a 10 b 20] &#39;c
+    ** Error: e.g. &quot;Asked the big question &#39;are you a value?&#39; and it wasn&#39;t&quot;
+    ** Near: ? ** select [a 10 ... (blah blah
+
+Perhaps not... but it does raise the point that we are asking for sort of a general evaluator operation or something at the callsite to say &quot;I don&#39;t want this to be a NULL, here&quot;.  Maybe unicode or emoji... check mark?
+
+    &gt;&gt; append x ✓ select [a 10 b 20] &#39;c
+
+In fact, just calling it CHECK is an option...though that sounds like something that would be more generic.  Or VERIFY?  Those sound awfully more grandiose and parameterized than simply seeing if something is null or not.  But rebol&#39;s fluidity is about letting you name any of these things out of the way if you find them objectionable.
+
+Anyway, **REALLY isn&#39;t going to get used for anything else** (at least no time soon) so it&#39;s not like it&#39;s hurting anything.  I&#39;m just afraid that if it&#39;s too gnarly to use that people won&#39;t get into the habit of supplementing their code with a nice annotation saying &quot;I expect this to succeed&quot;.
+
+The floor is open for thoughts.  Short words preferred.  Might this be the mysterious use for BE?
+
+    &gt;&gt; be 300 + 4
+    == 304
+
+    &gt;&gt; be &quot;I&#39;m an ANY-VALUE!, therefore I am.&quot;
+    == &quot;I&#39;m an ANY-VALUE!, therefore I am.&quot;
+
+Doesn&#39;t make as much sense at the callsite, though:
+
+    &gt;&gt; append x be select [a 10 b 20] &#39;c
+    ** Script Error: e.g. &quot;A NULL is nothing, and thus cannot BE&quot;
+    ** Near: be ** select [a 10 ... (blah blah
+
+Or...wait...maybe...CAN?
+
+    &gt;&gt; append x can select [a 10 b 20] &#39;c
+    ** Script Error: e.g. &quot;Thought you could get a non-NULL, but you COULDN&#39;T&quot;
+    ** Near: can ** select [a 10 ... (blah blah
+
+Problem being it sounds a little like a question word.  **append x can any [ ]**.
+
+Another one I had wondered about was **THE**.  Probably better than BE, but still a bit obtuse.
+
+    &gt;&gt; append x the select [a 10 b 20] &#39;c
+    ** Script Error: e.g. &quot;Can&#39;t use THE to refer to something that&#39;s not there&quot;
+    ** Near: the ** select [a 10 ... (blah blah
+
+    &gt;&gt; y: null
+    &gt;&gt; append x the y
+    ** Script Error: e.g. &quot;Can&#39;t use THE to refer to something that&#39;s not there&quot;
+    ** Near: the ** y
+
+That&#39;s...maybe not objectively awful.
+
+Urg.  Opinions?</description>
+    
+    <lastBuildDate>Sun, 20 Jun 2021 02:42:52 +0000</lastBuildDate>
+    <category>Naming</category>
+    <atom:link href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss" rel="self" type="application/rss+xml" />
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-username="hostilefork" data-post="9" data-topic="1250">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt="" width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<p>At the moment I'm liking how THE looks and its brevity, but MUST conveys a bit more of the meaning from REALLY.</p>
+</blockquote>
+</aside>
+<p>THE has a purpose that now seems obvious: literally the thing you are saying.  (e.g. Rebol2's QUOTE):</p>
+<pre><code>&gt;&gt; the x
+== x
+</code></pre>
+<p>This means MUST is looking to be victorious, for those who want it.</p>
+<pre><code>&gt;&gt; must find "abc" "b"
+== "bc"
+
+&gt;&gt; must find "abc" "q"
+** Error: MUST requires argument to not be NULL    
+</code></pre>
+<p><strong>But an issue that should make everyone happier is that NULL is becoming accepted fewer places.</strong>  For instance, you can no longer APPEND a NULL.  You have to TRY it to turn it into a BLANK!...</p>
+<pre><code>&gt;&gt; append [a b c] find "abc" "q"
+** Script Error: append requires value argument to not be null
+
+&gt;&gt; append [a b c] try find "abc" "q"
+== [a b c]
+</code></pre>
+<p>NULL's emphasis is on being a semi-ornery value that permits word access and is falsey, but isn't really accepted most places...including not being able to be put in blocks.  So there should be fewer MUST needed, maybe even more about getting error locality than being necessary to trigger an error ultimately.</p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/11">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/11</link>
+        <pubDate>Sun, 20 Jun 2021 02:42:52 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-11</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <pre><code>viable, must-have, must-be</code></pre>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/10">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/10</link>
+        <pubDate>Wed, 18 Dec 2019 09:49:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-10</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="8" data-topic="1250">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/blackattr/40/204_2.png" class="avatar"> BlackATTR:</div>
+<blockquote>
+<p><code>valid</code></p>
+</blockquote>
+</aside>
+<p>VALID seems like it should be used for <em>something</em>.  Maybe not this, though.</p>
+<p>At the moment I'm liking how THE looks and its brevity, but MUST conveys a bit more of the meaning from REALLY.</p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/9">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/9</link>
+        <pubDate>Wed, 11 Dec 2019 13:27:04 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-9</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[BlackATTR]]></dc:creator>
+        <description><![CDATA[
+            <p>A mixed bag of other options: <code>valid</code>, <code>extant</code>, <code>real</code>, <code>usable</code>, <code>impose</code></p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/8">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/8</link>
+        <pubDate>Tue, 10 Dec 2019 21:39:00 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-8</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="6" data-topic="1250">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/rgchris/40/14_2.png" class="avatar"> rgchris:</div>
+<blockquote>
+<p>must</p>
+</blockquote>
+</aside>
+<p>Hmm, MUST is pretty good, hadn't thought of that!</p>
+<pre><code>append data must select block item
+</code></pre>
+<p>One thing I've sort of flipped about on is the difference in attitudes between "English can't be a language of relevance in the post-singularity future" vs. "The advent of the Internet and Wikipedia, and English-dominance in programming culture, is hardening the language more firmly than before."  Time will tell.</p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/7">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/7</link>
+        <pubDate>Tue, 10 Dec 2019 20:51:05 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-7</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[rgchris]]></dc:creator>
+        <description><![CDATA[
+            <p>How about <code>affirm</code> ? Could also do <code>where</code>, <code>expect</code>, <code>assume</code>, <code>presume</code>, <code>suppose</code>, <code>must</code>, <code>need</code>.</p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/6">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/6</link>
+        <pubDate>Tue, 10 Dec 2019 20:40:39 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-6</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <p>I do not think it should not be possible to use utf-8 code like that. It should be possible.<br>
+Not really suitable for use in the standard codebase of the project or standard functions.<br>
+What users / developers do for their code they must know for themselves. I do not consider it really convenient to use.</p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/5">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/5</link>
+        <pubDate>Tue, 10 Dec 2019 15:47:36 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-5</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="3" data-topic="1250">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/iarnold/40/226_2.png" class="avatar"> iArnold:</div>
+<blockquote>
+<p>Anything that is not on a 'standard' keyboard does not belong in code (/ language) unless it is something that is to be printed.</p>
+</blockquote>
+</aside>
+<p>With editors, search and replace, macros/etc. I feel it's a bit of a waste of UTF-8 support to not be willing to entertain the idea that there are alternative spellings for things that use symbols.  <a href="https://en.wikipedia.org/wiki/APL_(programming_language)#Character_set" rel="nofollow noopener">APL is precedent</a>, and being able to "go there" is a strength of Rebol.</p>
+<p>That said, I like my proposal as explained.  <strong>non null x</strong> → <strong>the x</strong>.  NON seems like a very useful inverse ENSURE to me.  THE might be a little weird but it's short and not entirely nonsensical; so it's better than REALLY.</p>
+<p>If someone were inclined to say <strong>✓: :the</strong> then that should be considered within the scope of the free choice that Rebol seeks to give you.</p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/4">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/4</link>
+        <pubDate>Tue, 10 Dec 2019 14:17:43 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-4</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[iArnold]]></dc:creator>
+        <description><![CDATA[
+            <aside class="quote no-group" data-post="1" data-topic="1250">
+<div class="title">
+<div class="quote-controls"></div>
+<img alt width="20" height="20" src="https://forum.rebol.info/user_avatar/forum.rebol.info/hostilefork/40/26_2.png" class="avatar"> hostilefork:</div>
+<blockquote>
+<pre><code class="lang-auto">&gt;&gt; append x ✓ select [a 10 b 20] 'c
+</code></pre>
+</blockquote>
+</aside>
+<p>Anything that is not on a 'standard' keyboard does not belong in code (/ language) unless it is something that is to be printed.</p>
+<p>Really no happy alternative here unless perhaps OUTCOME.</p>
+<pre><code>&gt;&gt; append x outcome select [a 10 b 20] 'c</code></pre>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/3">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/3</link>
+        <pubDate>Tue, 10 Dec 2019 14:12:48 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-3</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>After reading my list, I started feeling like nothing seemed to rival ENSURE.  Which gave me the idea of retaking it for ensuring something's not NULL and then doing the match in two steps.  So instead of just saying <strong>ensure [integer! text!] thing</strong> you'd say <strong>ensure match [integer! text!] thing</strong>.</p>
+<p>That looks pretty good to the casual observer, because all failed MATCH returns NULL, right?  It's a little more typing, but it's literate--and you can abbreviate it if you do it a lot.  (<code>matches: chain [:match | :ensure]</code>)  Then you have a fully generic ENSURE as its own part.</p>
+<p><em>Then I tried it and remembered why you can't do it this way.</em>  MATCH can be given falsey things to test, like BLANK! or LOGIC! false, or even <code>&lt;opt&gt;</code> to pass NULL itself.  When that happens and it matches, the result is converted to VOID!.  See the section here: <strong><a href="https://forum.rebol.info/t/why-void-is-not-like-unset-and-why-its-more-ornery/947">"How MATCH uses VOID! to warn you of a tricky case"</a></strong></p>
+<p>This means that REALLY MATCH (or after the theorized renaming to ENSURE MATCH) is not a substitute for today's ENSURE behavior.  To illustrate the situation as it looks right now:</p>
+<pre><code>block: [1 _ 3]
+
+if ensure [blank! integer!] second block [
+   print "Why would you test something that FAILs if it doesn't succeed?"
+   print "You wouldn't, so no one writes this pattern!"
+   print "So no need to worry about VOID!ing a blank"
+]
+
+if match [blank! integer!] second block [
+    print "...but you might easily write something like this.  :-("
+    print "It's good to catch if you do via VOID!"
+    print "To mitigate it, you can say `if value? match [...]`"
+    print "And there's EITHER-MATCH if your use was more complex"
+]
+
+data: really match [blank! integer!] second block
+; ^-- you just got VOID! and not the BLANK you wanted :-/
+</code></pre>
+<p>I might try to say this fell into the category of me overthinking things, except <em>this is a really easy mistake to make with a matching dialect</em>.  And for a double whammy, look at this:</p>
+<pre><code> &gt;&gt; x: really match &lt;opt&gt; null
+ == #[void]
+</code></pre>
+<p>There you have two problems compounded.  Firstly MATCH didn't want to give a deceptively falsey result (it <em>did</em> match) so it helped you know with VOID!.  But even if it <em>had</em> given you a falsey result, REALLY would have rejected it...because the input you are matching was NULL.  Yet REALLY-MATCH can do this just fine due to understanding the combination:</p>
+<pre><code> &gt;&gt; x: really-match &lt;opt&gt; null
+ ; null
+</code></pre>
+<p><strong>Long story short: ENSURE is probably good how it is.</strong>  VOID! may no longer make sense for MATCH on falsey input vs. raising an error, though.  Like I said--these are hard puzzles to fit together.</p>
+<p>So maybe keep brainstorming.</p>
+<pre><code>&gt;&gt; append x non-null select [a 10 b 20] 'c
+** Script Error: e.g. "Being outright literal might not be the worst idea"
+** Near: non-null ** select [a 10 ... (blah blah
+</code></pre>
+<p>For that matter, NON could be an anti-ENSURE that is generic.</p>
+<pre><code>&gt;&gt; non integer! &lt;foo&gt;
+== &lt;foo&gt;
+
+&gt;&gt; non integer! 3
+** Script Error: e.g. "you said it was not an integer and it was!"
+</code></pre>
+<p>So <strong>non null x</strong> would be just an instance of this generalized check.  <code>really</code> is 6 characters to that 8, but that's a much more powerful concept, and reads rather unambiguously.</p>
+<hr>
+<p>So far I'm liking:</p>
+<ul>
+<li>NON as the anti-ENSURE, providing <code>non null</code> as one option (along with being generalized)</li>
+<li>THE as a potential shorthand for <code>non null</code>, which would be used by those in the know who have absorbed what it means</li>
+<li>GOT as a shorthand for <strong>non null get</strong>
+</li>
+</ul>
+<p>After thinking about it, REALLY is probably not as bad as I've made it out to be--but given that it's not as patently obvious as <strong>non null</strong> you'd have to look it up.  By which point, you might as well have looked up THE and learned something much shorter that does the same thing.</p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/2">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/2</link>
+        <pubDate>Sat, 07 Dec 2019 10:52:14 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-2</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+      <item>
+        <title>We REALLY need a better name for... REALLY</title>
+        <dc:creator><![CDATA[hostilefork]]></dc:creator>
+        <description><![CDATA[
+            <p>If I've done my due diligence in <a href="https://forum.rebol.info/t/null-blank-void-history-under-scrutiny/1249">reasoning through a world where NULL is normalized</a>, then being able to have your code assert places where you didn't expect a NULL is pretty important.</p>
+<blockquote>
+<p><strong>TL;DR</strong>: <a href="https://github.com/metaeducation/ren-c/commit/b185ba51b337dfa83d8a7233c0dc12c49775ea02">The construct that has been committed is called MUST</a></p>
+<pre><code>&gt;&gt; must find "abc" "b"
+== "bc"
+
+&gt;&gt; must find "abc" "q"
+** Error: MUST requires argument to not be NULL    
+</code></pre>
+</blockquote>
+<hr>
+<p>Once upon a time, this was called ENSURE:</p>
+<pre><code>&gt;&gt; append x ensure select [a 10 b 20] 'c
+** Error: e.g. "Couldn't ENSURE you had a value, it was NULL""
+** Near: ensure ** select [a 10 ... (blah blah
+</code></pre>
+<p>But that was retaken to be a 2-argument function: a variant of MATCH that triggers an error if the type doesn't match a type or set (e.g. <code>ensure [text! integer!] 1 + 2</code>).  It passes the value through if it matches, and raises an error if it does not.</p>
+<p>I used that all the time, whereas a single-arity function that checked against NULL seemed less useful.  So long as you were throwing in a check, was "it's not null" the only thing you knew about the data?  You could even say <strong>ensure any-value! ...</strong> if that was the case, and that wasn't too bad.</p>
+<p>Still...for the heck of it, I went ahead and made a non-null checker and called it... REALLY.  Yes, REALLY.</p>
+<pre><code>&gt;&gt; append x really select [a 10 b 20] 'c
+** Error: e.g. "You REALLY wanted a value, but got back NULL"
+** Near: really ** select [a 10 ... (blah blah
+</code></pre>
+<p>I didn't like the name, and never used it.  Nulls caused enough problems in those days on their own.<br>
+But with Sometimes-Too-Friendly Nulls, callsites could REALLY use this now.</p>
+<p>I'd be willing to shuffle names around.  But ENSURE became quite entrenched.  I'd be loathe to retake it unless a quite good replacement were found.</p>
+<p>So, what've we got?</p>
+<h2>Hm, wait... GOT?</h2>
+<p>I just wrote that and wondered if it could work:</p>
+<pre><code>&gt;&gt; append x got select [a 10 b 20] 'c
+** Error: e.g. "Thought you GOT a value, but you got nothin' (it was NULL)"
+** Near: got ** select [a 10 ... (blah blah
+</code></pre>
+<p>It's weird, and has a bit of that problem of looking at a word where it doesn't look like a word.  Then none of them do if you think too much.  Interesting term to know: <strong><a href="http://en.wikipedia.org/wiki/Semantic_satiation">"semantic satiation"</a></strong></p>
+<p>The idea that GOT is an assertion, a la "I got this", is certainly odd.  My leaning is that maybe that suggests it's better as a version of GET that ensures the lookup was not NULL?  Otherwise you'd wind up writing oddities like <strong>got get</strong>.  :-/</p>
+<p>So this may play a role here in code that wishes to be more cautious about NULLs, as <strong>really get</strong>.  That phrasing makes REALLY look a bit favorable.  :-/</p>
+<h2>TRY would be nice (but it's taken)</h2>
+<p>I wish we had a short name like TRY available.  That would look good:</p>
+<pre><code>&gt;&gt; append x try select [a 10 b 20] 'c
+** Error: e.g. "You TRY'd but did not succeed, and got a NULL"
+** Near: try ** select [a 10 ... (blah blah
+</code></pre>
+<p>But right now it's what powers the <a href="https://github.com/rebol/rebol-issues/issues/1611#issuecomment-385719133">"blank in, null out" convention</a> that helps long chains of expressions optimize yet gives error locality.  That's pretty solid stuff, IMO (quick recap):</p>
+<pre><code>&gt;&gt; data: [a [b 1]]
+
+&gt;&gt; select select data 'a 'b
+== 1
+
+&gt;&gt; select select data 'x 'b
+** Script Error: select requires series argument to not be null
+** Near: [... select data 'x ~~ 'b]
+
+&gt;&gt; select try select data 'x 'b
+; null
+</code></pre>
+<p>This fits into the angle of how NULL is still error-causing in many slots, and must be defused into blanks to be accepted in most parameters...(that aren't refinements!)</p>
+<p>When it was an UNSET!=&gt;NONE! converter, BrianH suggested TO-VALUE (which I independently proposed when I wanted the operation), and he also proposed DEFANG (weird, and also less appropriate in light of the premise here that NULL is fairly mild).</p>
+<p>I don't know what decent name TRY could be pushed to in order to retake it.  DENULL sucks.  BLANKIFY sucks.  REIFY is awfully grandiose.</p>
+<p>What's nice about TRY here i.m.o. is how it reads at the callsite.  You don't have to know that it turns nulls into blanks, you just sort of see it in a chain mitigating an error.  There is MAYBE:</p>
+<pre><code>&gt;&gt; select maybe select data 'x 'b
+; null
+</code></pre>
+<p>I don't like it as much for this, and think the MAYBE operation is a lot cooler for <a href="https://trello.com/c/XnDsvsM0">what it does right now</a>.</p>
+<h2>DID would also be nice (but also taken)</h2>
+<pre><code>&gt;&gt; append x did select [a 10 b 20] 'c
+** Error: Thought you DID get a value, but you didn't, it was NULL
+** Near: try ** select [a 10 ... (blah blah
+</code></pre>
+<p>DID is serving a good purpose as a complement to NOT, and I'm quite attached to it.  It has also made it into the C sources (replacing <a href="https://stackoverflow.com/questions/10307281/c-operator-is-a-two-not">the <code>!!</code> "operator"</a>)</p>
+<h2>We Never Figured Out The <code>?</code> Operator</h2>
+<p>Maybe this is common enough that the ? operator could be taken for it...</p>
+<pre><code>&gt;&gt; append x ? select [a 10 b 20] 'c
+** Error: e.g. "Asked the big question 'are you a value?' and it wasn't"
+** Near: ? ** select [a 10 ... (blah blah
+</code></pre>
+<p>Perhaps not... but it does raise the point that we are asking for sort of a general evaluator operation or something at the callsite to say "I don't want this to be a NULL, here".  Maybe unicode or emoji... check mark?</p>
+<pre><code>&gt;&gt; append x ✓ select [a 10 b 20] 'c
+</code></pre>
+<p>In fact, just calling it CHECK is an option...though that sounds like something that would be more generic.  Or VERIFY?  Those sound awfully more grandiose and parameterized than simply seeing if something is null or not.  But rebol's fluidity is about letting you name any of these things out of the way if you find them objectionable.</p>
+<p>Anyway, <strong>REALLY isn't going to get used for anything else</strong> (at least no time soon) so it's not like it's hurting anything.  I'm just afraid that if it's too gnarly to use that people won't get into the habit of supplementing their code with a nice annotation saying "I expect this to succeed".</p>
+<p>The floor is open for thoughts.  Short words preferred.  Might this be the mysterious use for BE?</p>
+<pre><code>&gt;&gt; be 300 + 4
+== 304
+
+&gt;&gt; be "I'm an ANY-VALUE!, therefore I am."
+== "I'm an ANY-VALUE!, therefore I am."
+</code></pre>
+<p>Doesn't make as much sense at the callsite, though:</p>
+<pre><code>&gt;&gt; append x be select [a 10 b 20] 'c
+** Script Error: e.g. "A NULL is nothing, and thus cannot BE"
+** Near: be ** select [a 10 ... (blah blah
+</code></pre>
+<p>Or...wait...maybe...CAN?</p>
+<pre><code>&gt;&gt; append x can select [a 10 b 20] 'c
+** Script Error: e.g. "Thought you could get a non-NULL, but you COULDN'T"
+** Near: can ** select [a 10 ... (blah blah
+</code></pre>
+<p>Problem being it sounds a little like a question word.  <strong>append x can any [ ]</strong>.</p>
+<p>Another one I had wondered about was <strong>THE</strong>.  Probably better than BE, but still a bit obtuse.</p>
+<pre><code>&gt;&gt; append x the select [a 10 b 20] 'c
+** Script Error: e.g. "Can't use THE to refer to something that's not there"
+** Near: the ** select [a 10 ... (blah blah
+
+&gt;&gt; y: null
+&gt;&gt; append x the y
+** Script Error: e.g. "Can't use THE to refer to something that's not there"
+** Near: the ** y
+</code></pre>
+<p>That's...maybe not objectively awful.</p>
+<p>Urg.  Opinions?</p>
+          <p><a href="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/1">Read full topic</a></p>
+        ]]></description>
+        <link>https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250/1</link>
+        <pubDate>Sat, 07 Dec 2019 07:52:46 +0000</pubDate>
+        <guid isPermaLink="false">forum.rebol.info-post-1250-1</guid>
+        <source url="https://forum.rebol.info/t/we-really-need-a-better-name-for-really/1250.rss">We REALLY need a better name for... REALLY</source>
+      </item>
+  </channel>
+</rss>
